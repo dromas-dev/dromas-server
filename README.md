@@ -31,7 +31,7 @@ A site's own pages (irongall.dev's front page and `llms.txt`) are not in this re
 git clone https://github.com/IronGall-dev/irongall-client
 git clone https://github.com/IronGall-dev/irongall-server
 cd irongall-server
-go test ./...
+scripts/check.sh          # vet and the short tests; scripts/check.sh full is what CI runs
 go run ./cmd/irongalld serve --dev
 ```
 

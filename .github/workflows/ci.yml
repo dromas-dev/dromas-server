@@ -59,33 +59,10 @@ jobs:
         run: |
           go version; ssh -V; jq --version; curl --version | head -1; bash --version | head -1
           echo "irongall-client at $(git -C ../irongall-client rev-parse HEAD)"
-      - name: gofmt
-        run: |
-          out=$(gofmt -l .)
-          [ -z "$out" ] || { echo "::error::not gofmt'd:"; echo "$out"; exit 1; }
-      - name: vet
-        run: go vet ./...
-      - name: test
-        # On the in-memory store: the AWS tests and the cost measurement skip,
-        # and a skip of any other test fails the job.
-        run: |
-          set +e
-          go test -count=1 -json ./... | tee "$RUNNER_TEMP/test.json" | jq -rj --unbuffered 'select(.Action == "output") | .Output'
-          status=${PIPESTATUS[0]}
-          set -e
-          jq -rs '[.[] | select(.Test != null)] | group_by([.Package, .Test])[] | select(any(.Action == "skip"))
-            | "\(.[0].Package) \(.[0].Test): " + ([.[] | select(.Action == "output") | .Output
-              | select(test("^ +[^ ]+\\.go:[0-9]+: ")) | sub("^ +"; "") | rtrimstr("\n")] | join(" "))' \
-            "$RUNNER_TEMP/test.json" > "$RUNNER_TEMP/skips"
-          echo "Skipped:"; cat "$RUNNER_TEMP/skips"
-          if grep -v -F -e 'needs IRONGALL_TEST_BOXES_TABLE, IRONGALL_TEST_MSGS_TABLE' -e 'needs the AWS tables' \
-            -e 'set IRONGALL_COST=1 to measure' "$RUNNER_TEMP/skips"; then
-            echo "::error::the tests above skipped, and this runner has every tool they need"
-            exit 1
-          fi
-          exit "$status"
-      - name: interop
-        run: test/interop.sh
+      - name: check
+        # gofmt, vet, every test (a skip fails the job, but the AWS tests' and
+        # the cost measurement's), and test/interop.sh: scripts/check.sh, which a laptop runs too.
+        run: scripts/check.sh full
 
   lint:
     runs-on: ubuntu-26.04
@@ -132,4 +109,4 @@ jobs:
           cache-dependency-path: |
             irongall-server/go.sum
             irongall-client/go.sum
-      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - run: scripts/check.sh vuln
