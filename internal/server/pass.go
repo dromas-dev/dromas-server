@@ -15,7 +15,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// A box proves itself with a pass it signs for itself (PROTOCOL.md §6.1b):
+// A box proves itself with a pass it signs for itself (PROTOCOL.md §8):
 // the server issues nothing and stores nothing for it. A pass is checked in
 // three steps, cheapest first: the certificate it carries against the hash of
 // the box's current one, which costs no signature check; the working key's
@@ -130,7 +130,7 @@ func (s *Server) standingOf(r *http.Request, a protocol.Address) (st Standing, b
 // (Known). A standing in memory alone holds no record, and a call that has
 // shown no pass is never made to read one, so that a poll never leaves the
 // process: then the answer carries none, and its client reads the box
-// (PROTOCOL.md §6.3).
+// (PROTOCOL.md §12.5).
 func (s *Server) revokedAt(a protocol.Address, b *Box) *problem {
 	if b == nil {
 		b, _ = s.store.Known(a)
@@ -143,7 +143,7 @@ func (s *Server) revokedAt(a protocol.Address, b *Box) *problem {
 
 // serverName is the name the caller called this server by, if it is one of
 // the server's own: the request's Host, lowercase, written as an origin is
-// (PROTOCOL.md §6.1b), with its port as a number and none at all when it is
+// (PROTOCOL.md §8), with its port as a number and none at all when it is
 // 443 or 80, either default taken as left unwritten, so that checking a pass
 // never rests on which scheme a request came by: a server may learn that
 // only from a forwarded header, and an authentication check does not hang
@@ -183,7 +183,7 @@ func unauthorized(hint, detail string) *problem {
 }
 
 // listedCertificate refuses a pass of a box whose current certificate its
-// identity has revoked (PROTOCOL.md §6.3a). No pass is looked at: one under
+// identity has revoked (PROTOCOL.md §10.2). No pass is looked at: one under
 // that certificate is not taken, and the box has no other until it publishes
 // a prekey under a new one, which needs no pass under the old.
 func listedCertificate() *problem {
@@ -199,7 +199,7 @@ const (
 // checkPass checks that the call carries the pass of box a: made for this
 // server, not run out, and signed under the certificate whose hash is cert
 // by a working key of the identity whose key, in SSH wire form, is key
-// (PROTOCOL.md §6.1b). serial is that certificate's serial, which a pass
+// (PROTOCOL.md §8). serial is that certificate's serial, which a pass
 // refused as under another names (certificate_serial). p is the call's pass
 // if the caller parsed it already, and otherwise nil.
 //
@@ -245,7 +245,7 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, cert
 	}
 	// A pass is remembered in the one form a client writes it, its signature
 	// as a verifier reads it, so the same pass written in another form a
-	// server reads (PROTOCOL.md §6.1b, §3) is answered from memory too, and
+	// server reads (PROTOCOL.md §8, §3.2) is answered from memory too, and
 	// its many spellings cost one check (IronGall-dev/irongall-server#69).
 	raw := sum
 	if one := sha256.Sum256([]byte(p.Authorization())); one != sum {
@@ -385,7 +385,7 @@ func (s *Server) owner(r *http.Request, params ...string) (protocol.Address, err
 }
 
 // sender authenticates a send: the sender is the box the call's pass names
-// (PROTOCOL.md §4.5, step 1).
+// (PROTOCOL.md §11.10, step 1).
 func (s *Server) sender(r *http.Request) (protocol.Address, error) {
 	auth, one := authorization(r)
 	p, err := protocol.ParsePass(auth)

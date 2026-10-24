@@ -12,7 +12,7 @@ import (
 )
 
 // Every check is exact at the clock of whoever makes it, and whoever makes a
-// time-limited thing leaves an hour of room (PROTOCOL.md §0). These tests
+// time-limited thing leaves an hour of room (PROTOCOL.md §3.4). These tests
 // give a box a clock of its own, set apart from the server's: every other
 // test here shares one clock between the two, and so cannot see a check that
 // only a second of difference fails.
@@ -89,7 +89,7 @@ func TestTheTwoClocksFurthestApart(t *testing.T) {
 // begun for a reader 10 minutes slow, a clock this server takes. The client
 // says in its own words what the server dates its answer, beside its own
 // clock: the server's words are
-// not shown (PROTOCOL.md §13), and the date on every answer is how the server
+// not shown (PROTOCOL.md §11.3), and the date on every answer is how the server
 // says what its clock reads.
 // A box that cannot register leaves nothing in the way of registering once
 // its clock is right.

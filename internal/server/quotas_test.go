@@ -51,7 +51,7 @@ func waits(r reply) int {
 }
 
 // Every limit a rate_limited answers for names itself in quota_id, and whom
-// it counted the call against in subject (PROTOCOL.md §13): the box for a
+// it counted the call against in subject (PROTOCOL.md §11.5): the box for a
 // call with its pass, the address for one with none.
 func TestEveryRefusalNamesItsLimit(t *testing.T) {
 	t.Parallel()
@@ -132,7 +132,7 @@ func TestARefusalGivesTheLongestWait(t *testing.T) {
 }
 
 // The same ciphertext posted again, of a send the server holds, is never
-// refused by a quota; a budget may defer it (PROTOCOL.md §8, §4.5 step 6). A
+// refused by a quota; a budget may defer it (PROTOCOL.md §11.5, §11.10 step 6). A
 // retry past its sender's calls, with its sends a day spent, is told the
 // calls' wait, and is then answered with the original receipt
 // (IronGall-dev/irongall-server#61).

@@ -35,7 +35,7 @@ func (s *Server) aclTooLarge() *problem {
 }
 
 // putACL is PUT /v1/<address>/acl (with the pass): the box's sender ACL,
-// replaced whole (PROTOCOL.md §6.2). Its preconditions are evaluated against
+// replaced whole (PROTOCOL.md §11.14). Its preconditions are evaluated against
 // the ACL held, a box with none included, after the call's other checks and
 // before its body is read, as RFC 9110 §13.2.1 has an origin server evaluate
 // them (precondition): a false If-Match is 412, and so is an If-None-Match
@@ -71,7 +71,7 @@ func (s *Server) putACL(w http.ResponseWriter, r *http.Request) error {
 	var doc protocol.ACLDocument
 	if err := decodeBody(w, r, s.aclBodyLimit(), &doc); err != nil {
 		// The bound is drawn from the entries, so a body over it is answered
-		// for them: an ACL's limit is in entries (PROTOCOL.md §13). With
+		// for them: an ACL's limit is in entries (PROTOCOL.md §11.3). With
 		// them unbounded, the body's bytes are the one limit there is.
 		var p *problem
 		if errors.As(err, &p) && p.code == protocol.CodeTooLarge && s.limits.ACLEntries > 0 {

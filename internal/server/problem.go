@@ -15,7 +15,7 @@ import (
 
 // Every error body is RFC 9457 Problem Details with the extension members
 // code and hint, and one member for each value the error carries
-// (PROTOCOL.md §13). Every value the detail names is one of those members
+// (PROTOCOL.md §11.3). Every value the detail names is one of those members
 // (AEP-193): fail takes the detail's values only as [value]s, each of which
 // sets its member, so a detail cannot carry a value its body does not. The
 // words, detail and hint, are for a person reading the body: a client needs

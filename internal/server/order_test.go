@@ -1,6 +1,6 @@
 package server
 
-// The orders of refusal a client acts on (PROTOCOL.md §13, the order of
+// The orders of refusal a client acts on (PROTOCOL.md §11.4, the order of
 // refusals): a call about a box answers its state before its pass (R1,
 // below), and what could change nothing is answered from what is kept (R2,
 // below). The third, a precondition evaluated once the target's state is
@@ -32,7 +32,7 @@ type stateAnswer struct {
 }
 
 // A call made with a box's pass, or about a box, answers that box's state
-// before it judges the pass, whatever pass it carries (PROTOCOL.md §13, the
+// before it judges the pass, whatever pass it carries (PROTOCOL.md §11.4, the
 // order of refusals): never registered or forgotten 404 no_such_mailbox, a
 // revoked address 410 revoked with its record, a box whose current
 // certificate its identity revoked 401 certificate_revoked. So a box learns
@@ -116,7 +116,7 @@ func TestEveryCallAboutABoxAnswersItsStateBeforeItsPass(t *testing.T) {
 		}, body: func(r *raw) any { return r.registration(1) }}, // the box's own registration, sent again
 		"PUT /v1/{addr}/prekey": {answers: owner, body: func(r *raw) any { return r.upload(1) }}, // the box's own statement, sent again
 		"PUT /v1/{addr}/revocations": {answers: map[string]stateAnswer{
-			"never registered": goesOn, "forgotten": goesOn, "its current certificate revoked": goesOn, // kept, box or none (PROTOCOL.md §3a), or raised
+			"never registered": goesOn, "forgotten": goesOn, "its current certificate revoked": goesOn, // kept, box or none (PROTOCOL.md §11.6), or raised
 			"revoked": gone,
 		}, body: func(r *raw) any { return r.certs(2) }},
 		"GET /v1/{addr}/revocations": {answers: map[string]stateAnswer{ // what is held of the address's revocations, box or none
@@ -130,7 +130,7 @@ func TestEveryCallAboutABoxAnswersItsStateBeforeItsPass(t *testing.T) {
 		"GET /v1/{addr}/messages":         {answers: owner},
 		"GET /v1/{addr}/messages/{id}":    {answers: owner},
 		"DELETE /v1/{addr}/messages/{id}": {answers: owner},
-		"POST /v1/{addr}/messages": {answers: map[string]stateAnswer{ // the sender's state, by a sender's codes (PROTOCOL.md §13)
+		"POST /v1/{addr}/messages": {answers: map[string]stateAnswer{ // the sender's state, by a sender's codes (PROTOCOL.md §11.4)
 			"never registered": {http.StatusForbidden, protocol.CodeUnknownSender, false}, "forgotten": {http.StatusForbidden, protocol.CodeUnknownSender, false},
 			"revoked": {http.StatusForbidden, protocol.CodeSenderRevoked, false}, "its current certificate revoked": revokedCert,
 		}, sender: true},
@@ -265,7 +265,7 @@ func emptyOK(_, got reply) string {
 }
 
 // What could change nothing is answered from what is kept, whatever it
-// would make new (PROTOCOL.md §13, the order of refusals): a registration's
+// would make new (PROTOCOL.md §11.4, the order of refusals): a registration's
 // identical retry, with its address's registrations and its /48's spent, is
 // 200 {}; a renewal's, with the box's renewals and certificates spent, 200
 // {}; a send's retry, with its sender's sends a day, the pair and box caps

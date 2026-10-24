@@ -236,7 +236,7 @@ func TestAMessagesHeadTakesNoTokenAndMarksNothing(t *testing.T) {
 }
 
 // A send's retry, the same bytes the box holds, whose precondition is false
-// is 412, not its first receipt (PROTOCOL.md §13; the client repo's #412
+// is 412, not its first receipt (PROTOCOL.md §11.4; the client repo's #412
 // item 5): the send evaluates them before its dedupe, and takes no MAY of
 // RFC 9110 §13.1.1.
 func TestASendsRetryWithAFalsePreconditionIs412(t *testing.T) {
@@ -678,7 +678,7 @@ func drained(e *env, n int) (*raw, protocol.MessageList, string) {
 }
 
 // A list's HEAD is a poll whatever its cursor, and moves none (PROTOCOL.md
-// §5.1, §13; the client repo's #412 item 4): one of a first page whose next
+// §11.11, §11.2; the client repo's #412 item 4): one of a first page whose next
 // cursor is not the one the box was handed hands out none, and one that
 // names the cursor the box was handed is 200, takes from the poll rate, and
 // leaves the box holding that cursor, whose GET then continues the drain.
@@ -717,7 +717,7 @@ func TestAListsHeadMovesNoCursor(t *testing.T) {
 }
 
 // A page refused for the page allowance leaves the box holding its cursor
-// (PROTOCOL.md §5.1: only a GET's 200 spends it; the client repo's #412
+// (PROTOCOL.md §11.11: only a GET's 200 spends it; the client repo's #412
 // item 2): once a page is due again, the same page continues the drain,
 // spending a page and no poll.
 func TestARefusedPageLeavesTheBoxItsCursor(t *testing.T) {

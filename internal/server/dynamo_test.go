@@ -709,9 +709,9 @@ func TestExpiredHeadersAreNotListed(t *testing.T) {
 // (protocol.Retention): the same bytes sent again inside it get the original
 // receipt. Past it, while the prekey they name lasts, they are new mail,
 // which only the sender's pass can post and its reader drops by its hash
-// (PROTOCOL.md §5 check 9), and that copy's dedupe record answers in its
+// (PROTOCOL.md §12.3 check 9), and that copy's dedupe record answers in its
 // turn. No client of this protocol posts the same bytes twice: a retry is
-// sealed afresh (§4.5).
+// sealed afresh (§12.2).
 func TestTheDedupeRecordSpansTheMessagesLife(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
@@ -956,7 +956,7 @@ func TestUpdateBoxIsConditional(t *testing.T) {
 
 // A pause, an ACL that denies everyone, deletes the box's mail, bodies
 // included: a sender's retry once a later ACL has undone it is answered from
-// the dedupe record, and nothing comes back (PROTOCOL.md §6.2).
+// the dedupe record, and nothing comes back (PROTOCOL.md §11.14).
 func TestRetryAfterAPauseIsNotRedelivered(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
@@ -968,7 +968,7 @@ func TestRetryAfterAPauseIsNotRedelivered(t *testing.T) {
 	e.want(e.do("PUT", to+"/acl", aclOf([]string{}, []string{"*"}), e.pass(b)), 200, "")
 	e.want(e.do("PUT", to+"/acl", aclOf([]string{"*"}, nil), e.pass(b)), 200, "")
 	// A retry of the same bytes is answered as the first send was, from the
-	// dedupe record (PROTOCOL.md §4.5 step 6): it stores nothing, and what the
+	// dedupe record (PROTOCOL.md §11.10 step 6): it stores nothing, and what the
 	// pause deleted stays deleted.
 	if r := e.do(http.MethodPost, to+"/messages", *sent, e.pass(a)); r.status != http.StatusOK {
 		t.Fatalf("retry: %d %s", r.status, r.body)

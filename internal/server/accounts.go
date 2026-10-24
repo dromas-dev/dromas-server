@@ -11,7 +11,7 @@ import (
 	"github.com/IronGall-dev/irongall-client/protocol"
 )
 
-// Accounts (PROTOCOL.md §6.5): a box may belong to one account, which
+// Accounts (PROTOCOL.md §11.16): a box may belong to one account, which
 // may lift its limits. A box joins with an adopt key the account minted, and
 // leaves on its own, or the account drops it.
 
@@ -58,7 +58,7 @@ func (s *Server) adopt(w http.ResponseWriter, r *http.Request) error {
 	if err := decodeBody(w, r, 4<<10, &req); err != nil {
 		return err
 	}
-	// None, null (PROTOCOL.md §0b) or empty is a missing member, as a
+	// None, null (PROTOCOL.md §3.3) or empty is a missing member, as a
 	// parameter sent without a value is an omitted one (RFC 6749 §3.1): the
 	// request is wrong, not the key.
 	if req.Key == "" {

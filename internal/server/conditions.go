@@ -23,7 +23,7 @@ type targetState struct {
 // precondition is every route's one step for its If-Match and
 // If-None-Match: taken once the route has read its target, after the call's
 // own budget, and before any of its work, the work's budgets, a cursor
-// taken or put, a mark, a write (PROTOCOL.md §13; the client repo's
+// taken or put, a mark, a write (PROTOCOL.md §11.4; the client repo's
 // #412). It evaluates them as conditions does, against t. A false one does
 // nothing but count as a call (LIMITS.md, rule 1): where the route has spent
 // none of the call's budget, t.spend spends it, and a refusal of that is
@@ -41,7 +41,7 @@ func precondition(r *http.Request, t targetState) error {
 
 // expected is what a write must still find of a target that carries no tag,
 // once its request's preconditions held at its read (precondition;
-// PROTOCOL.md §13): an If-Match held, so the target exists (a list of tags
+// PROTOCOL.md §11.2): an If-Match held, so the target exists (a list of tags
 // is never true of one with none); an If-None-Match of "*" held, so it does
 // not (one of tags is true of it whatever it holds, so it asks nothing);
 // and neither asks nothing. A target with a tag, an ACL, is written under
@@ -62,7 +62,7 @@ func expected(r *http.Request) Expect {
 // precondition, the one step every route takes for them: so whatever the
 // route answers before that point, a refusal of the pass, a box that does
 // not exist, a body it reads first that is refused, is answered as without
-// them (§13.2.1). PROTOCOL.md §13 has the rule.
+// them (§13.2.1). PROTOCOL.md §11.2 has the rule.
 //
 // exists is whether the target has a current representation, and tag its
 // entity-tag, "" where it carries none. If-Match is false for a target that

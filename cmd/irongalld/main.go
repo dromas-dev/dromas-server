@@ -18,7 +18,7 @@
 // client tests against. Nothing survives a restart.
 // It takes a pass made for any name, unless -names is given.
 //
-// account is the operator's hand on accounts (PROTOCOL.md §6.5) until
+// account is the operator's hand on accounts (PROTOCOL.md §11.16) until
 // accounts have users who log in: create one, mint an adopt key for it, or
 // drop a box from it.
 package main
@@ -71,8 +71,8 @@ func main() {
 
 // sizeCaps refuses a cap on a ciphertext the protocol does not allow: one
 // above protocol.MaxCiphertext, the largest every reader takes (PROTOCOL.md
-// §4.5), or one that is not a whole number of its own padding blocks, which a
-// message just under it would be padded past (§4.3a). serve checks the two
+// §11.10), or one that is not a whole number of its own padding blocks, which a
+// message just under it would be padded past (§9.3). serve checks the two
 // before anything starts.
 func sizeCaps(l server.Limits) error {
 	for _, c := range []struct {
@@ -83,9 +83,9 @@ func sizeCaps(l server.Limits) error {
 		case c.n < 0:
 			return fmt.Errorf("%s: %d is not a size", c.flag, c.n)
 		case c.n > protocol.MaxCiphertext:
-			return fmt.Errorf("%s: %d bytes is over the largest ciphertext the protocol allows, %d (PROTOCOL.md §4.5)", c.flag, c.n, protocol.MaxCiphertext)
+			return fmt.Errorf("%s: %d bytes is over the largest ciphertext the protocol allows, %d (PROTOCOL.md §11.10)", c.flag, c.n, protocol.MaxCiphertext)
 		case protocol.PaddedSize(c.n) != c.n:
-			return fmt.Errorf("%s: %d bytes is not a whole number of its own padding blocks, so a message just under it would be padded past it (PROTOCOL.md §4.3a): %d is the next size that is", c.flag, c.n, protocol.PaddedSize(c.n))
+			return fmt.Errorf("%s: %d bytes is not a whole number of its own padding blocks, so a message just under it would be padded past it (PROTOCOL.md §9.3): %d is the next size that is", c.flag, c.n, protocol.PaddedSize(c.n))
 		}
 	}
 	return nil
@@ -119,7 +119,7 @@ func serve(args []string) error {
 	streamEvery := fs.Duration("stream-interval", time.Second, "how often each stream shard is read")
 	proxies := fs.String("trusted-proxy", "", "comma-separated CIDRs whose CF-Connecting-IP names the client: the proxy in front, if any")
 	l := server.DefaultLimits()
-	fs.IntVar(&l.MaxSize, "max-size", l.MaxSize, "cap on a ciphertext, bytes: a send reads its body to it. A whole number of its own padding blocks, at most the protocol's largest ciphertext (PROTOCOL.md §4.3a, §4.5), or serve does not start")
+	fs.IntVar(&l.MaxSize, "max-size", l.MaxSize, "cap on a ciphertext, bytes: a send reads its body to it. A whole number of its own padding blocks, at most the protocol's largest ciphertext (PROTOCOL.md §9.3, §11.10), or serve does not start")
 	fs.IntVar(&l.AccountMaxSize, "account-max-size", l.AccountMaxSize, "the most an account can lift -max-size to, bytes (up to -max-size: nothing). Held as -max-size is")
 	fs.IntVar(&l.PairCap, "pair-cap", l.PairCap, "unacked messages per sender and box (0: off)")
 	fs.IntVar(&l.BoxCap, "box-cap", l.BoxCap, "messages per box (0: off)")

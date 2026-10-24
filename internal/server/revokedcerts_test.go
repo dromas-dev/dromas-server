@@ -15,7 +15,7 @@ import (
 	"github.com/IronGall-dev/irongall-client/protocol"
 )
 
-// Revoking certificates (PROTOCOL.md §6.3a) as this server enforces it: the
+// Revoking certificates (PROTOCOL.md §10.2) as this server enforces it: the
 // identity signs a revocation of every certificate through a serial, with no
 // pass, and the address goes on. The server keeps the highest one and serves
 // it in every read of the box, takes no pass and no prekey statement under a
@@ -521,7 +521,7 @@ func TestTheRemedyRenewsWhenATakerSpentTheDaysRenewals(t *testing.T) {
 
 // The box's current statement, registered again once its identity revoked
 // the certificate it is signed under, is refused before its pass, as the
-// same statement sent to PUT …/prekey is (PROTOCOL.md §3 step 5, §6.3a):
+// same statement sent to PUT …/prekey is (PROTOCOL.md §11.7 step 5, §10.2):
 // nothing under that certificate is taken, an identical retry included.
 func TestAnIdenticalRegistrationUnderARevokedCertificateIsRefused(t *testing.T) {
 	t.Parallel()

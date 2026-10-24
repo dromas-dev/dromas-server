@@ -15,7 +15,7 @@ import (
 	"github.com/IronGall-dev/irongall-client/protocol"
 )
 
-// Revocation (PROTOCOL.md §6.3) as this server enforces it: the identity's
+// Revocation (PROTOCOL.md §10.1) as this server enforces it: the identity's
 // own signature over the fixed statement ends a box for good, with no pass,
 // and nothing else does. The server keeps the signature and serves it, in
 // the 410 a read of the box answers, so that nobody has to take its word
@@ -212,7 +212,7 @@ func TestRevocation(t *testing.T) {
 }
 
 // A server keeps a revocation for an address it has no box for (PROTOCOL.md
-// §6.3): of an address never registered, and of one whose box it forgot.
+// §11.15): of an address never registered, and of one whose box it forgot.
 // It serves it at the address's revocations, and at the read of the box too
 // once the address itself is revoked, and holds a later registration to it:
 // 410 while the address is revoked, and nothing under a certificate its
@@ -346,7 +346,7 @@ func TestARevokedBoxIsReadAsItsRecord(t *testing.T) {
 	}
 }
 
-// The server keeps and serves a revocation of any address (PROTOCOL.md §6.3):
+// The server keeps and serves a revocation of any address (PROTOCOL.md §11.15):
 // it answers GET …/revocations with no pass, with the record it holds of the address, in
 // the same bytes the read of the box carries, and 404 not_revoked when it
 // holds none, for an address with no box as for one with a box and nothing

@@ -12,7 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
-// The accounts table (PROTOCOL.md §6.5): account is the account id's
+// The accounts table (PROTOCOL.md §11.16): account is the account id's
 // bytes; sk 0x00 is the account's record and 0x04 ‖ SHA-256 of the key an
 // adopt key's state.
 // Which boxes an account holds is the box records' to say: each names its

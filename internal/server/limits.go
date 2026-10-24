@@ -125,7 +125,7 @@ func (l Limits) liftedReceives() time.Duration { return min(l.ReceiveRefill, Rec
 const uncappedPages = 1000
 
 // continuations is the allowance for list pages after the first, per box. A
-// page after the first is not a poll (PROTOCOL.md §5.1), so it has its own:
+// page after the first is not a poll (PROTOCOL.md §11.11), so it has its own:
 // two full boxes' worth of pages at once, and a full box's worth back each
 // poll interval. A drain's pages are never refused (its fetches may be paced:
 // Limits.DrainBurst), and a cursor is no way around the poll rate. With no

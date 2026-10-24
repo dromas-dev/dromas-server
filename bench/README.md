@@ -5,7 +5,7 @@ First run on 2026-10-10: 2× Neoverse-V2, Go 1.26.6, standard library only, a si
 | Dir | Measures | How to run |
 |---|---|---|
 | `crypto/` | SSHSIG verify over 16 KiB (~71 µs; a forgery costs the same), SHA-256 / de-armor (~10–12 µs), SSH tag check (~0.08 µs), HMAC check of the owner token that was (~0.31 µs pooled), map lookup (~0.011 µs) | `cd bench/crypto && go test -bench . -benchtime 2s -count 3` |
-| `crypto/base64_test.go` | **A TEST, not a benchmark:** Go's `encoding/base64` decodes 76-column-wrapped base64 (LF and CRLF) to the exact bytes, which `PROTOCOL.md` §4.5 relied on while a send carried its ciphertext as base64 inside JSON | `cd bench/crypto && go test -run TestWrappedBase64DecodesExactly -v .` |
+| `crypto/base64_test.go` | **A TEST, not a benchmark:** Go's `encoding/base64` decodes 76-column-wrapped base64 (LF and CRLF) to the exact bytes, which `PROTOCOL.md` §11.10 relied on while a send carried its ciphertext as base64 inside JSON | `cd bench/crypto && go test -run TestWrappedBase64DecodesExactly -v .` |
 | `poll/` | **A whole empty poll over loopback HTTP, against a real `irongalld serve --dev`: 33 to 34 µs of server CPU with a pass the server remembers** (2026-10-13; 40,000 polls, keep-alive, 0 errors, three runs). The same run on the server as it was with a 62-byte bearer token: 31 to 32 µs. `poll/srv`, a model of an earlier design with nothing but an HMAC check and a map lookup, measured ~19 µs on 2026-10-10 | below |
 
 The memory and item-size measurements, and what a pass costs to check the first time and after, are `internal/server/cost_test.go` (`IRONGALL_COST=1 go test ./internal/server -run TestCost -v`).

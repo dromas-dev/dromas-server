@@ -30,7 +30,7 @@ import (
 // would change nothing is answered before what costs.
 
 // A retry is answered as the first send was, from the dedupe record, though
-// the box renewed its prekey since (PROTOCOL.md §4.5 step 6): stored once,
+// the box renewed its prekey since (PROTOCOL.md §11.10 step 6): stored once,
 // counted once. A new ciphertext to the retired prekey is still stale.
 func TestARetryAfterARenewalGetsItsReceipt(t *testing.T) {
 	t.Parallel()
@@ -156,7 +156,7 @@ func errorsAs(err error, ae **client.APIError) bool {
 }
 
 // A lookup, the read of a box, is its caller's address's to pay for: it
-// takes no pass (PROTOCOL.md §4.1; IronGall-dev/irongall-client#352). Past
+// takes no pass (PROTOCOL.md §11.8; IronGall-dev/irongall-client#352). Past
 // the gate, where it spends its address's flood budget whatever it carries,
 // a pass this process has checked among them, it spends nothing, as the
 // page a link opens spends nothing: memory answers both, and only a read
@@ -243,7 +243,7 @@ func TestUnknownIDsSpendTheBoxsCalls(t *testing.T) {
 }
 
 // A prekey statement that could not be taken even if it verified is refused
-// from its order, read before any signature is checked (PROTOCOL.md §6.4): a
+// from its order, read before any signature is checked (PROTOCOL.md §11.9): a
 // serial not above the current one under the current certificate is 409 and
 // a certificate the floor covers is bad_key, though the signature is not the
 // statement's. Nothing is counted against the caller for either.
@@ -271,7 +271,7 @@ func TestAStatementOutOfOrderIsRefusedBeforeItsSignature(t *testing.T) {
 
 // Registration never changes a box, so a registered box is answered from its
 // record whether this process holds it or reads it, and spends nothing of its
-// address's registrations (PROTOCOL.md §13, the order of refusals;
+// address's registrations (PROTOCOL.md §11.4, the order of refusals;
 // IronGall-dev/irongall-client#410): with the address's one registration
 // spent, the box's identical retry is 200, and another statement is 409 with
 // no check, signed or not, with a pass or none.

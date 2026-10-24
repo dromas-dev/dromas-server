@@ -39,7 +39,7 @@ func (s *beforePut) PutMessage(ctx context.Context, box protocol.Address, h *Hea
 // Every 410 revoked this server answers carries the record it holds of the
 // address, its identity's revocation of it beside its revocation of
 // certificates, as the read of a box does and as GET …/revocations serves it
-// (PROTOCOL.md §6.3; IronGall-dev/irongall-client#353), so a client checks
+// (PROTOCOL.md §11.3; IronGall-dev/irongall-client#353), so a client checks
 // it with no second call: a send held between its check of the recipient
 // and its write while the address is revoked, the read, a registration, a
 // prekey upload, the revocation sent again, a send, and each call about the

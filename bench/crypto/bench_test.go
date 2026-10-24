@@ -22,7 +22,7 @@ func init() {
 	pub, priv, _ = ed25519.GenerateKey(rand.Reader)
 	// SSHSIG signs a small blob: magic, namespace, reserved, hash alg,
 	// H(message). The namespace is a pass's, irongall-pass-v1:<address>
-	// (PROTOCOL.md §6.1b), for an address of 64 hex characters.
+	// (PROTOCOL.md §8), for an address of 64 hex characters.
 	h := sha512.Sum512(msg)
 	str := func(b []byte, s string) []byte { return append(binary.BigEndian.AppendUint32(b, uint32(len(s))), s...) }
 	sshsigBlob = str(str(str([]byte("SSHSIG"), "irongall-pass-v1:"+strings.Repeat("0a", 32)), ""), "sha512")

@@ -103,7 +103,7 @@ func TestACLRoute(t *testing.T) {
 	}
 	// Over the entries, and over the body's bound drawn from them, which is
 	// refused before it is parsed: the limit is the entries either way
-	// (PROTOCOL.md §13: a too_large on an ACL is entries).
+	// (PROTOCOL.md §11.3: a too_large on an ACL is entries).
 	huge := aclOf([]string{"*"}, []string{strings.Repeat(" ", int(e.server.aclBodyLimit()))})
 	for _, body := range []any{aclOf([]string{"*", x}, []string{y, x}), huge} {
 		r := e.do("PUT", path, body, pass)
@@ -254,7 +254,7 @@ func (o *onRead) Read(p []byte) (int, error) {
 }
 
 // A PUT's If-Match is held to the ACL its write replaces (PROTOCOL.md
-// §13): another writer's ACL that lands while the PUT reads its body, after
+// §11.2): another writer's ACL that lands while the PUT reads its body, after
 // its If-Match was evaluated, makes the PUT 409 box_changed, and the other
 // writer's ACL stays; the same PUT sent again meets an If-Match that is
 // false (412), and one with the tag now held is taken
@@ -352,7 +352,7 @@ func TestAnACLsGETReadsItsPreconditions(t *testing.T) {
 
 // With no bound on its entries, an ACL's body is still bounded, to keep the
 // record one item: a body over that is too_large with the body's bytes as
-// its limit, the one limit there is (PROTOCOL.md §13).
+// its limit, the one limit there is (PROTOCOL.md §11.3).
 func TestAnUnboundedACLNamesItsBodysBytes(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
@@ -405,8 +405,8 @@ func TestACLRefusesSends(t *testing.T) {
 
 // A deny list deletes the box's unacked mail from what it matches, and only
 // that; a retry of a message stored before is still answered with its
-// receipt, since a retry is no new mail (PROTOCOL.md §4.5 step 6). One that
-// denies everyone is how a box pauses, and a later ACL undoes it (§6.2).
+// receipt, since a retry is no new mail (PROTOCOL.md §11.10 step 6). One that
+// denies everyone is how a box pauses, and a later ACL undoes it (§11.14).
 func TestACLDenyPurges(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
@@ -444,7 +444,7 @@ func TestACLDenyPurges(t *testing.T) {
 	}
 	e.want(e.do("POST", to+"/messages", e.sealTo(b), e.pass(a)), 403, protocol.CodeSenderNotAllowed)
 
-	// The pause (PROTOCOL.md §6.2), nobody allowed and everyone denied:
+	// The pause (PROTOCOL.md §11.14), nobody allowed and everyone denied:
 	// everything goes, and nothing more comes until a later ACL undoes it.
 	// What the pause deleted stays deleted.
 	e.want(e.do("PUT", to+"/acl", aclOf([]string{}, []string{"*"}), e.pass(b)), 200, "")

@@ -285,7 +285,7 @@ func TestAccounts(t *testing.T) {
 		pass := r.pass(1)
 		e.want(e.do(http.MethodPut, r.path("/account"), protocol.AdoptRequest{Key: "x"}, ""), 401, protocol.CodeUnauthorized)
 		e.want(e.do(http.MethodPut, r.path("/account"), []byte(`{"key":1}`), pass), 400, protocol.CodeBadRequest)
-		// No key, a null one (PROTOCOL.md §0b) or an empty one is a member
+		// No key, a null one (PROTOCOL.md §3.3) or an empty one is a member
 		// missing from the request, not a key refused.
 		for _, body := range []string{`{}`, `{"key":null}`, `{"key":""}`} {
 			got := e.do(http.MethodPut, r.path("/account"), []byte(body), pass)

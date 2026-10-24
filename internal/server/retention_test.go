@@ -12,7 +12,7 @@ import (
 // A message this server still serves is one its reader takes: each post is
 // dated afresh, and the server keeps mail the TTL less the hour after it
 // received it, so a reader whose clock the server takes refuses none as
-// stale before its expires_at (PROTOCOL.md §4.5, §7). A message pair_full
+// stale before its expires_at (PROTOCOL.md §12.2, §13). A message pair_full
 // held in its sender's outbox is the case the TTL's monthly promise is for.
 func TestMailIsTakenWhileTheServerServesIt(t *testing.T) {
 	t.Parallel()

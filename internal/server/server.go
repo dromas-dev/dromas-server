@@ -1,5 +1,5 @@
-// Package server is irongalld's HTTP API (PROTOCOL.md §3–§6, the status map
-// in §13) over a Store.
+// Package server is irongalld's HTTP API (PROTOCOL.md §11, the status map
+// in §11.3) over a Store.
 package server
 
 import (
@@ -43,13 +43,13 @@ type Config struct {
 	// Names are the names clients call this server by: the host of its URL,
 	// lowercase, with its port only when that is not the scheme's default. A
 	// pass is taken only on a request whose Host, written so, is one of them
-	// (PROTOCOL.md §6.1b). None: any Host
+	// (PROTOCOL.md §8). None: any Host
 	// is taken, which is for the dev server and tests only, since a pass
 	// made for another server would then pass here.
 	Names []string
 	// IdentityTypes are the identity key types this server registers: some
 	// of protocol.IdentityTypes, ssh-ed25519 among them, since that is the
-	// one every client makes and verifies (PROTOCOL.md §2). None: every type
+	// one every client makes and verifies (PROTOCOL.md §4.1). None: every type
 	// this build verifies.
 	IdentityTypes []string
 	// Site, when set, is served at every path outside /v1/ and /to/, the
@@ -374,7 +374,7 @@ func notStored(h http.Handler) http.Handler {
 
 // dated dates every answer by the server's own clock, the one its checks
 // read. A client whose pass or statement is refused for its time compares
-// that date with its own clock (PROTOCOL.md §0): it is how a refusal for a
+// that date with its own clock (PROTOCOL.md §12.1): it is how a refusal for a
 // time says what this clock reads. Every check here is exact at this clock,
 // and a client makes what it sends with an hour of room, so a refusal for a
 // time is nearly always a clock that is off.
@@ -632,7 +632,7 @@ func pathAddr(r *http.Request, params ...string) (protocol.Address, error) {
 }
 
 // queryOf reads the query of a call that takes params: each at most once,
-// and no other (PROTOCOL.md §13). A parameter the call does not know, or one
+// and no other (PROTOCOL.md §11.2). A parameter the call does not know, or one
 // given twice, is refused as a member a body should not hold is, and named
 // in member.
 func queryOf(r *http.Request, params ...string) (map[string]string, error) {
@@ -677,7 +677,7 @@ func readProblem(err, tooLarge error) error {
 }
 
 // decodeJSON reads a JSON body into v as every reader of the protocol reads
-// one (protocol.UnmarshalRequest, PROTOCOL.md §0b): one I-JSON object, names
+// one (protocol.UnmarshalRequest, PROTOCOL.md §3.3): one I-JSON object, names
 // matched exactly, nested at most protocol.MaxDepth deep, and no member v
 // does not name.
 func decodeJSON(data []byte, v any) error {
@@ -1002,7 +1002,7 @@ func revoked() *problem {
 // revokedWith is revoked carrying the record b holds of the revoked
 // address, its identity with what the identity revoked: every 410 revoked
 // answered from what is held of an address carries it, so a client checks
-// it with no second call (PROTOCOL.md §6.3; IronGall-dev/irongall-client#353).
+// it with no second call (PROTOCOL.md §11.3; IronGall-dev/irongall-client#353).
 func revokedWith(b *Box) *problem {
 	p := revoked()
 	p.record = b.record()
@@ -1019,7 +1019,7 @@ func fetchedAlready(wait time.Duration) *problem {
 }
 
 // rateLimited is a 429 for a call past limit q, which it names with whom q
-// counted the call against (PROTOCOL.md §13), and how long to wait in
+// counted the call against (PROTOCOL.md §11.5), and how long to wait in
 // Retry-After.
 func rateLimited(q protocol.Quota, wait time.Duration, format string, values ...value) *problem {
 	p := spent(protocol.CodeRateLimited, wait, format, values...)

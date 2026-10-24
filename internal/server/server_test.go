@@ -30,7 +30,7 @@ import (
 )
 
 // The server's answers, checked over raw HTTP, against the status map
-// (PROTOCOL.md §13) and the box states (§3a).
+// (PROTOCOL.md §11.3) and the box states (§11.6).
 
 type reply struct {
 	status int
@@ -81,7 +81,7 @@ func limitedBy(err error, q protocol.Quota) bool {
 	return errors.As(err, &ae) && ae.Problem.Code == protocol.CodeRateLimited && ae.Problem.QuotaID == q
 }
 
-// sealed is a send as the server reads one (PROTOCOL.md §4.5): the
+// sealed is a send as the server reads one (PROTOCOL.md §11.10): the
 // ciphertext, which is the body, and the serials of the prekey it is sealed
 // to, which are the query.
 type sealed struct {
@@ -328,8 +328,8 @@ func (r *raw) register(d time.Duration) *raw {
 }
 
 // A signature is at most protocol.MaxSignature bytes as it arrives (PROTOCOL.md
-// §3), what follows its END line included, and is kept and served as it was
-// sent (§4.5). A pass is at most protocol.MaxPassAuthorization.
+// §3.2), what follows its END line included, and is kept and served as it was
+// sent (§13). A pass is at most protocol.MaxPassAuthorization.
 func TestASignatureIsBounded(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
@@ -375,7 +375,7 @@ func TestRegistration(t *testing.T) {
 	e.want(e.do("PUT", r.path(""), []byte(`{"identity":"","prekey":"","prekey_signature":null}`), pass), 400, protocol.CodeBadRequest)
 	e.want(e.do("PUT", r.path(""), []byte(`{"identity":"not base64!","prekey":"","prekey_signature":""}`), pass), 400, protocol.CodeBadEncoding)
 	e.want(e.do("PUT", r.path(""), []byte(`not json`), pass), 400, protocol.CodeBadRequest)
-	// A body is read as every reader reads JSON (PROTOCOL.md §0b): names
+	// A body is read as every reader reads JSON (PROTOCOL.md §3.3): names
 	// exactly, none twice, one value, and each byte field in its one
 	// encoding.
 	rj, _ := json.Marshal(reg)
@@ -499,7 +499,7 @@ func TestRegistration(t *testing.T) {
 }
 
 // A registration of a registered box, or of a revoked address, is answered
-// from what is held of it before anything below is checked (PROTOCOL.md §3
+// from what is held of it before anything below is checked (PROTOCOL.md §11.7
 // step 5), whether this process's memory holds the box or it reads the
 // record, under the count of registrations (IronGall-dev/irongall-server#94):
 // another statement is 409 whatever pass it carries and however it is
@@ -662,7 +662,7 @@ func TestOwnerCalls(t *testing.T) {
 
 // An address in a path is 64 lowercase hex characters, so a box has one URL:
 // the same address in uppercase is no address, on every route that names
-// one, whoever calls (PROTOCOL.md §2).
+// one, whoever calls (PROTOCOL.md §2.2).
 func TestAnAddressInAPathIsLowercase(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
@@ -690,7 +690,7 @@ func TestAnAddressInAPathIsLowercase(t *testing.T) {
 
 // A query parameter a call does not take, and one given twice, is refused
 // as a member a body should not hold is: 400 bad_request, naming it in
-// member (PROTOCOL.md §13). A cursor not of a cursor's form is named too.
+// member (PROTOCOL.md §11.2). A cursor not of a cursor's form is named too.
 // The send's own parameters are TestSendPipeline's.
 func TestAQueryHoldsOnlyTheCallsParameters(t *testing.T) {
 	t.Parallel()
@@ -730,7 +730,7 @@ func TestAQueryHoldsOnlyTheCallsParameters(t *testing.T) {
 }
 
 // A list's query is read before its pass, the cursor's decode included
-// (PROTOCOL.md §5.1): a cursor that is empty, not of a cursor's form, or not
+// (PROTOCOL.md §11.11): a cursor that is empty, not of a cursor's form, or not
 // one this server could have made is 400 naming cursor, with a pass or none.
 func TestACursorIsReadBeforeThePass(t *testing.T) {
 	t.Parallel()
@@ -818,7 +818,7 @@ func TestAPassIsForOneServer(t *testing.T) {
 }
 
 // The server writes the Host a request names as an origin is written, as a
-// client writes the server's name in its pass (PROTOCOL.md §6.1b): its port as
+// client writes the server's name in its pass (PROTOCOL.md §8): its port as
 // a number, and none at all for 443 or 80, whichever scheme the client
 // called it by, which TLS ending in front of the server hides. So a box whose
 // URL is https://mail.example:443 signs its pass for mail.example, and its
@@ -1147,7 +1147,7 @@ func TestGreaseIsIgnored(t *testing.T) {
 
 // A file whose one stanza is grease has no native stanza: it is not said to
 // have more than one (IronGall-dev/irongall-client#417 item 4), and is told
-// it has no recipient, as PROTOCOL.md §4.5 step 7 has it. Its stanzas are
+// it has no recipient, as PROTOCOL.md §11.10 step 7 has it. Its stanzas are
 // read as a reader reads them (protocol.ReadStanzas).
 func TestAFileWithNoNativeStanzaIsNotSaidToHaveTwo(t *testing.T) {
 	t.Parallel()
@@ -1172,7 +1172,7 @@ func (otherRecipient) Wrap([]byte) ([]*age.Stanza, error) {
 }
 
 // A send whose stanzas a box does not take is refused wrong_recipient_type
-// with the hint of its case, in PROTOCOL.md §4.5 step 7's order: a stanza
+// with the hint of its case, in PROTOCOL.md §11.10 step 7's order: a stanza
 // of another type first, whatever else the file holds; then no native
 // stanza; then more than one; then a native stanza of the other type.
 func TestEachWrongRecipientTypeIsToldItsOwnCase(t *testing.T) {

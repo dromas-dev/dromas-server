@@ -23,7 +23,7 @@ import (
 
 // A first page carries an ETag, the first 16 bytes of the SHA-256 of its
 // body, and a poll that sends it back is 304 while the page is unchanged
-// (PROTOCOL.md §5.1). The tag is the page's own: every process computes it
+// (PROTOCOL.md §11.11). The tag is the page's own: every process computes it
 // alike, with no key, and an empty box's is the same on every server. A tag
 // of the page before, the old "<count>-<version>" form among them, is not
 // the page's. Weak comparison: W/ is read past, and * names any page. A page
@@ -181,7 +181,7 @@ func TestAPollsIfMatchIsEvaluatedFirst(t *testing.T) {
 }
 
 // A 304 is a poll: it takes from the poll rate, and a box that polls faster is
-// refused 429, never answered 304, whatever it sends (PROTOCOL.md §5.1).
+// refused 429, never answered 304, whatever it sends (PROTOCOL.md §11.11).
 func TestA304IsAPoll(t *testing.T) {
 	t.Parallel()
 	l := relaxed()

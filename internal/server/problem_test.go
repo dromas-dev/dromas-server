@@ -12,7 +12,7 @@ import (
 )
 
 // Every value an error's detail names is also a member of its own, of its
-// type (PROTOCOL.md §13, AEP-193): a client reads the member and never the
+// type (PROTOCOL.md §11.3, AEP-193): a client reads the member and never the
 // words, so a value only in the words is one a client loses.
 func TestAnErrorsValuesAreMembers(t *testing.T) {
 	t.Parallel()

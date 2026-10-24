@@ -13,7 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 )
 
-// account runs one operator command on accounts (PROTOCOL.md §6.5).
+// account runs one operator command on accounts (PROTOCOL.md §11.16).
 func account(cmd string, args []string) error {
 	fs := flag.NewFlagSet("account "+cmd, flag.ContinueOnError)
 	region := fs.String("region", "us-east-1", "the AWS region")

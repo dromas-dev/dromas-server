@@ -33,7 +33,7 @@ func (e *env) stands(a protocol.Address) (*Box, *protocol.Certificate) {
 }
 
 // A box's record may go once nothing of the box is valid any more
-// (PROTOCOL.md §7): a registration and every renewal set its expiry to the
+// (PROTOCOL.md §13): a registration and every renewal set its expiry to the
 // later of its certificate's end and its prekey's last mail.
 func TestARecordExpiresWhenNothingOfTheBoxIsValid(t *testing.T) {
 	t.Parallel()

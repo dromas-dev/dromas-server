@@ -13,7 +13,7 @@ COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath -o /irongalld ./cmd/irongalld
 
-# The echo box (PROTOCOL.md §10): a CLIENT, irongall-echo from irongall-client,
+# The echo box: a CLIENT, irongall-echo from irongall-client,
 # with the irongall command beside it for the operator (addr, adopt). Built only
 # as the target "echo"; the default target, the last stage, is the server.
 FROM build AS echo-build

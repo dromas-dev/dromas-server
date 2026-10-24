@@ -47,7 +47,7 @@ func ranged(t *testing.T, e *env, l Limits) (*env, *rangeStore) {
 	return &env{t: t, clock: e.clock, srv: srv}, rs
 }
 
-// A fetch that was cut resumes by range (PROTOCOL.md §5.2): Range: bytes=N-,
+// A fetch that was cut resumes by range (PROTOCOL.md §11.12): Range: bytes=N-,
 // N inside the ciphertext, is answered 206 with the bytes from N on and a
 // Content-Range that says so, read from the store from N, and every other
 // Range, an If-Range beside one included, with the whole body, 200, read
@@ -109,7 +109,7 @@ func TestAFetchResumesByRange(t *testing.T) {
 	}
 }
 
-// A ranged fetch is counted as any fetch is (PROTOCOL.md §5.7): a fetch of a
+// A ranged fetch is counted as any fetch is (PROTOCOL.md §11.12): a fetch of a
 // message fetched before, ranged or not, takes from the box's allowance of
 // repeats, and past it is 429 refetch_spent.
 func TestARangedFetchIsCountedAsAnyFetch(t *testing.T) {

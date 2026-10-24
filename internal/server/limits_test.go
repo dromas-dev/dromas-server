@@ -259,7 +259,7 @@ func TestMissesPerIP(t *testing.T) {
 		t.Fatalf("the owner's poll with its pass remembered: %d %s", r.status, r.body)
 	}
 	// So is that pass written in another form a server reads (PROTOCOL.md
-	// §6.1b): it is remembered by the one form a client writes, so a new
+	// §8): it is remembered by the one form a client writes, so a new
 	// spelling of it costs no check, and the address past its count is no
 	// bar.
 	for _, respelled := range []string{
@@ -501,7 +501,7 @@ func TestMissingBoxIsRememberedUntilItIsWritten(t *testing.T) {
 	}
 }
 
-// A refusal's detail names no value that no member carries (PROTOCOL.md §13):
+// A refusal's detail names no value that no member carries (PROTOCOL.md §11.3):
 // the polls' refusal says no rate, which is the server's to set (-poll-after,
 // -poll-burst, -poll-refill), and the wait is in Retry-After (#65).
 func TestThePollsRefusalNamesNoRateItDoesNotCarry(t *testing.T) {

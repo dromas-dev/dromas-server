@@ -13,7 +13,7 @@ import (
 	"github.com/IronGall-dev/irongall-client/protocol"
 )
 
-// State is what a server holds of an address (PROTOCOL.md §3a). A box's
+// State is what a server holds of an address (PROTOCOL.md §11.6). A box's
 // record is Active, the one state a record is written in or read back as;
 // Revoked and NoBox are what the store answers from the address's
 // revocations alone.
@@ -46,14 +46,14 @@ type Box struct {
 	Prekey    *protocol.Prekey
 	// The certificate Signature carries, which is the box's current one: its
 	// serial, and the SHA-256 of its bytes. A pass is taken only under it,
-	// and a prekey only under it or a later one (PROTOCOL.md §2b). A box's
+	// and a prekey only under it or a later one (PROTOCOL.md §5). A box's
 	// statements are ordered by this serial first, and by the prekey's own
 	// second.
 	CertSerial uint64
 	Cert       [32]byte
 	// SenderKeyTypes is what the box declared with its current prekey: the
 	// identity key types of the senders it takes mail from, or
-	// protocol.AnySender (PROTOCOL.md §2). Only names this build verifies
+	// protocol.AnySender (PROTOCOL.md §7). Only names this build verifies
 	// are kept (declared): a box of any other type cannot send here.
 	SenderKeyTypes []string
 	// Retired holds the newest retired prekeys (Limits.RetiredKept), each
@@ -62,29 +62,29 @@ type Box struct {
 	Rev     uint64 // the record's revision, 0 with no record; a write must name the one it read
 	Created time.Time
 	// Expires is when the record may go: DynamoDB's TTL deletes it some time
-	// after (PROTOCOL.md §7). Every registration and renewal moves it to
+	// after (PROTOCOL.md §13). Every registration and renewal moves it to
 	// when nothing of the box is valid any more. Zero: never.
 	Expires time.Time
-	// Account is the account the box belongs to, or "" (PROTOCOL.md §6.5).
+	// Account is the account the box belongs to, or "" (PROTOCOL.md §11.16).
 	// Only Adopt and Leave change it.
 	Account string
 	// What the identity revoked, from the address's revocations item
 	// (Revocations): kept for good and served to whoever asks.
 	//
 	// Revocation is the identity's signature that revoked the address
-	// (PROTOCOL.md §6.3): nil unless State is Revoked. With Identity it
+	// (PROTOCOL.md §10.1): nil unless State is Revoked. With Identity it
 	// proves itself, so nobody takes this server's word that the box is
 	// revoked.
 	Revocation []byte
 	// RevokedCerts is the identity's highest revocation of its certificates,
 	// exactly as it signed it, and RevokedCertsSig its signature
-	// (PROTOCOL.md §6.3a): nil until one is published. The address goes on.
+	// (PROTOCOL.md §10.2): nil until one is published. The address goes on.
 	// Served with Identity to whoever asks, it proves itself as Revocation
 	// does. It was verified when it was stored, and only one through a higher
 	// serial replaces it.
 	RevokedCerts    []byte
 	RevokedCertsSig []byte
-	// ACL is the box's sender ACL (PROTOCOL.md §6.2): who may send to it,
+	// ACL is the box's sender ACL (PROTOCOL.md §11.14): who may send to it,
 	// deny read first and then allow. nil until the box puts one, and a box
 	// with none takes mail from everyone. It is replaced whole, and never
 	// removed.
@@ -127,7 +127,7 @@ func (b *Box) listed(serial uint64) (bool, error) {
 
 // Expect is what a conditional write asks of its target as it writes: what a
 // request's If-Match or If-None-Match held of the target at its read
-// (expected; PROTOCOL.md §13), so that a change between the two refuses the
+// (expected; PROTOCOL.md §11.2), so that a change between the two refuses the
 // write, ErrStale, and the request is answered 409 box_changed. It is the
 // write's own condition, beside any other it has, and asks nothing of a
 // request that carried neither.
@@ -143,7 +143,7 @@ const (
 )
 
 // Revocations is what an address's identity has revoked, as kept in an item
-// of its own beside the box's record, box or none (PROTOCOL.md §6.3, §6.3a):
+// of its own beside the box's record, box or none (PROTOCOL.md §10.1, §10.2):
 // the revocation of the address once, and the highest revocation of its
 // certificates. Nothing in it is ever taken away, so two copies merge to the
 // larger of each.
@@ -175,7 +175,7 @@ func (r *Revocations) merge(o *Revocations) {
 }
 
 // record is the revocation record of what b holds of its identity's
-// revocations, as a client reads one (PROTOCOL.md §6.3): served by
+// revocations, as a client reads one (PROTOCOL.md §10.3): served by
 // GET …/revocations, and carried by a 410 revoked (revokedWith).
 func (b *Box) record() *protocol.Revocations {
 	return &protocol.Revocations{Identity: b.Identity, Revocation: b.Revocation, RevokedCertificates: b.RevokedCerts, RevokedCertificatesSignature: b.RevokedCertsSig}
@@ -303,7 +303,7 @@ func listNames(statement []byte, serial uint64) (bool, error) {
 	return r.Revokes(serial), nil
 }
 
-// Account is an account's record (PROTOCOL.md §6.5). An account pays,
+// Account is an account's record (PROTOCOL.md §11.16). An account pays,
 // from prepaid credit, for its boxes' sends past the free limits and for
 // size over the cap; with no credit they have the free limits. An unmetered
 // account's boxes have no daily limit, the largest cap and new mail at
@@ -343,7 +343,7 @@ type Header struct {
 	ExpiresAt  time.Time
 }
 
-// Standing is what checking a box's pass needs of it (PROTOCOL.md §6.1b):
+// Standing is what checking a box's pass needs of it (PROTOCOL.md §8):
 // its state, its identity's public key, which certificate is its current
 // one, and whether its identity has revoked that certificate.
 type Standing struct {
@@ -353,7 +353,7 @@ type Standing struct {
 	// CertSerial is Box.CertSerial, which Listed is judged by.
 	CertSerial uint64
 	// Listed is true while the box's current certificate is one its identity
-	// has revoked (PROTOCOL.md §6.3a): no pass of the box is taken until it
+	// has revoked (PROTOCOL.md §10.2): no pass of the box is taken until it
 	// publishes a prekey under a new certificate.
 	Listed bool
 	// InAccount is true for a box in an account, whose limits are read from
@@ -422,7 +422,7 @@ func identityType(doc []byte) string {
 func certHash(c *protocol.Certificate) [32]byte { return sha256.Sum256(c.Marshal()) }
 
 // expiry is when the record of a box whose current statement is p, under
-// cert, may go (PROTOCOL.md §7): once the certificate has ended, so that no
+// cert, may go (PROTOCOL.md §13): once the certificate has ended, so that no
 // working key of it is left to register with, and the last mail sealed to p
 // has expired.
 func expiry(p *protocol.Prekey, cert *protocol.Certificate) time.Time {
@@ -619,7 +619,7 @@ type Store interface {
 	List(ctx context.Context, box protocol.Address, after *Cursor, limit int) ([]Header, error)
 	// Message returns a live message and its body, or ErrNotFound: the body
 	// from byte from on where from is inside it, above 0 and below its Size,
-	// and otherwise whole, as a fetch answers a range (PROTOCOL.md §5.2).
+	// and otherwise whole, as a fetch answers a range (PROTOCOL.md §11.12).
 	// So a fetch that resumes reads only the rest from where a body is kept.
 	Message(ctx context.Context, box protocol.Address, id [32]byte, from int64) (*Header, []byte, error)
 	// DeleteMessage acks a message: its body goes, then it leaves the list;
@@ -631,7 +631,7 @@ type Store interface {
 	DeleteMessages(ctx context.Context, box protocol.Address) error
 	// DeleteFrom deletes every live message in a box whose sender from
 	// matches, as acks do: what an ACL's deny list now refuses (PROTOCOL.md
-	// §6.2). A message already gone is no error.
+	// §11.14). A message already gone is no error.
 	DeleteFrom(ctx context.Context, box protocol.Address, from func(protocol.Address) bool) error
 
 	// Account returns an account's record, or ErrNotFound: read on its

@@ -21,7 +21,7 @@ const registerLimit = 64 << 10
 // take as one.
 const hintDocument = "the identity document is \"irongall-v1\", LF, one SSH public key with no comment, LF: look for a comment, CRLF or a missing final newline"
 
-// register is PUT /v1/<address> (PROTOCOL.md §3). It is a call of a box that
+// register is PUT /v1/<address> (PROTOCOL.md §11.7). It is a call of a box that
 // does not exist yet, so its address pays for it: its body is read only once
 // the call has spent one of its address's flood budget at the gate, as a
 // revocation's is.
@@ -29,7 +29,7 @@ const hintDocument = "the identity document is \"irongall-v1\", LF, one SSH publ
 // Registration never changes a box, so what is kept of the address is read
 // before any signature, and a box registered there, or an address revoked,
 // is answered from it, held in memory or read, by one path (registered),
-// spending none of the address's registrations (PROTOCOL.md §13, the order
+// spending none of the address's registrations (PROTOCOL.md §11.4, the order
 // of refusals; IronGall-dev/irongall-client#410). Memory answers with
 // nothing counted. A read is counted once, as what it turns out to be: the
 // registrations it would spend, the address's and its /48's, are reserved
@@ -58,7 +58,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 	if protocol.Address(sha256.Sum256(req.Identity)) != h {
 		return fail(protocol.CodeIdentityMismatch, hintDocument, "the identity document does not hash to the address")
 	}
-	// The document's form, then its key's type, then its key (PROTOCOL.md §3).
+	// The document's form, then its key's type, then its key (PROTOCOL.md §11.7).
 	// A well-formed document of a type the protocol does not define, or that
 	// this server does not register, is neither malformed nor a bad key.
 	id, err := protocol.ParseIdentity(req.Identity)
@@ -73,7 +73,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 	}
 	// A box registered, or an address its identity revoked, is answered from
 	// what is kept of the address, whatever the statement and however many
-	// registrations the address has spent (PROTOCOL.md §13, the order of
+	// registrations the address has spent (PROTOCOL.md §11.4, the order of
 	// refusals): from memory, with nothing counted, or from one read.
 	cur, known := s.store.Known(h)
 	if known && settled(cur) {
@@ -177,7 +177,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 }
 
 // statementRevoked is the answer to a prekey statement signed under a
-// certificate the box's identity revoked (PROTOCOL.md §6.3a).
+// certificate the box's identity revoked (PROTOCOL.md §10.2).
 func statementRevoked() *problem {
 	return fail(protocol.CodeCertificateRevoked, "certify a new working key at a higher serial: irongall prekey renew", "the statement is signed under a certificate this box's identity revoked")
 }
@@ -192,7 +192,7 @@ func settled(b *Box) bool { return b.open() || b != nil && b.State == Revoked }
 // certificate, is checked; nothing else is. A certificate the identity
 // revoked signs nothing this server takes, the box's current statement sent
 // again included, so it is refused before the pass, as a prekey upload's
-// identical retry is (PROTOCOL.md §6.3a).
+// identical retry is (PROTOCOL.md §10.2).
 //
 // A registration answered from what is kept of its address, held in memory
 // or read, spends no registrations count, so the retry is a renewal's
@@ -242,7 +242,7 @@ func (s *Server) registered(w http.ResponseWriter, r *http.Request, id *protocol
 }
 
 // take makes p, under cert, box b's current prekey statement (PROTOCOL.md
-// §6.4): a key the box published before, its current one or a live retired
+// §11.9): a key the box published before, its current one or a live retired
 // one, is refused; the statement it replaces retires while it is live, and
 // only the newest retired are kept. The record's expiry moves to when
 // nothing of the new statement is valid.
@@ -274,12 +274,12 @@ func (s *Server) take(b *Box, statement, sig []byte, p *protocol.Prekey, cert *p
 //
 // A certificate is taken only once it has begun by the clock of every box
 // this server takes, and so of every reader of the mail signed under it: a
-// box whose clock is less than PassLifetime behind this one (PROTOCOL.md §0).
+// box whose clock is less than PassLifetime behind this one (PROTOCOL.md §15.7).
 // A client dates a certificate from MaxSkew before it makes it, so one made
 // by a clock this server takes a pass from has always begun that long.
 //
 // A refusal for a time states what this clock reads: a client makes its
-// certificate and its statement with an hour of room (PROTOCOL.md §0), so
+// certificate and its statement with an hour of room (PROTOCOL.md §3.4), so
 // one of these is nearly always the caller's clock, and a new statement
 // signed by the same clock would be refused the same way.
 func (s *Server) checkPrekey(id *protocol.Identity, statement, sig []byte) (*protocol.Prekey, *protocol.Certificate, error) {
@@ -311,14 +311,14 @@ func (s *Server) checkPrekey(id *protocol.Identity, statement, sig []byte) (*pro
 	return p, cert, nil
 }
 
-// prekey is PUT /v1/<address>/prekey (PROTOCOL.md §6.4). The authority is a
+// prekey is PUT /v1/<address>/prekey (PROTOCOL.md §11.9). The authority is a
 // statement ordered after the current one, signed under a certificate of the
 // identity, with a pass under that same certificate: no pass under the box's
 // current one is needed, which is how a box that lost its working key comes
 // back.
 //
 // A box's statements are ordered by their certificate's serial first and by
-// their own serial second (PROTOCOL.md §2b). So a prekey published at the
+// their own serial second (PROTOCOL.md §5). So a prekey published at the
 // highest serial there is, by whoever took a working key, holds nothing: the
 // box's next certificate passes it.
 //
@@ -349,7 +349,7 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 		return err
 	case b != nil && b.State == Revoked:
 		return revokedWith(b)
-	case !b.open(): // a box the server forgot comes back by a registration (PROTOCOL.md §6.4)
+	case !b.open(): // a box the server forgot comes back by a registration (PROTOCOL.md §12.4)
 		return noSuchMailbox
 	}
 	id, err := protocol.ParseIdentity(b.Identity)
@@ -361,7 +361,7 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 	// An identical retry: it was verified when it was stored, so only its
 	// pass is checked, and nothing changes. A certificate the identity has
 	// revoked signs nothing this server takes, the box's current statement
-	// sent again included (PROTOCOL.md §6.3a).
+	// sent again included (PROTOCOL.md §10.2).
 	if bytes.Equal(req.Prekey, b.Statement) && bytes.Equal(req.PrekeySignature, b.Signature) {
 		if listed, err := b.listed(b.CertSerial); err != nil {
 			return err
@@ -489,13 +489,13 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 // getBox is GET /v1/<address>, the one read of a box: everything a sender
 // needs before it posts, which is the identity document, the current prekey
 // statement with its signature, the key types the box declared with it, and
-// the revocation of its certificates held (PROTOCOL.md §4.1). A revoked
+// the revocation of its certificates held (PROTOCOL.md §11.8). A revoked
 // address is 410 with its record, which proves itself: a client takes
 // "revoked" on nothing less, and needs no second call for it. An address
 // with no box is 404, whatever its identity revoked of its certificates.
 // It takes no pass: it is public, and the gate counts it by the address it
 // comes from, whatever Authorization it carries, which nothing here reads
-// (PROTOCOL.md §4.1, §8; IronGall-dev/irongall-client#352). It is the one
+// (PROTOCOL.md §11.8, §11.5; IronGall-dev/irongall-client#352). It is the one
 // answer of the API that is gzipped, to a request that takes it.
 func (s *Server) getBox(w http.ResponseWriter, r *http.Request) error {
 	h, err := pathAddr(r)
@@ -521,7 +521,7 @@ func (s *Server) getBox(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// getRevocations is GET /v1/<address>/revocations (PROTOCOL.md §6.3): the
+// getRevocations is GET /v1/<address>/revocations (PROTOCOL.md §11.15): the
 // record this server holds of the address, with a box here or none, or 404
 // not_revoked. A box learns the same of the boxes it writes to from their read
 // (getBox); this route is for its own, where this server holds no box for it.
@@ -566,11 +566,11 @@ const (
 // holds nothing of is a record kept for good, so that one is counted as a
 // registration is, against its caller's address.
 //
-// A revocation of the address (PROTOCOL.md §6.3): the address is revoked
+// A revocation of the address (PROTOCOL.md §11.15): the address is revoked
 // for good, its box's mail and record are deleted, and the signature is kept
 // and served (revocations).
 //
-// A revocation of certificates (PROTOCOL.md §6.3a): the address goes on.
+// A revocation of certificates (PROTOCOL.md §10.2): the address goes on.
 // It revokes every certificate through a serial, and the highest stands: one
 // through a lower serial than the one held is refused, and the same one again
 // changes nothing. From then on no pass and no prekey statement under a

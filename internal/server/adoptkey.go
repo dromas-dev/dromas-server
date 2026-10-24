@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// An adopt key (PROTOCOL.md §6.5) lets a box join an account. The server
+// An adopt key (PROTOCOL.md §11.16) lets a box join an account. The server
 // keeps its SHA-256, as the key of the account's item for it, and never the
 // key, so a copy of the accounts table holds none, and a key is shown once,
 // when it is made. A secret of 112 bits or more is kept "in a hashed form

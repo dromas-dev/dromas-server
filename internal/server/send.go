@@ -12,7 +12,7 @@ import (
 	"github.com/IronGall-dev/irongall-client/protocol"
 )
 
-// send is POST /v1/<recipient>/messages (PROTOCOL.md §4.5, the server pipeline):
+// send is POST /v1/<recipient>/messages (PROTOCOL.md §11.10, the server pipeline):
 // cheapest check first, and only the last step writes. Every count is taken
 // before the work it guards and given back if that work does not happen.
 func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
@@ -32,7 +32,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 	}
 	// A refusal of the calls gives their wait alone. The sends a day are
 	// behind the dedupe (step 6): only it shows whether the call is new mail
-	// that spends them, and a retry spends none (PROTOCOL.md §8).
+	// that spends them, and a retry spends none (PROTOCOL.md §11.5).
 	if lim, err := s.limitsOf(ctx, from); err != nil {
 		return err
 	} else if err := s.spendCall(from, lim); err != nil {
@@ -246,7 +246,7 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 		return delivered{}, refused
 	}
 
-	// 8. First the box's ACL (PROTOCOL.md §6.2): deny, then allow. It is
+	// 8. First the box's ACL (PROTOCOL.md §11.14): deny, then allow. It is
 	// read before any quota is taken, so a refused send spends none of them.
 	// One code and one wording whether the sender was denied or is not on an
 	// allow list, so a sender cannot tell which.
@@ -311,7 +311,7 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 		From:       from,
 		Size:       len(p.ciphertext),
 		ReceivedAt: now.UTC().Truncate(time.Millisecond),
-		ExpiresAt:  now.UTC().Truncate(time.Millisecond).Add(protocol.Retention), // the TTL less the hour and a post's own time (PROTOCOL.md §0, §7)
+		ExpiresAt:  now.UTC().Truncate(time.Millisecond).Add(protocol.Retention), // the TTL less the hour and a post's own time (PROTOCOL.md §3.4, §13)
 	}
 	orig, err = s.store.PutMessage(ctx, to, h, p.ciphertext)
 	if err != nil {
@@ -439,7 +439,7 @@ func (s *Server) duplicate(w http.ResponseWriter, orig *Header, from protocol.Ad
 // checkStanzas requires exactly one native stanza, of the current prekey's
 // type, beside grease, the stanzas sorted by protocol.ReadStanzas, the one
 // reading of them a reader shares, which refuses before any key agreement
-// a file a server takes no send of (PROTOCOL.md §4.5 step 7, §5 check 1). A
+// a file a server takes no send of (PROTOCOL.md §11.10 step 7, §12.3 check 1). A
 // send names the current serial, so no retired prekey is live. Which KEY it
 // is encrypted to cannot be checked, by design of native age. Each case has
 // its own hint, in this order: a stanza of another type, none native, more

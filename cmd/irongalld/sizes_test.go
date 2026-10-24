@@ -11,8 +11,8 @@ import (
 )
 
 // irongalld serve refuses to start on a cap on a ciphertext above the
-// protocol's largest (PROTOCOL.md §4.5), or on one that is not a whole number
-// of its own padding blocks (§4.3a), naming the flag. It refuses before it
+// protocol's largest (PROTOCOL.md §11.10), or on one that is not a whole number
+// of its own padding blocks (§9.3), naming the flag. It refuses before it
 // listens or opens any store, so each call returns at once; one that has not
 // returned in a few seconds has started a server, which ends with the test.
 func TestServeRefusesASizeCapTheProtocolDoesNotAllow(t *testing.T) {

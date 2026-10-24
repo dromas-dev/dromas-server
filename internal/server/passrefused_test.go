@@ -1,6 +1,6 @@
 package server
 
-// How a pass is refused (PROTOCOL.md §6.1b; IronGall-dev/irongall-server#93).
+// How a pass is refused (PROTOCOL.md §8; IronGall-dev/irongall-server#93).
 //
 // Every certificate_not_current to a pass names, in certificate_serial, the
 // certificate the call takes a pass under, at each caller of checkPass and
@@ -253,8 +253,8 @@ func TestASendNamesTheSendersCurrentCertificate(t *testing.T) {
 // under an older one (revoked too), one under a later one never on record,
 // and one that is no pass. A send can only know whose pass it is by reading
 // it, so a send with no pass, or one that is no pass, is unauthorized
-// (PROTOCOL.md §6.1b). The way back is an upload under a later
-// certificate, whose pass is read under that one (PROTOCOL.md §6.1b, §6.4).
+// (PROTOCOL.md §8). The way back is an upload under a later
+// certificate, whose pass is read under that one (PROTOCOL.md §8, §11.9).
 func TestARevokedCurrentCertificateIsAnsweredBeforeThePass(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
@@ -320,7 +320,7 @@ func TestARevokedCurrentCertificateIsAnsweredBeforeThePass(t *testing.T) {
 
 // An address with no box whose identity revoked certificates: a registration
 // of a statement under one of them is certificate_revoked before its pass is
-// read, whatever it carries (PROTOCOL.md §3 step 6, §6.1b). Control: one
+// read, whatever it carries (PROTOCOL.md §11.7 step 6, §8). Control: one
 // above them has its pass read.
 func TestARegistrationUnderARevokedCertificateIsAnsweredBeforeThePass(t *testing.T) {
 	t.Parallel()

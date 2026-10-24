@@ -18,7 +18,7 @@ import (
 // pageSize is the list page: up to 50 messages (the delivery contract).
 const pageSize = 50
 
-// list is GET /v1/<address>/messages (PROTOCOL.md §5.1): metadata only,
+// list is GET /v1/<address>/messages (PROTOCOL.md §11.11): metadata only,
 // oldest first, pages of 50. Every answer is a page with the count, and
 // carries the poll interval in Retry-After; a first page carries its ETag
 // too, and a poll that sends it back is 304 while the page is unchanged
@@ -34,7 +34,7 @@ const pageSize = 50
 // handed. Only a list with something to return reads storage.
 func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
 	// The path and the query first, the cursor's decode among them, before
-	// the pass (PROTOCOL.md §5.1).
+	// the pass (PROTOCOL.md §11.11).
 	if _, err := pathAddr(r, cursorParam); err != nil {
 		return err
 	}
@@ -54,7 +54,7 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
 	// A page after the first exists and carries no tag, so its
 	// preconditions are known before its page is read, and before its
 	// cursor is looked at: a false one is a poll like any other (PROTOCOL.md
-	// §5.1), which takes no cursor.
+	// §11.11), which takes no cursor.
 	if hasCursor {
 		if err := precondition(r, targetState{exists: true, hint: hintList, also: []string{"Retry-After", poll}, spend: func() error { return s.spendPoll(box) }}); err != nil {
 			return err
@@ -280,9 +280,9 @@ func (s *Server) notHeld(r *http.Request, a protocol.Address) error {
 // on this server's word, and when, are in the list. A Range of one
 // open-ended byte range that begins inside the ciphertext is answered 206,
 // the bytes from there on, read from the store with the same range, and any
-// other with the whole body (PROTOCOL.md §5.2; protocol.RangeAsked): a fetch
+// other with the whole body (PROTOCOL.md §11.12; protocol.RangeAsked): a fetch
 // that was cut resumes so. A ranged fetch is counted as any fetch is. A
-// HEAD is no fetch (PROTOCOL.md §13): it reads only whether the box holds
+// HEAD is no fetch (PROTOCOL.md §11.2): it reads only whether the box holds
 // the message, takes no token of new mail and marks nothing, spends one of
 // the box's calls, and carries no Content-Length and reads no Range.
 func (s *Server) fetch(w http.ResponseWriter, r *http.Request) error {
