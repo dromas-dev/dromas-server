@@ -26,7 +26,7 @@ import (
 // Posts of the same ciphertext from one sender in flight at once are one
 // call (IronGall-dev/irongall-server#76): the second waits for the first and
 // is answered 200 with its receipt, never refused by a quota the first one
-// spent (PROTOCOL.md §8), for the sends a day, the pair cap and the box's
+// spent (PROTOCOL.md §11.5), for the sends a day, the pair cap and the box's
 // new mail alike. Another sender's post of the same bytes is its own, and is
 // answered 409 by the dedupe or the write.
 func TestPostsOfTheSameBytesInFlightAreOneCall(t *testing.T) {
@@ -54,8 +54,8 @@ func TestPostsOfTheSameBytesInFlightAreOneCall(t *testing.T) {
 			time.Sleep(5 * time.Millisecond)
 			go func() { defer wg.Done(); r2 = e.do("POST", to.path("/messages"), sealedTo(1, 1, ct), from.pass(1)) }()
 			wg.Wait()
-			if got := fmt.Sprint(r1.status, " ", r2.status); got != "201 200" {
-				t.Errorf("%s, trial %d: the same bytes posted twice at once answered %s %s, %s %s; want 201 and 200", c.name, i, got, r1.code(), r2.code(), r2.body)
+			if got := fmt.Sprint(r1.status, " ", r2.status); got != "201 200" && got != "200 201" {
+				t.Errorf("%s, trial %d: the same bytes posted twice at once answered %s %s, %s %s; want 201 and 200, whichever won", c.name, i, got, r1.code(), r2.code(), r2.body)
 			}
 		}
 	}
