@@ -48,4 +48,4 @@ gh api repos/IronGall-dev/irongall-server/security-advisories/reports \
 
 **Run them:** `README.md` § Build and run.
 
-**Where the rest is:** the threat model, the properties, the operator's power, the residual risks and the open questions for reviewers are [`CRYPTO-ANALYSIS.md`](CRYPTO-ANALYSIS.md). Every limit and where it is weak is [`LIMITS.md`](LIMITS.md); start there to break one.
+**Where the rest is:** the threat model, what a server can and cannot do, and the residual risks are the client repo's [`PROTOCOL.md`](https://github.com/IronGall-dev/irongall-client/blob/main/PROTOCOL.md) §15, Security considerations; the questions for an outside reviewer are the client repo's issue #35. Every limit and where it is weak is [`LIMITS.md`](LIMITS.md); start there to break one.

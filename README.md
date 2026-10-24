@@ -14,7 +14,6 @@ The server of [irongall.dev](https://irongall.dev): end-to-end encrypted, sender
 | `internal/server/` | The API (every route under `/v1/`, and `/to/<address>`, the page a box's link opens), a deployment's site when it gives one (`-site`), what each process holds in memory, the DynamoDB stream followers, the two stores (DynamoDB with S3 Express One Zone, and in memory) and the limits |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | How this server is built: processes, memory, the pass check, request paths, storage, failure modes and the stages of scale |
 | [`LIMITS.md`](LIMITS.md) | Every limit this server enforces, who pays for it, and where it is weak: there to be checked |
-| [`CRYPTO-ANALYSIS.md`](CRYPTO-ANALYSIS.md) | The design summarised for a reviewer: threat model, primitives, properties, limits and open questions |
 | [`SECURITY.md`](SECURITY.md) | How to report a vulnerability privately, and what this server must get right beside the code and tests that hold it |
 | `test/interop.sh` | The stock-tools client and the Go client, together, against a real `irongalld` |
 | `test/working-key-openssh.sh` | A measurement, not a test: what stock `ssh-keygen` does with a certificate an identity signs for a working key (the client repo's issue #30) |
