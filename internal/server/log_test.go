@@ -66,6 +66,7 @@ func (s deadS3) PutMessage(ctx context.Context, box protocol.Address, h *Header,
 // and the access line of its read match; a path's segment that is not the
 // address is named as a whole (loggedPath), the address inside it unseen.
 func TestNoLogLineCarriesAnAddress(t *testing.T) {
+	t.Parallel()
 	var logged bytes.Buffer
 	var a protocol.Address
 	a[0], a[31] = 0xab, 0xcd
@@ -119,6 +120,7 @@ func TestNoLogLineCarriesAnAddress(t *testing.T) {
 // The server is not wrapped in apitest: a site's pages are a deployment's,
 // which api/openapi.yaml does not describe (site_test.go's are not either).
 func TestTheAccessLogWritesWhatTheRoutersMatched(t *testing.T) {
+	t.Parallel()
 	site := t.TempDir()
 	page := strings.Repeat("p", 200) + ".html"
 	if err := os.WriteFile(filepath.Join(site, page), []byte("<p>a page</p>"), 0o600); err != nil {
@@ -198,6 +200,7 @@ func TestTheAccessLogWritesWhatTheRoutersMatched(t *testing.T) {
 // configuration with it is held in cmd/irongalld, where they run
 // (TestServeAndAccountWriteTheSDKsLinesRedacted, #81).
 func TestTheAWSSDKsLinesAreRedacted(t *testing.T) {
+	t.Parallel()
 	var logged bytes.Buffer
 	run := strings.Repeat("ab", 32)
 	AWSLogger(&logged).Logf(logging.Warn, "a response's Date: %s", run)
@@ -217,6 +220,7 @@ func (panicStreams) DescribeStream(context.Context, *dynamodbstreams.DescribeStr
 // redacts, and ends the process as a lost place does, so a restart rebuilds
 // memory: never its words on stderr, past the redaction.
 func TestAFollowersPanicIsLoggedRedactedAndEndsTheProcess(t *testing.T) {
+	t.Parallel()
 	var logged bytes.Buffer
 	l := redacting(log.New(&logged, "", 0))
 	f := &feed{streams: panicStreams{}, interval: time.Hour, logf: l.Printf, shards: map[string]*shard{}}

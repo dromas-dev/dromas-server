@@ -100,6 +100,7 @@ func rawGet(t *testing.T, srv *httptest.Server, target string) (int, string, str
 // without the slash redirects to. The API and the link page are never the
 // site's.
 func TestTheSiteServesEachPageAtItsPath(t *testing.T) {
+	t.Parallel()
 	srv := siteServer(t, relaxed(), true)
 	for path, want := range map[string]struct{ file, ctype string }{
 		"/":                     {"index.html", "text/html; charset=utf-8"},
@@ -137,6 +138,7 @@ func TestTheSiteServesEachPageAtItsPath(t *testing.T) {
 // A page is answered as a static file is: 304 to its ETag or a date not
 // before its own, a HEAD with no body, and a range.
 func TestASitePageAnswersConditionally(t *testing.T) {
+	t.Parallel()
 	srv := siteServer(t, relaxed(), true)
 	first, _ := get(t, srv, http.MethodGet, "/llms.txt")
 	if resp, body := get(t, srv, http.MethodGet, "/llms.txt", "If-None-Match", first.Header.Get("ETag")); resp.StatusCode != http.StatusNotModified || body != "" {
@@ -161,6 +163,7 @@ func TestASitePageAnswersConditionally(t *testing.T) {
 // a 404 among them, from one address at once, are each answered under the
 // default limits, while the API is not ready; a flood is refused.
 func TestASitePageSpendsOnlyAFloodBudget(t *testing.T) {
+	t.Parallel()
 	srv := siteServer(t, DefaultLimits(), false)
 	if resp, _ := get(t, srv, http.MethodGet, "/v1/"+strings.Repeat("0", 64)); resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("the API before it is ready: %d, want 503", resp.StatusCode)
@@ -184,6 +187,7 @@ func TestASitePageSpendsOnlyAFloodBudget(t *testing.T) {
 // Location is a URI reference, and with the request's query
 // (IronGall-dev/irongall-server#44): each lands on its page.
 func TestADirectorysRedirectNamesItsPath(t *testing.T) {
+	t.Parallel()
 	site, err := LoadSite(writeSite(t, map[string]string{
 		"p%41/index.html": "PCT", "q?x/index.html": "Q", "h#x/index.html": "HASH", "s p/index.html": "SPACE", "docs/index.md": "docs",
 	}))
@@ -217,6 +221,7 @@ func TestADirectorysRedirectNamesItsPath(t *testing.T) {
 
 // With no site, every path outside /v1/ and the link page is 404.
 func TestNoSiteIsNotFound(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(New(Config{Store: NewMemStore(time.Now), Limits: relaxed()}).Handler())
 	t.Cleanup(srv.Close)
 	for _, path := range []string{"/", "/llms.txt"} {
@@ -231,6 +236,7 @@ func TestNoSiteIsNotFound(t *testing.T) {
 // could never serve at its path (IronGall-dev/irongall-server#43), is refused
 // at start.
 func TestASiteOfAnythingElseIsRefused(t *testing.T) {
+	t.Parallel()
 	for name, files := range map[string]map[string]string{
 		"a type it holds none of": {"index.html": "x", "notes.pdf": "x"},
 		"a file with no type":     {"index.html": "x", "README": "x"},
@@ -258,6 +264,7 @@ func TestASiteOfAnythingElseIsRefused(t *testing.T) {
 // (IronGall-dev/irongall-server#45); a link inside it is still refused
 // (above), and a root that is no directory is refused as one.
 func TestASitesRootMayBeALink(t *testing.T) {
+	t.Parallel()
 	dir := writeSite(t, siteFiles)
 	link := filepath.Join(t.TempDir(), "current")
 	if err := os.Symlink(dir, link); err != nil {

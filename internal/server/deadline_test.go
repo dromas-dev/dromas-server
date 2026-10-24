@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -100,6 +101,7 @@ func closesWithin(conn net.Conn, d time.Duration) (bool, string) {
 // cut is counted once, in the one place every cut is
 // (IronGall-dev/irongall-client#413 item 3).
 func TestABodyThatStopsIsCutBehindEveryAnswer(t *testing.T) {
+	t.Parallel()
 	nobody := strings.Repeat("ab", 32)
 	cases := []struct {
 		name    string
@@ -171,6 +173,7 @@ func TestABodyThatStopsIsCutBehindEveryAnswer(t *testing.T) {
 // after its last chunk's line, or inside its trailer (#83), where net/http's
 // error for the trailer is not the deadline's.
 func TestAChunkedBodyCutInItsTrailerIs408(t *testing.T) {
+	t.Parallel()
 	nobody := strings.Repeat("ab", 32)
 	head := "PUT /v1/" + nobody + " HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n"
 	for _, c := range []struct{ name, req string }{
@@ -212,6 +215,10 @@ func TestAChunkedBodyCutInItsTrailerIs408(t *testing.T) {
 // would give it a second and three more; the control is a body its handler
 // reads, answered after the whole of it.
 func TestAnAnswerWrittenFirstOutlivesTheDrainOfItsBody(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("long: -short skips it; scripts/check.sh full and CI run it")
+	}
 	nobody := strings.Repeat("ab", 32)
 	cases := []struct {
 		name   string
@@ -311,6 +318,7 @@ func trickle(t *testing.T, addr, head string, size, rate int) (status string, at
 // once, long before its deadline, with no cut, and the connection is
 // closed (IronGall-dev/irongall-client#413 item 3).
 func TestABodyTheServerWouldNotDrainIsNotRead(t *testing.T) {
+	t.Parallel()
 	nobody := strings.Repeat("ab", 32)
 	for _, c := range []struct{ name, head, body string }{
 		{"its request asks to close", "Connection: close\r\nContent-Length: 1000\r\n", "{"},
@@ -352,6 +360,7 @@ func TestABodyTheServerWouldNotDrainIsNotRead(t *testing.T) {
 // The body is chunked, so nothing says how long it is, and comes at four
 // times the bound a second for two seconds.
 func TestADrainStopsAtNetHTTPsBound(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.BodyTimeout, l.BodyMinRate = time.Second, 1024
 	s := New(Config{Store: NewMemStore(time.Now), Limits: l})
@@ -398,6 +407,7 @@ func TestADrainStopsAtNetHTTPsBound(t *testing.T) {
 // and again on one connection and reads nothing, with a small receive
 // buffer.
 func TestAnAnswerNeverReadIsCut(t *testing.T) {
+	t.Parallel()
 	big := make([]byte, 8<<20)
 	if _, err := rand.Read(big); err != nil {
 		t.Fatal(err)
@@ -458,6 +468,7 @@ func TestAnAnswerNeverReadIsCut(t *testing.T) {
 // third of -body-min-rate, and the page waits on it, so a clock for the
 // whole answer would cut it.
 func TestASlowReaderIsNotCut(t *testing.T) {
+	t.Parallel()
 	page := make([]byte, 1<<20)
 	if _, err := rand.Read(page); err != nil {
 		t.Fatal(err)
@@ -530,6 +541,7 @@ func (s slowStore) Box(ctx context.Context, a protocol.Address) (*Box, error) {
 // net/http begins its own read of the connection, for the next request,
 // and a deadline set there would cancel every request still to come on it.
 func TestAPacedBodysDeadlineEndsWithTheBody(t *testing.T) {
+	t.Parallel()
 	l := pacedLimits()
 	e := newEnv(t, l, func(c *Config) { c.Store = slowStore{Store: c.Store, hold: 3 * time.Second} })
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
@@ -582,6 +594,7 @@ func TestAPacedBodysDeadlineEndsWithTheBody(t *testing.T) {
 // first is the router's 400, and the second is refused for the flood
 // budget.
 func TestOptionsStarIsCounted(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.RequestBurst, l.RequestRefill = 1, time.Hour
 	s := New(Config{Store: NewMemStore(time.Now), Limits: l})
@@ -609,6 +622,7 @@ func TestOptionsStarIsCounted(t *testing.T) {
 // none of an answer is cut at -body-timeout and what the buffers between
 // took, whatever the answer's size would earn.
 func TestAWriteIsCreditedOnlyForTheBytesItHasWritten(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.BodyTimeout, l.BodyMinRate = time.Second, 1000
 	s := New(Config{Store: NewMemStore(time.Now), Limits: l})
@@ -668,6 +682,13 @@ func (d *deadlines) SetReadDeadline(time.Time) error    { return nil }
 // ciphertext in one write, which was credited for all of it before any of
 // it moved. At this -body-min-rate the ciphertext would earn a minute.
 func TestAFetchNeverReadIsCutWhateverItsSize(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("long: -short skips it; scripts/check.sh full and CI run it")
+	}
+	if runtime.GOOS == "darwin" {
+		t.Skip("macOS loopback buffers far past a small SO_RCVBUF, so the paced writer is never held: CI runs it on Linux")
+	}
 	l := relaxed()
 	l.BodyTimeout, l.BodyMinRate, l.MaxSize = time.Second, 8<<10, 1<<20
 	e := newEnv(t, l)

@@ -159,6 +159,7 @@ func (s *Memory) listed(t *testing.T, box protocol.Address, id [32]byte) bool {
 // Each crash point between the writes, then the retry.
 
 func TestCrashAfterTheBody(t *testing.T) {
+	t.Parallel()
 	e, s := dynamoEnv(t)
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
 	failOnce(s, "put: after the body")
@@ -174,6 +175,7 @@ func TestCrashAfterTheBody(t *testing.T) {
 }
 
 func TestRetryAfterAckIsNotRedelivered(t *testing.T) {
+	t.Parallel()
 	e, s := dynamoEnv(t)
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
 	sent := capture(e, "/v1/"+b.Address().String())
@@ -211,6 +213,7 @@ func TestRetryAfterAckIsNotRedelivered(t *testing.T) {
 }
 
 func TestCrashBetweenAnAcksDeletes(t *testing.T) {
+	t.Parallel()
 	e, s := dynamoEnv(t)
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
 	ctx := context.Background()
@@ -234,6 +237,7 @@ func TestCrashBetweenAnAcksDeletes(t *testing.T) {
 }
 
 func TestHeaderWithoutBodyIsGone(t *testing.T) {
+	t.Parallel()
 	e, s := dynamoEnv(t)
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
 	ctx := context.Background()
@@ -259,6 +263,7 @@ func TestHeaderWithoutBodyIsGone(t *testing.T) {
 // whose dedupe read was stale writes the body before its conditional write
 // finds the acked item, leaving a body the lifecycle rule reaps.
 func TestAckedMessageWithABodyAgainIsGone(t *testing.T) {
+	t.Parallel()
 	e, s := dynamoEnv(t)
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
 	ctx := context.Background()
@@ -278,6 +283,7 @@ func TestAckedMessageWithABodyAgainIsGone(t *testing.T) {
 // through the streams, and an id the other has not heard of yet is read by
 // its key.
 func TestTwoProcesses(t *testing.T) {
+	t.Parallel()
 	e, _ := dynamoEnv(t)
 	ctx := context.Background()
 	other := startDynamo(t, e.clock.Now)
@@ -349,6 +355,7 @@ func TestTwoProcesses(t *testing.T) {
 // A restart starts with empty memory and is ready at once; each box is read
 // on its first use, once, and answered from memory after that.
 func TestRestartLoadsLazily(t *testing.T) {
+	t.Parallel()
 	e, _ := dynamoEnv(t)
 	ctx := context.Background()
 	a, b, c, f := e.box(protocol.Classic), e.box(protocol.Classic), e.box(protocol.Classic), e.box(protocol.Classic)
@@ -404,6 +411,7 @@ func TestRestartLoadsLazily(t *testing.T) {
 // carries no pass, and loads nothing there (ARCHITECTURE.md § Startup;
 // IronGall-dev/irongall-server#42).
 func TestAResentRevocationLoadsNothingElsewhere(t *testing.T) {
+	t.Parallel()
 	e, _ := dynamoEnv(t)
 	a := e.box(protocol.Classic)
 	rec := record(t, a)
@@ -425,6 +433,7 @@ func TestAResentRevocationLoadsNothingElsewhere(t *testing.T) {
 // Polls read a box once per process, on its first use: every later poll,
 // empty or not, is answered from memory, kept current by the stream.
 func TestPollsReadOncePerProcess(t *testing.T) {
+	t.Parallel()
 	e, s := dynamoEnv(t)
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
 	poll := func() reply {
@@ -457,6 +466,7 @@ func (throttled) Count(context.Context, protocol.Address) (int, error) {
 }
 
 func TestThrottleIs503(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	b := e.box(protocol.Classic)
 	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: throttled{e.store}, Limits: relaxed(), Now: e.clock.Now}).Handler()))
@@ -473,6 +483,7 @@ func TestThrottleIs503(t *testing.T) {
 
 // Until the store has loaded its memory, every call is a 503.
 func TestNotReadyIs503(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: NewMemStore(time.Now), Limits: relaxed(), Ready: func() bool { return false }}).Handler()))
 	defer srv.Close()
 	e := &env{t: t, srv: srv}
@@ -615,6 +626,7 @@ func (c *countingStore) Leave(ctx context.Context, b *Box) error {
 // one, a pass from before the renewal and a revoked box are all answered
 // from memory.
 func TestPollStaysInMemory(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
 	b, c := e.box(protocol.Classic), e.box(protocol.Classic)
@@ -671,6 +683,7 @@ func TestPollStaysInMemory(t *testing.T) {
 // A header past its expiry is never listed, though the TTL has not deleted
 // it yet.
 func TestExpiredHeadersAreNotListed(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
 	send(t, a, b, "expires first")
@@ -700,6 +713,7 @@ func TestExpiredHeadersAreNotListed(t *testing.T) {
 // turn. No client of this protocol posts the same bytes twice: a retry is
 // sealed afresh (§4.5).
 func TestTheDedupeRecordSpansTheMessagesLife(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
 	sent := capture(e, "/v1/"+b.Address().String())
@@ -725,6 +739,7 @@ func TestTheDedupeRecordSpansTheMessagesLife(t *testing.T) {
 // holds, changes nothing on the stream. A revocation adds to what memory
 // holds; the record's removal drops the box, whose next use reads it again.
 func TestTheRecordAndTheRevocationsAreMemorys(t *testing.T) {
+	t.Parallel()
 	s := NewDynamoStore(DynamoConfig{BoxCache: 10})
 	var a protocol.Address
 	a[0] = 7
@@ -786,6 +801,7 @@ func TestTheRecordAndTheRevocationsAreMemorys(t *testing.T) {
 // remembered missing, rather than keep answering for it as it was
 // (IronGall-dev/irongall-server#87). Control: an active image keeps it.
 func TestARecordInAStateNotWrittenIsRefused(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
@@ -889,6 +905,7 @@ func TestARecordInAStateNotWrittenIsRefused(t *testing.T) {
 // the record, which fails (IronGall-dev/irongall-server#87). In process
 // over canned tables.
 func TestADeletedImageIsNotServedFromTheCache(t *testing.T) {
+	t.Parallel()
 	e0 := newEnv(t, relaxed())
 	r := e0.raw().register(protocol.MaxPrekeyLifetime)
 	a := r.id.Address()
@@ -918,6 +935,7 @@ func TestADeletedImageIsNotServedFromTheCache(t *testing.T) {
 
 // A box's record is only written over the revision it was read at.
 func TestUpdateBoxIsConditional(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
 	b := e.box(protocol.Classic)
@@ -940,6 +958,7 @@ func TestUpdateBoxIsConditional(t *testing.T) {
 // included: a sender's retry once a later ACL has undone it is answered from
 // the dedupe record, and nothing comes back (PROTOCOL.md §6.2).
 func TestRetryAfterAPauseIsNotRedelivered(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
 	to := "/v1/" + b.Address().String()
@@ -965,6 +984,7 @@ func TestRetryAfterAPauseIsNotRedelivered(t *testing.T) {
 }
 
 func TestBoxCache(t *testing.T) {
+	t.Parallel()
 	var a1, a2, a3 protocol.Address
 	a1[0], a2[0], a3[0] = 1, 2, 3
 	c := newBoxCache(2)
@@ -1004,6 +1024,7 @@ func TestBoxCache(t *testing.T) {
 // one the server forgot or a revoked one is told so whatever it carries, and
 // only a call on a box in use is asked for that box's pass.
 func TestTheBoxsStateAnswersBeforeItsPass(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
 	poll := func(a protocol.Address, pass string) reply {
@@ -1045,6 +1066,7 @@ func TestTheBoxsStateAnswersBeforeItsPass(t *testing.T) {
 // collection's size, which the metric observes: the messages table has its
 // LSI, so the metric is not blind, and a new box's estimate tops out at 1 GB.
 func TestDynamoObservesTheItemCollection(t *testing.T) {
+	t.Parallel()
 	e, s := dynamoEnv(t)
 	m := NewMetrics(prometheus.NewRegistry())
 	s.dynamo().metrics = m

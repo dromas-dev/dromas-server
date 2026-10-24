@@ -41,6 +41,7 @@ func (c *recCache[K, V]) put(v V) {
 // merges, as a put does, and a write to another shard's address leaves a
 // read's token standing.
 func TestAFillAfterAWriteItDidNotSeeIsNotKept(t *testing.T) {
+	t.Parallel()
 	var a, other protocol.Address
 	a[0], other[0] = 1, 2
 	c := newBoxCache(10)
@@ -76,6 +77,7 @@ func TestAFillAfterAWriteItDidNotSeeIsNotKept(t *testing.T) {
 // clone that notes each copy it is handed to put, and whether the lock is
 // held then.
 func TestAWriteAndAFillAreEachOneStepUnderTheLock(t *testing.T) {
+	t.Parallel()
 	var a protocol.Address
 	a[0] = 7
 	var put []uint64 // the revs of the copies put
@@ -126,6 +128,7 @@ func TestAWriteAndAFillAreEachOneStepUnderTheLock(t *testing.T) {
 // the registration's view is put after it. A registration with no write to
 // its address meanwhile is cached, so the box's first call reads nothing.
 func TestARegistrationThatRacedARevocationIsNotCachedWithoutIt(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	s := NewDynamoStore(DynamoConfig{BoxCache: 10}) // never started: memory alone
 	now := time.Now()
@@ -155,6 +158,7 @@ func TestARegistrationThatRacedARevocationIsNotCachedWithoutIt(t *testing.T) {
 // parses (IronGall-dev/irongall-server#64): one that does not parse stands in
 // place of one that does, so that its next use fails closed.
 func TestMergedCopiesKeepEveryRevocation(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	r := e.raw()
 	a, doc := r.id.Address(), r.id.Document()
@@ -295,6 +299,7 @@ func (c *cannedTables) store() *Memory {
 // TestAnImageDuringAReadKeepsItsFillOut and
 // TestAnAccountChangeDuringItsReadKeepsTheFillOut hold the same on AWS.
 func TestAWriteDuringAReadKeepsItsFillOut(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := t.Context()
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
@@ -349,6 +354,7 @@ func TestAWriteDuringAReadKeepsItsFillOut(t *testing.T) {
 // remembered ends, so the next call reads the record, and a read begun
 // before it puts nothing. In process over canned tables.
 func TestARegistrationThatFindsARecordCountsIt(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	a := r.id.Address()
@@ -379,6 +385,7 @@ func TestARegistrationThatFindsARecordCountsIt(t *testing.T) {
 // a fill whose read began before one keeps its copy out
 // (IronGall-dev/irongall-server#97): memory alone, nothing read.
 func TestTheStreamsChangesAreCounted(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	a := r.id.Address()
@@ -421,6 +428,7 @@ func TestTheStreamsChangesAreCounted(t *testing.T) {
 // image of a newer record, or of a revocation of the address's certificates,
 // each through applyBoxImage, which counts it (#97).
 func TestAnImageDuringAReadKeepsItsFillOut(t *testing.T) {
+	t.Parallel()
 	e, s := dynamoEnv(t)
 	f := injectFaults(s)
 	ctx := context.Background()
@@ -490,6 +498,7 @@ func TestAnImageDuringAReadKeepsItsFillOut(t *testing.T) {
 // an account, through applyAccountRecord, which counts it (#97), keeps its
 // copy out of the account cache, as a box's does.
 func TestAnAccountChangeDuringItsReadKeepsTheFillOut(t *testing.T) {
+	t.Parallel()
 	e, s := dynamoEnv(t)
 	ctx := context.Background()
 	acc, _ := accountEnv(t, e, false, 1)
@@ -568,6 +577,7 @@ func accountChange(op stypes.OperationType, id string, rev uint64) stypes.Record
 // answer without it at the end is a copy kept, and one after a step is a
 // copy shown, which every reader of the cache is given.
 func TestEveryOrderOfAFillAndAWrite(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	a := r.id.Address()
@@ -724,6 +734,7 @@ func (s *heldRead) Box(context.Context, protocol.Address) (*Box, error) {
 // answered what it found. The lookups run in a synctest bubble, so the test
 // knows each is waiting on the shared read before it lets the read go.
 func TestALookupJoinedToAReadBegunBeforeARevocationReadsAgain(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	a := r.id.Address()
@@ -799,6 +810,7 @@ func TestALookupJoinedToAReadBegunBeforeARevocationReadsAgain(t *testing.T) {
 // taken; and an index that held the removed box takes the registration's
 // standing (IronGall-dev/irongall-client#407 item 2). Memory alone.
 func TestARegistrationAfterTheTTLsRemovalIsNewerThanTheRemovedRecord(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	a := r.id.Address()
@@ -864,6 +876,7 @@ func standsAt(b *Box) string {
 // sees the lock held, by the same taking of it as the check
 // (IronGall-dev/irongall-client#407 item 3).
 func TestAFillAndAMissAreEachOneStepUnderTheLock(t *testing.T) {
+	t.Parallel()
 	var a, other protocol.Address
 	a[0], other[0] = 7, 8
 	c := newBoxCache(10)

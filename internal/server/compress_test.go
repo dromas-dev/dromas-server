@@ -68,6 +68,7 @@ func varies(resp *http.Response) bool {
 // A request takes gzip by naming it, or x-gzip, with a weight above zero, or
 // by "*" when it does not name it (RFC 9110 §12.5.3, §12.4.2).
 func TestWhatTakesGzip(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		fields []string
 		want   bool
@@ -104,6 +105,7 @@ func TestWhatTakesGzip(t *testing.T) {
 // and is the JSON it is otherwise; to any other it is the JSON. Both say
 // they vary by Accept-Encoding.
 func TestABoxsReadIsGzippedWhenTaken(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	b := e.raw().register(protocol.MaxPrekeyLifetime)
 	url := e.srv.URL + b.path("")
@@ -140,6 +142,7 @@ func TestABoxsReadIsGzippedWhenTaken(t *testing.T) {
 // though one of three messages is long enough to gain from it, nor a fetch,
 // an error, an owner's read or the link page.
 func TestNoOtherAnswerIsGzipped(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	from, to := e.box(protocol.Classic), e.box(protocol.Classic)
 	r := send(t, from, to, strings.Repeat("the same words again ", 200))
@@ -177,6 +180,7 @@ func TestNoOtherAnswerIsGzipped(t *testing.T) {
 // 304 and a range answer to. An image, and a page gzip would make larger, are
 // answered as they are, and say nothing of Accept-Encoding.
 func TestASitesTextIsGzippedOnce(t *testing.T) {
+	t.Parallel()
 	text := strings.Repeat("what an agent reads first\n", 40)
 	site, err := LoadSite(writeSite(t, map[string]string{
 		"llms.txt":             text,

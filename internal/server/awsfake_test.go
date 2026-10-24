@@ -22,6 +22,7 @@ import (
 
 	"github.com/IronGall-dev/irongall-client/protocol"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
@@ -160,7 +161,9 @@ func (o onlyHost) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 // fakeStore is the store on DynamoDB over f, with a record cache and the
-// SDK's default retryer, as irongalld's config.LoadDefaultConfig leaves it.
+// SDK's default retryer, as irongalld's config.LoadDefaultConfig leaves it:
+// its attempts, quota and what it retries, with no pause between attempts, so
+// a test of a retried write waits for nothing the SDK's jitter would add.
 func fakeStore(t testing.TB, f *fakeAWS) *Memory {
 	t.Helper()
 	srv := httptest.NewServer(f)
@@ -176,6 +179,9 @@ func fakeStore(t testing.TB, f *fakeAWS) *Memory {
 		Credentials:  credentials.NewStaticCredentialsProvider("AKIDFAKE", "fake", ""),
 		BaseEndpoint: aws.String(srv.URL),
 		HTTPClient:   &http.Client{Transport: onlyHost{host: host, rt: tr}},
+		Retryer: func() aws.Retryer {
+			return retry.AddWithMaxBackoffDelay(retry.NewStandard(), time.Millisecond)
+		},
 	}
 	s := NewDynamoStore(DynamoConfig{AWS: cfg, BoxesTable: "boxes", MsgsTable: "msgs", AccountsTable: "accounts", Bucket: "bodies", BoxCache: 16})
 	s.dynamo().s3 = newS3(cfg, func(o *s3.Options) { o.UsePathStyle = true })

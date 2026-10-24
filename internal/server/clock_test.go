@@ -29,6 +29,7 @@ func (e *env) skewed(off *time.Duration) client.Options {
 // in full: it registers, mail under a certificate made that moment reaches
 // it and is delivered, its own mail is delivered, and it renews.
 func TestABoxWhoseClockIsOffByLessThanThePassAllows(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for _, off := range []time.Duration{-9 * time.Minute, -2 * time.Minute, -time.Second, time.Second, 2 * time.Second, 30 * time.Second, 3 * time.Minute, 49 * time.Minute, 50 * time.Minute} {
 		e := newEnv(t, relaxed())
@@ -60,6 +61,7 @@ func TestABoxWhoseClockIsOffByLessThanThePassAllows(t *testing.T) {
 // The two boxes at the far edges of what the server takes, 49 minutes fast
 // and 9 slow, exchange mail under certificates made that moment.
 func TestTheTwoClocksFurthestApart(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
 	fast, slow := 49*time.Minute, -9*time.Minute
@@ -92,6 +94,7 @@ func TestTheTwoClocksFurthestApart(t *testing.T) {
 // A box that cannot register leaves nothing in the way of registering once
 // its clock is right.
 func TestABoxWhoseClockIsTooFarOffIsRefusedAndTold(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for _, c := range []struct {
 		off  time.Duration
@@ -133,6 +136,7 @@ func TestABoxWhoseClockIsTooFarOffIsRefusedAndTold(t *testing.T) {
 // one it signs instead, which has run out by the server's clock. The mail is
 // delivered when the clock is right.
 func TestABoxWhoseClockGoesBackFetchesNothing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
 	var off time.Duration
@@ -176,6 +180,7 @@ func TestABoxWhoseClockGoesBackFetchesNothing(t *testing.T) {
 // days a client asks for, and refuses one a second longer. And it dates every
 // answer by that clock, which is how a refusal for a time states it.
 func TestThePrekeyCeilingAndTheDateOnAnAnswer(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	now := e.clock.Now()
 	for _, c := range []struct {

@@ -36,6 +36,7 @@ func (e *env) stands(a protocol.Address) (*Box, *protocol.Certificate) {
 // (PROTOCOL.md §7): a registration and every renewal set its expiry to the
 // later of its certificate's end and its prekey's last mail.
 func TestARecordExpiresWhenNothingOfTheBoxIsValid(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	now := e.clock.Now()
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
@@ -63,6 +64,7 @@ func TestARecordExpiresWhenNothingOfTheBoxIsValid(t *testing.T) {
 // account gone with the old one. What its identity revoked stays. A test
 // makes the delete the TTL makes.
 func TestAForgottenBoxRegistersAnew(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
 	now := e.clock.Now()
@@ -93,6 +95,7 @@ func TestAForgottenBoxRegistersAnew(t *testing.T) {
 // (sk 0x01); a revocation of the address deletes the record and keeps the
 // item. AWS only.
 func TestTheRecordAndTheRevocationsAreTwoItems(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e, s := dynamoEnv(t)
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
@@ -142,6 +145,7 @@ func TestTheRecordAndTheRevocationsAreTwoItems(t *testing.T) {
 // wrote: a revocation of the box's certificates, and the revocation of its
 // address, each answered from its memory once it arrives. AWS only.
 func TestASecondProcessLearnsWhatIsRevoked(t *testing.T) {
+	t.Parallel()
 	e, _ := dynamoEnv(t)
 	other := startDynamo(t, e.clock.Now)
 	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: other, Limits: relaxed(), Now: e.clock.Now, Ready: other.Ready}).Handler()))

@@ -53,6 +53,7 @@ func ranged(t *testing.T, e *env, l Limits) (*env, *rangeStore) {
 // Range, an If-Range beside one included, with the whole body, 200, read
 // whole. No answer is 416.
 func TestAFetchResumesByRange(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
 	e2, rs := ranged(t, e, relaxed())
@@ -112,6 +113,7 @@ func TestAFetchResumesByRange(t *testing.T) {
 // message fetched before, ranged or not, takes from the box's allowance of
 // repeats, and past it is 429 refetch_spent.
 func TestARangedFetchIsCountedAsAnyFetch(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
 	l := relaxed()

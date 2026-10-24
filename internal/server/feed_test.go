@@ -159,6 +159,7 @@ func (s *Memory) countOf(box protocol.Address) int {
 }
 
 func TestFeed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	insert, ack := stypes.OperationTypeInsert, stypes.OperationTypeModify
 
@@ -277,6 +278,7 @@ func TestFeed(t *testing.T) {
 // a deleted one; an account's other items, and accounts not cached, are not
 // memory's.
 func TestAccountRecords(t *testing.T) {
+	t.Parallel()
 	s := &Memory{accCache: newAccountCache(10)}
 	b := func(v []byte) stypes.AttributeValue { return &stypes.AttributeValueMemberB{Value: v} }
 	rec := func(op stypes.OperationType, id string, sk []byte, rev uint64, unmetered bool) stypes.Record {

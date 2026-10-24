@@ -48,6 +48,7 @@ type stateAnswer struct {
 // answer of its own, the call goes on, as a registration of an address with
 // no box and a revocation of one do.
 func TestEveryCallAboutABoxAnswersItsStateBeforeItsPass(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	e := newEnv(t, l)
 	// live is a box in use: the recipient of the sends below, and the box
@@ -280,6 +281,7 @@ func emptyOK(_, got reply) string {
 // limits are read from the code (limitsByName): one without its role in
 // retryRoles fails.
 func TestARetryIsAnsweredFromWhatIsKeptWhateverItWouldMakeNew(t *testing.T) {
+	t.Parallel()
 	for name := range New(Config{Store: NewMemStore(nil), Limits: relaxed()}).limitsByName() {
 		if _, ok := retryRoles[name]; !ok {
 			t.Errorf("the limit %s: no role of it in retryRoles", name)

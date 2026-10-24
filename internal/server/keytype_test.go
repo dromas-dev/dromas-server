@@ -47,6 +47,7 @@ func (e *env) rawP256() *raw {
 // the server checks the identity's signature when a certificate is put on
 // record, and a pass against that certificate after.
 func TestABoxOfTheOptionalKeyType(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	now := e.clock.Now()
 	p := e.rawP256().register(protocol.MaxPrekeyLifetime)
@@ -98,6 +99,7 @@ func TestABoxOfTheOptionalKeyType(t *testing.T) {
 // put a box's certificate into a pass they signed with a key of their own.
 // The hash matches, and the signature is what refuses it.
 func TestAPassThatCarriesAnotherBoxsCertificate(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	for name, victim := range map[string]*raw{"ssh-ed25519": e.raw(), "ecdsa-sha2-nistp256": e.rawP256()} {
 		victim.register(protocol.MaxPrekeyLifetime)
@@ -120,6 +122,7 @@ func TestAPassThatCarriesAnotherBoxsCertificate(t *testing.T) {
 // signed gives no pass, however the hash came to be there: it takes a fault
 // in the server or in its store, and this is the check that would catch one.
 func TestACertificateOnRecordThatTheIdentityDidNotSign(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
 	now := e.clock.Now()
@@ -175,6 +178,7 @@ func TestACertificateOnRecordThatTheIdentityDidNotSign(t *testing.T) {
 // end of the certificate it is under: a pass signed minutes before its
 // certificate ends would otherwise outlive it in memory.
 func TestARememberedPassEndsWithItsCertificate(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	now := e.clock.Now()
 	r := e.raw()
@@ -242,6 +246,7 @@ func (b bareSigner) PublicKey() ssh.PublicKey {
 // any other type is answered with its own code: it is neither a malformed
 // document nor a bad key.
 func TestAnIdentityTypeTheServerDoesNotRegister(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	now := e.clock.Now()
 
@@ -269,6 +274,7 @@ func TestAnIdentityTypeTheServerDoesNotRegister(t *testing.T) {
 // The Go client on a P-256 identity, through the real server: it registers,
 // and exchanges mail with a box on an Ed25519 identity.
 func TestGoClientOnAP256Identity(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	o := e.opts()
 	o.IdentityType = protocol.IdentityP256
@@ -294,6 +300,7 @@ func TestGoClientOnAP256Identity(t *testing.T) {
 // no receipt for mail the recipient's client would have refused. The
 // declaration is the last prekey's: a new prekey without one clears it.
 func TestTheSenderKeyTypesABoxDeclared(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	now := e.clock.Now()
 	p256, ed := e.rawP256().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)

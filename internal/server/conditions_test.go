@@ -62,6 +62,7 @@ func inAccount(e *env, r *raw, uses int) string {
 // does not. Where a condition is false, nothing the route does is done
 // (unchanged).
 func TestEveryRouteEvaluatesItsPreconditions(t *testing.T) {
+	t.Parallel()
 	forms := []struct {
 		name, field, value string
 	}{
@@ -266,6 +267,7 @@ func addressAt(t *testing.T, p string) protocol.Address {
 // is answered as it is without one, a false If-Match or If-None-Match: *
 // among them.
 func TestAPreconditionIsIgnoredWhereTheAnswerWouldBeARefusal(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	other := e.raw().register(protocol.MaxPrekeyLifetime)

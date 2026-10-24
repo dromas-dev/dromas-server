@@ -18,6 +18,7 @@ import (
 // second the dating truncates, is the room protocol.Retention leaves
 // (protocol.PostTime); the request's own time is bounded by its pass.
 func TestMailAtTheLastSecondOfItsLife(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for _, c := range []struct {
 		name           string

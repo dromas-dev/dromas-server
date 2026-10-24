@@ -31,6 +31,7 @@ import (
 // (IronGall-dev/irongall-server#86). Every answer carries the poll interval
 // in Retry-After, a 304's too.
 func TestAFirstPageIsNotModifiedWhileUnchanged(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.PairCap, l.BoxCap = 0, 0
 	e := newEnv(t, l)
@@ -111,6 +112,7 @@ func TestAFirstPageIsNotModifiedWhileUnchanged(t *testing.T) {
 // If-None-Match does: a box past its poll rate is refused 429 whatever it
 // sends.
 func TestAPollsIfMatchIsEvaluatedFirst(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.PairCap, l.BoxCap = 0, 0
 	e := newEnv(t, l)
@@ -181,6 +183,7 @@ func TestAPollsIfMatchIsEvaluatedFirst(t *testing.T) {
 // A 304 is a poll: it takes from the poll rate, and a box that polls faster is
 // refused 429, never answered 304, whatever it sends (PROTOCOL.md §5.1).
 func TestA304IsAPoll(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.PollBurst, l.PollRefill = 2, time.Hour
 	e := newEnv(t, l)
@@ -216,6 +219,7 @@ func TestA304IsAPoll(t *testing.T) {
 // An id that shares a held message's first 8 bytes is not that message: its
 // fetch and its ack are 404 from memory, and touch no storage.
 func TestAnIDThatSharesAPrefixIsNotHeld(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	e := newEnv(t, l)
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
@@ -286,6 +290,7 @@ func (f *tagFront) honest() {
 // it keeps that tag, and the mail sent after is delivered
 // (IronGall-dev/irongall-client#149).
 func TestAPlantedTagHidesNoMailAtAnHonestServer(t *testing.T) {
+	t.Parallel()
 	for _, plant := range []string{`",*,"`, `"x,*,y"`, `W/"a,W/*,b"`} {
 		e := newEnv(t, relaxed())
 		a, b := e.box(protocol.Classic), e.box(protocol.Classic)
@@ -313,6 +318,7 @@ func TestAPlantedTagHidesNoMailAtAnHonestServer(t *testing.T) {
 // Nor is that mail lost to the renewals the box makes meanwhile, which retire
 // the prekey it was sealed to.
 func TestAMailHiddenByAPlantedTagIsNotLost(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
 	f := &tagFront{plant: `",*,"`}

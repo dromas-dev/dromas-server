@@ -46,6 +46,7 @@ func (s *beforePut) PutMessage(ctx context.Context, box protocol.Address, h *Hea
 // box with its own pass, for a box revoked and for an address revoked with
 // no box here.
 func TestEvery410CarriesTheRecord(t *testing.T) {
+	t.Parallel()
 	hook := &beforePut{}
 	e := newEnv(t, relaxed(), func(c *Config) { hook.Store, c.Store = c.Store, hook })
 	until := e.clock.Now().Add(protocol.MaxPrekeyLifetime)

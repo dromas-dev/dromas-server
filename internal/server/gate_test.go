@@ -108,6 +108,7 @@ func respelled(t *testing.T, pass string) string {
 // a new state by being one of these; and each route that answers GET is
 // held to it for HEAD too.
 func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.RequestBurst, l.RequestRefill = 1, time.Hour
 	l.MissesPerMinute = 1000
@@ -271,6 +272,7 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 // from an address past its flood budget, every route is refused 429
 // requests, before its 503 (IronGall-dev/irongall-server#75's note).
 func TestAServerNotReadyCountsFirst(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.RequestBurst, l.RequestRefill = 1, time.Hour
 	e := newEnv(t, l, func(c *Config) { c.Ready = func() bool { return false } })
@@ -295,6 +297,7 @@ func TestAServerNotReadyCountsFirst(t *testing.T) {
 // (IronGall-dev/irongall-server#67), and a pass the process has checked
 // spends none of it: another box behind the same address goes on.
 func TestANewPassSpendsItsAddresssFloodBudget(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.RequestBurst, l.RequestRefill = 20, time.Hour
 	e, m, _ := metered(t, l)
@@ -360,6 +363,7 @@ func TestANewPassSpendsItsAddresssFloodBudget(t *testing.T) {
 // which nothing signs (IronGall-dev/irongall-server#69). A signature that
 // differs in a bit is checked, and refused.
 func TestARespelledPassCostsNoSecondCheck(t *testing.T) {
+	t.Parallel()
 	e, m, _ := metered(t, relaxed())
 	b := e.box(protocol.Classic)
 	poll := func(auth string) reply { return e.do("GET", "/v1/"+b.Address().String()+"/messages", nil, auth) }

@@ -60,6 +60,7 @@ func applied(a answer) answer { a.apply = true; return a }
 // controls: every attempt a fault; a failed condition or throttles alone,
 // nothing applied.
 func TestAWriteRetriedAfterAnAmbiguousAttemptMayHaveBeenApplied(t *testing.T) {
+	t.Parallel()
 	_, _, box := heldRecord(t)
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	msg := &Header{ID: [32]byte{7}, From: box.Addr, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
@@ -112,6 +113,7 @@ func TestAWriteRetriedAfterAnAmbiguousAttemptMayHaveBeenApplied(t *testing.T) {
 // condition on through): applied and answered 500, then the retry's failed
 // condition, and the raise is counted.
 func TestARaiseRetriedAfterAnAmbiguousAttemptMayHaveBeenApplied(t *testing.T) {
+	t.Parallel()
 	_, r, _ := heldRecord(t)
 	f := newFakeAWS()
 	f.dynamo = scripted("UpdateItem", applied(answer500), answerCCF)
@@ -131,6 +133,7 @@ func TestARaiseRetriedAfterAnAmbiguousAttemptMayHaveBeenApplied(t *testing.T) {
 // may have been applied all the same. The control is the same write on a
 // fresh client: three attempts.
 func TestADrainedRetryQuotaHidesNoAppliedWrite(t *testing.T) {
+	t.Parallel()
 	_, _, box := heldRecord(t)
 	for _, drained := range []bool{false, true} {
 		t.Run(fmt.Sprintf("drained=%v", drained), func(t *testing.T) {
@@ -204,6 +207,7 @@ func putItemMeets(first answer, change func(item map[string]any)) func(string, i
 // another sender at the same time, or of the same sender at another, a send
 // of those bytes that got there first, which this write did not make.
 func TestAPutRetriedOntoItsOwnItemIsStored(t *testing.T) {
+	t.Parallel()
 	_, from, _ := heldRecord(t)
 	to := protocol.Address{1, 2, 3}
 	for _, c := range []struct {
@@ -254,6 +258,7 @@ func TestAPutRetriedOntoItsOwnItemIsStored(t *testing.T) {
 // item, so nothing is stored. The control: a refusal the SDK models,
 // ResourceNotFound.
 func TestARefusalAWSStatedGivesTheCountBack(t *testing.T) {
+	t.Parallel()
 	_, from, box := heldRecord(t)
 	t.Run("UpdateItem", func(t *testing.T) {
 		for _, code := range []string{"ValidationException", "AccessDeniedException", "ResourceNotFoundException"} {
@@ -309,6 +314,7 @@ func TestARefusalAWSStatedGivesTheCountBack(t *testing.T) {
 // process never applied, so a read begun before it puts nothing, and leaves
 // the index (Memory.write).
 func TestAWriteThatMayHaveBeenAppliedForgetsItsAddress(t *testing.T) {
+	t.Parallel()
 	_, r, box := heldRecord(t)
 	notFound := answer{status: http.StatusBadRequest, body: dynErr("ResourceNotFoundException", "")}
 	validation := answer{status: http.StatusBadRequest, body: dynErr("ValidationException", "")}
@@ -465,6 +471,7 @@ func (s *overFake) PutMessage(ctx context.Context, box protocol.Address, h *Head
 // with one renewal a day, the next is refused (IronGall-dev/irongall-server#89).
 // The control: a renewal answered with a fault every attempt.
 func TestARenewalTheStoreMayHaveAppliedIsCounted(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name    string
 		answers []answer
@@ -500,6 +507,7 @@ func TestARenewalTheStoreMayHaveAppliedIsCounted(t *testing.T) {
 // 410 (IronGall-dev/irongall-server#89, #15). The controls are the same
 // sends whose write AWS answered 200.
 func TestASendWhoseWriteWasRetriedIsStored(t *testing.T) {
+	t.Parallel()
 	for _, retried := range []bool{false, true} {
 		dynamo := func() func(string, int, []byte) answer {
 			if retried {
@@ -620,6 +628,7 @@ func (b *boxesTable) answer(op string, n int, body []byte) answer {
 // echo. The control: a raise AWS refused leaves the index standing, and the
 // same pass is taken (IronGall-dev/irongall-server#89).
 func TestARevocationWhoseAnswerWasLostIsInTheNextPassCheck(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name    string
 		applied bool
@@ -682,6 +691,7 @@ func TestARevocationWhoseAnswerWasLostIsInTheNextPassCheck(t *testing.T) {
 // refusal stated, since its retry carries its first attempt's token
 // (TestAnAdoptsRetriesCarryItsFirstAttemptsToken).
 func TestEveryConditionalWriteRetriedAfterAnAmbiguousAttemptMayHaveBeenApplied(t *testing.T) {
+	t.Parallel()
 	_, _, box := heldRecord(t)
 	createBox := func(ctx context.Context, s *Memory) error { return s.CreateBox(ctx, cloneBox(box)) }
 	leave := func(ctx context.Context, s *Memory) error { return s.Leave(ctx, cloneBox(box)) }
@@ -745,6 +755,7 @@ func TestEveryConditionalWriteRetriedAfterAnAmbiguousAttemptMayHaveBeenApplied(t
 // DynamoDB Developer Guide, Transaction APIs, Idempotency; transact). The
 // fake answers every attempt with a 500 and keeps each one's token.
 func TestAnAdoptsRetriesCarryItsFirstAttemptsToken(t *testing.T) {
+	t.Parallel()
 	_, _, box := heldRecord(t)
 	var mu sync.Mutex
 	var tokens []string
@@ -771,6 +782,7 @@ func TestAnAdoptsRetriesCarryItsFirstAttemptsToken(t *testing.T) {
 // write whose outcome is unknown, 503, never 409 box_changed. The control:
 // a Leave whose condition failed alone is 409 (IronGall-dev/irongall-server#89).
 func TestALeaveTheStoreMayHaveAppliedIsNot409(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name    string
 		answers []answer
@@ -815,6 +827,7 @@ func TestALeaveTheStoreMayHaveAppliedIsNot409(t *testing.T) {
 // record cache and the index (IronGall-dev/irongall-server#101). The
 // control: a fault at every attempt.
 func TestAnAdoptAfterAnAmbiguousAttemptMayHaveBeenApplied(t *testing.T) {
+	t.Parallel()
 	_, _, box := heldRecord(t)
 	inProgress := answer{status: http.StatusBadRequest, body: dynErr("TransactionInProgressException", "")}
 	// A cancellation the SDK does not retry: for a conflict on the key's
@@ -882,6 +895,7 @@ func TestAnAdoptAfterAnAmbiguousAttemptMayHaveBeenApplied(t *testing.T) {
 // condition: with one registration an hour, neither it nor its client's
 // retry is 503, then 429 (IronGall-dev/irongall-client#411 item 2).
 func TestARegistrationWhoseOutcomeIsUnknownIsAnsweredFromTheRecord(t *testing.T) {
+	t.Parallel()
 	tb := &boxesTable{items: map[string]map[string]any{}}
 	var puts atomic.Int32
 	f := newFakeAWS()
@@ -922,6 +936,7 @@ func TestARegistrationWhoseOutcomeIsUnknownIsAnsweredFromTheRecord(t *testing.T)
 // retire's answer lost at every attempt, which may have been applied: the
 // box is forgotten.
 func TestAnAckWhoseBodyWasNotDeletedChangesNothing(t *testing.T) {
+	t.Parallel()
 	_, _, box := heldRecord(t)
 	id := [32]byte{7}
 	for _, c := range []struct {

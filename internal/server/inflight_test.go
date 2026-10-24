@@ -30,6 +30,7 @@ import (
 // new mail alike. Another sender's post of the same bytes is its own, and is
 // answered 409 by the dedupe or the write.
 func TestPostsOfTheSameBytesInFlightAreOneCall(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name string
 		set  func(*Limits)
@@ -113,6 +114,7 @@ func (s *revokedBetween) Box(ctx context.Context, a protocol.Address) (*Box, err
 // record is refused there, as its pass's check would have refused it
 // (sender), and its mail is not taken.
 func TestASenderRevokedDuringItsSendIsRefused(t *testing.T) {
+	t.Parallel()
 	s := &revokedBetween{}
 	e := newEnv(t, relaxed(), func(c *Config) { s.Store, c.Store = c.Store, s })
 	to, from := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
@@ -148,6 +150,7 @@ func (s *heldDeletes) DeleteMessages(ctx context.Context, a protocol.Address) er
 // one in flight and are answered 410, and the revoking PUT is answered with
 // its delete's result.
 func TestPUTsDuringARevocationsDeleteStartNoOther(t *testing.T) {
+	t.Parallel()
 	hs := &heldDeletes{started: make(chan struct{}), release: make(chan struct{})}
 	e := newEnv(t, relaxed(), func(c *Config) { hs.Store, c.Store = c.Store, hs })
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
@@ -184,6 +187,7 @@ func TestPUTsDuringARevocationsDeleteStartNoOther(t *testing.T) {
 // puts the body again, and the write that finds the item not live deletes it
 // (IronGall-dev/irongall-server#16). The message is not served either way.
 func TestADuplicateAfterAnAckLeavesNoBody(t *testing.T) {
+	t.Parallel()
 	e, s := dynamoEnv(t)
 	ctx := context.Background()
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
@@ -232,6 +236,7 @@ func (s slowRead) Box(ctx context.Context, a protocol.Address) (*Box, error) {
 // was refused before reading, makes its own read: it is never handed the
 // refusal of another caller's address (lookup).
 func TestALookupIsNeverRefusedForAnotherCallersMisses(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.MissesPerMinute = 1
 	var x, y protocol.Address
@@ -286,6 +291,7 @@ func (s alwaysRead) Box(ctx context.Context, a protocol.Address) (*Box, error) {
 // Lookups that share a read each get a copy of their own of the record, since
 // a caller may change the one it has (a renewal does).
 func TestLookupsThatShareAReadGetCopiesOfTheirOwn(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	b := e.raw().register(protocol.MaxPrekeyLifetime)
 	s := New(Config{Store: alwaysRead{e.store, make(chan struct{}, 2)}, Limits: relaxed(), Now: e.clock.Now})
@@ -420,6 +426,7 @@ func (s *leadDedupe) Dedupe(ctx context.Context, box protocol.Address, id [32]by
 // serials, which comes while it is in flight, is stored, never handed the
 // stale one's refusal (IronGall-dev/irongall-server#92).
 func TestAStaleSerialIsAPostOfItsOwn(t *testing.T) {
+	t.Parallel()
 	s := &leadDedupe{wait: time.Second, entered: make(chan struct{}), second: make(chan struct{}), read: make(chan struct{})}
 	e := newEnv(t, relaxed(), func(cfg *Config) { s.Store, cfg.Store = cfg.Store, s })
 	to, from := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
@@ -490,6 +497,7 @@ func (s *panicOnce) Box(ctx context.Context, a protocol.Address) (*Box, error) {
 // singleflight's DoChan would end the process on that panic, and Do hands it
 // to every caller (IronGall-dev/irongall-server#92).
 func TestAPanicInEachSingleFlightEndsOnlyItsCalls(t *testing.T) {
+	t.Parallel()
 	const n = 8
 	e := newEnv(t, relaxed())
 	p := &panicOnce{Store: e.store, entered: make(chan string, 3)}
@@ -569,6 +577,7 @@ func (s *changedBetween) Box(ctx context.Context, a protocol.Address) (*Box, err
 // pass's check and the send's read of its record is refused as its pass's
 // check would refuse it, and nothing is stored (send; IronGall-dev/irongall-server#92).
 func TestASenderChangedBetweenItsPassAndItsRecordIsRefused(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name   string
 		status int
@@ -647,6 +656,7 @@ func (c *cannedAWS) Do(r *http.Request) (*http.Response, error) {
 // (IronGall-dev/irongall-server#16, #92). TestADuplicateAfterAnAckLeavesNoBody
 // holds the first on AWS.
 func TestADuplicatesWriteDeletesOnlyAnAckedBody(t *testing.T) {
+	t.Parallel()
 	var box, from protocol.Address
 	box[0], from[0] = 1, 2
 	body := []byte("the same bytes")

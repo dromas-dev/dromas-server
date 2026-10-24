@@ -72,6 +72,7 @@ func record(t *testing.T, b *client.Box) *protocol.Revocations {
 }
 
 func TestRevocation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
 	a, b, c := e.box(protocol.Classic), e.box(protocol.Classic), e.box(protocol.Classic)
@@ -218,6 +219,7 @@ func TestRevocation(t *testing.T) {
 // identity revoked. A revocation of certificates alone leaves the read 404,
 // and a registration above it carries it.
 func TestARevocationIsKeptWithNoBox(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	now := e.clock.Now()
 
@@ -282,6 +284,7 @@ func TestARevocationIsKeptWithNoBox(t *testing.T) {
 // caller's address; one for an address with a box, or with revocations
 // already, is not.
 func TestARevocationWithNoBoxIsCountedAsARegistration(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.RegistrationsPerHour = 1
 	e := newEnv(t, l)
@@ -303,6 +306,7 @@ func TestARevocationWithNoBoxIsCountedAsARegistration(t *testing.T) {
 // part is the bytes that were put, and verifies, so a client takes "revoked"
 // from the one read with no second call and on none of the server's word.
 func TestARevokedBoxIsReadAsItsRecord(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	alone, withCerts := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 	certs := withCerts.certs(1)
@@ -348,6 +352,7 @@ func TestARevokedBoxIsReadAsItsRecord(t *testing.T) {
 // holds none, for an address with no box as for one with a box and nothing
 // revoked.
 func TestTheRevocationsOfAnyAddressAreServed(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	none, certsOnly, ended := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 	e.want(e.do("GET", revocationPath(protocol.Address{7}), nil, ""), 404, protocol.CodeNotRevoked)
@@ -396,6 +401,7 @@ func TestTheRevocationsOfAnyAddressAreServed(t *testing.T) {
 // exist does, and a revocation that verifies is refused, 429, while the
 // caller's address has none left.
 func TestJunkRevocationsAreLimited(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.MissesPerMinute = 2
 	e := newEnv(t, l)
@@ -418,6 +424,7 @@ func TestJunkRevocationsAreLimited(t *testing.T) {
 // box can be revoked at any moment, and a 410 is cacheable unless it says
 // otherwise. The page a link opens is the one answer that may be kept.
 func TestNoAnswerOfTheAPIIsStored(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	a := e.box(protocol.Classic)
 	base := "/v1/" + a.Address().String()
@@ -452,6 +459,7 @@ func mustJSONBytes(t *testing.T, b []byte) []byte {
 // about a revoked box lives only in the memory of the process that took the
 // revocation. AWS only: the in-memory store has one process.
 func TestARevocationOutlivesTheProcess(t *testing.T) {
+	t.Parallel()
 	e, _ := dynamoEnv(t)
 	a := e.box(protocol.Classic)
 	rec := record(t, a)
@@ -519,6 +527,7 @@ func (w *watchedStore) DeleteMessages(ctx context.Context, a protocol.Address) e
 // nothing more, so each is answered 410 from its record with no check, and
 // none draws another read of the box's messages: the box holds none.
 func TestASecondRevocationReadsNoMail(t *testing.T) {
+	t.Parallel()
 	w := &watchedStore{}
 	e := newEnv(t, relaxed(), watching(w))
 	owner := e.box(protocol.Classic)
@@ -550,6 +559,7 @@ func TestASecondRevocationReadsNoMail(t *testing.T) {
 // box is: memory shows the box holding mail, and that is what a second delete
 // is for.
 func TestARevocationRetriedAfterAFailedDeleteDeletes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	w := &watchedStore{}
 	e := newEnv(t, relaxed(), watching(w))
@@ -585,6 +595,7 @@ func TestARevocationRetriedAfterAFailedDeleteDeletes(t *testing.T) {
 // nobody. A process whose memory holds the address deletes both
 // (IronGall-dev/irongall-server#42).
 func TestAResentRevocationLoadsNothing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	w := &watchedStore{}
 	e := newEnv(t, relaxed(), watching(w))
@@ -632,6 +643,7 @@ func TestAResentRevocationLoadsNothing(t *testing.T) {
 // certificates is refused, with the revocation beside it, and nothing changes.
 // Once the box is revoked, anything sent for it is answered from its record.
 func TestARevocationComesWithTheCertificatesHeld(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)

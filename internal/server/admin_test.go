@@ -22,6 +22,7 @@ import (
 // once, the answer names the limits that held anything, and nothing else is
 // touched. The interface is never on the API's routes.
 func TestTheOperatorClearsAnAddress(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	e := newEnv(t, l)
 	l.MissesPerMinute = 2
@@ -92,6 +93,7 @@ func TestTheOperatorClearsAnAddress(t *testing.T) {
 // it written either way, and a trusted proxy reached over a link-local
 // address is believed.
 func TestAZonedCallerIsKeyedByItsSlash64(t *testing.T) {
+	t.Parallel()
 	peer := (&net.TCPAddr{IP: net.ParseIP("fe80::1"), Zone: "eth0", Port: 1234}).String() // as net/http fills RemoteAddr
 	l := relaxed()
 	l.MissesPerMinute = 2

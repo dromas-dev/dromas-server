@@ -22,6 +22,7 @@ import (
 // them spent, the next is refused, so a box cannot ask without end whether
 // its mail is still held.
 func TestAFalsePreconditionOnAHeldMessageSpendsOneOfTheBoxsCalls(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		method, field, value string
 		status               int
@@ -49,6 +50,7 @@ func TestAFalsePreconditionOnAHeldMessageSpendsOneOfTheBoxsCalls(t *testing.T) {
 // puts none (the client repo's #412 item 2): the box still holds the cursor
 // it was handed, and the page it names, asked for next, is a continuation.
 func TestAListWhosePreconditionIsFalseTakesNoCursor(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ name, field, value string }{
 		{"If-None-Match: *", "If-None-Match", "*"},
 		{`If-Match: "x"`, "If-Match", `"x"`},
@@ -113,6 +115,7 @@ func (s *revokeRace) Revoke(ctx context.Context, a protocol.Address, rv *Revocat
 // written by another request between the evaluation and the write fails it,
 // 409 box_changed, and what that other request wrote stands.
 func TestARevocationsIfNoneMatchIsHeldToWhatItsWriteReplaces(t *testing.T) {
+	t.Parallel()
 	race := &revokeRace{through: 2}
 	e := newEnv(t, relaxed(), func(c *Config) { race.Store = c.Store; c.Store = race })
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
@@ -158,6 +161,7 @@ func (e *env) head(path, pass string, hdr ...string) *http.Response {
 // of the description's, which api/apitest, which every test server is
 // wrapped in, holds it to. The routes are read from routes().
 func TestAHeadIsItsGetWithoutContent(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	to, msg := holding(e)
 	revoking := e.raw().register(protocol.MaxPrekeyLifetime)
@@ -214,6 +218,7 @@ func TestAHeadIsItsGetWithoutContent(t *testing.T) {
 // first fetch is its first, and only the one after it is a repeat, within
 // an allowance of one.
 func TestAMessagesHeadTakesNoTokenAndMarksNothing(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.DrainBurst, l.DrainRefill = 2, time.Hour
 	l.PollBurst, l.PollRefill = 1, time.Hour // the repeat allowance: one
@@ -235,6 +240,7 @@ func TestAMessagesHeadTakesNoTokenAndMarksNothing(t *testing.T) {
 // item 5): the send evaluates them before its dedupe, and takes no MAY of
 // RFC 9110 §13.1.1.
 func TestASendsRetryWithAFalsePreconditionIs412(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 	post := sealedTo(1, 1, ciphertextTo(t, to))
@@ -250,6 +256,7 @@ func TestASendsRetryWithAFalsePreconditionIs412(t *testing.T) {
 // client repo's #412 item 6): the box's next fetch of it is its first, and
 // only the one after that spends the repeat allowance, here one.
 func TestAFetchWithAFalsePreconditionLeavesTheMessageUnfetched(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.PollBurst, l.PollRefill = 1, time.Hour // the repeat allowance: one
 	e := newEnv(t, l)
@@ -272,6 +279,7 @@ func TestAFetchWithAFalsePreconditionLeavesTheMessageUnfetched(t *testing.T) {
 // where some are, is refused ErrStale and writes nothing, on the store the
 // tests run on, DynamoDB's where it is set.
 func TestARevocationsWriteHoldsWhatItsPreconditionsHeld(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := t.Context()
 	r := e.raw()
@@ -376,6 +384,7 @@ type reach struct {
 // marks no message fetched and makes no write of the store. The routes are
 // read from the code: one without its states here fails.
 func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.PairCap = 0
 	l.RequestBurst, l.RequestRefill = 1000, time.Hour
@@ -674,6 +683,7 @@ func drained(e *env, n int) (*raw, protocol.MessageList, string) {
 // names the cursor the box was handed is 200, takes from the poll rate, and
 // leaves the box holding that cursor, whose GET then continues the drain.
 func TestAListsHeadMovesNoCursor(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.PairCap = 0
 	l.PollBurst, l.PollRefill = 100, time.Hour
@@ -711,6 +721,7 @@ func TestAListsHeadMovesNoCursor(t *testing.T) {
 // item 2): once a page is due again, the same page continues the drain,
 // spending a page and no poll.
 func TestARefusedPageLeavesTheBoxItsCursor(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.PairCap, l.BoxCap = 0, pageSize+1 // two pages to a full box: an allowance of four at once
 	l.PollBurst, l.PollRefill = 100, time.Hour

@@ -31,6 +31,7 @@ var update = flag.Bool("update", false, "write testdata/aws-requests.golden agai
 // and each changed line is read before it is committed. A transaction's
 // client token is random, and left out.
 func TestEveryStoreCallSendsAWSWhatItSentBefore(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
 	box, other, from := protocol.Address{0xb0, 1}, protocol.Address{0xb1, 2}, protocol.Address{0xf0, 3}
 	id := [32]byte{0x1d, 4}

@@ -59,6 +59,7 @@ func (e *env) sendTo(to *raw, serial, under uint64, from *raw, fromUnder uint64)
 // and Box.revocations, which a store reads when it adds revocations to what
 // it holds, is an error too.
 func TestAStoredListThatDoesNotParseIsAnError(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
 	r, other := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
@@ -84,6 +85,7 @@ func TestAStoredListThatDoesNotParseIsAnError(t *testing.T) {
 }
 
 func TestRevokedCertificates(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
 	now := e.clock.Now()
@@ -259,6 +261,7 @@ func TestRevokedCertificates(t *testing.T) {
 // and always the highest held, so a sender has it before it posts with no
 // second call. A box nobody revoked carries none.
 func TestABoxIsReadWithTheRevocationOfItsCertificates(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	r.prekey(10, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
@@ -305,6 +308,7 @@ func TestABoxIsReadWithTheRevocationOfItsCertificates(t *testing.T) {
 // signature check that nothing has paid for, as one that is not a revocation
 // of the address does.
 func TestJunkRevocationsOfCertificatesAreLimited(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.MissesPerMinute = 2
 	e := newEnv(t, l)
@@ -324,6 +328,7 @@ func TestJunkRevocationsOfCertificatesAreLimited(t *testing.T) {
 // is delivered; and the box, whose working key before the renewal is now
 // worth nothing here, goes on at its address.
 func TestTheClientRevokesItsEarlierCertificates(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
@@ -366,6 +371,7 @@ func TestTheClientRevokesItsEarlierCertificates(t *testing.T) {
 // at the highest serial there is, with a working key someone took, does not
 // end the address: the box's next renewal passes it, and its senders follow.
 func TestAPrekeyAtTheHighestSerialDoesNotEndTheAddress(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
@@ -398,6 +404,7 @@ func TestAPrekeyAtTheHighestSerialDoesNotEndTheAddress(t *testing.T) {
 // revoked certificate lives only in the memory of the process that took the
 // revocation. AWS only: the in-memory store has one process.
 func TestARevocationOfCertificatesOutlivesTheProcess(t *testing.T) {
+	t.Parallel()
 	e, _ := dynamoEnv(t)
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	rec := r.certs(1)
@@ -431,6 +438,7 @@ func TestARevocationOfCertificatesOutlivesTheProcess(t *testing.T) {
 // whether it covers the box's current certificate. The record carries none
 // of it.
 func TestTheStandingKnowsTheRevokedCertificates(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
@@ -476,6 +484,7 @@ func TestTheStandingKnowsTheRevokedCertificates(t *testing.T) {
 // and revokes the taken certificate the same day. From then on this server
 // takes nothing more under that certificate.
 func TestTheRemedyRenewsWhenATakerSpentTheDaysRenewals(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	l := relaxed()
 	l.RenewalsPerDay = DefaultLimits().RenewalsPerDay
@@ -515,6 +524,7 @@ func TestTheRemedyRenewsWhenATakerSpentTheDaysRenewals(t *testing.T) {
 // same statement sent to PUT …/prekey is (PROTOCOL.md §3 step 5, §6.3a):
 // nothing under that certificate is taken, an identical retry included.
 func TestAnIdenticalRegistrationUnderARevokedCertificateIsRefused(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	e.want(e.do("PUT", r.path(""), r.registration(1), r.pass(1)), 200, "")

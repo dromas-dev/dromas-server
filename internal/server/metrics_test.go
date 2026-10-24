@@ -46,6 +46,7 @@ func metered(t *testing.T, l Limits) (*env, *Metrics, *prometheus.Registry) {
 // name, whom it counts and whether it was allowed; passes, lists and
 // fetches by kind; and how many keys each limit holds.
 func TestMetricsCountWhatTheServerDoes(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.PollBurst, l.PollRefill = 1, time.Minute
 	l.ReceiveBurst, l.ReceiveRefill = 10, time.Minute
@@ -97,6 +98,7 @@ func TestMetricsCountWhatTheServerDoes(t *testing.T) {
 // none of the boxes' addresses, the message's id, the caller's IP or a path
 // as it was sent.
 func TestMetricsCarryNoCallerValue(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.MissesPerMinute, l.RequestBurst, l.RequestRefill = 1, 2, time.Minute
 	e, _, reg := metered(t, l)
@@ -125,6 +127,7 @@ func TestMetricsCarryNoCallerValue(t *testing.T) {
 // Every call to AWS is counted by its service, operation and outcome, from a
 // fixed set, and timed with its retries (Metrics.InstrumentAWS).
 func TestMetricsCountTheStoresCalls(t *testing.T) {
+	t.Parallel()
 	refuse := true
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/x-amz-json-1.0")
@@ -182,6 +185,7 @@ func collectionsWant(gb float64) string {
 // and the upper bound of the estimate is observed, in GB: AWS's advice for a
 // table with an LSI, whose item collections are capped at 10 GB.
 func TestMetricsObserveTheItemCollectionAMessageWriteGrew(t *testing.T) {
+	t.Parallel()
 	f := newFakeAWS()
 	var asked atomic.Bool
 	f.dynamo = func(op string, _ int, body []byte) answer {

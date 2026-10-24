@@ -15,6 +15,7 @@ import (
 // type (PROTOCOL.md §13, AEP-193): a client reads the member and never the
 // words, so a value only in the words is one a client loses.
 func TestAnErrorsValuesAreMembers(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	l := relaxed()
 	l.SendsPerDay = 1

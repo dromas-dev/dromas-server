@@ -96,6 +96,7 @@ func costBox(t *testing.T, pq bool, retired int) (*Box, ssh.Signer) {
 
 // TestCostMemoryPerBox measures the heap each structure holds per box.
 func TestCostMemoryPerBox(t *testing.T) {
+	t.Parallel()
 	costOnly(t)
 	const n = 200_000
 	addrs := costAddrs(n)
@@ -275,6 +276,7 @@ func valueSize(v types.AttributeValue) int {
 // functions that build them, and the write units each costs (1 per KB,
 // rounded up).
 func TestCostItemSizes(t *testing.T) {
+	t.Parallel()
 	costOnly(t)
 	wcu := func(n int) int { return (n + 1023) / 1024 }
 	for _, c := range []struct {

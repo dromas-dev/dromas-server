@@ -15,6 +15,7 @@ import (
 // stale before its expires_at (PROTOCOL.md §4.5, §7). A message pair_full
 // held in its sender's outbox is the case the TTL's monthly promise is for.
 func TestMailIsTakenWhileTheServerServesIt(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	day := 24 * time.Hour
 	t.Run("held by pair_full, read every 30 days", func(t *testing.T) {

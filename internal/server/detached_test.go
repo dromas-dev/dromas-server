@@ -76,6 +76,7 @@ func sealFor(t *testing.T, to *raw, serial uint64) []byte {
 // callers hang up while each is being written are stored, and each spends
 // its count, so the next one is refused.
 func TestAWriteOutlivesItsCallersHangUp(t *testing.T) {
+	t.Parallel()
 	ctx0 := context.Background()
 	l := relaxed()
 	l.SendsPerDay, l.RenewalsPerDay = 1, 1
@@ -167,6 +168,7 @@ func (s *heldPut) PutMessage(ctx context.Context, box protocol.Address, h *Heade
 // before the revocation and writes after it deletes what it wrote, and is
 // answered 410.
 func TestMailSentAroundARevocationDoesNotOutliveIt(t *testing.T) {
+	t.Parallel()
 	ctx0 := context.Background()
 	s := &heldPut{}
 	e := newEnv(t, relaxed(), func(c *Config) { s.Store, c.Store = c.Store, s })
@@ -217,6 +219,7 @@ func (s *failPut) PutMessage(ctx context.Context, box protocol.Address, h *Heade
 // not. Each error is the one the store returns when the fake of AWS answers
 // so, as the SDK makes it, or when its backend answers so (faults).
 func TestACountIsKeptWhenItsWriteMayHaveBeenApplied(t *testing.T) {
+	t.Parallel()
 	every := func(a answer) func(string, int, []byte) answer { return func(string, int, []byte) answer { return a } }
 	everyS3 := func(a answer) func(string, int) answer { return func(string, int) answer { return a } }
 	// put is the error of a send's PutMessage on ctx when AWS answers so.

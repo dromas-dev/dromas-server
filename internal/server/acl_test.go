@@ -62,6 +62,7 @@ func (e *env) sealTo(to *client.Box) sealed {
 // anything is stored. A GET carries the ETag of the ACL held, and a PUT,
 // whose ACL may not be what was sent, carries none (RFC 9110 §9.3.4).
 func TestACLRoute(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.ACLEntries = 3
 	e := newEnv(t, l)
@@ -165,6 +166,7 @@ func TestACLRoute(t *testing.T) {
 // body is read (RFC 9110 §13.2.1). One without If-Match replaces whatever is
 // held, so no ACL is the last the server takes (IronGall-dev/irongall-client#360).
 func TestAnACLsIfMatch(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.ACLEntries = 3
 	e := newEnv(t, l)
@@ -258,6 +260,7 @@ func (o *onRead) Read(p []byte) (int, error) {
 // false (412), and one with the tag now held is taken
 // (IronGall-dev/irongall-server#88).
 func TestAnACLsIfMatchIsHeldToTheACLItsWriteReplaces(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	b, x := e.box(protocol.Classic), e.box(protocol.Classic)
 	path := "/v1/" + b.Address().String() + "/acl"
@@ -302,6 +305,7 @@ func TestAnACLsIfMatchIsHeldToTheACLItsWriteReplaces(t *testing.T) {
 // If-Match, compared strongly, is 412, and then an If-None-Match that names
 // the tag, compared weakly, is 304 with the tag and no body.
 func TestAnACLsGETReadsItsPreconditions(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	b, other := e.box(protocol.Classic), e.box(protocol.Classic)
 	path := "/v1/" + b.Address().String() + "/acl"
@@ -350,6 +354,7 @@ func TestAnACLsGETReadsItsPreconditions(t *testing.T) {
 // record one item: a body over that is too_large with the body's bytes as
 // its limit, the one limit there is (PROTOCOL.md §13).
 func TestAnUnboundedACLNamesItsBodysBytes(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.ACLEntries = 0
 	e := newEnv(t, l)
@@ -366,6 +371,7 @@ func TestAnUnboundedACLNamesItsBodysBytes(t *testing.T) {
 // its sender is denied or only not allowed, before anything of the sender's
 // quotas is spent; a sender it lets in is taken.
 func TestACLRefusesSends(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.SendsPerDay = 1
 	e := newEnv(t, l)
@@ -402,6 +408,7 @@ func TestACLRefusesSends(t *testing.T) {
 // receipt, since a retry is no new mail (PROTOCOL.md §4.5 step 6). One that
 // denies everyone is how a box pauses, and a later ACL undoes it (§6.2).
 func TestACLDenyPurges(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
 	a, b, c := e.box(protocol.Classic), e.box(protocol.Classic), e.box(protocol.Classic)
@@ -455,6 +462,7 @@ func TestACLDenyPurges(t *testing.T) {
 // On DynamoDB, an ACL put through one process reaches another through the
 // stream, and that process then refuses what it refuses.
 func TestACLReachesAnotherProcess(t *testing.T) {
+	t.Parallel()
 	e, _ := dynamoEnv(t)
 	other := startDynamo(t, e.clock.Now)
 	srv2 := httptest.NewServer(apitest.Handler(t, New(Config{Store: other, Limits: relaxed(), Now: e.clock.Now, Ready: other.Ready}).Handler()))

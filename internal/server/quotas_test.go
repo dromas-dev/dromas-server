@@ -54,6 +54,7 @@ func waits(r reply) int {
 // it counted the call against in subject (PROTOCOL.md §13): the box for a
 // call with its pass, the address for one with none.
 func TestEveryRefusalNamesItsLimit(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.PollBurst, l.PollRefill = 1, time.Minute
 	l.CallBurst, l.CallRefill = 1, time.Minute
@@ -93,6 +94,7 @@ func TestEveryRefusalNamesItsLimit(t *testing.T) {
 // its calls is told their wait, and one past its sends too meets them once
 // that wait is over (IronGall-dev/irongall-server#61).
 func TestARefusalGivesTheLongestWait(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.CallBurst, l.CallRefill = 1, time.Minute
 	l.SendsPerDay, l.RenewalsPerDay = 1, 1
@@ -135,6 +137,7 @@ func TestARefusalGivesTheLongestWait(t *testing.T) {
 // calls' wait, and is then answered with the original receipt
 // (IronGall-dev/irongall-server#61).
 func TestARetryPastTheCallsIsDeferredByTheCalls(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.CallBurst, l.CallRefill = 2, time.Minute
 	l.SendsPerDay = 1
@@ -164,6 +167,7 @@ func TestARetryPastTheCallsIsDeferredByTheCalls(t *testing.T) {
 // from one /64 to the next, a refusal by either spends neither, and an IPv4
 // address has no /48 count. The operator's clear forgets both.
 func TestRegistrationsAreCountedByTheRange(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.RegistrationsPerHour, l.RangeRegistrationsPerHour = 2, 3
 	e := newEnv(t, l)
@@ -200,6 +204,7 @@ func TestRegistrationsAreCountedByTheRange(t *testing.T) {
 // (IronGall-dev/irongall-server#34). A call whose pass comes first spends its
 // box's budgets, never this one, and another address's budget is its own.
 func TestTheFloodBudget(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.RequestBurst, l.RequestRefill = 8, time.Second
 	e := newEnv(t, l)
@@ -267,6 +272,7 @@ func TestTheFloodBudget(t *testing.T) {
 // not in its canonical form or of a subtree named without its slash. A route
 // that takes HEAD as GET answers it as itself.
 func TestWhatNoRouteAnswersIsCounted(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.RequestBurst, l.RequestRefill = 1, time.Hour
 	e := newEnv(t, l)
@@ -304,6 +310,7 @@ func TestWhatNoRouteAnswersIsCounted(t *testing.T) {
 // and leaves a CONNECT's path as sent (IronGall-dev/irongall-server#60). A
 // route that takes a pass spends none of the flood budget.
 func TestARequestIsCountedOnceWhateverItsPathEscapes(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.RequestBurst, l.RequestRefill = 3, time.Hour
 	e := newEnv(t, l)
@@ -339,6 +346,7 @@ func TestARequestIsCountedOnceWhateverItsPathEscapes(t *testing.T) {
 // first, by the limit's name (limits top): which box takes the most new mail,
 // say. It keeps nothing, and knows every limit by the name a refusal gives it.
 func TestLimitsTop(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.ReceiveBurst, l.ReceiveRefill = 10, time.Minute
 	e := newEnv(t, l)
@@ -370,6 +378,7 @@ func TestLimitsTop(t *testing.T) {
 // deeper in debt than one that spent 51, though both show 2 s, and is the
 // one -n 1 lists.
 func TestLimitsTopListsTheDeepestInDebtFirst(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.RequestBurst, l.RequestRefill = DefaultLimits().RequestBurst, DefaultLimits().RequestRefill
 	e := newEnv(t, l)

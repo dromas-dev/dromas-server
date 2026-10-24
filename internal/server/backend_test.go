@@ -550,6 +550,7 @@ var backendReads = []string{"ReadAddress", "ReadLive", "List", "Message", "Dedup
 // 3). The writes are held to the interface's methods: one added there and
 // not here fails.
 func TestEveryWriteOfTheBackendReachesMemoryByItsOutcome(t *testing.T) {
+	t.Parallel()
 	writes := backendWrites()
 	bt := reflect.TypeFor[Backend]()
 	for i := range bt.NumMethod() {
@@ -687,6 +688,7 @@ func TestEveryWriteOfTheBackendReachesMemoryByItsOutcome(t *testing.T) {
 // comes as the DynamoDB backend decodes its stream's record. Every kind of
 // change is here: one added and not here fails.
 func TestAnItemThatDoesNotReadIsGoneWhateverItsKind(t *testing.T) {
+	t.Parallel()
 	b := func(v []byte) stypes.AttributeValue { return &stypes.AttributeValueMemberB{Value: v} }
 	s := func(v string) stypes.AttributeValue { return &stypes.AttributeValueMemberS{Value: v} }
 	modify := func(img map[string]stypes.AttributeValue) stypes.Record {
@@ -759,6 +761,7 @@ func TestAnItemThatDoesNotReadIsGoneWhateverItsKind(t *testing.T) {
 // first, would keep out by ending the miss; and two writes' changes go in
 // the order they were made.
 func TestTheInMemoryFeedComesAfterItsWritersApply(t *testing.T) {
+	t.Parallel()
 	_, _, rec := heldRecord(t)
 	ctx := t.Context()
 	s := NewMemStore(time.Now)

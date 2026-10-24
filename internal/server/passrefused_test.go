@@ -110,6 +110,7 @@ func (e *env) notCurrentNaming(r reply, n uint64) {
 // register: a new box's registration takes a pass under its statement's
 // certificate, and names that one.
 func TestARegistrationOfANewBoxNamesItsStatementsCertificate(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	r := e.raw()
 	r.prekey(5, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
@@ -139,6 +140,7 @@ func TestARegistrationOfANewBoxNamesItsStatementsCertificate(t *testing.T) {
 // process's memory does not hold, names the box's current certificate, for a
 // pass under another certificate and for a record that does not verify.
 func TestARegistrationOfABoxNotInMemoryNamesItsCurrentCertificate(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed(), func(c *Config) { c.Store = unknownStore{c.Store} })
 	r := at3(e)
 	for name, pass := range otherPasses(r, 3) {
@@ -151,6 +153,7 @@ func TestARegistrationOfABoxNotInMemoryNamesItsCurrentCertificate(t *testing.T) 
 
 // registered: the same, for a box this process holds.
 func TestARegistrationOfABoxInMemoryNamesItsCurrentCertificate(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	r := at3(e)
 	for name, pass := range otherPasses(r, 3) {
@@ -163,6 +166,7 @@ func TestARegistrationOfABoxInMemoryNamesItsCurrentCertificate(t *testing.T) {
 
 // prekey, an identical retry: the box's current certificate.
 func TestAnIdenticalUploadNamesTheCurrentCertificate(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	r := at3(e)
 	for name, pass := range otherPasses(r, 3) {
@@ -176,6 +180,7 @@ func TestAnIdenticalUploadNamesTheCurrentCertificate(t *testing.T) {
 // prekey, an upload: the new statement's certificate, not the box's current
 // one, whatever the pass is under.
 func TestAnUploadNamesItsStatementsCertificate(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	r := at3(e)
 	r.prekey(5, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
@@ -194,6 +199,7 @@ func TestAnUploadNamesItsStatementsCertificate(t *testing.T) {
 // certificate, for a pass under another certificate and for a record that
 // does not verify.
 func TestEveryOwnerCallNamesTheCurrentCertificate(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	r := at3(e)
 	id := strings.Repeat("a", 64)
@@ -226,6 +232,7 @@ func TestEveryOwnerCallNamesTheCurrentCertificate(t *testing.T) {
 
 // sender: a send names the sender's current certificate.
 func TestASendNamesTheSendersCurrentCertificate(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	r, o := at3(e), e.raw().register(protocol.MaxPrekeyLifetime)
 	r.certify(2)
@@ -249,6 +256,7 @@ func TestASendNamesTheSendersCurrentCertificate(t *testing.T) {
 // (PROTOCOL.md §6.1b). The way back is an upload under a later
 // certificate, whose pass is read under that one (PROTOCOL.md §6.1b, §6.4).
 func TestARevokedCurrentCertificateIsAnsweredBeforeThePass(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	r, o := at3(e), e.raw().register(protocol.MaxPrekeyLifetime)
 	later := e.passFor(r.certify(5), r.id.Address(), e.name())
@@ -315,6 +323,7 @@ func TestARevokedCurrentCertificateIsAnsweredBeforeThePass(t *testing.T) {
 // read, whatever it carries (PROTOCOL.md §3 step 6, §6.1b). Control: one
 // above them has its pass read.
 func TestARegistrationUnderARevokedCertificateIsAnsweredBeforeThePass(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	m := e.raw()
 	e.want(e.do("PUT", m.path("/revocations"), m.certs(4), ""), 200, "")

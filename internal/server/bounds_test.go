@@ -38,6 +38,10 @@ const streamOp = "DynamoDBStreams_20120810."
 // another, the fake answers the first and holds the one named: a delete of
 // a box's mail reaches its delete of the bodies so.
 func TestEveryCallToAWSEndsAtItsBound(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("long: -short skips it; scripts/check.sh full and CI run it")
+	}
 	_, _, box := heldRecord(t)
 	hang := answer{hang: true}
 	now := time.Now().UTC().Truncate(time.Millisecond)
@@ -279,6 +283,10 @@ func postBytes(c *http.Client, url string, ct []byte, pass string) int {
 // the same sender is answered at once, and a lookup's shared read (lead) is
 // bounded the same way.
 func TestAPostsSharedReadEndsAtItsBound(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("long: -short skips it; scripts/check.sh full and CI run it")
+	}
 	h := &hangingDedupe{started: make(chan struct{}), let: make(chan struct{})}
 	e := newEnv(t, relaxed(), func(c *Config) { h.Store, c.Store = c.Store, h })
 	to, from := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
@@ -348,6 +356,10 @@ func (s *holdDedupe) Dedupe(ctx context.Context, box protocol.Address, id [32]by
 // though a large send meanwhile, from any sender, is refused 503
 // (IronGall-dev/irongall-server#91).
 func TestAHeldReadGivesBackTheLargeRead(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("long: -short skips it; scripts/check.sh full and CI run it")
+	}
 	l := relaxed()
 	l.MaxSize, l.AccountMaxSize = 16<<10, 64<<10
 	l.BodyTimeout = 300 * time.Millisecond
@@ -457,6 +469,7 @@ func (s *readDeadlines) Box(ctx context.Context, a protocol.Address) (*Box, erro
 // recipient's account and its record read again after the write
 // (IronGall-dev/irongall-server#91).
 func TestEveryReadOfASendsSharedCallIsBounded(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	s := &readDeadlines{seen: map[string]time.Duration{}}
 	e := newEnv(t, relaxed(), func(c *Config) { s.Store, c.Store = c.Store, s })
@@ -509,6 +522,7 @@ func (b *boundedFirstRead) GetRecords(ctx context.Context, in *dynamodbstreams.G
 // there is no lost place: the follower logs it and reads the shard again at
 // its next pass, as after any failed read (IronGall-dev/irongall-server#91).
 func TestAFollowersReadEndedAtItsBoundIsReadAgain(t *testing.T) {
+	t.Parallel()
 	fs, f, s, box, now := feedFixture(t)
 	b := &boundedFirstRead{fakeStream: fs}
 	var mu sync.Mutex

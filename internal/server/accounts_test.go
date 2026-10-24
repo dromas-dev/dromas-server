@@ -30,6 +30,7 @@ import (
 
 // An adopt key names its account, and is known by its SHA-256.
 func TestAdoptKeys(t *testing.T) {
+	t.Parallel()
 	key, hash, err := NewAdoptKey("echo")
 	if err != nil {
 		t.Fatal(err)
@@ -70,6 +71,7 @@ func TestAdoptKeys(t *testing.T) {
 // The accounts table keeps an adopt key's SHA-256 and never the key, so a
 // copy of the table holds no key.
 func TestAnAdoptKeyIsKeptAsItsHash(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
 	acc, key := accountEnv(t, e, true, 1)
@@ -154,6 +156,7 @@ func adopt(t *testing.T, b *client.Box, key string) string {
 }
 
 func TestAccounts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	l := relaxed()
 	l.SendsPerDay, l.MaxSize, l.AccountMaxSize = 2, 4096, 16384 // the smallest message is 2,048 bytes
@@ -301,6 +304,7 @@ func TestAccounts(t *testing.T) {
 
 // Adopt and Leave write only over the record they were given.
 func TestAdoptAndLeaveNameTheRecord(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
 	acc, key := accountEnv(t, e, true, 1)
@@ -350,6 +354,7 @@ func (s *adoptCounting) Adopt(ctx context.Context, b *Box, account string, key [
 // A key that is not this server's, or is spent or expired, is refused after
 // a read of its item, and never reaches the write of the box's record.
 func TestARefusedKeyWritesNothing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	l := relaxed()
 	e := newEnv(t, l)
@@ -373,6 +378,7 @@ func TestARefusedKeyWritesNothing(t *testing.T) {
 }
 
 func TestAdoptRaceIsAConflict(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	e := newEnv(t, l)
 	acc, key := accountEnv(t, e, true, 2)
@@ -442,6 +448,7 @@ func (s dynamoAdopt) Adopt(ctx context.Context, b *Box, account string, key [32]
 // that meets another every time is ErrStale, and the adopt 409 box_changed.
 // A failed condition still wins, whichever item conflicted.
 func TestAnAdoptThatMeetsAnotherIsSentAgain(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
 	acc, key := accountEnv(t, e, true, 5)
@@ -495,6 +502,7 @@ func TestAnAdoptThatMeetsAnotherIsSentAgain(t *testing.T) {
 // the record changes if that transaction commits, so it is ErrStale, as a
 // failed condition is, and a client sends it again (409 box_changed).
 func TestARecordWriteThatMeetsATransactionIsStale(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
 	a := e.box(protocol.Classic)
@@ -522,6 +530,7 @@ func TestARecordWriteThatMeetsATransactionIsStale(t *testing.T) {
 // makes a metered account unmetered by hand, then deletes it, and its box
 // has the free limits again.
 func TestAccountChangesReachMemory(t *testing.T) {
+	t.Parallel()
 	if !onAWS() {
 		t.Skip("needs the AWS tables")
 	}
@@ -576,6 +585,7 @@ func until(t *testing.T, ok func(i int) bool) {
 // for it: the pass comes before the body, so a body from anyone else is never
 // read that far.
 func TestLargeReadsTakeTurns(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.MaxSize, l.AccountMaxSize = 16<<10, 64<<10 // bodies read at once up to 16 KiB, at most 64 KiB
 	e := newEnv(t, l)
@@ -626,6 +636,7 @@ func TestLargeReadsTakeTurns(t *testing.T) {
 // is read at once, not after the stalled one's peer gives up. The metrics
 // count the cut and both reads.
 func TestAStalledBodyGivesTheLargeReadBack(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.MaxSize, l.AccountMaxSize = 16<<10, 64<<10 // bodies read at once up to 16 KiB, at most 64 KiB
 	l.BodyTimeout, l.BodyMinRate = 300*time.Millisecond, 1<<20
@@ -666,6 +677,7 @@ func TestAStalledBodyGivesTheLargeReadBack(t *testing.T) {
 // 503 and Retry-After, and does not wait on its own client. The metrics count
 // the wait that timed out.
 func TestAWaitForTheLargeReadIsBounded(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.MaxSize, l.AccountMaxSize = 16<<10, 64<<10
 	l.BodyTimeout = 200 * time.Millisecond

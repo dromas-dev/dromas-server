@@ -331,6 +331,7 @@ func (r *raw) register(d time.Duration) *raw {
 // §3), what follows its END line included, and is kept and served as it was
 // sent (§4.5). A pass is at most protocol.MaxPassAuthorization.
 func TestASignatureIsBounded(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	now := e.clock.Now()
 	pad := func(sig []byte, to int) []byte {
@@ -361,6 +362,7 @@ func TestASignatureIsBounded(t *testing.T) {
 }
 
 func TestRegistration(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	now := e.clock.Now()
 	r := e.raw()
@@ -505,6 +507,7 @@ func TestRegistration(t *testing.T) {
 // is certificate_revoked with no pass read, and a revoked address is 410.
 // Control: an address with no box has its statement and its pass read.
 func TestARegistrationOfARegisteredBoxIsAnsweredFromItsRecordFirst(t *testing.T) {
+	t.Parallel()
 	for name, with := range map[string][]func(*Config){
 		"a box this process holds":         nil,
 		"a box this process does not hold": {func(c *Config) { c.Store = unknownStore{c.Store} }},
@@ -568,6 +571,7 @@ func (s *boxReads) Box(ctx context.Context, a protocol.Address) (*Box, error) {
 // record (register; IronGall-dev/irongall-server#94,
 // IronGall-dev/irongall-client#410).
 func TestARegistrationReadsItsAddressOnce(t *testing.T) {
+	t.Parallel()
 	reads := &boxReads{}
 	e := newEnv(t, relaxed(), func(c *Config) { reads.Store, c.Store = c.Store, unknownStore{reads} })
 	once := func(what string, r *raw, req protocol.RegisterRequest, pass string, status int, code protocol.Code) {
@@ -593,6 +597,7 @@ func TestARegistrationReadsItsAddressOnce(t *testing.T) {
 }
 
 func TestOwnerCalls(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	pass := r.pass(1)
@@ -659,6 +664,7 @@ func TestOwnerCalls(t *testing.T) {
 // the same address in uppercase is no address, on every route that names
 // one, whoever calls (PROTOCOL.md §2).
 func TestAnAddressInAPathIsLowercase(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	pass := r.pass(1)
@@ -687,6 +693,7 @@ func TestAnAddressInAPathIsLowercase(t *testing.T) {
 // member (PROTOCOL.md §13). A cursor not of a cursor's form is named too.
 // The send's own parameters are TestSendPipeline's.
 func TestAQueryHoldsOnlyTheCallsParameters(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	pass := r.pass(1)
@@ -726,6 +733,7 @@ func TestAQueryHoldsOnlyTheCallsParameters(t *testing.T) {
 // (PROTOCOL.md §5.1): a cursor that is empty, not of a cursor's form, or not
 // one this server could have made is 400 naming cursor, with a pass or none.
 func TestACursorIsReadBeforeThePass(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	for _, q := range []string{"?cursor=", "?cursor=a%2Fb", "?cursor=zzz"} {
@@ -743,6 +751,7 @@ func TestACursorIsReadBeforeThePass(t *testing.T) {
 // a call that carries no pass is. The read of a box reads none, so it is
 // answered with two as with none (IronGall-dev/irongall-client#352).
 func TestTwoAuthorizationLinesAreNoPass(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
 	pass := e.pass(b)
@@ -781,6 +790,7 @@ func TestTwoAuthorizationLinesAreNoPass(t *testing.T) {
 // is not sent with the pass, so checked against whatever name a request
 // gives, a pass made for another server would pass here.
 func TestAPassIsForOneServer(t *testing.T) {
+	t.Parallel()
 	clk := &clock{t: time.Now().UTC().Truncate(time.Second)}
 	e := &env{t: t, clock: clk, store: NewMemStore(clk.Now)}
 	e.srv = httptest.NewServer(apitest.Handler(t, New(Config{Store: e.store, Limits: relaxed(), Now: clk.Now, Names: []string{"mail.example", "mail.example:8443"}}).Handler()))
@@ -815,6 +825,7 @@ func TestAPassIsForOneServer(t *testing.T) {
 // call names mail.example:443. Each pass here is a new one, a second later:
 // one the server has taken is taken again without its name being read.
 func TestTheServerReadsItsHostAsAnOrigin(t *testing.T) {
+	t.Parallel()
 	clk := &clock{t: time.Now().UTC().Truncate(time.Second)}
 	e := &env{t: t, clock: clk, store: NewMemStore(clk.Now)}
 	e.srv = httptest.NewServer(apitest.Handler(t, New(Config{Store: e.store, Limits: relaxed(), Now: clk.Now, Names: []string{"mail.example", "mail.example:8443"}}).Handler()))
@@ -842,6 +853,7 @@ func TestTheServerReadsItsHostAsAnOrigin(t *testing.T) {
 }
 
 func TestPrekeyRenewal(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	now := e.clock.Now()
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
@@ -923,6 +935,7 @@ func TestPrekeyRenewal(t *testing.T) {
 }
 
 func TestSendPipeline(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
 	a, b := e.box(protocol.Classic), e.box(protocol.PostQuantum)
@@ -1115,6 +1128,7 @@ func (greaseRecipient) Wrap([]byte) ([]*age.Stanza, error) {
 }
 
 func TestGreaseIsIgnored(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
@@ -1136,6 +1150,7 @@ func TestGreaseIsIgnored(t *testing.T) {
 // it has no recipient, as PROTOCOL.md §4.5 step 7 has it. Its stanzas are
 // read as a reader reads them (protocol.ReadStanzas).
 func TestAFileWithNoNativeStanzaIsNotSaidToHaveTwo(t *testing.T) {
+	t.Parallel()
 	var ct bytes.Buffer
 	w, _ := age.Encrypt(&ct, greaseRecipient{})
 	_ = w.Close()
@@ -1161,6 +1176,7 @@ func (otherRecipient) Wrap([]byte) ([]*age.Stanza, error) {
 // of another type first, whatever else the file holds; then no native
 // stanza; then more than one; then a native stanza of the other type.
 func TestEachWrongRecipientTypeIsToldItsOwnCase(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
 	a, classic, pq := e.box(protocol.Classic), e.box(protocol.Classic), e.box(protocol.PostQuantum)
@@ -1207,6 +1223,7 @@ func TestEachWrongRecipientTypeIsToldItsOwnCase(t *testing.T) {
 }
 
 func TestPerIPLimits(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.SendsPerMinutePerIP = 1
 	e := newEnv(t, l)
@@ -1227,6 +1244,7 @@ func TestPerIPLimits(t *testing.T) {
 // no one outside can pick their own bucket. The limit read here is the one on
 // sends, which is taken before a send's pass is looked at.
 func TestClientIPFromTrustedProxy(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.SendsPerMinutePerIP = 1
 	clk := time.Now()
@@ -1272,6 +1290,7 @@ func TestClientIPFromTrustedProxy(t *testing.T) {
 // naming its serial is stale, and one naming the current serial but sealed
 // to the retired key's type is refused. The box may then delete the key.
 func TestSendNamesTheCurrentPrekey(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
@@ -1304,6 +1323,7 @@ func TestSendNamesTheCurrentPrekey(t *testing.T) {
 // is not a renewal. Its record keeps only the RetiredKept newest retired
 // prekeys, so a box that renews often cannot grow it.
 func TestRenewalLimits(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	// The Go client certifies a new working key with each prekey, so each of
 	// its renewals is its identity's act, counted under that limit: a

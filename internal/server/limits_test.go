@@ -19,6 +19,7 @@ import (
 
 // A key whose bucket is full again is dropped; one still in use is kept.
 func TestBucketsDropKeysFullAgain(t *testing.T) {
+	t.Parallel()
 	t0 := time.Unix(1_700_000_000, 0)
 	bs := newBuckets("test", 2, time.Minute)
 	for _, k := range []string{"a", "b", "c"} {
@@ -51,6 +52,7 @@ func TestBucketsDropKeysFullAgain(t *testing.T) {
 // poll rate: two full boxes' worth at once, a full box's worth each poll
 // interval.
 func TestContinuationAllowance(t *testing.T) {
+	t.Parallel()
 	l := DefaultLimits()
 	pages := (l.BoxCap + pageSize - 1) / pageSize
 	if bs := l.continuations(); bs.n != 2*pages || bs.every != l.PollRefill/time.Duration(pages) {
@@ -89,6 +91,7 @@ func listOf(t *testing.T, r reply) protocol.MessageList {
 // a poll, answered from memory; with something after it, it is a
 // continuation, which has its own allowance.
 func TestCursorIsNoWayAroundThePollRate(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.PairCap, l.BoxCap = 0, pageSize // a box of one page: two continuations at once, one back each poll interval
 	l.PollBurst, l.PollRefill = 3, 50*time.Second
@@ -148,6 +151,7 @@ func TestCursorIsNoWayAroundThePollRate(t *testing.T) {
 // handed the box last (IronGall-dev/irongall-server#5): a drain's pages come
 // from the page allowance, and the same cursor again is a poll.
 func TestAContinuationIsTheCursorHandedOutLast(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.PairCap, l.BoxCap = 0, 0
 	l.PollBurst, l.PollRefill = 2, 50*time.Second
@@ -182,6 +186,7 @@ func TestAContinuationIsTheCursorHandedOutLast(t *testing.T) {
 
 // A fetch or an ack of an id the box does not hold is answered from memory.
 func TestUnknownIDsStayInMemory(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
 	e2, cs := counted(t, e, relaxed())
@@ -212,6 +217,7 @@ func TestUnknownIDsStayInMemory(t *testing.T) {
 // that asked, and past its count that address is refused before another such
 // read. A box memory holds is no miss: it is answered whatever the count.
 func TestMissesPerIP(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	e := newEnv(t, l)
 	b := e.box(protocol.Classic)
@@ -276,6 +282,7 @@ func TestMissesPerIP(t *testing.T) {
 // registration reads no record, and the new box's record is in memory from
 // then on, so its first poll is no read that could miss.
 func TestANewBoxIsUsedWhateverItsAddressMissed(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.MissesPerMinute = 1
 	e := newEnv(t, l)
@@ -293,6 +300,7 @@ func TestANewBoxIsUsedWhateverItsAddressMissed(t *testing.T) {
 // A missing box that memory remembers is answered from memory: never refused,
 // never counted, and no call to storage. Only the store on AWS remembers one.
 func TestARememberedMissIsFree(t *testing.T) {
+	t.Parallel()
 	e, _ := dynamoEnv(t)
 	l := relaxed()
 	l.MissesPerMinute = 1
@@ -316,6 +324,7 @@ func TestARememberedMissIsFree(t *testing.T) {
 // fetch of one already fetched takes from the box's allowance for catching up
 // after a failure, which polls and first fetches never touch.
 func TestAFetchedMessageIsFetchedAgainFromAnAllowance(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
 	l := relaxed()
@@ -357,6 +366,7 @@ func TestAFetchedMessageIsFetchedAgainFromAnAllowance(t *testing.T) {
 
 // The count of fetches lives in the message's mark and stops at 255.
 func TestIndexCountsFetches(t *testing.T) {
+	t.Parallel()
 	x := newIndex()
 	var box protocol.Address
 	box[0] = 3
@@ -390,6 +400,7 @@ func TestIndexCountsFetches(t *testing.T) {
 // the certificate that is still the box's, and an entry goes once its pass
 // has run out.
 func TestPassesAreRememberedUntilTheyRunOut(t *testing.T) {
+	t.Parallel()
 	now := time.Unix(1_700_000_000, 0)
 	var a1, a2 protocol.Address
 	a1[0], a2[0] = 1, 2
@@ -427,6 +438,7 @@ func TestPassesAreRememberedUntilTheyRunOut(t *testing.T) {
 }
 
 func TestMissCache(t *testing.T) {
+	t.Parallel()
 	now := time.Unix(1_700_000_000, 0)
 	var a1, a2, a3 protocol.Address
 	a1[1], a2[1], a3[1] = 1, 2, 3 // one shard
@@ -471,6 +483,7 @@ func TestMissCache(t *testing.T) {
 // On DynamoDB, a box a read did not find is remembered as missing until it
 // is written.
 func TestMissingBoxIsRememberedUntilItIsWritten(t *testing.T) {
+	t.Parallel()
 	e, s := dynamoEnv(t)
 	ctx := context.Background()
 	r := e.raw()
@@ -492,6 +505,7 @@ func TestMissingBoxIsRememberedUntilItIsWritten(t *testing.T) {
 // the polls' refusal says no rate, which is the server's to set (-poll-after,
 // -poll-burst, -poll-refill), and the wait is in Retry-After (#65).
 func TestThePollsRefusalNamesNoRateItDoesNotCarry(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.PollBurst, l.PollRefill, l.PollAfter = 1, 10*time.Second, 10 // a server that asks for a poll every 10 seconds
 	e := newEnv(t, l)

@@ -33,6 +33,7 @@ import (
 // the box renewed its prekey since (PROTOCOL.md §4.5 step 6): stored once,
 // counted once. A new ciphertext to the retired prekey is still stale.
 func TestARetryAfterARenewalGetsItsReceipt(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	l := relaxed()
 	l.SendsPerDay = 1
@@ -62,6 +63,7 @@ func TestARetryAfterARenewalGetsItsReceipt(t *testing.T) {
 // dedupe's read among them, and a retry spends from them too
 // (Limits.CallBurst): past them a replay is refused before anything is read.
 func TestASendersCallsBoundTheDedupeRead(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	e := newEnv(t, l)
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
@@ -90,6 +92,7 @@ func TestASendersCallsBoundTheDedupeRead(t *testing.T) {
 // sender's outbox. A retry spends none of it, and an account lifts it to
 // ReceiveCeiling, never past it.
 func TestTheReceiveBudget(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	l := relaxed()
 	l.ReceiveBurst, l.ReceiveRefill = 2, time.Minute
@@ -160,6 +163,7 @@ func errorsAs(err error, ae **client.APIError) bool {
 // that finds no box counts, as a miss. Whatever Authorization it carries,
 // no pass is parsed or checked, and none of a box's calls is spent.
 func TestLookupsArePaidByTheirCaller(t *testing.T) {
+	t.Parallel()
 	t.Run("whatever it carries", func(t *testing.T) {
 		l := relaxed()
 		l.CallBurst, l.CallRefill = 1, time.Hour
@@ -221,6 +225,7 @@ func TestLookupsArePaidByTheirCaller(t *testing.T) {
 // and is a call like any other: it spends the box's calls. A held message's
 // fetch and ack were paid for by its receive.
 func TestUnknownIDsSpendTheBoxsCalls(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	e := newEnv(t, l)
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
@@ -243,6 +248,7 @@ func TestUnknownIDsSpendTheBoxsCalls(t *testing.T) {
 // a certificate the floor covers is bad_key, though the signature is not the
 // statement's. Nothing is counted against the caller for either.
 func TestAStatementOutOfOrderIsRefusedBeforeItsSignature(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.MissesPerMinute = 1
 	e := newEnv(t, l)
@@ -270,6 +276,7 @@ func TestAStatementOutOfOrderIsRefusedBeforeItsSignature(t *testing.T) {
 // spent, the box's identical retry is 200, and another statement is 409 with
 // no check, signed or not, with a pass or none.
 func TestARegisteredBoxIsAnsweredWhateverItsAddressSpentOfRegistrations(t *testing.T) {
+	t.Parallel()
 	for name, with := range map[string][]func(*Config){
 		"a box this process holds":         nil,
 		"a box this process does not hold": {func(c *Config) { c.Store = unknownStore{c.Store} }},
@@ -316,6 +323,7 @@ func (s *failedReads) Box(ctx context.Context, a protocol.Address) (*Box, error)
 // and kept when it finds nothing, which is refused for the registrations.
 // With the misses spent too, the read is refused for them.
 func TestARegistrationsReadIsCountedAsWhatItFinds(t *testing.T) {
+	t.Parallel()
 	const ip = "2001:db8:7:7::1"
 	l := relaxed()
 	l.RegistrationsPerHour, l.RangeRegistrationsPerHour, l.MissesPerMinute = 2, 2, 1
@@ -374,6 +382,7 @@ func TestARegistrationsReadIsCountedAsWhatItFinds(t *testing.T) {
 // same serial 200, a lower one 409, whatever the signature. Nothing is
 // counted against the caller for either.
 func TestAFloorNoHigherIsAnsweredWithoutACheck(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.MissesPerMinute = 1
 	e := newEnv(t, l)
@@ -397,6 +406,7 @@ func TestAFloorNoHigherIsAnsweredWithoutACheck(t *testing.T) {
 // revoked. The revocation of the address is counted against no box, so
 // nothing keeps an owner from ending a box.
 func TestTheIdentitysActsAreCountedApart(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.CertificatesPerDay, l.CertificateRevocationsPerDay = 1, 1
 	e := newEnv(t, l)
@@ -427,6 +437,7 @@ func TestTheIdentitysActsAreCountedApart(t *testing.T) {
 // spent: it spends none of the box's counts (#84). The calls are still
 // spent after it.
 func TestATakerCannotHoldTheRemedyBack(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.CallBurst, l.CallRefill = DefaultLimits().CallBurst, DefaultLimits().CallRefill
 	l.CertificatesPerDay, l.CertificateRevocationsPerDay = 1, 1
@@ -452,6 +463,7 @@ func TestATakerCannotHoldTheRemedyBack(t *testing.T) {
 // checked. A pass the process remembers is answered from memory whatever
 // the count.
 func TestFailedPassesAreCountedPerCaller(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.MissesPerMinute = 2
 	e := newEnv(t, l)
@@ -492,6 +504,7 @@ func forgedFromPublic(t *testing.T, e *env, a protocol.Address) (protocol.Regist
 // (IronGall-dev/irongall-server#40). Past the misses it is refused before it
 // is checked, as on any other route.
 func TestAnIdenticalRetrysPassIsCounted(t *testing.T) {
+	t.Parallel()
 	for name, with := range map[string][]func(*Config){
 		"a box this process holds":         nil,
 		"a box this process does not hold": {func(c *Config) { c.Store = unknownStore{c.Store} }},
@@ -517,6 +530,7 @@ func TestAnIdenticalRetrysPassIsCounted(t *testing.T) {
 // (IronGall-dev/irongall-server#40). An honest retry, with the same pass or a
 // new one, is taken.
 func TestAnIdenticalRetrySpendsTheBoxsCalls(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.CallBurst, l.CallRefill = 2, time.Hour
 	e := newEnv(t, l)
@@ -534,6 +548,7 @@ func TestAnIdenticalRetrySpendsTheBoxsCalls(t *testing.T) {
 // flight waits for one to settle: given back, it is taken; kept, it is
 // refused.
 func TestAReservationWaitsForOthersInFlight(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	clock := func() time.Time { return now }
 	bs := newBuckets("test", 1, time.Hour)
@@ -623,6 +638,7 @@ func concurrently(t *testing.T, e *env, l Limits, to *raw, froms []*raw, n int) 
 // A sender's daily count is taken before the write: sends in flight at once
 // cannot all pass on one count (IronGall-dev/irongall-server#4).
 func TestDailySendsAreTakenBeforeTheWrite(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.SendsPerDay, l.PairCap, l.BoxCap = 5, 0, 0
 	e := newEnv(t, l)
@@ -635,6 +651,7 @@ func TestDailySendsAreTakenBeforeTheWrite(t *testing.T) {
 // The pair and box caps count the sends in flight too, so sends made at once
 // cannot all pass on the same counts (IronGall-dev/irongall-server#4).
 func TestTheCapsCountSendsInFlight(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.PairCap, l.BoxCap = 3, 0
 	e := newEnv(t, l)
@@ -669,6 +686,7 @@ func (s slowBox) Box(ctx context.Context, a protocol.Address) (*Box, error) {
 // that does not exist, from an address with one miss to spend, are each
 // answered 404, from one read.
 func TestLookupsOfOneAddressShareARead(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.MissesPerMinute = 1
 	e := newEnv(t, l)
@@ -728,6 +746,7 @@ func (s *ctxBox) Known(protocol.Address) (*Box, bool) { return nil, false }
 // the read fails none of the lookups waiting on it, each answered from that
 // one read.
 func TestALeaderWhoHangsUpFailsNoLookup(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	e := newEnv(t, l)
 	b := e.raw().register(protocol.MaxPrekeyLifetime)
@@ -795,6 +814,7 @@ func (s panicStore) Revoke(context.Context, protocol.Address, *Revocations, Expe
 // reservation is held and no read is in flight, and the next lookup of the
 // address is answered.
 func TestAPanicSettlesItsReservations(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.MissesPerMinute, l.DrainBurst, l.DrainRefill, l.CertificateRevocationsPerDay = 10, 10, time.Minute, 10
 	e := newEnv(t, l)
@@ -883,6 +903,7 @@ func (l *lockedBuffer) String() string {
 // a fetch that is not a first one gives its token back; an account can lift
 // it.
 func TestTheDrainBudget(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	e := newEnv(t, l)
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)

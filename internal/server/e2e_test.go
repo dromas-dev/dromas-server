@@ -168,6 +168,7 @@ func signer(t *testing.T, b *client.Box) ssh.Signer {
 }
 
 func TestEndToEnd(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	a, b := e.box(protocol.PostQuantum), e.box(protocol.Classic)
 
@@ -249,6 +250,7 @@ func capture(e *env, to string) *sealed {
 // A send's 201 names the message it made, at the path its recipient fetches
 // it from (RFC 9110 §15.3.2); a retry's 200 makes nothing, and names nothing.
 func TestASendNamesTheMessageItMade(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
 	req := e.sealTo(b)
@@ -271,6 +273,7 @@ func TestASendNamesTheMessageItMade(t *testing.T) {
 }
 
 func TestRetryGetsOriginalReceipt(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
 	sent := capture(e, "/v1/"+b.Address().String())
@@ -295,6 +298,7 @@ func TestRetryGetsOriginalReceipt(t *testing.T) {
 // A new prekey comes under a new certificate: the pass the box held before
 // it, which the server had taken, is refused.
 func TestPassRefusedAfterRekey(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	b := e.box(protocol.Classic)
 	receive(t, b)
@@ -339,6 +343,7 @@ func mustHex(t *testing.T, s string) []byte {
 // A box whose prekey expired still works for its owner, and renews. (Senders
 // refusing the expired prekey is tested in irongall-client.)
 func TestRenewalAfterExpiry(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
 	e.clock.Add(protocol.MaxPrekeyLifetime)
@@ -356,6 +361,7 @@ func TestRenewalAfterExpiry(t *testing.T) {
 }
 
 func TestRecoveryWithIdentityAlone(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	a, b := e.box(protocol.PostQuantum), e.box(protocol.PostQuantum)
 	// A restored machine: the identity, nothing else.
@@ -377,6 +383,7 @@ func TestRecoveryWithIdentityAlone(t *testing.T) {
 }
 
 func TestPagination(t *testing.T) {
+	t.Parallel()
 	l := relaxed()
 	l.PairCap = 0
 	l.PollBurst = 1 // a drain of two pages is one poll, and a continuation
@@ -400,6 +407,7 @@ func TestPagination(t *testing.T) {
 }
 
 func TestLimits(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	t.Run("pair_full", func(t *testing.T) {
 		l := relaxed()
@@ -486,6 +494,7 @@ func TestLimits(t *testing.T) {
 // from it; under "server allowed" a send to a new address tells the server
 // first, so the reply is taken and a stranger's send is refused.
 func TestTheGoClientsACL(t *testing.T) {
+	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
 	a, b, c, stranger := e.heldBox(protocol.Classic), e.heldBox(protocol.Classic), e.heldBox(protocol.Classic), e.heldBox(protocol.Classic)

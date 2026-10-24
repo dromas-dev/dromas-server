@@ -15,6 +15,7 @@ import (
 // Each index tags its marks under a random key of its own, so nobody
 // outside the process can compute a tag.
 func TestTheMarkKeyIsRandom(t *testing.T) {
+	t.Parallel()
 	x, y := newIndex(), newIndex()
 	if x.key == ([32]byte{}) || x.key == y.key {
 		t.Fatalf("mark keys %x and %x", x.key, y.key)
@@ -40,6 +41,7 @@ func (x *index) tombs(box protocol.Address) int {
 // Layer 1 must stay exact when a change arrives twice, late, or out of
 // order with this process's own writes (ARCHITECTURE.md § Memory).
 func TestIndex(t *testing.T) {
+	t.Parallel()
 	var box protocol.Address
 	box[0] = 7
 	const now = 1_000_000
@@ -183,6 +185,7 @@ func TestIndex(t *testing.T) {
 // Memory holds a box only after its first use loads it, and a change that
 // arrives meanwhile is applied after the load.
 func TestIndexLoad(t *testing.T) {
+	t.Parallel()
 	var box protocol.Address
 	box[0] = 7
 	const now = 1_000_000

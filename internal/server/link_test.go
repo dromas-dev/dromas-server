@@ -16,6 +16,7 @@ import (
 
 // With no site, outside /v1/ the server has the link page and nothing else.
 func TestNoPagesButTheLinkPage(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: NewMemStore(time.Now), Limits: relaxed(), Ready: func() bool { return false }}).Handler()))
 	defer srv.Close()
 	for _, p := range []string{"/", "/llms.txt", "/docs/", "/docs", "/index.html", "/to.html", "/nope"} {
@@ -44,6 +45,7 @@ func TestNoPagesButTheLinkPage(t *testing.T) {
 // 404. A server with no names of its own (the dev server's) names itself as
 // the request does.
 func TestLinkPage(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: NewMemStore(time.Now), Limits: relaxed(), Ready: func() bool { return false }}).Handler()))
 	defer srv.Close()
 	get := func(method, path string) (*http.Response, string) {
@@ -95,6 +97,7 @@ func TestLinkPage(t *testing.T) {
 // the first of them, and by the scheme the caller reached it by, which a
 // trusted proxy in front says in X-Forwarded-Proto and nobody else can.
 func TestTheLinkPageNamesItsOwnServer(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name    string
 		proxies []netip.Prefix
@@ -140,6 +143,7 @@ var loopback = []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}
 // a line of the README, at the address the client code carries, on a server
 // called irongall.dev through TLS in front of it.
 func TestLinkPageCommandIsInTheClientREADME(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: NewMemStore(time.Now), Limits: relaxed(), Names: []string{"irongall.dev"}, TrustedProxies: loopback}).Handler()))
 	defer srv.Close()
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/to/"+client.EchoAddress, nil)
