@@ -293,3 +293,30 @@ func TestASiteBackendIsASchemeAndAHost(t *testing.T) {
 		}
 	}
 }
+
+// The site is asked for the codings the client asked for, and no other: a
+// proxy that asked for gzip itself would undo it on the way back, and the
+// client would get bytes its site never sent.
+func TestTheSiteIsAskedTheClientsCodings(t *testing.T) {
+	t.Parallel()
+	rec := &recorder{}
+	srv := httptest.NewServer(New(Config{Store: NewMemStore(time.Now), Limits: relaxed(), SiteBackend: backendOf(t, rec)}).Handler())
+	t.Cleanup(srv.Close)
+	tr := &http.Transport{DisableCompression: true}
+	t.Cleanup(tr.CloseIdleConnections)
+	for _, ae := range []string{"", "gzip", "zstd, gzip;q=0.5"} {
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
+		if ae != "" {
+			req.Header.Set("Accept-Encoding", ae)
+		}
+		resp, err := (&http.Client{Transport: tr}).Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		asks := rec.taken()
+		if got := asks[len(asks)-1].header.Get("Accept-Encoding"); got != ae {
+			t.Errorf("the client asked for %q: the site was asked for %q", ae, got)
+		}
+	}
+}

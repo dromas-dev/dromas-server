@@ -34,9 +34,15 @@ func SiteBackend(raw string) (*url.URL, error) {
 // (clientIP), X-Forwarded-Host is the request's Host, and X-Forwarded-Proto
 // is a trusted proxy's, else this connection's; the Forwarded and
 // X-Forwarded-* headers that came with the request are dropped, as Rewrite
-// drops them. A backend that does not answer is a 502.
+// drops them. The backend is asked for the codings the client asked for and
+// no other: net/http's transport would ask for gzip itself where the client
+// asked for none, and undo it on the way back, so its own compression is
+// off. A backend that does not answer is a 502.
 func (s *Server) siteProxy(backend *url.URL) http.Handler {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DisableCompression = true
 	return &httputil.ReverseProxy{
+		Transport: transport,
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetURL(backend)
 			r.Out.Host = r.In.Host
