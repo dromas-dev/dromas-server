@@ -1,6 +1,8 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/http"
 
@@ -162,6 +164,12 @@ func (s *Server) getACL(w http.ResponseWriter, r *http.Request) error {
 type aclAnswer struct {
 	body []byte
 	tag  string
+}
+
+// entityTag is a strong ETag of b: its hash.
+func entityTag(b []byte) string {
+	sum := sha256.Sum256(b)
+	return `"` + hex.EncodeToString(sum[:16]) + `"`
 }
 
 // answerACL is the answer for an ACL held, nil for none.

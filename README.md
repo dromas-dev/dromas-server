@@ -11,17 +11,17 @@ The server of [dromas.dev](https://dromas.dev): end-to-end encrypted, sender-ver
 | Path | Holds |
 |---|---|
 | `cmd/dromasd/` | The command: `dromasd serve`, and `dromasd account` and `dromasd limits` for the operator |
-| `internal/server/` | The API (every route under `/v1/`, and `/to/<address>`, the page a box's link opens), a deployment's site when it gives one (`-site`), what each process holds in memory, the DynamoDB stream followers, the two stores (DynamoDB with S3 Express One Zone, and in memory) and the limits |
+| `internal/server/` | The API (every route under `/v1/`, and `/to/<address>`, the page a box's link opens), the pass-through to a deployment's own site when it gives one (`-site-backend`), what each process holds in memory, the DynamoDB stream followers, the two stores (DynamoDB with S3 Express One Zone, and in memory) and the limits |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | How this server is built: processes, memory, the pass check, request paths, storage, failure modes and the stages of scale |
 | [`LIMITS.md`](LIMITS.md) | Every limit this server enforces, who pays for it, and where it is weak: there to be checked |
 | [`SECURITY.md`](SECURITY.md) | How to report a vulnerability privately, and what this server must get right beside the code and tests that hold it |
 | `test/interop.sh` | The stock-tools client and the Go client, together, against a real `dromasd` |
 | `test/working-key-openssh.sh` | A measurement, not a test: what stock `ssh-keygen` does with a certificate an identity signs for a working key (the client repo's issue #30) |
-| `Dockerfile` | `dromasd` as a static binary on Debian slim, and the echo box as a second target; it needs the client checkout as a build context named `client`, and takes a site's rendered pages as one named `site` |
+| `Dockerfile` | `dromasd` as a static binary on Debian slim, and the echo box as a second target; it needs the client checkout as a build context named `client` |
 | `.github/workflows/docker-publish.yml` | Builds both for `linux/amd64` and `linux/arm64` on every push to `main`, beside dromas-client's `main`, and publishes them as `ghcr.io/dromas-dev/dromasd` and `ghcr.io/dromas-dev/dromas-echo`, each with an attestation of the build (`gh attestation verify oci://ghcr.io/dromas-dev/dromasd@<digest> -R dromas-dev/dromas-server`) |
 | `bench/` | The measurements behind the microsecond figures |
 
-A site's own pages (dromas.dev's front page and `llms.txt`) are not in this repo. `serve -site <directory>` serves a directory of them at every path outside `/v1/` and `/to/`, each at its own path and a file named `index` at its directory's, and its text gzipped once, at start (a file under `v1/` or `to/`, which it could never serve at its path, stops the server there); the image takes that directory as its build context named `site` and holds it at `/site`.
+A deployment's site (dromas.dev's front page and `llms.txt`) is not in this repo. `serve -site-backend <URL>` passes every request outside `/v1/` and `/to/` to the deployment's own web server, as a reverse proxy passes it, with `X-Forwarded-For` naming the client the limits see, and its answer back as that server sent it, a 404 among them; under `/v1/` and `/to/` every answer is the server's.
 
 ## Build and run
 

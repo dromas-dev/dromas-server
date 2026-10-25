@@ -412,12 +412,9 @@ func TestAnAnswerNeverReadIsCut(t *testing.T) {
 	if _, err := rand.Read(big); err != nil {
 		t.Fatal(err)
 	}
-	site, err := LoadSite(writeSite(t, map[string]string{"index.html": "<!doctype html><title>front</title>", "big.png": string(big)}))
-	if err != nil {
-		t.Fatal(err)
-	}
+	site := siteBackend(t, map[string]string{"index.html": "<!doctype html><title>front</title>", "big.png": string(big)})
 	l := pacedLimits()
-	e := newEnv(t, l, func(c *Config) { c.Site = site })
+	e := newEnv(t, l, func(c *Config) { c.SiteBackend = site })
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	pass := r.pass(1)
 	tag := e.do("GET", r.path("/messages"), nil, pass).header.Get("ETag")
@@ -473,12 +470,9 @@ func TestASlowReaderIsNotCut(t *testing.T) {
 	if _, err := rand.Read(page); err != nil {
 		t.Fatal(err)
 	}
-	site, err := LoadSite(writeSite(t, map[string]string{"index.html": "<!doctype html><title>front</title>", "big.png": string(page)}))
-	if err != nil {
-		t.Fatal(err)
-	}
+	site := siteBackend(t, map[string]string{"index.html": "<!doctype html><title>front</title>", "big.png": string(page)})
 	l := pacedLimits()
-	s := New(Config{Store: NewMemStore(time.Now), Limits: l, Site: site})
+	s := New(Config{Store: NewMemStore(time.Now), Limits: l, SiteBackend: site})
 	addr, _ := servedSmall(t, s, l)
 	d := net.Dialer{Control: func(_, _ string, rc syscall.RawConn) error {
 		return rc.Control(func(fd uintptr) { _ = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_RCVBUF, 4096) })

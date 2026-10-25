@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"regexp"
 	"slices"
@@ -52,9 +53,10 @@ type Config struct {
 	// one every client makes and verifies (PROTOCOL.md §4.1). None: every type
 	// this build verifies.
 	IdentityTypes []string
-	// Site, when set, is served at every path outside /v1/ and /to/, the
-	// API's and the link page's (LoadSite). None: those paths are 404.
-	Site *Site
+	// SiteBackend, when set, is the web server every request outside /v1/
+	// and /to/, the API's and the link page's, is passed to (SiteBackend,
+	// siteProxy). None: those paths are 404.
+	SiteBackend *url.URL
 	// Metrics, when set, count what the server does and refuses
 	// (NewMetrics). None: nothing is counted.
 	Metrics *Metrics
@@ -71,7 +73,7 @@ type Server struct {
 	names   []string
 	// identityTypes are the identity key types a box may register with.
 	identityTypes []string
-	site          *Site
+	site          http.Handler
 	metrics       *Metrics
 
 	polls     *buckets // per box
@@ -127,7 +129,6 @@ func New(c Config) *Server {
 		proxies:       c.TrustedProxies,
 		names:         c.Names,
 		identityTypes: c.IdentityTypes,
-		site:          c.Site,
 		metrics:       c.Metrics,
 		polls:         newBuckets(string(protocol.QuotaPolls), c.Limits.PollBurst, c.Limits.PollRefill),
 		pages:         c.Limits.continuations(),
@@ -155,6 +156,9 @@ func New(c Config) *Server {
 		s.identityTypes = protocol.IdentityTypes()
 	}
 	s.metrics.watch(s)
+	if c.SiteBackend != nil {
+		s.site = s.siteProxy(c.SiteBackend)
+	}
 	return s
 }
 
@@ -207,7 +211,8 @@ func (s *Server) routes() []route {
 }
 
 // linkRoute is the page a box's link opens, the server's one route outside
-// /v1/; a site, when there is one, answers the rest.
+// /v1/, under /to/, which is the server's too; a site, when there is one,
+// answers the rest.
 const linkRoute = "GET " + protocol.LinkPath + "{addr}"
 
 // Handler returns the API's routes, the page a box's link opens, and the
@@ -221,8 +226,10 @@ func (s *Server) Handler() http.Handler {
 	for _, r := range s.routes() {
 		s.mount(api, r.pattern, r.pass, s.whenReady(s.handle(r.h)))
 	}
+	link := http.NewServeMux()
+	s.mount(link, linkRoute, passNone, s.linkPage())
 	mux := http.NewServeMux()
-	s.mount(mux, linkRoute, passNone, s.linkPage())
+	s.subtree(mux, protocol.LinkPath, link, func(h http.Handler) http.Handler { return h })
 	s.subtree(mux, "/v1/", api, notStored)
 	if s.site != nil {
 		s.mount(mux, "/", passNone, s.site)

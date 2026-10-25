@@ -151,7 +151,7 @@ func serve(args []string) error {
 	adminSocket := fs.String("admin-socket", "", "a Unix socket for the operator's commands (dromasd limits): 0600 from the moment this process makes it, never on the API's listener (empty: none)")
 	idle := fs.Duration("idle-timeout", 75*time.Second, "how long an idle keep-alive connection stays open (nginx's default as a server): above the idle timeout of a proxy in front, which may otherwise reuse a connection this one has just closed")
 	metricsListen := fs.String("metrics-listen", "", "address to serve the operator's metrics on, at /metrics in Prometheus' text format: a listener of its own, never the API's (empty: none)")
-	siteDir := fs.String("site", "", "a directory of pages to serve at every path outside /v1/ and /to/, each at its own path and an index at its directory's, read once at start (empty: none; those paths are 404)")
+	siteBackend := fs.String("site-backend", "", "the URL of a deployment's own web server, http or https and a host alone, which every request outside /v1/ and /to/ is passed to, as a reverse proxy passes it (empty: none; those paths are 404)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -203,12 +203,12 @@ func serve(args []string) error {
 		}
 		cfg.TrustedProxies = append(cfg.TrustedProxies, p)
 	}
-	if *siteDir != "" {
-		site, err := server.LoadSite(*siteDir)
+	if *siteBackend != "" {
+		u, err := server.SiteBackend(*siteBackend)
 		if err != nil {
-			return fmt.Errorf("-site: %w", err)
+			return fmt.Errorf("-site-backend: %w", err)
 		}
-		cfg.Site = site
+		cfg.SiteBackend = u
 	}
 	var start func() error
 	switch {

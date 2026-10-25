@@ -175,51 +175,31 @@ func TestNoOtherAnswerIsGzipped(t *testing.T) {
 	}
 }
 
-// A site's text page that gzip makes smaller is gzipped once, and answered
-// so to a request that takes gzip: bytes with an ETag of their own, which a
-// 304 and a range answer to. An image, and a page gzip would make larger, are
-// answered as they are, and say nothing of Accept-Encoding.
-func TestASitesTextIsGzippedOnce(t *testing.T) {
+// A site's answer is its web server's, as that server sent it: the server
+// compresses none of it, whatever the request takes, and a gzip the site
+// made itself comes back as it was made.
+func TestASitesAnswerIsCompressedOnlyByTheSite(t *testing.T) {
 	t.Parallel()
 	text := strings.Repeat("what an agent reads first\n", 40)
-	site, err := LoadSite(writeSite(t, map[string]string{
-		"llms.txt":             text,
-		"index.html":           "<!doctype html><title>front</title>",
-		"apple-touch-icon.png": "\x89PNG\r\n\x1a\n" + strings.Repeat("png", 200),
-	}))
-	if err != nil {
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	if _, err := io.WriteString(zw, text); err != nil || zw.Close() != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(New(Config{Store: NewMemStore(time.Now), Limits: relaxed(), Site: site}).Handler())
-	t.Cleanup(srv.Close)
-
-	resp, plain := rawCall(t, http.MethodGet, srv.URL+"/llms.txt")
-	if string(plain) != text || resp.Header.Get("Content-Encoding") != "" || resp.Header.Get("ETag") != entityTag([]byte(text)) || !varies(resp) {
-		t.Fatalf("no Accept-Encoding: %d in %q, ETag %q, Vary %q", resp.StatusCode, resp.Header.Get("Content-Encoding"), resp.Header.Get("ETag"), resp.Header.Values("Vary"))
-	}
-	resp, gz := rawCall(t, http.MethodGet, srv.URL+"/llms.txt", "Accept-Encoding", "gzip")
-	tag := resp.Header.Get("ETag")
-	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Encoding") != "gzip" || !varies(resp) || tag != entityTag(gz) || tag == entityTag([]byte(text)) {
-		t.Fatalf("gzip: %d in %q, ETag %q, Vary %q", resp.StatusCode, resp.Header.Get("Content-Encoding"), tag, resp.Header.Values("Vary"))
-	}
-	if string(gunzip(t, gz)) != text || len(gz) >= len(text) || resp.Header.Get("Content-Type") != "text/plain; charset=utf-8" {
-		t.Errorf("gzip: %d bytes of %s, not the page", len(gz), resp.Header.Get("Content-Type"))
-	}
-	if resp, got := rawCall(t, http.MethodGet, srv.URL+"/llms.txt", "Accept-Encoding", "gzip", "If-None-Match", tag); resp.StatusCode != http.StatusNotModified || len(got) != 0 || resp.Header.Get("Content-Encoding") != "" {
-		t.Errorf("gzip, its own tag: %d in %q, want 304", resp.StatusCode, resp.Header.Get("Content-Encoding"))
-	}
-	if resp, _ := rawCall(t, http.MethodGet, srv.URL+"/llms.txt", "If-None-Match", tag); resp.StatusCode != http.StatusOK {
-		t.Errorf("no Accept-Encoding, the gzip's tag: %d, want 200", resp.StatusCode)
-	}
-	if resp, got := rawCall(t, http.MethodGet, srv.URL+"/llms.txt", "Accept-Encoding", "gzip", "Range", "bytes=0-9"); resp.StatusCode != http.StatusPartialContent || !bytes.Equal(got, gz[:10]) || resp.Header.Get("Content-Encoding") != "gzip" {
-		t.Errorf("gzip, a range: %d in %q, %q, want 206 of the gzip's first 10 bytes", resp.StatusCode, resp.Header.Get("Content-Encoding"), got)
-	}
-	if resp, got := rawCall(t, http.MethodGet, srv.URL+"/llms.txt", "Accept-Encoding", "gzip;q=0"); string(got) != text || resp.Header.Get("Content-Encoding") != "" {
-		t.Errorf("gzip;q=0: %d in %q, want the page as it is", resp.StatusCode, resp.Header.Get("Content-Encoding"))
-	}
-	for _, path := range []string{"/", "/apple-touch-icon.png"} {
-		if resp, _ := rawCall(t, http.MethodGet, srv.URL+path, "Accept-Encoding", "gzip"); resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Encoding") != "" || varies(resp) {
-			t.Errorf("%s: %d in %q, Vary %q, want it as it is", path, resp.StatusCode, resp.Header.Get("Content-Encoding"), resp.Header.Values("Vary"))
+	backend := backendOf(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/gz" {
+			w.Header().Set("Content-Encoding", "gzip")
+			_, _ = w.Write(gz.Bytes())
+			return
 		}
+		_, _ = io.WriteString(w, text)
+	}))
+	srv := httptest.NewServer(New(Config{Store: NewMemStore(time.Now), Limits: relaxed(), SiteBackend: backend}).Handler())
+	t.Cleanup(srv.Close)
+	if resp, got := rawCall(t, http.MethodGet, srv.URL+"/plain", "Accept-Encoding", "gzip"); resp.Header.Get("Content-Encoding") != "" || string(got) != text || varies(resp) {
+		t.Errorf("the site's plain answer, to a request that takes gzip: %q, %d bytes, Vary %q", resp.Header.Get("Content-Encoding"), len(got), resp.Header.Values("Vary"))
+	}
+	if resp, got := rawCall(t, http.MethodGet, srv.URL+"/gz", "Accept-Encoding", "gzip"); resp.Header.Get("Content-Encoding") != "gzip" || !bytes.Equal(got, gz.Bytes()) {
+		t.Errorf("the site's own gzip: %q, %d bytes, want its %d", resp.Header.Get("Content-Encoding"), len(got), gz.Len())
 	}
 }

@@ -24,7 +24,7 @@
 - **`SECURITY.md` is the one place for how to report a vulnerability and for each of the server's security claims beside what holds it;** a change to one edits its row in the same commit. The threat model is the client repo's `PROTOCOL.md` §15, Security considerations.
 - **No comparison tables here.** The one comparison doc is `PRECEDENTS.md` in the client repo, and this server's own build choices are its Part 3: point there.
 - **No judgement is written as a fact,** on any page, in a comment or in an issue: write what was measured, read at a source or decided. Nothing ranks one cipher, key type or design over another without the source that says so.
-- **The server's own page outside `/v1/` is `/to/<address>`,** the page a box's link opens (`internal/server/link.go`). **With `-site` it also serves a deployment's pages, a directory rendered elsewhere, at every path outside `/v1/` and `/to/`** (`internal/server/site.go`; the image's `site` stage), and refuses at start a site that holds a file under either. 🛑 No site's content goes in this repo.
+- **The server's own page outside `/v1/` is `/to/<address>`,** the page a box's link opens (`internal/server/link.go`). **With `-site-backend` every request outside `/v1/` and `/to/` is passed to a deployment's own web server, as a reverse proxy passes it, and its answer back as it came, a 404 among them** (`internal/server/site.go`); under `/v1/` and `/to/` every answer is the server's. 🛑 No site's content or logic goes in this repo.
 
 ### Before every push
 

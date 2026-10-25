@@ -117,12 +117,9 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 	l.DrainBurst, l.DrainRefill = 1000, time.Hour
 	l.ReceiveBurst, l.ReceiveRefill = 1000, time.Hour
 	l.SendsPerDay = 1000
-	site, err := LoadSite(writeSite(t, siteFiles))
-	if err != nil {
-		t.Fatal(err)
-	}
+	site := siteBackend(t, siteFiles)
 	reg := prometheus.NewRegistry()
-	e := newEnv(t, l, func(c *Config) { c.Metrics, c.Site = NewMetrics(reg), site })
+	e := newEnv(t, l, func(c *Config) { c.Metrics, c.SiteBackend = NewMetrics(reg), site })
 	n := 0
 	fresh := func() string { // an address that has spent nothing
 		n++

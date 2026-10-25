@@ -21,7 +21,7 @@
 | Echo boxes | 2 | `dromas` clients with their own keys, one post-quantum and one X25519-only (decided), never inside the server |
 | AWS, managed | — | Three DynamoDB tables, boxes, messages and accounts, each with its stream on; the S3 Express One Zone directory bucket |
 | Edge | — | For dromas.dev today, Cloudflare (TLS) and its tunnel to one host; later an NLB on AWS |
-| The site | — | A deployment's pages (a front page, `llms.txt`, docs) are not in this repo: with `-site`, `dromasd` serves a directory of them at every path outside `/v1/` and `/to/` (`internal/server/site.go`) |
+| The site | — | A deployment's site is not in this repo: with `-site-backend`, `dromasd` passes every request outside `/v1/` and `/to/` to the deployment's own web server, as a reverse proxy does (`net/http/httputil`), and its answer back as that server sent it, a 404 among them (`internal/server/site.go`) |
 | Redis | 0 | Penciled in for later, not needed for a while (§ The in-process plan, item 7) |
 
 ```mermaid
@@ -192,10 +192,10 @@ sequenceDiagram
 | Answer | Compressed | Why |
 |---|---|---|
 | A box's read, `GET /v1/<addr>` `200` | Per answer, by Huffman coding alone, with a writer from a pool | Base64 in JSON, read before every post and for each sender in a drain. On reads of 1.6 KB and 4.1 KB (an X25519 and a post-quantum prekey) it saves 24% and 27% in about 9 and 13 µs; levels 1 to 6 save 1.4 to 3.8% of an X25519 read more, and nothing of a post-quantum one, in 1.5 to 1.7 times the time, since base64 holds almost no repeats, and a new writer per answer costs more than the coding (2026-10-18) |
-| A site's text: HTML, plain text, Markdown, SVG | Once at start, at the best level, when that is smaller | No CPU per answer. Each gzip has its own `ETag`, and a range is of its bytes, which is how `http.ServeContent` asks for compression to be done; it then leaves a whole answer's `Content-Length` to `net/http` |
 | A list or a poll | Never | A `304` has no body and an empty page is 45 bytes; a page puts what senders chose beside the box's own values, the shape of BREACH (RFC 7457 §2.6) |
 | A fetch | Never | Age ciphertext does not compress (§ Storage) |
-| Errors, an owner's reads, the link page, a site's images | Never | A few hundred bytes, or compressed already, or seldom asked for |
+| Errors, an owner's reads, the link page | Never | A few hundred bytes, or seldom asked for |
+| A site's answer | Never by this server | Its web server's, passed on as that server sent it, compressed or not |
 
 
 ### Following the stream

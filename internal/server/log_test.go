@@ -117,8 +117,9 @@ func TestNoLogLineCarriesAnAddress(t *testing.T) {
 // character a token may hold, no run of 63 hex, no name that reads as one
 // redact gives (#79), and no run of 64 of the capitals A to F, which redact
 // would write as such a name (dromas-dev/dromas-client#413 item 1).
-// The server is not wrapped in apitest: a site's pages are a deployment's,
-// which api/openapi.yaml does not describe (site_test.go's are not either).
+// The server is not wrapped in apitest: a site's pages are a deployment's
+// web server's, which api/openapi.yaml does not describe (site_test.go's
+// are not either).
 func TestTheAccessLogWritesWhatTheRoutersMatched(t *testing.T) {
 	t.Parallel()
 	site := t.TempDir()
@@ -126,12 +127,8 @@ func TestTheAccessLogWritesWhatTheRoutersMatched(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(site, page), []byte("<p>a page</p>"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	st, err := LoadSite(site)
-	if err != nil {
-		t.Fatal(err)
-	}
 	var logged bytes.Buffer
-	s := New(Config{Store: NewMemStore(time.Now), Limits: relaxed(), Now: time.Now, Log: log.New(&logged, "", log.LstdFlags), Site: st})
+	s := New(Config{Store: NewMemStore(time.Now), Limits: relaxed(), Now: time.Now, Log: log.New(&logged, "", log.LstdFlags), SiteBackend: backendOf(t, http.FileServer(http.Dir(site)))})
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 	request := func(method, path string) string {
@@ -173,7 +170,7 @@ func TestTheAccessLogWritesWhatTheRoutersMatched(t *testing.T) {
 		{"GET", "/v1/x%2Fy", "GET /v1/" + logName([]byte("x/y")) + " "},
 		{"GET", "/v1/%41", "GET /v1/" + logName([]byte("A")) + " "},
 		{"GET", "/" + page, "GET / (a path of 206 bytes) 200 "},
-		{"GET", "/" + strings.Repeat("q", 300), "GET / (a path of 301 bytes) 404 "},
+		{"GET", "/" + strings.Repeat("q/", 150), "GET / (a path of 301 bytes) 404 "},
 		{"GET", "/v1/" + strings.Repeat(a.String(), 1<<12), fmt.Sprintf("GET /v1/%s ", logName([]byte(strings.Repeat(a.String(), 1<<12))))},
 		{strings.Repeat("A", 1<<16), "/v1/x", fmt.Sprintf("(a method of %d bytes) (a path of 5 bytes) ", 1<<16)},
 		{"PROPFIND", "/v1/x", "PROPFIND (a path of 5 bytes) 405 "},
