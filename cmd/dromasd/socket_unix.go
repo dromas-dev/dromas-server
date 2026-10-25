@@ -11,7 +11,7 @@ import (
 // can open from its bind on: it is bound under a umask that leaves its
 // owner's bits alone, as systemd binds a socket unit's. A socket chmod'ed
 // after its bind takes another user's connection until then
-// (IronGall-dev/irongall-server#47). The umask is the process's: this runs at
+// (dromas-dev/dromas-server#47). The umask is the process's: this runs at
 // start, before anything else makes a file.
 func listenOwn(path string) (net.Listener, error) {
 	old := syscall.Umask(0o177)

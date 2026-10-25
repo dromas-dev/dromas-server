@@ -31,14 +31,14 @@ func main() {
 			return
 		}
 		auth := r.Header.Get("Authorization")
-		got, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(auth, "Bearer igt1_"))
+		got, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(auth, "Bearer drt1_"))
 		if err != nil {
 			http.Error(w, "unauthorized", 401)
 			return
 		}
 		h := pool.Get().(hash.Hash)
 		h.Reset()
-		h.Write([]byte("irongall-token-v1"))
+		h.Write([]byte("dromas-token-v1"))
 		h.Write(H[:])
 		h.Write(binary.BigEndian.AppendUint32(nil, 0))
 		ok := subtle.ConstantTimeCompare(h.Sum(nil), got) == 1

@@ -14,14 +14,14 @@ import (
 	"github.com/aws/smithy-go/middleware"
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // Metrics count what this server does and refuses, for its operator
-// (IronGall-dev/irongall-server#59; ARCHITECTURE.md § Metrics), as
+// (dromas-dev/dromas-server#59; ARCHITECTURE.md § Metrics), as
 // Prometheus counts a service: its requests, errors and latency, every
 // failure beside its attempts. They are served on a listener of their own
-// (irongalld serve -metrics-listen), never the API's.
+// (dromasd serve -metrics-listen), never the API's.
 //
 // No label is a value a caller chooses: no address, IP, box, message id,
 // cursor or path as sent, each of which would be a series per caller and is
@@ -58,7 +58,7 @@ var gigabytes = []float64{1 << 30, 2 << 30, 4 << 30, 6 << 30, 8 << 30, 9 << 30, 
 
 // NewMetrics makes the server's metrics and registers them with reg.
 func NewMetrics(reg prometheus.Registerer) *Metrics {
-	const ns = "irongalld"
+	const ns = "dromasd"
 	m := &Metrics{
 		reg: reg,
 		requests: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "requests_total",
@@ -106,7 +106,7 @@ func (m *Metrics) watch(s *Server) {
 		}
 	}
 	// A second server on one registry, in a test, counts on the first's keys.
-	_ = m.reg.Register(keyCounts{s: s, desc: prometheus.NewDesc("irongalld_limit_keys",
+	_ = m.reg.Register(keyCounts{s: s, desc: prometheus.NewDesc("dromasd_limit_keys",
 		"Keys each limit holds now: the boxes or addresses whose bucket is not full, by the limit's name.", []string{"limit"}, nil)})
 }
 
@@ -271,7 +271,7 @@ func (m *Metrics) InstrumentAWS(cfg *aws.Config) {
 		return
 	}
 	cfg.APIOptions = append(cfg.APIOptions, func(stack *middleware.Stack) error {
-		return stack.Initialize.Add(middleware.InitializeMiddlewareFunc("IrongalldMetrics", func(ctx context.Context, in middleware.InitializeInput, next middleware.InitializeHandler) (middleware.InitializeOutput, middleware.Metadata, error) {
+		return stack.Initialize.Add(middleware.InitializeMiddlewareFunc("DromasdMetrics", func(ctx context.Context, in middleware.InitializeInput, next middleware.InitializeHandler) (middleware.InitializeOutput, middleware.Metadata, error) {
 			start := time.Now()
 			out, md, err := next.HandleInitialize(ctx, in)
 			service, op := awsmiddleware.GetServiceID(ctx), awsmiddleware.GetOperationName(ctx)

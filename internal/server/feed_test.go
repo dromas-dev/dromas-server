@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodbstreams"
 	stypes "github.com/aws/aws-sdk-go-v2/service/dynamodbstreams/types"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // fakeStream is a DynamoDB stream whose shards a test opens, writes and

@@ -10,7 +10,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // State is what a server holds of an address (PROTOCOL.md §11.6). A box's
@@ -248,7 +248,7 @@ func (b *Box) withRevocations(rv *Revocations) (*Box, error) {
 // record (version), and every revocation either holds, since none is ever
 // taken away: the revocation of the address if either holds it, and the
 // higher revocation of its certificates (higherCerts). Nothing is dropped
-// for a list that does not parse (IronGall-dev/irongall-server#64).
+// for a list that does not parse (dromas-dev/dromas-server#64).
 func mergeViews(old, cur *Box) *Box {
 	base, other := cur, old
 	if versionOf(old).after(versionOf(cur)) {
@@ -483,13 +483,13 @@ func isRefusal(err error) bool {
 
 // errNotStored is a send's error that the store states left nothing stored:
 // its body's PUT failed, before its item was written, whatever S3 answered
-// (IronGall-dev/irongall-server#90).
+// (dromas-dev/dromas-server#90).
 var errNotStored = errors.New("not stored")
 
 // version is a record's place in its address's history: the time its box
 // registered, to the millisecond as the store keeps it, then its rev. A box
 // registered again once the TTL took its record starts at rev 1 again, and
-// later (IronGall-dev/irongall-client#407 item 2). It is the one comparison
+// later (dromas-dev/dromas-client#407 item 2). It is the one comparison
 // of two records of an address: the record cache's (putLocked, image,
 // mergeViews) and the index's (setStanding). An account's has its rev
 // alone.
@@ -520,8 +520,8 @@ const storeTimeout = 10 * time.Second
 // each call of the stream follower (boundedStreams). A handler hands every
 // store write a context apart from its request (detached), so that what a
 // write changed is counted and reaches memory whenever the write was made
-// (IronGall-dev/irongall-server#14), and a call that callers share reads on
-// one (IronGall-dev/irongall-server#91).
+// (dromas-dev/dromas-server#14), and a call that callers share reads on
+// one (dromas-dev/dromas-server#91).
 func bounded(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(ctx, storeTimeout)
 }

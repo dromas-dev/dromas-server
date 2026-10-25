@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IronGall-dev/irongall-server/internal/server"
+	"github.com/dromas-dev/dromas-server/internal/server"
 )
 
-// irongalld serve refuses to start on a budget of new mail that would let a
+// dromasd serve refuses to start on a budget of new mail that would let a
 // box take mail faster than server.ReceiveCeiling, one turned off or one
 // refilled faster, naming the flag. It refuses before it listens or opens any
 // store, as for a size cap.

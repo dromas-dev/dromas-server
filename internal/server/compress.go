@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // Compression: gzip, where it saves bytes for little CPU, and nowhere else

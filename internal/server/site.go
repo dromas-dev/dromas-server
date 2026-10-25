@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // A site: with -site, a directory of pages served at the root, outside /v1/

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // Backend is what a store keeps durably, and the change feed of it: the
@@ -128,7 +128,7 @@ const (
 // what the item now holds, decoded by the backend, or that it is gone. An
 // item that does not read is carried with Err, and applied as one gone,
 // whatever its kind: memory then holds nothing of it, and its next use
-// reads it again (IronGall-dev/irongall-client#407 item 1).
+// reads it again (dromas-dev/dromas-client#407 item 1).
 type Change struct {
 	Kind ChangeKind
 	// Addr is the record's address, the revocations', or the message's box.

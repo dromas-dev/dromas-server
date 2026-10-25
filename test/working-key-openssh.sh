@@ -1,6 +1,6 @@
 #!/bin/sh
 # working-key-openssh.sh — what stock ssh-keygen does with a certificate the identity signs for a working key
-# (irongall-client issue #30, where the results are). A measurement, not a test of our code: nothing of ours is run.
+# (dromas-client issue #30, where the results are). A measurement, not a test of our code: nothing of ours is run.
 #   test/working-key-openssh.sh make  <dir>   make keys, certificates and signatures in <dir> (which must not exist)
 #   test/working-key-openssh.sh check <dir>   verify what is in <dir>, whichever OpenSSH made it
 # Each row is a verdict: "ok" it is the expected one, "!!!" it is not, neither when the row is a reading with no expectation.
@@ -13,7 +13,7 @@ mode=$1; d=$2
 A=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 B=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 C=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-ns="irongall-msg-v1:$B"
+ns="dromas-msg-v1:$B"
 echo "== $mode $d on $(ssh -V 2>&1)"
 
 mk() { # name ca principal validity serial [extra ssh-keygen -s options]
@@ -52,7 +52,7 @@ if [ "$mode" = make ]; then
   mkdir -p "$d"; cd "$d" || exit 1
   for k in identity work other; do ssh-keygen -q -t ed25519 -N '' -C $k -f $k; done
   ssh-keygen -q -t ecdsa -b 256 -N '' -C p256 -f p256
-  printf 'hello irongall\n' > m
+  printf 'hello dromas\n' > m
   printf 'hello irongal1\n' > m.bad
   mk good      identity "$A" +33d 5 -O clear
   mk defopts   identity "$A" +33d 5
@@ -82,7 +82,7 @@ if ssh-keygen -q -k -f "$t/krl" -s identity.pub "$t/krlspec" 2>"$t/krl.err"; the
 vfy "certified key, identity as cert-authority"            Good    "$t/as.ca"    "$A" "$ns" good/m.sig      m
 vfy "same, identity listed as an ordinary key"             refused "$t/as.plain" "$A" "$ns" good/m.sig      m
 vfy "same, message altered"                                refused "$t/as.ca"    "$A" "$ns" good/m.sig      m.bad
-vfy "same, another namespace"                              refused "$t/as.ca"    "$A" "irongall-msg-v1:$C" good/m.sig m
+vfy "same, another namespace"                              refused "$t/as.ca"    "$A" "dromas-msg-v1:$C" good/m.sig m
 vfy "certificate for another principal"                    refused "$t/as.ca"    "$A" "$ns" wrongprin/m.sig m
 vfy "certificate from another key"                         refused "$t/as.ca"    "$A" "$ns" otherca/m.sig   m
 vfy "signed with -f work (the private key's path)"         "?"     "$t/as.ca"    "$A" "$ns" good/m.sig.plain m

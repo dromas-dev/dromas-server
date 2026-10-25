@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // rawCall calls url with exactly the headers given, each one whose value is

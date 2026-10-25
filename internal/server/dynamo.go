@@ -15,7 +15,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/ratelimit"
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
@@ -27,6 +26,7 @@ import (
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	"github.com/aws/smithy-go/middleware"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // dynamoBackend is the production backend (ARCHITECTURE.md § Storage): box
@@ -140,7 +140,7 @@ func newS3(cfg aws.Config, opts ...func(*s3.Options)) *s3.Client {
 // there, and its caller is answered 503; a write's caller meets a write
 // whose outcome is unknown.
 func bound(stack *middleware.Stack) error {
-	return stack.Initialize.Add(middleware.InitializeMiddlewareFunc("irongallBound", func(ctx context.Context, in middleware.InitializeInput, next middleware.InitializeHandler) (middleware.InitializeOutput, middleware.Metadata, error) {
+	return stack.Initialize.Add(middleware.InitializeMiddlewareFunc("dromasBound", func(ctx context.Context, in middleware.InitializeInput, next middleware.InitializeHandler) (middleware.InitializeOutput, middleware.Metadata, error) {
 		ctx, cancel := context.WithTimeout(ctx, storeTimeout)
 		out, md, err := next.HandleInitialize(ctx, in)
 		if o, ok := out.Result.(*s3.GetObjectOutput); ok && err == nil && o.Body != nil {
@@ -679,7 +679,7 @@ func IsThrottle(err error) bool {
 // note records whether a write's calls made an attempt that left open
 // whether it was applied: a fault of AWS's own, an answer lost, a timeout,
 // which the SDK retries. One note serves every call of one write, a
-// transaction's tries among them (IronGall-dev/irongall-server#101), so a
+// transaction's tries among them (dromas-dev/dromas-server#101), so a
 // write one attempt of which left it open stays open whatever came after
 // (written).
 type note struct{ seen atomic.Bool }
@@ -718,7 +718,7 @@ func (n *note) option() func(*dynamodb.Options) {
 // applied. After an attempt that left it open (n): unknown, whatever came
 // after, a failed condition or a throttle among them, since a failed
 // condition may be the one that attempt's own write makes
-// (IronGall-dev/irongall-server#89). Otherwise a refusal stated: the
+// (dromas-dev/dromas-server#89). Otherwise a refusal stated: the
 // write's condition failed (cond), or it met a transaction on its item,
 // which changes the item if it commits, so it is answered as its failed
 // condition; a throttle or the SDK's retry quota running out; or any other
@@ -921,7 +921,7 @@ func (s *dynamoBackend) crashed(step string) error {
 // fails stores nothing, whatever S3 answered (errNotStored). A failed
 // condition that hands back the item it met tells, whatever came before it:
 // this write's own item (its sender, its time), which an attempt the SDK
-// retried applied, is the write, applied (IronGall-dev/irongall-server#89);
+// retried applied, is the write, applied (dromas-dev/dromas-server#89);
 // another's is a duplicate.
 func (s *dynamoBackend) PutMessage(ctx context.Context, box protocol.Address, h *Header, body []byte) error {
 	if _, err := s.s3.PutObject(ctx, &s3.PutObjectInput{
@@ -955,7 +955,7 @@ func (s *dynamoBackend) PutMessage(ctx context.Context, box protocol.Address, h 
 		case !live:
 			// Acked since this send's dedupe read missed it: the PUT above
 			// made its body again, which nothing would serve, and only the
-			// lifecycle rule would take (IronGall-dev/irongall-server#16).
+			// lifecycle rule would take (dromas-dev/dromas-server#16).
 			// A live one's body is that message's, the same bytes.
 			if err := s.deleteBody(ctx, box, h.ID); err != nil {
 				s.logf("msgs: deleting a body put again after its message's ack: %v", err)
@@ -1054,7 +1054,7 @@ func (s *dynamoBackend) DeleteMessage(ctx context.Context, box protocol.Address,
 // matches, as acks: bodies first, then each item leaves the list. The live
 // index carries each message's sender, so one Query of it finds them. The
 // Query is strongly consistent, which a local secondary index allows: a
-// message stored just before it is in it (IronGall-dev/irongall-server#15).
+// message stored just before it is in it (dromas-dev/dromas-server#15).
 // Until a retire is made, nothing a reader of the list sees has changed: a
 // failure there is a refusal.
 func (s *dynamoBackend) DeleteFrom(ctx context.Context, box protocol.Address, from func(protocol.Address) bool, retired func([32]byte, time.Time)) error {

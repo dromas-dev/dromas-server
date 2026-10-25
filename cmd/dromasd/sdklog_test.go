@@ -13,7 +13,7 @@ import (
 
 // The AWS SDK's own lines are written through the redaction as serve and
 // account create run them, not as AWSLogger alone does
-// (IronGall-dev/irongall-server#72, #81): each command, with its stderr
+// (dromas-dev/dromas-server#72, #81): each command, with its stderr
 // read, loads its configuration and calls an endpoint of the test's own,
 // which answers every call with a Date of 64 hex that the SDK quotes in a
 // warning. Neither writes the run in the clear. No AWS is reached: the

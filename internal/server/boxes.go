@@ -10,7 +10,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // registerLimit bounds a registration or prekey body: a post-quantum prekey
@@ -19,7 +19,7 @@ const registerLimit = 64 << 10
 
 // hintDocument is what to do about an identity document the server does not
 // take as one.
-const hintDocument = "the identity document is \"irongall-v1\", LF, one SSH public key with no comment, LF: look for a comment, CRLF or a missing final newline"
+const hintDocument = "the identity document is \"dromas-v1\", LF, one SSH public key with no comment, LF: look for a comment, CRLF or a missing final newline"
 
 // register is PUT /v1/<address> (PROTOCOL.md §11.7). It is a call of a box that
 // does not exist yet, so its address pays for it: its body is read only once
@@ -30,7 +30,7 @@ const hintDocument = "the identity document is \"irongall-v1\", LF, one SSH publ
 // before any signature, and a box registered there, or an address revoked,
 // is answered from it, held in memory or read, by one path (registered),
 // spending none of the address's registrations (PROTOCOL.md §11.4, the order
-// of refusals; IronGall-dev/irongall-client#410). Memory answers with
+// of refusals; dromas-dev/dromas-client#410). Memory answers with
 // nothing counted. A read is counted once, as what it turns out to be: the
 // registrations it would spend, the address's and its /48's, are reserved
 // before it, given back if it finds a box or a revocation, and kept if it
@@ -66,10 +66,10 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 	case errors.Is(err, protocol.ErrIdentityFormat):
 		return failErr(protocol.CodeIdentityMismatch, hintDocument, err)
 	case errors.Is(err, protocol.ErrIdentityType), err == nil && !slices.Contains(s.identityTypes, id.Type()):
-		return fail(protocol.CodeUnsupportedKeyType, "make a box whose identity is an ssh-ed25519 key, as irongall init does unless told otherwise",
+		return fail(protocol.CodeUnsupportedKeyType, "make a box whose identity is an ssh-ed25519 key, as dromas init does unless told otherwise",
 			"this server registers identities of these key types: %s", keyTypesValue(s.identityTypes))
 	case err != nil:
-		return failErr(protocol.CodeBadKey, "make a new identity: irongall init in a new box", err)
+		return failErr(protocol.CodeBadKey, "make a new identity: dromas init in a new box", err)
 	}
 	// A box registered, or an address its identity revoked, is answered from
 	// what is kept of the address, whatever the statement and however many
@@ -116,7 +116,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 		if listed, err := cur.listed(cert.Serial()); err != nil {
 			return err
 		} else if listed {
-			return fail(protocol.CodeCertificateRevoked, "certify a new working key at a higher serial: irongall prekey renew", "the statement is signed under a certificate this address's identity revoked")
+			return fail(protocol.CodeCertificateRevoked, "certify a new working key at a higher serial: dromas prekey renew", "the statement is signed under a certificate this address's identity revoked")
 		}
 	}
 	// The pass, under the certificate the statement is signed under: the
@@ -156,7 +156,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 	}
 	// The address has a record, or may have one this write made, whose
 	// outcome is unknown: the record answers, as for a box registered
-	// before (IronGall-dev/irongall-client#411 item 2), and no count of the
+	// before (dromas-dev/dromas-client#411 item 2), and no count of the
 	// client's retry depends on the write.
 	exists := errors.Is(err, ErrExists)
 	if !exists && !mayHaveApplied(err) {
@@ -179,7 +179,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 // statementRevoked is the answer to a prekey statement signed under a
 // certificate the box's identity revoked (PROTOCOL.md §10.2).
 func statementRevoked() *problem {
-	return fail(protocol.CodeCertificateRevoked, "certify a new working key at a higher serial: irongall prekey renew", "the statement is signed under a certificate this box's identity revoked")
+	return fail(protocol.CodeCertificateRevoked, "certify a new working key at a higher serial: dromas prekey renew", "the statement is signed under a certificate this box's identity revoked")
 }
 
 // settled reports whether what is held of an address answers a registration
@@ -208,7 +208,7 @@ func (s *Server) registered(w http.ResponseWriter, r *http.Request, id *protocol
 	case cur.State == Revoked:
 		return revokedWith(cur)
 	case !bytes.Equal(cur.Identity, req.Identity) || !bytes.Equal(cur.Statement, req.Prekey) || !bytes.Equal(cur.Signature, req.PrekeySignature):
-		return fail(protocol.CodeConflict, "registered: to replace its prekey, irongall prekey renew", "this address is registered with another prekey")
+		return fail(protocol.CodeConflict, "registered: to replace its prekey, dromas prekey renew", "this address is registered with another prekey")
 	}
 	if listed, err := cur.listed(cur.CertSerial); err != nil {
 		return err
@@ -250,7 +250,7 @@ func (s *Server) take(b *Box, statement, sig []byte, p *protocol.Prekey, cert *p
 	keyHash := sha256.Sum256([]byte(p.Key))
 	retired := slices.DeleteFunc(b.Retired, func(x Retired) bool { return !now.Before(x.NotAfter) })
 	if keyHash == sha256.Sum256([]byte(b.Prekey.Key)) || slices.ContainsFunc(retired, func(x Retired) bool { return x.KeyHash == keyHash }) {
-		return fail(protocol.CodePrekeyNotNew, "every prekey must be a NEW key: irongall prekey renew makes one", "this key was already published")
+		return fail(protocol.CodePrekeyNotNew, "every prekey must be a NEW key: dromas prekey renew makes one", "this key was already published")
 	}
 	if now.Before(b.Prekey.NotAfter) {
 		retired = append(retired, Retired{Type: b.Prekey.Type(), NotAfter: b.Prekey.NotAfter, KeyHash: sha256.Sum256([]byte(b.Prekey.Key))})
@@ -284,7 +284,7 @@ func (s *Server) take(b *Box, statement, sig []byte, p *protocol.Prekey, cert *p
 // signed by the same clock would be refused the same way.
 func (s *Server) checkPrekey(id *protocol.Identity, statement, sig []byte) (*protocol.Prekey, *protocol.Certificate, error) {
 	const (
-		check   = ": check it, then irongall init for a new box, irongall prekey renew for one in use"
+		check   = ": check it, then dromas init for a new box, dromas prekey renew for one in use"
 		early   = "a certificate starts an hour before it is made, and a server takes one once it has begun for every box it takes, 10 minutes before its own clock, so this machine's clock reads more than 50 minutes ahead of the server's" + check
 		tooLong = "a client signs a prekey for 33 days, so this machine's clock reads more than an hour ahead of the server's" + check
 	)
@@ -298,13 +298,13 @@ func (s *Server) checkPrekey(id *protocol.Identity, statement, sig []byte) (*pro
 	case errors.Is(err, protocol.ErrCertificateNotBegun):
 		return nil, nil, failErr(protocol.CodePrekeyTime, early, err)
 	case errors.Is(err, protocol.ErrCertificateTime):
-		return nil, nil, failErr(protocol.CodePrekeyTime, "sign a new prekey statement: irongall prekey renew", err)
+		return nil, nil, failErr(protocol.CodePrekeyTime, "sign a new prekey statement: dromas prekey renew", err)
 	case err != nil:
-		return nil, nil, failErr(protocol.CodeBadKey, "sign a new prekey statement: irongall prekey renew", err)
+		return nil, nil, failErr(protocol.CodeBadKey, "sign a new prekey statement: dromas prekey renew", err)
 	}
 	if err := p.CheckLifetime(s.now()); err != nil {
 		if p.Expired(s.now()) {
-			return nil, nil, failErr(protocol.CodePrekeyTime, "sign a new prekey statement: irongall prekey renew", err)
+			return nil, nil, failErr(protocol.CodePrekeyTime, "sign a new prekey statement: dromas prekey renew", err)
 		}
 		return nil, nil, failErr(protocol.CodePrekeyTime, tooLong, err)
 	}
@@ -390,7 +390,7 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 		if err := s.failed(r); err != nil {
 			return err
 		}
-		return failErr(protocol.CodeBadKey, "sign a new prekey statement: irongall prekey renew", err)
+		return failErr(protocol.CodeBadKey, "sign a new prekey statement: dromas prekey renew", err)
 	}
 	if listed, err := b.listed(o.CertSerial); err != nil {
 		return err
@@ -398,10 +398,10 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 		return refusedRevoked
 	}
 	if o.CertSerial < b.CertSerial || (o.CertSerial == b.CertSerial && o.Cert != b.Cert) {
-		return fail(protocol.CodeCertificateNotCurrent, "certify a new working key at a higher serial: irongall prekey renew", "the certificate's serial must be above %d, or the certificate be the box's current one", certificateSerialValue(b.CertSerial))
+		return fail(protocol.CodeCertificateNotCurrent, "certify a new working key at a higher serial: dromas prekey renew", "the certificate's serial must be above %d, or the certificate be the box's current one", certificateSerialValue(b.CertSerial))
 	}
 	if o.CertSerial == b.CertSerial && o.Serial <= b.Prekey.Serial {
-		return fail(protocol.CodeConflict, "a newer prekey is already published: irongall prekey renew takes the next serial", "under the box's current certificate the serial must be above %d", prekeySerialValue(b.Prekey.Serial))
+		return fail(protocol.CodeConflict, "a newer prekey is already published: dromas prekey renew takes the next serial", "under the box's current certificate the serial must be above %d", prekeySerialValue(b.Prekey.Serial))
 	}
 	m, err := s.miss(r)
 	if err != nil {
@@ -410,7 +410,7 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 	defer func() { m.release(s.now()) }() // settled below, but for a panic
 	p, cert, err := s.checkPrekey(id, req.Prekey, req.PrekeySignature)
 	if err == nil && (cert.Serial() != o.CertSerial || certHash(cert) != o.Cert || p.Serial != o.Serial) {
-		err = fail(protocol.CodeBadKey, "sign a new prekey statement: irongall prekey renew", "the statement does not read the same verified as unverified")
+		err = fail(protocol.CodeBadKey, "sign a new prekey statement: dromas prekey renew", "the statement does not read the same verified as unverified")
 	}
 	if err != nil {
 		m.keep()
@@ -477,7 +477,7 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 	if err := s.store.UpdateBox(detached(r.Context()), b); err != nil {
 		stored = mayHaveApplied(err)
 		if errors.Is(err, ErrStale) {
-			return fail(protocol.CodeBoxChanged, "retry: irongall prekey renew", "the box changed during the request")
+			return fail(protocol.CodeBoxChanged, "retry: dromas prekey renew", "the box changed during the request")
 		}
 		return err
 	}
@@ -495,7 +495,7 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 // with no box is 404, whatever its identity revoked of its certificates.
 // It takes no pass: it is public, and the gate counts it by the address it
 // comes from, whatever Authorization it carries, which nothing here reads
-// (PROTOCOL.md §11.8, §11.5; IronGall-dev/irongall-client#352). It is the one
+// (PROTOCOL.md §11.8, §11.5; dromas-dev/dromas-client#352). It is the one
 // answer of the API that is gzipped, to a request that takes it.
 func (s *Server) getBox(w http.ResponseWriter, r *http.Request) error {
 	h, err := pathAddr(r)
@@ -548,8 +548,8 @@ func (s *Server) getRevocations(w http.ResponseWriter, r *http.Request) error {
 // What to do about a body that is not a revocation of the address, or not
 // one of its certificates.
 const (
-	hintRevocation   = "a revocation is the identity key's own signature over its fixed statement, with the identity document: irongall revocation make prints the record"
-	hintRevokedCerts = "a revocation of certificates is signed by the identity key itself, and sent with the identity document: irongall cert revoke-earlier makes and publishes one"
+	hintRevocation   = "a revocation is the identity key's own signature over its fixed statement, with the identity document: dromas revocation make prints the record"
+	hintRevokedCerts = "a revocation of certificates is signed by the identity key itself, and sent with the identity document: dromas cert revoke-earlier makes and publishes one"
 )
 
 // revoke is PUT /v1/<address>/revocations: the identity document with what
@@ -747,7 +747,7 @@ func (s *Server) deleteHeld(ctx context.Context, b *Box) error {
 // record if one is left. One purge of an address is in flight at a time, on
 // a context apart from any one request, and a call that comes meanwhile
 // waits for it and gets its result, starting nothing
-// (IronGall-dev/irongall-server#29): a revocation sent for a revoked box
+// (dromas-dev/dromas-server#29): a revocation sent for a revoked box
 // carries no pass and costs no signature check, so anyone can send one, and
 // each would otherwise start a whole delete of the box's mail of its own.
 func (s *Server) purge(ctx context.Context, b *Box) error {

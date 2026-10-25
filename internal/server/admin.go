@@ -12,7 +12,7 @@ import (
 
 // The operator's interface: commands for whoever runs this server, never
 // part of the API. It is served on a Unix socket that only the server's own
-// user can open (irongalld serve -admin-socket), and never on the API's
+// user can open (dromasd serve -admin-socket), and never on the API's
 // listener, so nothing that reaches the API reaches it.
 
 // ClearAddress forgets what the limits keyed by a caller's address hold of
@@ -64,7 +64,7 @@ type Indebted struct {
 
 // Top returns, for the limit named name, the n keys it holds deepest in debt
 // now, deepest first: which boxes or addresses spend it most. It reads memory
-// and keeps nothing (IronGall-dev/irongall-server#59). ok is false for a
+// and keeps nothing (dromas-dev/dromas-server#59). ok is false for a
 // name that is no limit's.
 func (s *Server) Top(name string, n int) (top []Indebted, ok bool) {
 	sets, ok := s.limitsByName()[name]
@@ -94,7 +94,7 @@ func (s *Server) Top(name string, n int) (top []Indebted, ok bool) {
 	}
 	// By the exact time, and only what is shown rounded: rounded first, keys
 	// within a second of each other would be listed by name
-	// (IronGall-dev/irongall-server#63).
+	// (dromas-dev/dromas-server#63).
 	slices.SortFunc(debts, func(a, b debt) int { return cmp.Or(cmp.Compare(b.in, a.in), cmp.Compare(a.key, b.key)) })
 	if len(debts) > n {
 		debts = debts[:n]

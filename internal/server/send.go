@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // send is POST /v1/<recipient>/messages (PROTOCOL.md §11.10, the server pipeline):
@@ -49,9 +49,9 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 	}
 	switch {
 	case sender != nil && sender.State == Revoked:
-		return fail(protocol.CodeSenderRevoked, "your box is revoked: make a new one, irongall init", "the sending box is revoked")
+		return fail(protocol.CodeSenderRevoked, "your box is revoked: make a new one, dromas init", "the sending box is revoked")
 	case !sender.open():
-		return fail(protocol.CodeUnknownSender, "register your own box first: irongall init", "the box the pass names is not registered")
+		return fail(protocol.CodeUnknownSender, "register your own box first: dromas init", "the box the pass names is not registered")
 	}
 	if listed, err := sender.listed(sender.CertSerial); err != nil {
 		return err
@@ -72,7 +72,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 	}
 	q, err := protocol.ParseSendQuery(r.URL.RawQuery)
 	if err != nil {
-		return queryProblem(err, "name the serials of the prekey the ciphertext is encrypted to, and of the certificate its statement is signed under: irongall send does")
+		return queryProblem(err, "name the serials of the prekey the ciphertext is encrypted to, and of the certificate its statement is signed under: dromas send does")
 	}
 
 	// 3. The body is the ciphertext's bytes, whatever its Content-Type says,
@@ -151,7 +151,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 
 	// 6 to 9, one call for the posts of this ciphertext to this box from
 	// this sender, naming the same serials, in flight at once
-	// (IronGall-dev/irongall-server#76, #16): one that arrives while the
+	// (dromas-dev/dromas-server#76, #16): one that arrives while the
 	// first is in them waits for it, and is answered as step 6 answers a
 	// post of bytes the box holds, or with the first's own refusal, which it
 	// would meet as well. The call runs apart from the request that leads
@@ -220,7 +220,7 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 
 	// 7. The box takes new mail on this prekey, and from this sender.
 	if rcpt.Prekey.Expired(now) {
-		return delivered{}, fail(protocol.CodePrekeyExpired, "the box's owner must publish a new prekey (irongall prekey renew); retry later", "this box's prekey has expired")
+		return delivered{}, fail(protocol.CodePrekeyExpired, "the box's owner must publish a new prekey (dromas prekey renew); retry later", "this box's prekey has expired")
 	}
 	// A prekey under a certificate the box's identity has revoked is one
 	// nobody may encrypt to. The cure is an expired prekey's: the owner
@@ -228,19 +228,19 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 	if listed, err := rcpt.listed(rcpt.CertSerial); err != nil {
 		return delivered{}, err
 	} else if listed {
-		return delivered{}, fail(protocol.CodePrekeyExpired, "the box's owner must publish a new prekey (irongall prekey renew); retry later", "this box's prekey is signed under a certificate its identity revoked")
+		return delivered{}, fail(protocol.CodePrekeyExpired, "the box's owner must publish a new prekey (dromas prekey renew); retry later", "this box's prekey is signed under a certificate its identity revoked")
 	}
 	// A box takes mail from a sender whose identity its client can verify:
 	// one on an Ed25519 key always, and otherwise what it declared with its
 	// prekey. Refused here, the sender has an error and no receipt for mail
 	// the recipient would have refused on reading it.
 	if t := identityType(p.sender.Identity); !protocol.AcceptsSender(rcpt.SenderKeyTypes, t) {
-		return delivered{}, fail(protocol.CodeSenderKeyType, "a box whose identity is an ssh-ed25519 key, as irongall init makes one, can write to any box",
+		return delivered{}, fail(protocol.CodeSenderKeyType, "a box whose identity is an ssh-ed25519 key, as dromas init makes one, can write to any box",
 			"this box's client does not verify identities of your box's key type, %s", keyTypeValue(t))
 	}
 	// A prekey is named by both serials: its own, and its certificate's.
 	if q.PrekeySerial != rcpt.Prekey.Serial || q.CertificateSerial != rcpt.CertSerial {
-		return delivered{}, fail(protocol.CodeStalePrekey, "a newer prekey exists: read GET /v1/<address> again and re-encrypt the same envelope (irongall does this)", "the box's current prekey is serial %d, under certificate %d", prekeySerialValue(rcpt.Prekey.Serial), certificateSerialValue(rcpt.CertSerial))
+		return delivered{}, fail(protocol.CodeStalePrekey, "a newer prekey exists: read GET /v1/<address> again and re-encrypt the same envelope (dromas does this)", "the box's current prekey is serial %d, under certificate %d", prekeySerialValue(rcpt.Prekey.Serial), certificateSerialValue(rcpt.CertSerial))
 	}
 	if refused := checkStanzas(p.stanzas, rcpt); refused != nil {
 		return delivered{}, refused
@@ -292,7 +292,7 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 	if rlim.ReceiveBurst > 0 {
 		recv, ok, wait := s.receivesAt(rlim).reserve(ctx, to.String(), s.now)
 		if !ok {
-			busy := fail(protocol.CodeMailboxBusy, "the box takes only so much new mail at a time: post it again after Retry-After (irongall outbox flush does)", "the box has taken as much new mail as it takes for now")
+			busy := fail(protocol.CodeMailboxBusy, "the box takes only so much new mail at a time: post it again after Retry-After (dromas outbox flush does)", "the box has taken as much new mail as it takes for now")
 			busy.retryAfter = wait
 			return delivered{}, busy
 		}
@@ -324,7 +324,7 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 	stored = true
 	// The box's address may have been revoked since step 5 read it: then
 	// what this wrote is deleted, as the revocation deleted the rest, and the
-	// send is answered as the box now stands (IronGall-dev/irongall-server#15).
+	// send is answered as the box now stands (dromas-dev/dromas-server#15).
 	// One process has the change in memory at once; with more, this is to be
 	// a strongly consistent read (ARCHITECTURE.md, stage 2).
 	read, cancel = bounded(ctx)
@@ -348,7 +348,7 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 // inFlight is, for each box, the sends this process has let past the pair
 // and box caps and not yet stored, kept beside the store's counts and read
 // with them under one lock, so sends in flight at once cannot all pass on
-// the same counts (IronGall-dev/irongall-server#4). It is this process's
+// the same counts (dromas-dev/dromas-server#4). It is this process's
 // alone, as every count is (LIMITS.md).
 type inFlight struct {
 	mu   sync.Mutex

@@ -1,6 +1,6 @@
 package server
 
-// How a pass is refused (PROTOCOL.md §8; IronGall-dev/irongall-server#93).
+// How a pass is refused (PROTOCOL.md §8; dromas-dev/dromas-server#93).
 //
 // Every certificate_not_current to a pass names, in certificate_serial, the
 // certificate the call takes a pass under, at each caller of checkPass and
@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -212,7 +212,7 @@ func TestEveryOwnerCallNamesTheCurrentCertificate(t *testing.T) {
 		{"DELETE", "/messages/" + id, nil},
 		{"GET", "/acl", nil},
 		{"PUT", "/acl", []byte(`{"allow":["*"],"deny":[]}`)},
-		{"PUT", "/account", []byte(`{"key":"iga1_AAAA"}`)},
+		{"PUT", "/account", []byte(`{"key":"dra1_AAAA"}`)},
 		{"DELETE", "/account", nil},
 	}
 	for _, c := range calls {
@@ -281,7 +281,7 @@ func TestARevokedCurrentCertificateIsAnsweredBeforeThePass(t *testing.T) {
 		{"DELETE", "/messages/" + id, nil},
 		{"GET", "/acl", nil},
 		{"PUT", "/acl", []byte(`{"allow":["*"],"deny":[]}`)},
-		{"PUT", "/account", []byte(`{"key":"iga1_AAAA"}`)},
+		{"PUT", "/account", []byte(`{"key":"dra1_AAAA"}`)},
 		{"DELETE", "/account", nil},
 		{"PUT", "", r.registration(3)},
 		{"PUT", "/prekey", r.upload(3)},

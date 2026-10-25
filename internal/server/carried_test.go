@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // beforePut runs a hook once, before the next PutMessage: a send held
@@ -39,7 +39,7 @@ func (s *beforePut) PutMessage(ctx context.Context, box protocol.Address, h *Hea
 // Every 410 revoked this server answers carries the record it holds of the
 // address, its identity's revocation of it beside its revocation of
 // certificates, as the read of a box does and as GET …/revocations serves it
-// (PROTOCOL.md §11.3; IronGall-dev/irongall-client#353), so a client checks
+// (PROTOCOL.md §11.3; dromas-dev/dromas-client#353), so a client checks
 // it with no second call: a send held between its check of the recipient
 // and its write while the address is revoked, the read, a registration, a
 // prekey upload, the revocation sent again, a send, and each call about the
@@ -106,7 +106,7 @@ func TestEvery410CarriesTheRecord(t *testing.T) {
 			"an ack":               e.do("DELETE", c.box.path("/messages/"+id), nil, pass),
 			"a read of its ACL":    e.do("GET", c.box.path("/acl"), nil, pass),
 			"an ACL":               e.do("PUT", c.box.path("/acl"), []byte(`{"allow":["*"]}`), pass),
-			"an adopt":             e.do("PUT", c.box.path("/account"), protocol.AdoptRequest{Key: "iga1_AAAA"}, pass),
+			"an adopt":             e.do("PUT", c.box.path("/account"), protocol.AdoptRequest{Key: "dra1_AAAA"}, pass),
 			"a leave":              e.do("DELETE", c.box.path("/account"), nil, pass),
 		}
 		for _, f := range c.first {

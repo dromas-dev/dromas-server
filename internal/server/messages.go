@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // pageSize is the list page: up to 50 messages (the delivery contract).
@@ -80,7 +80,7 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
 	// A page after the first is a continuation only when it presents the
 	// cursor of the page served last: a made-up, replayed or retried cursor
 	// is answered all the same, and charged as a poll
-	// (IronGall-dev/irongall-server#5).
+	// (dromas-dev/dromas-server#5).
 	if more == 0 || !held {
 		if err := s.spendPoll(box); err != nil {
 			return err
@@ -121,7 +121,7 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
 	}
 	// A first page's tag is that of its body, so its preconditions are
 	// evaluated once the page is read: an If-Match first, compared strongly,
-	// and a false one is 412 (IronGall-dev/irongall-server#71); then an
+	// and a false one is 412 (dromas-dev/dromas-server#71); then an
 	// If-None-Match that names the tag, compared weakly, or is "*", is 304
 	// with no body, its ETag, its Retry-After and the headers every answer
 	// carries (RFC 9110 §15.4.5). A page after the first, which has none,
@@ -152,7 +152,7 @@ func (s *Server) spendPoll(a protocol.Address) error {
 }
 
 // hintList is a list's 412's hint.
-const hintList = "list again without If-Match: irongall recv does"
+const hintList = "list again without If-Match: dromas recv does"
 
 // listTag is a first page's ETag: the first 16 bytes of the SHA-256 of its
 // body, in hex. It is a strong validator that every process computes alike

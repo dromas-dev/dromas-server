@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"filippo.io/age"
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // heldTillGone holds a write, while armed, until its request's context has
@@ -72,7 +72,7 @@ func sealFor(t *testing.T, to *raw, serial uint64) []byte {
 }
 
 // A write runs to its end however its caller goes, and what it changed is
-// counted (IronGall-dev/irongall-server#14): a send and a renewal whose
+// counted (dromas-dev/dromas-server#14): a send and a renewal whose
 // callers hang up while each is being written are stored, and each spends
 // its count, so the next one is refused.
 func TestAWriteOutlivesItsCallersHangUp(t *testing.T) {
@@ -164,7 +164,7 @@ func (s *heldPut) PutMessage(ctx context.Context, box protocol.Address, h *Heade
 }
 
 // Mail sent around a revocation of its box's address does not outlive it
-// (IronGall-dev/irongall-server#15): a send that passed its check of the box
+// (dromas-dev/dromas-server#15): a send that passed its check of the box
 // before the revocation and writes after it deletes what it wrote, and is
 // answered 410.
 func TestMailSentAroundARevocationDoesNotOutliveIt(t *testing.T) {
@@ -212,7 +212,7 @@ func (s *failPut) PutMessage(ctx context.Context, box protocol.Address, h *Heade
 
 // A count reserved for a write is kept when the write may have been applied,
 // whatever error it returned, and given back only for a refusal the store or
-// AWS stated (IronGall-dev/irongall-server#14, #90): a send whose write timed
+// AWS stated (dromas-dev/dromas-server#14, #90): a send whose write timed
 // out, or met a fault of AWS's own, or whose backend answered an error it
 // states nothing of, spends its send a day; one AWS throttled, or refused
 // for the call itself, or whose body's PUT failed before its item, does

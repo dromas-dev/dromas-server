@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/api/apitest"
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/api/apitest"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // rangeStore is the test store, keeping what each read of a message's body
@@ -92,7 +92,7 @@ func TestAFetchResumesByRange(t *testing.T) {
 		{"Range", "bytes=99999999999999999999999-"},
 		{"Range", "items=5-"},
 		// A unit is a token, ASCII: U+017F is no s, though Unicode folds it
-		// to one (IronGall-dev/irongall-client#405).
+		// to one (dromas-dev/dromas-client#405).
 		{"Range", "byte\u017f=5-"},
 		{"Range", "bytes=5-", "If-Range", `"x"`},
 		{"Range", "bytes=5-", "If-Range", "Sun, 18 Oct 2026 00:00:00 GMT"},

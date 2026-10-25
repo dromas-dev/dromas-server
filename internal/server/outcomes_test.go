@@ -3,7 +3,7 @@ package server
 // What a write AWS answered with an error is taken to have done: applied,
 // or possibly so, and the count reserved for it is kept; or refused, as AWS
 // or the store stated, and the count is given back (LIMITS.md rule 4;
-// IronGall-dev/irongall-server#14, #89, #90). awsfake_test.go has the fake.
+// dromas-dev/dromas-server#14, #89, #90). awsfake_test.go has the fake.
 
 import (
 	"context"
@@ -20,8 +20,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 const (
@@ -53,7 +53,7 @@ func applied(a answer) answer { a.apply = true; return a }
 // A write the SDK retried after an attempt whose answer leaves open whether
 // it was applied (a fault of AWS's own, a lost answer) may have been applied
 // whatever its last attempt answered, a failed condition or a throttle among
-// them (IronGall-dev/irongall-server#89): the fake applies the first
+// them (dromas-dev/dromas-server#89): the fake applies the first
 // UpdateItem and answers it with a 500, or drops its answer, and the retry is
 // answered as DynamoDB answers a retry of an applied conditional write, or
 // throttled; and the same for a send's PutItem, throttled after a 500. The
@@ -202,7 +202,7 @@ func putItemMeets(first answer, change func(item map[string]any)) func(string, i
 // A send's PutItem applied and answered 500 meets, retried, its own item:
 // the failed condition returns the item this write made (its sender, its
 // time), so the message is stored, and memory has its mark
-// (IronGall-dev/irongall-server#89). The controls: the same write answered
+// (dromas-dev/dromas-server#89). The controls: the same write answered
 // 200, stored; and a retry whose failed condition returns a live item of
 // another sender at the same time, or of the same sender at another, a send
 // of those bytes that got there first, which this write did not make.
@@ -251,7 +251,7 @@ func TestAPutRetriedOntoItsOwnItemIsStored(t *testing.T) {
 }
 
 // A refusal AWS stated, of a write it did not apply, gives the count back
-// whatever fault the SDK gives it (IronGall-dev/irongall-server#90):
+// whatever fault the SDK gives it (dromas-dev/dromas-server#90):
 // DynamoDB's refusals that the SDK does not model (ValidationException,
 // AccessDeniedException) come back with no fault, and are refusals all the
 // same; and a send whose body's PUT failed, whatever S3 answered, wrote no
@@ -307,7 +307,7 @@ func TestARefusalAWSStatedGivesTheCountBack(t *testing.T) {
 // the record cache counts it as a write and keeps no copy, so a read begun
 // before it puts nothing after it, and the index forgets the box, so its
 // standing from before the write checks no pass; the next use reads the
-// table (recCache.write; IronGall-dev/irongall-server#89). The controls: a
+// table (recCache.write; dromas-dev/dromas-server#89). The controls: a
 // refusal AWS stated, one the SDK models or one it gives no fault (#90),
 // changes nothing in memory; a failed condition with nothing applied evicts
 // the cached copy, counted as a write, since the store holds what this
@@ -468,7 +468,7 @@ func (s *overFake) PutMessage(ctx context.Context, box protocol.Address, h *Head
 
 // A renewal the store applied, whose first attempt AWS answered with a
 // fault and whose retry met its own write's failed condition, is counted:
-// with one renewal a day, the next is refused (IronGall-dev/irongall-server#89).
+// with one renewal a day, the next is refused (dromas-dev/dromas-server#89).
 // The control: a renewal answered with a fault every attempt.
 func TestARenewalTheStoreMayHaveAppliedIsCounted(t *testing.T) {
 	t.Parallel()
@@ -504,7 +504,7 @@ func TestARenewalTheStoreMayHaveAppliedIsCounted(t *testing.T) {
 // with a fault and whose retry met its own item, is stored: answered 201
 // and counted, with one send a day; and where its recipient's address was
 // revoked before the write, what it wrote is deleted and it is answered
-// 410 (IronGall-dev/irongall-server#89, #15). The controls are the same
+// 410 (dromas-dev/dromas-server#89, #15). The controls are the same
 // sends whose write AWS answered 200.
 func TestASendWhoseWriteWasRetriedIsStored(t *testing.T) {
 	t.Parallel()
@@ -626,7 +626,7 @@ func (b *boxesTable) answer(op string, n int, body []byte) answer {
 // certificate is refused at once, from the record read again. Before, the
 // index's standing from before the write took that pass until the stream's
 // echo. The control: a raise AWS refused leaves the index standing, and the
-// same pass is taken (IronGall-dev/irongall-server#89).
+// same pass is taken (dromas-dev/dromas-server#89).
 func TestARevocationWhoseAnswerWasLostIsInTheNextPassCheck(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -684,7 +684,7 @@ func TestARevocationWhoseAnswerWasLostIsInTheNextPassCheck(t *testing.T) {
 // condition fails after an attempt that left open whether it was applied:
 // the fake applies the first attempt and answers it with a 500, and the
 // retry fails its condition, as DynamoDB answers a retry of an applied
-// conditional write (IronGall-dev/irongall-server#89). So too a delete,
+// conditional write (dromas-dev/dromas-server#89). So too a delete,
 // which has no condition, throttled after a 500. The controls: the same
 // write's failed condition, or throttles, alone, a refusal stated as before;
 // and Adopt's transaction cancelled for a failed condition after a 500, a
@@ -780,7 +780,7 @@ func TestAnAdoptsRetriesCarryItsFirstAttemptsToken(t *testing.T) {
 // A Leave the store applied, whose first attempt AWS answered with a fault
 // and whose retry met its own write's failed condition, is answered as any
 // write whose outcome is unknown, 503, never 409 box_changed. The control:
-// a Leave whose condition failed alone is 409 (IronGall-dev/irongall-server#89).
+// a Leave whose condition failed alone is 409 (dromas-dev/dromas-server#89).
 func TestALeaveTheStoreMayHaveAppliedIsNot409(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -824,7 +824,7 @@ func TestALeaveTheStoreMayHaveAppliedIsNot409(t *testing.T) {
 // by a later call of its transaction, which carries another client token.
 // Its transaction's calls share one note of such an attempt, so the store
 // states no refusal: the count is kept, and memory forgets the box, the
-// record cache and the index (IronGall-dev/irongall-server#101). The
+// record cache and the index (dromas-dev/dromas-server#101). The
 // control: a fault at every attempt.
 func TestAnAdoptAfterAnAmbiguousAttemptMayHaveBeenApplied(t *testing.T) {
 	t.Parallel()
@@ -893,7 +893,7 @@ func TestAnAdoptAfterAnAmbiguousAttemptMayHaveBeenApplied(t *testing.T) {
 // applied and answered 500 and its retry's condition failed on that write,
 // is answered from the record, which it reads as it does after a failed
 // condition: with one registration an hour, neither it nor its client's
-// retry is 503, then 429 (IronGall-dev/irongall-client#411 item 2).
+// retry is 503, then 429 (dromas-dev/dromas-client#411 item 2).
 func TestARegistrationWhoseOutcomeIsUnknownIsAnsweredFromTheRecord(t *testing.T) {
 	t.Parallel()
 	tb := &boxesTable{items: map[string]map[string]any{}}

@@ -18,9 +18,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	stypes "github.com/aws/aws-sdk-go-v2/service/dynamodbstreams/types"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // dynamo is the DynamoDB backend s is over.
@@ -119,7 +119,7 @@ var errStated = refused(errors.New("AWS throttled the call"))
 // faults wraps a backend, and makes any write's outcome what a test asks of
 // it, and runs a hook at a read's answer: after the backend answered, before
 // memory has the answer. It stands where every fault of a backend reaches
-// memory (IronGall-dev/irongall-client#407 item 4).
+// memory (dromas-dev/dromas-client#407 item 4).
 type faults struct {
 	Backend
 	mu     sync.Mutex
@@ -546,7 +546,7 @@ var backendReads = []string{"ReadAddress", "ReadLive", "List", "Message", "Dedup
 // count is given back; unknown, before or after the backend applied it,
 // memory forgets what it held of the write's target, the record cache and
 // the index, or the account, a read begun before puts nothing, the answer is
-// ErrUnknown and the count is kept (IronGall-dev/irongall-client#411 item
+// ErrUnknown and the count is kept (dromas-dev/dromas-client#411 item
 // 3). The writes are held to the interface's methods: one added there and
 // not here fails.
 func TestEveryWriteOfTheBackendReachesMemoryByItsOutcome(t *testing.T) {
@@ -684,7 +684,7 @@ func TestEveryWriteOfTheBackendReachesMemoryByItsOutcome(t *testing.T) {
 // An item of the backend's that does not read is applied as one gone,
 // whatever its kind: the address forgotten, the record cache and the index
 // both, or the account evicted, each counted so that a read begun before it
-// puts nothing (IronGall-dev/irongall-client#407 item 1). Each kind's item
+// puts nothing (dromas-dev/dromas-client#407 item 1). Each kind's item
 // comes as the DynamoDB backend decodes its stream's record. Every kind of
 // change is here: one added and not here fails.
 func TestAnItemThatDoesNotReadIsGoneWhateverItsKind(t *testing.T) {

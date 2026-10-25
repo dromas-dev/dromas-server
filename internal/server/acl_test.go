@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"filippo.io/age"
-	"github.com/IronGall-dev/irongall-client/api/apitest"
-	"github.com/IronGall-dev/irongall-client/client"
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/api/apitest"
+	"github.com/dromas-dev/dromas-client/client"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // aclOf is an ACL document: the lists as given.
@@ -164,7 +164,7 @@ func TestACLRoute(t *testing.T) {
 // RFC 9110 §13.1.1 has an origin server evaluate one, a box with no ACL
 // included; a false one is 412, changes nothing, and is answered before the
 // body is read (RFC 9110 §13.2.1). One without If-Match replaces whatever is
-// held, so no ACL is the last the server takes (IronGall-dev/irongall-client#360).
+// held, so no ACL is the last the server takes (dromas-dev/dromas-client#360).
 func TestAnACLsIfMatch(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
@@ -258,7 +258,7 @@ func (o *onRead) Read(p []byte) (int, error) {
 // its If-Match was evaluated, makes the PUT 409 box_changed, and the other
 // writer's ACL stays; the same PUT sent again meets an If-Match that is
 // false (412), and one with the tag now held is taken
-// (IronGall-dev/irongall-server#88).
+// (dromas-dev/dromas-server#88).
 func TestAnACLsIfMatchIsHeldToTheACLItsWriteReplaces(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())

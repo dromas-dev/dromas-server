@@ -1,4 +1,4 @@
-// Package server is irongalld's HTTP API (PROTOCOL.md §11, the status map
+// Package server is dromasd's HTTP API (PROTOCOL.md §11, the status map
 // in §11.3) over a Store.
 package server
 
@@ -22,7 +22,7 @@ import (
 	"github.com/aws/smithy-go/logging"
 	"golang.org/x/sync/singleflight"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // Config configures a Server.
@@ -182,7 +182,7 @@ const (
 	passAnyBox
 	// passPathBox: only the pass of the box the path names: the calls a box
 	// makes about itself, which answer that box's state before they look at
-	// a pass (IronGall-dev/irongall-server#74).
+	// a pass (dromas-dev/dromas-server#74).
 	passPathBox
 )
 
@@ -250,8 +250,8 @@ func (s *Server) subtree(mux *http.ServeMux, prefix string, inner *http.ServeMux
 // spend the box's budgets. Every other spends one of its address's flood
 // budget first (spendRequest): a call with no pass, and one with a pass the
 // process has not checked, which costs a parse and up to two signature
-// checks to find out whose it is (IronGall-dev/irongall-server#67,
-// IronGall-dev/irongall-client#269). Until its pass is checked, a call is
+// checks to find out whose it is (dromas-dev/dromas-server#67,
+// dromas-dev/dromas-client#269). Until its pass is checked, a call is
 // its address's.
 func (s *Server) gate(pass passRule, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -347,7 +347,7 @@ type registered struct{ http.Handler }
 // further, before any handler sees it, and so before any count (LIMITS.md,
 // rule 1); every request after its head reaches h, OPTIONS * among them,
 // which net/http would otherwise answer itself, uncounted
-// (IronGall-dev/irongall-server#75). An idle keep-alive connection is closed
+// (dromas-dev/dromas-server#75). An idle keep-alive connection is closed
 // after idle.
 func HTTPServer(addr string, h http.Handler, l Limits, idle time.Duration) *http.Server {
 	return &http.Server{
@@ -465,12 +465,12 @@ func (s *Server) handle(h func(http.ResponseWriter, *http.Request) error) http.H
 }
 
 // paced holds every request's body and every answer to Limits.BodyTimeout
-// and Limits.BodyMinRate (IronGall-dev/irongall-server#7): a deadline that
+// and Limits.BodyMinRate (dromas-dev/dromas-server#7): a deadline that
 // starts at BodyTimeout and grows a second for each BodyMinRate bytes
 // moved, so a slow link that keeps sending is let through, and a peer that
 // stops is cut off. It is the outermost wrapper, so no answer goes without
 // it: a refusal at the gate, the router's own, the link page's, a site's
-// (IronGall-dev/irongall-server#31, #77). What the handler leaves of a body
+// (dromas-dev/dromas-server#31, #77). What the handler leaves of a body
 // is drained through the body itself before the answer's first byte goes
 // out (pacedBody.drain), so the drain is cut and counted as the handler's
 // reads are, at the deadline they left, and the answer's time runs from
@@ -505,7 +505,7 @@ func (s *Server) paced(h http.Handler) http.Handler {
 // body is open. The read that ends it does not: net/http has then begun its
 // own read of the connection, for the next request, and a deadline set on it
 // would cut that read and with it the context of every request still to
-// come on the connection (IronGall-dev/irongall-server#28).
+// come on the connection (dromas-dev/dromas-server#28).
 type pacedBody struct {
 	io.ReadCloser
 	rc      *http.ResponseController
@@ -559,7 +559,7 @@ const drainBound = 256 << 10
 
 // drain reads what the handler left of the body, before the answer's first
 // byte goes out, through Read, so a cut of it is counted where every cut is
-// (IronGall-dev/irongall-client#413 item 3): net/http would otherwise drain
+// (dromas-dev/dromas-client#413 item 3): net/http would otherwise drain
 // it with a reader of its own, whose cut is no cut here (go1.27's
 // chunkWriter.writeHeader, and body.Close once the handler returns). No byte
 // of the drain moves the read deadline, as none of net/http's did: the body
@@ -589,7 +589,7 @@ func (p *pacedBody) drain() {
 // rate bytes, setting the write deadline before each: the timeout from
 // when the write began, and a second for each rate bytes of it already
 // written, as a read is credited only for the bytes it has read
-// (IronGall-dev/irongall-client#413 item 2). So a peer that takes none of
+// (dromas-dev/dromas-client#413 item 2). So a peer that takes none of
 // an answer holds the connection the timeout and what the buffers between
 // took, whatever the answer's size.
 type pacedWriter struct {
@@ -704,12 +704,12 @@ func required(fields ...any) error {
 // detached is ctx apart from its request's end, for a store write a request
 // makes once its work is done: the write runs to its end however its caller
 // goes, so that what it changed is counted and reaches memory, and the store
-// bounds each of its calls (bounded; IronGall-dev/irongall-server#14).
+// bounds each of its calls (bounded; dromas-dev/dromas-server#14).
 func detached(ctx context.Context) context.Context { return context.WithoutCancel(ctx) }
 
 // mayHaveApplied reports whether a store write that returned err may have
 // been applied all the same, so that a count reserved for it is kept, never
-// given back (LIMITS.md rule 4; IronGall-dev/irongall-server#14, #89, #90):
+// given back (LIMITS.md rule 4; dromas-dev/dromas-server#14, #89, #90):
 // what the store's one choke point for writes said, ErrUnknown, of anything
 // but a refusal stated (Memory.write).
 func mayHaveApplied(err error) bool { return errors.Is(err, ErrUnknown) }
@@ -730,7 +730,7 @@ func (s *Server) box(ctx context.Context, a protocol.Address) (*Box, error) {
 // Limits.MissesPerMinute guards: the caller's address reserves a count before
 // it, and keeps it only if the read finds no box (s.miss). Lookups of one
 // address made while its read is in flight share that read, and are counted
-// for nothing: it costs no more for them (IronGall-dev/irongall-server#6).
+// for nothing: it costs no more for them (dromas-dev/dromas-server#6).
 // One whose token (Store.Begin), taken once memory could not answer it, is
 // later than the token the read began at reads again: that read may be from
 // before a write this process applied before the lookup came, a revocation
@@ -779,7 +779,7 @@ type sharedRead struct {
 
 // lead makes the read of a's record that lookups of a meanwhile share. It
 // runs apart from its caller's request, bounded by storeTimeout, so a caller
-// who hangs up fails none of them (IronGall-dev/irongall-server#32), and it
+// who hangs up fails none of them (dromas-dev/dromas-server#32), and it
 // settles its reservation however it ends, a panic included (#36). A caller
 // refused before reading makes no read, and those waiting on it ask for
 // themselves (notRead). It takes its token before it reads, so every write
@@ -826,7 +826,7 @@ func (s *Server) miss(r *http.Request) (*reservation, error) {
 // (Limits.RequestBurst): every call that carries no pass this process has
 // checked (gate), and every request no route matches (unrouted), as Let's
 // Encrypt limits every endpoint per address
-// (IronGall-dev/irongall-server#58). It is sized far above what an honest
+// (dromas-dev/dromas-server#58). It is sized far above what an honest
 // crowd behind one address makes, the site's pages included: for floods
 // alone. A refusal is the problem to answer with.
 func (s *Server) spendRequest(r *http.Request) *problem {
@@ -869,7 +869,7 @@ func (g registration) release(now time.Time) {
 
 // reserveRegistration reserves a registration of the caller's address: of
 // its IPv4 address or IPv6 /64, and of its IPv6 /48, as Let's Encrypt counts
-// new accounts (IronGall-dev/irongall-server#57), before the work they
+// new accounts (dromas-dev/dromas-server#57), before the work they
 // guard, to be kept or given back once its outcome is known (LIMITS.md rule
 // 4). Each is reserved before the other is settled, so a refusal by one
 // spends neither; a refusal gives the longer wait of the two (longest). why
@@ -939,7 +939,7 @@ func (s *Server) raisesADay() perDay {
 // of also, the box's other counts in memory that the same call would spend,
 // read without taking from them: whichever waits longest, under its own name.
 // RFC 8555 §6.6 asks that Retry-After be when every limit lets the same
-// request through (IronGall-dev/irongall-server#56). Counts behind work, a
+// request through (dromas-dev/dromas-server#56). Counts behind work, a
 // read of storage or a signature check, are not read ahead of it: the order
 // of checks puts them last because they cost.
 func (s *Server) longest(p *problem, a protocol.Address, also ...perDay) *problem {
@@ -1002,7 +1002,7 @@ func revoked() *problem {
 // revokedWith is revoked carrying the record b holds of the revoked
 // address, its identity with what the identity revoked: every 410 revoked
 // answered from what is held of an address carries it, so a client checks
-// it with no second call (PROTOCOL.md §11.3; IronGall-dev/irongall-client#353).
+// it with no second call (PROTOCOL.md §11.3; dromas-dev/dromas-client#353).
 func revokedWith(b *Box) *problem {
 	p := revoked()
 	p.record = b.record()
@@ -1012,7 +1012,7 @@ func revokedWith(b *Box) *problem {
 // fetchedAlready refuses a fetch of a message the box has fetched before, once
 // its allowance for that is spent (fetch in messages.go).
 func fetchedAlready(wait time.Duration) *problem {
-	p := fail(protocol.CodeRefetchSpent, "keep each message when you fetch it, then ack it (irongall recv does both); to fetch this one again, wait for Retry-After",
+	p := fail(protocol.CodeRefetchSpent, "keep each message when you fetch it, then ack it (dromas recv does both); to fetch this one again, wait for Retry-After",
 		"this message was fetched before, and the box's allowance for fetching again is spent")
 	p.retryAfter = wait
 	return p
@@ -1062,7 +1062,7 @@ var hexRun = regexp.MustCompile(`[0-9A-Fa-f]{64,}`)
 // "#" and the first 16 hex characters of the SHA-256 of the run in lower
 // case, a name only someone already holding the run can match: no log line
 // carries an address or a message id, in a path, a store's error or
-// anywhere else (IronGall-dev/irongall-server#9).
+// anywhere else (dromas-dev/dromas-server#9).
 func redact(line []byte) []byte {
 	return hexRun.ReplaceAllFunc(line, func(run []byte) []byte { return []byte(logName(run)) })
 }
@@ -1087,7 +1087,7 @@ func (r redactor) Write(p []byte) (int, error) {
 }
 
 // Redacting is w, redacting each line written to it (redact): the writer
-// under every log irongalld keeps, net/http's own among them.
+// under every log dromasd keeps, net/http's own among them.
 func Redacting(w io.Writer) io.Writer {
 	if _, ok := w.(redactor); ok {
 		return w
@@ -1097,7 +1097,7 @@ func Redacting(w io.Writer) io.Writer {
 
 // AWSLogger is the logger for the AWS SDK's own lines, written to w through
 // Redacting: its default writes to stderr apart from the redaction
-// (IronGall-dev/irongall-server#72).
+// (dromas-dev/dromas-server#72).
 func AWSLogger(w io.Writer) logging.Logger { return logging.NewStandardLogger(Redacting(w)) }
 
 // redacting is l writing through Redacting, so that every line logged
@@ -1114,12 +1114,12 @@ func redacting(l *log.Logger) *log.Logger {
 
 // loggedMethod is what the access log writes of a request's method: one of
 // the form methodName reads and no longer than longestMethod, or its length
-// alone, so a caller makes no line longer (IronGall-dev/irongall-server#11).
+// alone, so a caller makes no line longer (dromas-dev/dromas-server#11).
 // A token may hold digits and "-._!~|#", and redact finds only an unbroken
 // run of hex, so a method written as it came could carry an address split by
 // one character, or a name that reads as one redact gives (#79); and the
 // capitals A to F are hex, so a method of 64 of them would be written as such
-// a name (IronGall-dev/irongall-client#413 item 1).
+// a name (dromas-dev/dromas-client#413 item 1).
 func loggedMethod(m string) string {
 	if len(m) > longestMethod || !methodName.MatchString(m) {
 		return fmt.Sprintf("(a method of %d bytes)", len(m))
@@ -1142,7 +1142,7 @@ const longestMethod = len("UPDATEREDIRECTREF")
 // pattern of the route that answered it, each wildcard's value written as
 // logName names it, whatever the value holds, so no byte the caller sent is
 // written and an escaped character cannot split an address past the
-// redaction (IronGall-dev/irongall-server#62, #11); a site's page as the
+// redaction (dromas-dev/dromas-server#62, #11); a site's page as the
 // site's pattern and the path's length; and a path no route answered by its
 // length alone.
 func loggedPath(r *http.Request) string {

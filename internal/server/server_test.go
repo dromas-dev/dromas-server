@@ -23,9 +23,9 @@ import (
 	"time"
 
 	"filippo.io/age"
-	"github.com/IronGall-dev/irongall-client/api/apitest"
-	"github.com/IronGall-dev/irongall-client/client"
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/api/apitest"
+	"github.com/dromas-dev/dromas-client/client"
+	"github.com/dromas-dev/dromas-client/protocol"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -165,7 +165,7 @@ func (e *env) want(r reply, status int, code protocol.Code) {
 
 // wantNotCurrent is want of a pass refused as under another certificate than
 // the one the call takes a pass under, serial n, which the answer names
-// (IronGall-dev/irongall-server#66).
+// (dromas-dev/dromas-server#66).
 func (e *env) wantNotCurrent(r reply, n uint64) {
 	e.t.Helper()
 	e.want(r, http.StatusUnauthorized, protocol.CodeCertificateNotCurrent)
@@ -411,7 +411,7 @@ func TestRegistration(t *testing.T) {
 	e.want(e.do("PUT", "/v1/"+hex.EncodeToString(h[:]), protocol.RegisterRequest{Identity: commented, Prekey: reg.Prekey, PrekeySignature: reg.PrekeySignature}, pass), 400, protocol.CodeIdentityMismatch)
 
 	// A small-order key: the grammar holds, the key check fails.
-	small, err := os.ReadFile("../../../irongall-client/testdata/vectors/identity/small-order-1.doc")
+	small, err := os.ReadFile("../../../dromas-client/testdata/vectors/identity/small-order-1.doc")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,7 +440,7 @@ func TestRegistration(t *testing.T) {
 	// and under the certificate the statement is signed under. A statement
 	// that leaked registers nothing for whoever found it.
 	e.want(e.do("PUT", r.path(""), reg, ""), 401, protocol.CodeUnauthorized)
-	e.want(e.do("PUT", r.path(""), reg, "Bearer igt1_abc"), 401, protocol.CodeUnauthorized)
+	e.want(e.do("PUT", r.path(""), reg, "Bearer drt1_abc"), 401, protocol.CodeUnauthorized)
 	e.want(e.do("PUT", r.path(""), reg, other.pass(1)), 401, protocol.CodeUnauthorized)
 	e.want(e.do("PUT", r.path(""), reg, e.passFor(r.work[1], r.id.Address(), "another.example")), 401, protocol.CodeUnauthorized)
 	e.want(e.do("PUT", r.path(""), reg, e.passFor(r.certify(2), r.id.Address(), e.name())), 401, protocol.CodeCertificateNotCurrent)
@@ -501,7 +501,7 @@ func TestRegistration(t *testing.T) {
 // A registration of a registered box, or of a revoked address, is answered
 // from what is held of it before anything below is checked (PROTOCOL.md §11.7
 // step 5), whether this process's memory holds the box or it reads the
-// record, under the count of registrations (IronGall-dev/irongall-server#94):
+// record, under the count of registrations (dromas-dev/dromas-server#94):
 // another statement is 409 whatever pass it carries and however it is
 // signed, the box's current statement under its revoked current certificate
 // is certificate_revoked with no pass read, and a revoked address is 410.
@@ -568,8 +568,8 @@ func (s *boxReads) Box(ctx context.Context, a protocol.Address) (*Box, error) {
 // once, under the registrations it would spend, reserved before the read, and
 // no more: one that makes a box, one of an address whose identity revoked
 // certificates before it had a box, and one answered from a registered box's
-// record (register; IronGall-dev/irongall-server#94,
-// IronGall-dev/irongall-client#410).
+// record (register; dromas-dev/dromas-server#94,
+// dromas-dev/dromas-client#410).
 func TestARegistrationReadsItsAddressOnce(t *testing.T) {
 	t.Parallel()
 	reads := &boxReads{}
@@ -749,7 +749,7 @@ func TestACursorIsReadBeforeThePass(t *testing.T) {
 // A call with two Authorization lines carries no pass, whatever each holds:
 // which of them is the pass is not the server's to choose. It is refused as
 // a call that carries no pass is. The read of a box reads none, so it is
-// answered with two as with none (IronGall-dev/irongall-client#352).
+// answered with two as with none (dromas-dev/dromas-client#352).
 func TestTwoAuthorizationLinesAreNoPass(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
@@ -1146,7 +1146,7 @@ func TestGreaseIsIgnored(t *testing.T) {
 }
 
 // A file whose one stanza is grease has no native stanza: it is not said to
-// have more than one (IronGall-dev/irongall-client#417 item 4), and is told
+// have more than one (dromas-dev/dromas-client#417 item 4), and is told
 // it has no recipient, as PROTOCOL.md §11.10 step 7 has it. Its stanzas are
 // read as a reader reads them (protocol.ReadStanzas).
 func TestAFileWithNoNativeStanzaIsNotSaidToHaveTwo(t *testing.T) {

@@ -4,8 +4,8 @@
 # client's main has moved. Actions are pinned by commit, each with its
 # release beside it.
 #
-# go.mod replaces the client module with ../irongall-client, so every job
-# checks this repo out beside irongall-client's main.
+# go.mod replaces the client module with ../dromas-client, so every job
+# checks this repo out beside dromas-client's main.
 name: ci
 
 on:
@@ -27,7 +27,7 @@ concurrency:
 defaults:
   run:
     shell: bash
-    working-directory: irongall-server
+    working-directory: dromas-server
 
 jobs:
   test:
@@ -41,24 +41,24 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          path: irongall-server
+          path: dromas-server
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: IronGall-dev/irongall-client
-          path: irongall-client
+          repository: dromas-dev/dromas-client
+          path: dromas-client
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: stable
           check-latest: true
           cache-dependency-path: |
-            irongall-server/go.sum
-            irongall-client/go.sum
+            dromas-server/go.sum
+            dromas-client/go.sum
       - name: tools
         run: |
           go version; ssh -V; jq --version; curl --version | head -1; bash --version | head -1
-          echo "irongall-client at $(git -C ../irongall-client rev-parse HEAD)"
+          echo "dromas-client at $(git -C ../dromas-client rev-parse HEAD)"
       - name: check
         # gofmt, vet, every test (a skip fails the job, but the AWS tests' and
         # the cost measurement's), and test/interop.sh: scripts/check.sh, which a laptop runs too.
@@ -70,24 +70,24 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          path: irongall-server
+          path: dromas-server
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: IronGall-dev/irongall-client
-          path: irongall-client
+          repository: dromas-dev/dromas-client
+          path: dromas-client
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: stable
           check-latest: true
           cache-dependency-path: |
-            irongall-server/go.sum
-            irongall-client/go.sum
+            dromas-server/go.sum
+            dromas-client/go.sum
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.15.0
-          working-directory: irongall-server
+          working-directory: dromas-server
 
   govulncheck:
     runs-on: ubuntu-26.04
@@ -95,18 +95,18 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          path: irongall-server
+          path: dromas-server
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: IronGall-dev/irongall-client
-          path: irongall-client
+          repository: dromas-dev/dromas-client
+          path: dromas-client
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: stable
           check-latest: true
           cache-dependency-path: |
-            irongall-server/go.sum
-            irongall-client/go.sum
+            dromas-server/go.sum
+            dromas-client/go.sum
       - run: scripts/check.sh vuln

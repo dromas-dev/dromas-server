@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/api/apitest"
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/api/apitest"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // The operator clears what the limits keyed by an address hold of one
@@ -69,7 +69,7 @@ func TestTheOperatorClearsAnAddress(t *testing.T) {
 	if code, key, _ := clear("2001:db8:1:2:3:4:5:6"); code != http.StatusOK || key != "2001:db8:1:2::/64" {
 		t.Fatalf("an IPv6 address: %d %q", code, key)
 	}
-	for _, bad := range []string{"", "nonsense", "127.0.0.1/8", "irongall.dev"} {
+	for _, bad := range []string{"", "nonsense", "127.0.0.1/8", "dromas.dev"} {
 		if code, _, _ := clear(bad); code != http.StatusBadRequest {
 			t.Errorf("clear %q: %d, want 400", bad, code)
 		}
@@ -88,7 +88,7 @@ func TestTheOperatorClearsAnAddress(t *testing.T) {
 
 // A caller's address is keyed without its IPv6 zone, which names an
 // interface of this host and is no part of the address
-// (IronGall-dev/irongall-server#48): a link-local caller is counted by its
+// (dromas-dev/dromas-server#48): a link-local caller is counted by its
 // /64 and its /48 as any other IPv6 caller is, the operator's clear reaches
 // it written either way, and a trusted proxy reached over a link-local
 // address is believed.

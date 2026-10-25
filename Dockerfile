@@ -1,31 +1,31 @@
-# irongalld, the irongall.dev server: a static binary on Debian slim.
+# dromasd, the dromas.dev server: a static binary on Debian slim.
 #
-# go.mod replaces irongall-client with ../irongall-client, so the build needs
+# go.mod replaces dromas-client with ../dromas-client, so the build needs
 # that checkout too: pass it as the build context named "client"
-# (docker build --build-context client=../irongall-client .).
+# (docker build --build-context client=../dromas-client .).
 FROM golang:1.27.3-trixie AS build
-WORKDIR /src/irongall-server
-COPY --from=client go.mod go.sum /src/irongall-client/
+WORKDIR /src/dromas-server
+COPY --from=client go.mod go.sum /src/dromas-client/
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
-COPY --from=client . /src/irongall-client
+COPY --from=client . /src/dromas-client
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath -o /irongalld ./cmd/irongalld
+    CGO_ENABLED=0 go build -trimpath -o /dromasd ./cmd/dromasd
 
-# The echo box: a CLIENT, irongall-echo from irongall-client,
-# with the irongall command beside it for the operator (addr, adopt). Built only
+# The echo box: a CLIENT, dromas-echo from dromas-client,
+# with the dromas command beside it for the operator (addr, adopt). Built only
 # as the target "echo"; the default target, the last stage, is the server.
 FROM build AS echo-build
-WORKDIR /src/irongall-client
+WORKDIR /src/dromas-client
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath -o /out/ ./cmd/irongall-echo ./cmd/irongall
+    CGO_ENABLED=0 go build -trimpath -o /out/ ./cmd/dromas-echo ./cmd/dromas
 
 FROM debian:13.7-slim AS echo
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-COPY --from=echo-build /out/irongall-echo /out/irongall /usr/local/bin/
+COPY --from=echo-build /out/dromas-echo /out/dromas /usr/local/bin/
 USER 65532:65532
-ENTRYPOINT ["irongall-echo"]
+ENTRYPOINT ["dromas-echo"]
 
 # A deployment's site, which serve -site /site serves: empty here, since no
 # site is in this repo. A build context named "site" replaces this stage
@@ -37,7 +37,7 @@ FROM scratch AS site
 # the build stage, for TLS to AWS.
 FROM debian:13.7-slim
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-COPY --from=build /irongalld /irongalld
+COPY --from=build /dromasd /dromasd
 COPY --from=site / /site/
 USER 65532:65532
-ENTRYPOINT ["/irongalld", "serve"]
+ENTRYPOINT ["/dromasd", "serve"]

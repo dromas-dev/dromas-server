@@ -77,7 +77,7 @@ func adminCall(socket, method, path string, out io.Writer) error {
 		}},
 	}
 	// The host is fixed, and the dial goes to the operator's own socket alone.
-	req, err := http.NewRequest(method, "http://irongalld"+path, http.NoBody) //nolint:gosec // as above
+	req, err := http.NewRequest(method, "http://dromasd"+path, http.NoBody) //nolint:gosec // as above
 	if err != nil {
 		return err
 	}

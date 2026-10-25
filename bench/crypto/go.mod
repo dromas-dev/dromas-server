@@ -1,3 +1,3 @@
-module irongall.dev/bench/crypto
+module dromas.dev/bench/crypto
 
 go 1.24

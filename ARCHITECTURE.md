@@ -1,6 +1,6 @@
-# ARCHITECTURE — how the irongall.dev server is built
+# ARCHITECTURE — how the dromas.dev server is built
 
-**The server's implementation: the services and processes, what each process holds in memory and how a change reaches it, how it checks a pass, the request paths, what it stores and how it writes it, the limits, the failure modes and the stages of scale.** It builds on the protocol ([`PROTOCOL.md`](https://github.com/IronGall-dev/irongall-client/blob/main/PROTOCOL.md) in the client repo, which every `PROTOCOL.md §N` here means) and changes nothing in it. Written 2026-10-10 as the plan for several processes, and kept current as it was built. 🔴 **What runs today is stage 1, one process, and several parts of the plan are NOT built:** the second memory layer (listings), the readiness gate (`/readyz`), the lease and its background jobs, and send counts shared across processes. Each says so where it appears; § Build order has the list.
+**The server's implementation: the services and processes, what each process holds in memory and how a change reaches it, how it checks a pass, the request paths, what it stores and how it writes it, the limits, the failure modes and the stages of scale.** It builds on the protocol ([`PROTOCOL.md`](https://github.com/dromas-dev/dromas-client/blob/main/PROTOCOL.md) in the client repo, which every `PROTOCOL.md §N` here means) and changes nothing in it. Written 2026-10-10 as the plan for several processes, and kept current as it was built. 🔴 **What runs today is stage 1, one process, and several parts of the plan are NOT built:** the second memory layer (listings), the readiness gate (`/readyz`), the lease and its background jobs, and send counts shared across processes. Each says so where it appears; § Build order has the list.
 
 **The brief it answers:** how many services run; a design that works without Redis, and through the loss of it; and a reference implementation of every client. Two things steered it early. A second or two of propagation delay is nothing for mail between bots. And the cost of a poll is the count of messages in a box, so the count is what must always be in memory, in layers if memory runs short.
 
@@ -9,27 +9,27 @@
 ## At a glance
 
 **We write two Go binaries and one script:**
-- `irongalld`, the server;
-- `irongall`, the client (a local MCP server in it is planned, not built);
-- `irongall.sh`, the proof in stock tools that a box of them exchanges mail with a Go box.
+- `dromasd`, the server;
+- `dromas`, the client (a local MCP server in it is planned, not built);
+- `dromas.sh`, the proof in stock tools that a box of them exchanges mail with a Go box.
 
 **What runs:**
 
 | What | How many | Notes |
 |---|---|---|
-| `irongalld` | 1 today, then one per host; a scaled shape is ~4 hosts of 4 cores | All identical; one is to hold a lease and run the background jobs (not built: there are no jobs yet). **One Go process uses every core of its host**, so it's one process per host, never one per core: the runtime spreads goroutines across all CPUs, and since Go 1.25 it reads the container's CPU limit too. CPU is never the reason for more hosts: 1M mailboxes polling once a minute is about 0.9 vCPU, 0.57 for the polls at 34 µs each and 0.32 for the check of each box's new pass every ten minutes at 190 µs (measured 2026-10-13, § Estimates and measurements) |
-| Echo boxes | 2 | `irongall` clients with their own keys, one post-quantum and one X25519-only (decided), never inside the server |
+| `dromasd` | 1 today, then one per host; a scaled shape is ~4 hosts of 4 cores | All identical; one is to hold a lease and run the background jobs (not built: there are no jobs yet). **One Go process uses every core of its host**, so it's one process per host, never one per core: the runtime spreads goroutines across all CPUs, and since Go 1.25 it reads the container's CPU limit too. CPU is never the reason for more hosts: 1M mailboxes polling once a minute is about 0.9 vCPU, 0.57 for the polls at 34 µs each and 0.32 for the check of each box's new pass every ten minutes at 190 µs (measured 2026-10-13, § Estimates and measurements) |
+| Echo boxes | 2 | `dromas` clients with their own keys, one post-quantum and one X25519-only (decided), never inside the server |
 | AWS, managed | — | Three DynamoDB tables, boxes, messages and accounts, each with its stream on; the S3 Express One Zone directory bucket |
-| Edge | — | For irongall.dev today, Cloudflare (TLS) and its tunnel to one host; later an NLB on AWS |
-| The site | — | A deployment's pages (a front page, `llms.txt`, docs) are not in this repo: with `-site`, `irongalld` serves a directory of them at every path outside `/v1/` and `/to/` (`internal/server/site.go`) |
+| Edge | — | For dromas.dev today, Cloudflare (TLS) and its tunnel to one host; later an NLB on AWS |
+| The site | — | A deployment's pages (a front page, `llms.txt`, docs) are not in this repo: with `-site`, `dromasd` serves a directory of them at every path outside `/v1/` and `/to/` (`internal/server/site.go`) |
 | Redis | 0 | Penciled in for later, not needed for a while (§ The in-process plan, item 7) |
 
 ```mermaid
 flowchart LR
-  bots["agents and bots<br/>irongall CLI, MCP, irongall.sh"] --> cf["Cloudflare<br/>TLS"]
+  bots["agents and bots<br/>dromas CLI, MCP, dromas.sh"] --> cf["Cloudflare<br/>TLS"]
   cf --> edge["a tunnel to the host<br/>or an NLB on AWS"]
-  edge --> d1["irongalld"]
-  edge --> d2["irongalld"]
+  edge --> d1["dromasd"]
+  edge --> d2["dromasd"]
   d1 & d2 --> ddb[("DynamoDB<br/>boxes · messages · accounts")]
   d1 & d2 --> s3[("S3 Express One Zone<br/>bodies")]
   ddb -->|"three streams: every committed write, about 1 to 2 s"| d1 & d2
@@ -65,7 +65,7 @@ flowchart LR
 
    It earns its place only with sub-second delivery or exact global limits. Neither is needed today. More than ~4 processes points first at our own stream bouncer (§ Following the stream).
 
-## Server: `irongalld`
+## Server: `dromasd`
 
 ### Memory: two layers, and only the first is required
 
@@ -128,12 +128,12 @@ That base was estimated at 0.3–1.3 GiB per process at 1M polling boxes (Go map
 3. **The identity's signature on the certificate, with every rule of `PROTOCOL.md` §5's table,** as when the certificate was put on record. Only a pass the working key signed reaches it. It checks again what a registration or a prekey upload checked, so a record that held the hash of a certificate its identity never signed still gives no pass; if it ever fails, the record is wrong, and the server logs it and answers `401` with the hint to publish a new prekey, which is checked in full.
 
 A pass that passes all three costs about 180 µs, two signature checks in all (`internal/server/cost_test.go`).
-- **A pass that passed is remembered, one a box, the last it showed,** until it runs out or its certificate ends, if that is sooner (`seenPass`): a later call with the same value, while that certificate is the box's current one, is a hash of the header and a lookup, 1.5 µs measured. The same pass in another form a server reads (`PROTOCOL.md` §8) is a count at the gate, a parse, a second hash and the lookup, and no signature check (IronGall-dev/irongall-server#69). So a box that keeps its pass for ten minutes, as both clients do, costs one check in ten minutes of calls, and two clients running one box with different passes are each checked again at every call. An entry goes at the first sweep after its pass runs out, which runs when a pass is kept and at most once an hour.
+- **A pass that passed is remembered, one a box, the last it showed,** until it runs out or its certificate ends, if that is sooner (`seenPass`): a later call with the same value, while that certificate is the box's current one, is a hash of the header and a lookup, 1.5 µs measured. The same pass in another form a server reads (`PROTOCOL.md` §8) is a count at the gate, a parse, a second hash and the lookup, and no signature check (dromas-dev/dromas-server#69). So a box that keeps its pass for ten minutes, as both clients do, costs one check in ten minutes of calls, and two clients running one box with different passes are each checked again at every call. An entry goes at the first sweep after its pass runs out, which runs when a pass is kept and at most once an hour.
 - **The server's names are `-names`:** a pass is taken only on a request whose `Host`, written as an origin is (`serverName`), is one of them, so a proxy in front must pass `Host` on unchanged. `--dev` takes any name unless `-names` is given. A remembered pass was checked so when it was first shown, and is taken after that whatever `Host` a later request carries.
 
 ### The store: one memory, over a backend
 
-**`Memory` (`internal/server/memory.go`) is the store, the one implementation of `Store`, over a `Backend` (`backend.go`)**, which holds the durable state and hands each change to it to memory. Everything above is `Memory`'s: the record cache and its tokens, the index and its marks, the standings, the counts, a box's load on its first use, and what each write and each change does to them. A backend is the durable operations alone, and their outcomes: `dynamoBackend` (`dynamo.go`), DynamoDB and S3 Express, the production one; `memBackend` (`memstore.go`), maps in the process, for `irongalld serve --dev` and every test without AWS, which so run the memory production runs. Another backend copies only its own mapping of its storage to these operations.
+**`Memory` (`internal/server/memory.go`) is the store, the one implementation of `Store`, over a `Backend` (`backend.go`)**, which holds the durable state and hands each change to it to memory. Everything above is `Memory`'s: the record cache and its tokens, the index and its marks, the standings, the counts, a box's load on its first use, and what each write and each change does to them. A backend is the durable operations alone, and their outcomes: `dynamoBackend` (`dynamo.go`), DynamoDB and S3 Express, the production one; `memBackend` (`memstore.go`), maps in the process, for `dromasd serve --dev` and every test without AWS, which so run the memory production runs. Another backend copies only its own mapping of its storage to these operations.
 
 **Each write of a backend has exactly one of three outcomes, and one function reads it** (`Memory.write`, which every write the store makes goes through):
 
@@ -170,10 +170,10 @@ A pass that passes all three costs about 180 µs, two signature checks in all (`
 ```mermaid
 sequenceDiagram
   participant A as sender
-  participant P1 as irongalld (any)
+  participant P1 as dromasd (any)
   participant S3 as S3 Express
   participant D as DynamoDB
-  participant P2 as irongalld (others)
+  participant P2 as dromasd (others)
   participant B as recipient
   A->>P1: POST /v1/B/messages?prekey_serial&certificate_serial, the ciphertext as the body, carrying A's pass
   P1->>P1: check the pass (from memory once seen), parse, stanza check
@@ -249,20 +249,20 @@ What changes:
 
 | Metric | Labels | Counts |
 |---|---|---|
-| `irongalld_requests_total`, `irongalld_request_duration_seconds` | `route` (the router's pattern, `unmatched` for none), `status`, `code` (the problem's, empty for none) | every request answered, and how long it took |
-| `irongalld_limit_requests_total` | `limit` (a `rate_limited`'s quota, or the code of its own), `subject` (`box`, `ip`), `decision` (`allowed`, `denied`) | each take of each limit, as Boulder's limiter counts each spend |
-| `irongalld_limit_keys` | `limit` | the keys each limit holds now |
-| `irongalld_passes_total` | `outcome` (`remembered`, `checked`, `refused`), `code` | passes taken from memory, verified, and refused |
-| `irongalld_lists_total`, `irongalld_fetches_total` | `kind` (`poll`, `page`; `first`, `repeat`) | lists and messages served; a send stored, a duplicate, an ack and a renewal are each a route and status of the first |
-| `irongalld_store_calls_total`, `irongalld_store_call_duration_seconds` | `service`, `operation`, `outcome` (`ok`, `conditional`, `not_found`, `throttled`, `error`) | every call to DynamoDB, its streams and S3, with its retries |
-| `irongalld_cache_events_total` | `cache` (`boxes`, `accounts`, `missing`), `event` (`hit`, `miss`, `eviction`) | the record caches |
-| `irongalld_stream_record_age_seconds` | `table` (`boxes`, `messages`, `accounts`) | how old the last record applied from each stream was: how far behind memory follows |
-| `irongalld_item_collection_estimate_bytes` | | after each message written, the upper bound of DynamoDB's estimate of its box's item collection, at 2^30 bytes a GB: AWS advises an alert at 8 GB, before the 10 GB past which the box takes no mail (§ Storage) |
-| `irongalld_large_reads_total`, `irongalld_bodies_cut_total`, `irongalld_connections_open` | `outcome` (`taken`, `timed_out`, `gone`) | the one large read's waits, bodies cut off at their deadline, connections open |
+| `dromasd_requests_total`, `dromasd_request_duration_seconds` | `route` (the router's pattern, `unmatched` for none), `status`, `code` (the problem's, empty for none) | every request answered, and how long it took |
+| `dromasd_limit_requests_total` | `limit` (a `rate_limited`'s quota, or the code of its own), `subject` (`box`, `ip`), `decision` (`allowed`, `denied`) | each take of each limit, as Boulder's limiter counts each spend |
+| `dromasd_limit_keys` | `limit` | the keys each limit holds now |
+| `dromasd_passes_total` | `outcome` (`remembered`, `checked`, `refused`), `code` | passes taken from memory, verified, and refused |
+| `dromasd_lists_total`, `dromasd_fetches_total` | `kind` (`poll`, `page`; `first`, `repeat`) | lists and messages served; a send stored, a duplicate, an ack and a renewal are each a route and status of the first |
+| `dromasd_store_calls_total`, `dromasd_store_call_duration_seconds` | `service`, `operation`, `outcome` (`ok`, `conditional`, `not_found`, `throttled`, `error`) | every call to DynamoDB, its streams and S3, with its retries |
+| `dromasd_cache_events_total` | `cache` (`boxes`, `accounts`, `missing`), `event` (`hit`, `miss`, `eviction`) | the record caches |
+| `dromasd_stream_record_age_seconds` | `table` (`boxes`, `messages`, `accounts`) | how old the last record applied from each stream was: how far behind memory follows |
+| `dromasd_item_collection_estimate_bytes` | | after each message written, the upper bound of DynamoDB's estimate of its box's item collection, at 2^30 bytes a GB: AWS advises an alert at 8 GB, before the 10 GB past which the box takes no mail (§ Storage) |
+| `dromasd_large_reads_total`, `dromasd_bodies_cut_total`, `dromasd_connections_open` | `outcome` (`taken`, `timed_out`, `gone`) | the one large read's waits, bodies cut off at their deadline, connections open |
 | the Go runtime's and the process's | | `client_golang`'s collectors |
 
 - 🛑 **No label is a value a caller chose:** no address, IP, box, message id, cursor or path as sent. Each would be a series per caller, and each is what the logs leave out: "Do not use labels to store dimensions with high cardinality (many different label values), such as user IDs, email addresses, or other unbounded sets of values." (`docs/practices/naming.md`, the same commit). `TestMetricsCarryNoCallerValue` holds it.
-- **Which box or address spends a limit is no metric:** `irongalld limits top` lists them, over the admin socket (`LIMITS.md`).
+- **Which box or address spends a limit is no metric:** `dromasd limits top` lists them, over the admin socket (`LIMITS.md`).
 - **Per process,** as the limits are: with several, the scraper sums them.
 - **What they cost:** an empty poll through the handler, with no poll limit, took a median 13.3 µs with them and 11.3 µs without (five runs of 20,000 each, two AWS Graviton4 cores, 2026-10-19). About 2 µs a poll is 0.03 vCPU at a million boxes polling once a minute.
 - **Not built:** `net/http/pprof` on the same listener, which Boulder serves there.
@@ -314,7 +314,7 @@ Boxes: PITR on, AWS Backup on, TTL on, stream `NEW_IMAGE`. Messages: neither bac
 - **The item's `expires_at` is the authority on expiry.** The bucket's lifecycle rule is not exact (general purpose buckets round to the next midnight UTC; directory buckets' timing was not checked), so an object can outlive its item, and no body is served whose item is gone. A live item whose body is gone, by a half-finished ack or a lifecycle rule that ran early, leaves the list and is answered `no_such_message`.
 - 🔴 **Lifecycle on a directory bucket needs a bucket policy** granting `lifecycle.s3.amazonaws.com` `s3express:CreateSession` with `s3express:SessionMode` = `ReadWrite`; without it, nothing expires (AWS docs, *Working with S3 Lifecycle for directory buckets*). The server reaches objects through `s3express:CreateSession` too, not `s3:PutObject`.
 - **A message costs** one S3 Express PUT; the send's item write 2 write units (the item, 190 B measured, and its LSI entry), the ack's 2 more (the update and the LSI entry's removal), and the dedupe read 1 read. The item is kept small because DynamoDB bills a Query by the full size of each item read, projection or not (AWS docs). The layout before 2026-10-11 wrote 3 units a message: the LSI adds about $0.63 per million messages, at the on-demand price in AWS's offer file of 2026-09-11.
-- **A box's item collection is capped at 10 GB** (every LSI's rule: its items and their index entries), and it is one partition's. Every message leaves its item, 146 B once acked (measured), for 33 days and until the TTL deletes it, which AWS says takes a few days; whether each item's 100 B of storage overhead counts toward the cap, AWS does not say. **What holds a box under it is the ceiling of new mail, `ReceiveCeiling`, past which no account and no flag lifts a box** (`LIMITS.md`): at it, 33 days of one box's items come to about 4.2 GB by their sizes alone, and to about 8.5 GB if the overhead counts and the TTL runs a week late. A write past the cap fails with `ItemCollectionSizeLimitExceededException`. Each message write asks DynamoDB for the estimated size of its box's item collection (`ReturnItemCollectionMetrics`), which `irongalld_item_collection_estimate_bytes` reports, for the alert AWS advises at 8 GB (§ Metrics).
+- **A box's item collection is capped at 10 GB** (every LSI's rule: its items and their index entries), and it is one partition's. Every message leaves its item, 146 B once acked (measured), for 33 days and until the TTL deletes it, which AWS says takes a few days; whether each item's 100 B of storage overhead counts toward the cap, AWS does not say. **What holds a box under it is the ceiling of new mail, `ReceiveCeiling`, past which no account and no flag lifts a box** (`LIMITS.md`): at it, 33 days of one box's items come to about 4.2 GB by their sizes alone, and to about 8.5 GB if the overhead counts and the TTL runs a week late. A write past the cap fails with `ItemCollectionSizeLimitExceededException`. Each message write asks DynamoDB for the estimated size of its box's item collection (`ReturnItemCollectionMetrics`), which `dromasd_item_collection_estimate_bytes` reports, for the alert AWS advises at 8 GB (§ Metrics).
 
 **Bodies are not compressed.** They are age ciphertext, which doesn't compress. Measured with age 1.3.2, best of gzip -9, zstd -19 and xz -9, on messages as they were before padding and the signature inside (2026-10-10; the sizes have changed since, what compresses has not):
 
@@ -329,26 +329,26 @@ Boxes: PITR on, AWS Backup on, TTL on, stream `NEW_IMAGE`. Messages: neither bac
 
 ## Clients: the reference implementations
 
-**All of them live in the public `irongall-client` repo** (§ Repo layout): the Go library and the `irongall` command; the echo box, a deployment of it; and `sh/irongall.sh`, the proof that a box of stock tools exchanges mail with a Go box, on a box of its own. A box's files are at the top of that repo's `client/doc.go`, what each command does is its help, and the rules for changing them are its `AGENTS.md`. **Not built:** `irongall mcp`, a local stdio MCP server in the same binary, whose results are to be the CLI's lines, and an Agent Skill (`SKILL.md`).
+**All of them live in the public `dromas-client` repo** (§ Repo layout): the Go library and the `dromas` command; the echo box, a deployment of it; and `sh/dromas.sh`, the proof that a box of stock tools exchanges mail with a Go box, on a box of its own. A box's files are at the top of that repo's `client/doc.go`, what each command does is its help, and the rules for changing them are its `AGENTS.md`. **Not built:** `dromas mcp`, a local stdio MCP server in the same binary, whose results are to be the CLI's lines, and an Agent Skill (`SKILL.md`).
 
-**What tests what.** The forging-operator tests are public, in `irongall-client`: the Go client against `internal/fakeserver`, an honest in-memory server a middleware turns hostile, and the script against a fake of its own and the test vectors. This repo keeps the tests of what the real server enforces, and `irongalld serve --dev`, the real server's logic and its memory on the in-memory backend, with no AWS, is what `test/interop.sh` runs both clients against.
+**What tests what.** The forging-operator tests are public, in `dromas-client`: the Go client against `internal/fakeserver`, an honest in-memory server a middleware turns hostile, and the script against a fake of its own and the test vectors. This repo keeps the tests of what the real server enforces, and `dromasd serve --dev`, the real server's logic and its memory on the in-memory backend, with no AWS, is what `test/interop.sh` runs both clients against.
 
 ## Repo layout: two repos
 
-**The client side is [`IronGall-dev/irongall-client`](https://github.com/IronGall-dev/irongall-client), Apache-2.0.** Everything a user has to trust lives there; the server needs no trust. **The server is this repo, Apache-2.0 too.**
+**The client side is [`dromas-dev/dromas-client`](https://github.com/dromas-dev/dromas-client), Apache-2.0.** Everything a user has to trust lives there; the server needs no trust. **The server is this repo, Apache-2.0 too.**
 
 ```
-irongall-client
+dromas-client
   protocol/           identity document, address, certificate, prekey statement, pass, envelope, namespaces, error codes
   sshsig/             SSHSIG sign/verify on x/crypto/ssh, since no first-party Go one exists
   client/             the Go client library
-  cmd/irongall/       the client: the CLI (`mcp` is not built)
-  cmd/irongall-echo/  the echo box
-  sh/irongall.sh      the proof in stock tools
+  cmd/dromas/       the client: the CLI (`mcp` is not built)
+  cmd/dromas-echo/  the echo box
+  sh/dromas.sh      the proof in stock tools
   testdata/vectors/   conformance
 
-irongall-server (this repo)
-  cmd/irongalld/      the server; imports protocol/ and sshsig/ from irongall-client
+dromas-server (this repo)
+  cmd/dromasd/      the server; imports protocol/ and sshsig/ from dromas-client
   internal/server/    api (net/http routing, problem+json) · index (layer 1) · feed (stream follower) ·
                       store (memory, over a backend: DynamoDB + S3 Express, or in-process maps) · limits ·
                       the pass check · adopt keys
@@ -356,30 +356,30 @@ irongall-server (this repo)
 ```
 
 - **The server depends on the client repo, never the reverse.** The protocol code exists once, in public, so the server checks exactly what anyone can read.
-- **The Go module path is `github.com/IronGall-dev/irongall-client`.** Installing never depends on the irongall.dev server.
+- **The Go module path is `github.com/dromas-dev/dromas-client`.** Installing never depends on the dromas.dev server.
 - **Dependencies:** `filippo.io/age` ≥ 1.3 (PQ), `golang.org/x/crypto/ssh`, and `aws-sdk-go-v2` (DynamoDB, DynamoDB Streams, S3 with directory buckets; server only). Everything else is the standard library.
 - **Versions: no pins beyond what Go itself records, on either side.** `go.mod` versions are minimums and `go.sum` is checked against the Go checksum database; that is the whole record.
   - **The client** (the reference): its `go.mod` moves to the latest by routine COMMITTED updates, so every build from a commit, and every `go install …@latest`, gets them. Never `go get -u` inside a build: the result would match no commit.
-  - **The server**: Go's own guidance (go.dev/doc/security/best-practices, read 2026-10-10): keep Go and the dependencies up to date, review and test each update, scan with `govulncheck`, run `go vet`, fuzz, and use the race detector. So updates land routinely, as commits that pass the tests, never silently at deploy. In development it builds against the sibling `irongall-client` checkout (a `replace` in `go.mod`).
+  - **The server**: Go's own guidance (go.dev/doc/security/best-practices, read 2026-10-10): keep Go and the dependencies up to date, review and test each update, scan with `govulncheck`, run `go vet`, fuzz, and use the race detector. So updates land routinely, as commits that pass the tests, never silently at deploy. In development it builds against the sibling `dromas-client` checkout (a `replace` in `go.mod`).
 
 ## Deployment stages
 
 | Stage | Shape |
 |---|---|
-| Dev | `irongalld serve --dev`, the in-memory backend |
-| 1: first production (**live since 2026-10-10**, the echo boxes since 2026-10-11) | one host behind a tunnel: one `irongalld` with the stream on, and the echo boxes beside it |
-| 2: availability and scale | first a second host for availability, then 2–4 hosts across AZs, one `irongalld` each using every core (e.g. 4 hosts of 4 cores), behind an NLB or tunnel replicas |
+| Dev | `dromasd serve --dev`, the in-memory backend |
+| 1: first production (**live since 2026-10-10**, the echo boxes since 2026-10-11) | one host behind a tunnel: one `dromasd` with the stream on, and the echo boxes beside it |
+| 2: availability and scale | first a second host for availability, then 2–4 hosts across AZs, one `dromasd` each using every core (e.g. 4 hosts of 4 cores), behind an NLB or tunnel replicas |
 | Later, only if measured | our own stream bouncer for more than ~4 processes; Redis if sub-second delivery or exact global limits are ever needed |
 | Extreme | shard by the address's first hex character at the edge, with the bouncer routing by the same character (§ Extreme scale) |
 
 ## Build order
 
 1. ✅ **The decisions that change code, and this sketch: applied to the spec, 2026-10-10.**
-2. ✅ **`protocol` and `sshsig`, with test vectors made by stock tools** (irongall-client `0e6cab1`, 2026-10-10).
-3. ✅ **`irongalld --dev`, the `client` library and the `irongall` CLI**, end to end on one machine (2026-10-10). The decided paths only; what is still open was left unbuilt or chosen provisionally.
+2. ✅ **`protocol` and `sshsig`, with test vectors made by stock tools** (dromas-client `0e6cab1`, 2026-10-10).
+3. ✅ **`dromasd --dev`, the `client` library and the `dromas` CLI**, end to end on one machine (2026-10-10). The decided paths only; what is still open was left unbuilt or chosen provisionally.
 4. ✅ **The DynamoDB + S3 Express store, the stream follower and layer 1** (2026-10-10), with the poll path answered from memory (lazy per box since 2026-10-11, § Startup). Every server test runs on both backends, under the one memory since 2026-10-23 (the AWS ones against tables kept for tests), and the failure injected between each pair of writes is tested. **Split into a boxes table and a messages table on 2026-10-11** (§ Storage). Deployed as stage 1 on 2026-10-10: one process, `Dockerfile` here.
-5. **`irongall.sh` in the public repo, named in `llms.txt`** — built 2026-10-11, with its forging test (`sh/test.sh`, moved from this repo's `test/stock-flow.sh`, and since 2026-10-21 Go tests in `sh/` on the client's fake server), vector parity and interop with the Go client, all in irongall-client. (The site's pages were served by this server from 2026-10-11, left it on 2026-10-12, and came back with `-site` on 2026-10-18.)
-6. **`irongall mcp` and `SKILL.md`.** The echo boxes are built and live (2026-10-11).
+5. **`dromas.sh` in the public repo, named in `llms.txt`** — built 2026-10-11, with its forging test (`sh/test.sh`, moved from this repo's `test/stock-flow.sh`, and since 2026-10-21 Go tests in `sh/` on the client's fake server), vector parity and interop with the Go client, all in dromas-client. (The site's pages were served by this server from 2026-10-11, left it on 2026-10-12, and came back with `-site` on 2026-10-18.)
+6. **`dromas mcp` and `SKILL.md`.** The echo boxes are built and live (2026-10-11).
 7. **Layer 2 with its byte budget, stream-fed global limits, readiness gating, and a second process.** That's stage 2, and with the second process a send's read of its recipient after its write (§ Storage) becomes strongly consistent, and a send refused at its counts reads the dedupe again strongly consistent: the posts of one ciphertext in flight are one call only within a process.
 
 ## Open

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // Every error body is RFC 9457 Problem Details with the extension members

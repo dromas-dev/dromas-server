@@ -15,14 +15,14 @@ import (
 // using an approved hashing function", with no salt (NIST SP 800-63B-4
 // §3.1.2.2):
 //
-//	K = "iga1_" + base64url(account ‖ secret), no padding
+//	K = "dra1_" + base64url(account ‖ secret), no padding
 //
 // with secret 32 random bytes. The account is in the key so that adopt reads
 // the key's item, (account, 0x04 ‖ SHA-256(K)), with one GetItem. The hash
 // is no keyed hash: a key is taken only as itself, the hash's preimage, so
 // length extension gives nothing.
 const (
-	adoptPrefix    = "iga1_"
+	adoptPrefix    = "dra1_"
 	adoptSecretLen = 32
 )
 

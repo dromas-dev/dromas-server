@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/client"
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/client"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // A message this server still serves is one its reader takes: each post is

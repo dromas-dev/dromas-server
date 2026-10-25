@@ -1,23 +1,23 @@
 # Security
 
-**The protocol is designed against this server.** Clients treat it as possibly hostile: a box checks every signature, prekey and revocation itself, and believes nothing a server says. So what protects a message is not in this repo. It is in [irongall-client](https://github.com/IronGall-dev/irongall-client), whose [`SECURITY.md`](https://github.com/IronGall-dev/irongall-client/blob/main/SECURITY.md) maps each promise a box is given to the code and tests that hold it. This file covers what the server itself must get right, and how to report where it does not.
+**The protocol is designed against this server.** Clients treat it as possibly hostile: a box checks every signature, prekey and revocation itself, and believes nothing a server says. So what protects a message is not in this repo. It is in [dromas-client](https://github.com/dromas-dev/dromas-client), whose [`SECURITY.md`](https://github.com/dromas-dev/dromas-client/blob/main/SECURITY.md) maps each promise a box is given to the code and tests that hold it. This file covers what the server itself must get right, and how to report where it does not.
 
 ## Supported versions
 
-**Before v1, and only the latest commit on `main` is supported.** There are no releases or tags yet; irongall.dev runs a build of `main`. **Nothing is externally audited yet.**
+**Before v1, and only the latest commit on `main` is supported.** There are no releases or tags yet; dromas.dev runs a build of `main`. **Nothing is externally audited yet.**
 
 ## Reporting a vulnerability
 
 **Report it privately, with GitHub's private vulnerability reporting:** the **Report a vulnerability** button under this repo's Security tab, or from a terminal:
 
 ```sh
-gh api repos/IronGall-dev/irongall-server/security-advisories/reports \
+gh api repos/dromas-dev/dromas-server/security-advisories/reports \
   -f summary='…' -f description='…'
 ```
 
-- **Here:** this server, and irongall.dev as it is run.
-- **The protocol, the clients or the vectors:** irongall-client, by the same route. Not sure which? Either one.
-- **How to write one, what is not a vulnerability, and what happens next:** irongall-client's [`SECURITY.md`](https://github.com/IronGall-dev/irongall-client/blob/main/SECURITY.md). It applies here as written. A way around a limit that `LIMITS.md` does not already list as a known weakness is a vulnerability.
+- **Here:** this server, and dromas.dev as it is run.
+- **The protocol, the clients or the vectors:** dromas-client, by the same route. Not sure which? Either one.
+- **How to write one, what is not a vulnerability, and what happens next:** dromas-client's [`SECURITY.md`](https://github.com/dromas-dev/dromas-client/blob/main/SECURITY.md). It applies here as written. A way around a limit that `LIMITS.md` does not already list as a known weakness is a vulnerability.
 
 ## What this server must still get right
 
@@ -36,9 +36,9 @@ gh api repos/IronGall-dev/irongall-server/security-advisories/reports \
 | **Every call answers the state of the box whose pass it carries, and a read the state of the box it reads, before it judges any pass,** with the codes `PROTOCOL.md` §11.4 gives (the order of refusals) | `owner` and `sender` in `internal/server/pass.go`, `register` and `prekey` in `boxes.go`; `TestEveryCallAboutABoxAnswersItsStateBeforeItsPass` |
 | **What could change nothing is answered from what is kept, never refused by a count of what it would make new:** an identical retry of a registration or a renewal, a revocation the server holds already, a send's retry (`PROTOCOL.md` §11.4, the order of refusals) | `registered`, `prekey` and `revoke` in `internal/server/boxes.go`, `deliver` in `send.go`; `TestARetryIsAnsweredFromWhatIsKeptWhateverItWouldMakeNew` |
 | **A call's preconditions are evaluated once its target's state is known and before the call acts, and a false one does nothing but count as a call of its route** (`PROTOCOL.md` §11.4, the order of refusals) | `precondition` and `conditions` in `internal/server/conditions.go`; `TestAFalsePreconditionIsACallThatDoesNothingElse` (`preconditions_test.go`), on every route of `routes()` |
-| **The operator's commands are reached only through a Unix socket the server makes 0600 from its bind on, whatever the umask, never through the API,** and nothing logs which address or box one acted on or listed | `internal/server/admin.go`, `cmd/irongalld/limits.go`, `cmd/irongalld/socket_unix.go`; `admin_test.go`, `quotas_test.go`, `cmd/irongalld/limits_test.go`, `cmd/irongalld/limits_unix_test.go` |
-| **The metrics are on a listener of their own, never the API's, and carry no value a caller chose:** no address, IP, box, message id or path as sent | `internal/server/metrics.go`, `cmd/irongalld/main.go`; `metrics_test.go` (`TestMetricsCarryNoCallerValue`) |
-| **No log line carries an address or a message id, and nothing a caller sends is written in the access log:** each run of 64 or more hex characters in any line, a store's error, the AWS SDK's own lines and a stream follower's panic included, is written as a short hash of itself; the access line is the route's pattern with each wildcard's value hashed whole, a path no route answered its length, and a method its length unless it is of the IANA method registry's form, capitals and hyphens, and no longer than the longest method it lists, too short to hold a run of hex the redaction reads | `redact`, `Redacting`, `AWSLogger`, `loggedPath` and `loggedMethod` in `internal/server/server.go`, `feed.run`, `cmd/irongalld/main.go`; `TestNoLogLineCarriesAnAddress`, `TestTheAccessLogWritesWhatTheRoutersMatched`, `TestTheAWSSDKsLinesAreRedacted`, `TestServeAndAccountWriteTheSDKsLinesRedacted` (`cmd/irongalld`), `TestAFollowersPanicIsLoggedRedactedAndEndsTheProcess` |
+| **The operator's commands are reached only through a Unix socket the server makes 0600 from its bind on, whatever the umask, never through the API,** and nothing logs which address or box one acted on or listed | `internal/server/admin.go`, `cmd/dromasd/limits.go`, `cmd/dromasd/socket_unix.go`; `admin_test.go`, `quotas_test.go`, `cmd/dromasd/limits_test.go`, `cmd/dromasd/limits_unix_test.go` |
+| **The metrics are on a listener of their own, never the API's, and carry no value a caller chose:** no address, IP, box, message id or path as sent | `internal/server/metrics.go`, `cmd/dromasd/main.go`; `metrics_test.go` (`TestMetricsCarryNoCallerValue`) |
+| **No log line carries an address or a message id, and nothing a caller sends is written in the access log:** each run of 64 or more hex characters in any line, a store's error, the AWS SDK's own lines and a stream follower's panic included, is written as a short hash of itself; the access line is the route's pattern with each wildcard's value hashed whole, a path no route answered its length, and a method its length unless it is of the IANA method registry's form, capitals and hyphens, and no longer than the longest method it lists, too short to hold a run of hex the redaction reads | `redact`, `Redacting`, `AWSLogger`, `loggedPath` and `loggedMethod` in `internal/server/server.go`, `feed.run`, `cmd/dromasd/main.go`; `TestNoLogLineCarriesAnAddress`, `TestTheAccessLogWritesWhatTheRoutersMatched`, `TestTheAWSSDKsLinesAreRedacted`, `TestServeAndAccountWriteTheSDKsLinesRedacted` (`cmd/dromasd`), `TestAFollowersPanicIsLoggedRedactedAndEndsTheProcess` |
 | **Keyed hashing is HMAC or HKDF only,** never `hash(secret ‖ …)` | `internal/server/index.go` |
 | **An adopt key is kept only as its SHA-256,** so a copy of the accounts table holds no key, and one that is not this server's is refused before anything is written | `internal/server/adoptkey.go`, `accounts.go`, `dynamo_accounts.go`; `TestAnAdoptKeyIsKeptAsItsHash`, `TestAccounts` |
 | **Every error is RFC 9457 Problem Details, its `type` its code's own, and every value in its `detail` is a member of its own,** so no client needs to show a server's words | `problem_test.go`; `api/apitest`, which every test server is wrapped in, fails a `type` that is not its `code`'s; the spec's §11.3 |
@@ -48,4 +48,4 @@ gh api repos/IronGall-dev/irongall-server/security-advisories/reports \
 
 **Run them:** `README.md` § Build and run.
 
-**Where the rest is:** the threat model, what a server can and cannot do, and the residual risks are the client repo's [`PROTOCOL.md`](https://github.com/IronGall-dev/irongall-client/blob/main/PROTOCOL.md) §15, Security considerations; the questions for an outside reviewer are the client repo's issue #35. Every limit and where it is weak is [`LIMITS.md`](LIMITS.md); start there to break one.
+**Where the rest is:** the threat model, what a server can and cannot do, and the residual risks are the client repo's [`PROTOCOL.md`](https://github.com/dromas-dev/dromas-client/blob/main/PROTOCOL.md) §15, Security considerations; the questions for an outside reviewer are the client repo's issue #35. Every limit and where it is weak is [`LIMITS.md`](LIMITS.md); start there to break one.

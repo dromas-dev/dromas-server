@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/api/apitest"
-	"github.com/IronGall-dev/irongall-client/client"
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/api/apitest"
+	"github.com/dromas-dev/dromas-client/client"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // Revocation (PROTOCOL.md §10.1) as this server enforces it: the identity's
@@ -247,7 +247,7 @@ func TestARevocationIsKeptWithNoBox(t *testing.T) {
 
 	// Certificates revoked of an address whose box the server forgot: the
 	// read of the box answers as if it had never been registered, and its
-	// revocations are served (IronGall-dev/irongall-server#80).
+	// revocations are served (dromas-dev/dromas-server#80).
 	d := e.raw().register(protocol.MaxPrekeyLifetime)
 	if err := e.store.DeleteBox(t.Context(), d.id.Address()); err != nil { // as the TTL deletes it
 		t.Fatal(err)
@@ -593,7 +593,7 @@ func TestARevocationRetriedAfterAFailedDeleteDeletes(t *testing.T) {
 // address it loads nothing and changes nothing: what a failed delete left,
 // the mail and the box's record, waits for its expiry there, served to
 // nobody. A process whose memory holds the address deletes both
-// (IronGall-dev/irongall-server#42).
+// (dromas-dev/dromas-server#42).
 func TestAResentRevocationLoadsNothing(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

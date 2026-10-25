@@ -194,7 +194,7 @@ const (
 // (note): an attempt of any of them that left open whether it was applied
 // leaves the write open whatever came after, a throttle, an answer that the
 // transaction is in progress, or the retry quota running out among them
-// (IronGall-dev/irongall-server#101). A condition that failed is the
+// (dromas-dev/dromas-server#101). A condition that failed is the
 // refusal named for its item in failed, whatever else met another; a
 // conflict that lasts every try is ErrStale. The SDK gives one call's
 // transaction a client token, the same on each of its attempts, and "if the

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/IronGall-dev/irongall-client/api/apitest"
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/api/apitest"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // The server's routes are the API description's, no more and no fewer: a

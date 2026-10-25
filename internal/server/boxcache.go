@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // recCache is a bounded LRU of records, each at a version, and a record
@@ -15,7 +15,7 @@ import (
 // missing; and account records (for a sender's limits).
 //
 // What it holds never goes back to before a write this process has applied
-// (IronGall-dev/irongall-server#12, #41, #95, #96). It counts the writes to
+// (dromas-dev/dromas-server#12, #41, #95, #96). It counts the writes to
 // each shard of its keys, and a write is counted and applied in one step
 // under its lock (write), from this process or the stream, once the write
 // has committed. A read takes its shard's count, a token, before it reads
@@ -49,7 +49,7 @@ type recCache[K comparable, V any] struct {
 	// between, in tests, runs in fill and in missed between the check and
 	// the put, under the lock: it is handed the taking of the lock the check
 	// was made under (takings), so that it can tell the lock was held from
-	// the check to the put (IronGall-dev/irongall-client#407 item 3).
+	// the check to the put (dromas-dev/dromas-client#407 item 3).
 	between func(checked uint64)
 }
 

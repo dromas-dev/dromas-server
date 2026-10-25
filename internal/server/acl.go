@@ -4,7 +4,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // The bound on a PUT …/acl body, before it is parsed: each entry as JSON
@@ -26,7 +26,7 @@ func (s *Server) aclBodyLimit() int64 {
 }
 
 // hintACL names what writes an ACL: the client does, from its own lists.
-const hintACL = "irongall peer allow and irongall peer block write this box's ACL from its own lists"
+const hintACL = "dromas peer allow and dromas peer block write this box's ACL from its own lists"
 
 // aclTooLarge is the answer to an ACL over -acl-entries, by its entries or by
 // the body bound drawn from them.

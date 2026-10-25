@@ -18,12 +18,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/client"
-	"github.com/IronGall-dev/irongall-client/protocol"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/dromas-dev/dromas-client/client"
+	"github.com/dromas-dev/dromas-client/protocol"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
@@ -232,7 +232,7 @@ func TestAccounts(t *testing.T) {
 			"never stored":            unstored,
 			"naming another account":  moved,
 			"expired":                 expiring,
-			"not a key":               "iga1_x",
+			"not a key":               "dra1_x",
 			"a key's hash, not a key": adoptPrefix + base64.RawURLEncoding.EncodeToString(append([]byte(acc.ID), func() []byte { h := sha256.Sum256([]byte(key)); return h[:] }()...)),
 		} {
 			if _, err := a.Adopt(ctx, k); codeOf(err) != protocol.CodeAdoptKeyRefused {
@@ -632,7 +632,7 @@ func TestLargeReadsTakeTurns(t *testing.T) {
 }
 
 // A large body that stops coming is cut off by its deadline, and gives the
-// one large read back (IronGall-dev/irongall-server#7): a large send after it
+// one large read back (dromas-dev/dromas-server#7): a large send after it
 // is read at once, not after the stalled one's peer gives up. The metrics
 // count the cut and both reads.
 func TestAStalledBodyGivesTheLargeReadBack(t *testing.T) {

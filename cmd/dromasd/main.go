@@ -1,11 +1,11 @@
-// Command irongalld is the irongall.dev server.
+// Command dromasd is the dromas.dev server.
 //
-//	irongalld serve -boxes-table T -msgs-table T -accounts-table T -bucket B -names NAMES [-listen addr] [options] [limits]
-//	irongalld serve --dev [-listen addr] [limits]
-//	irongalld account create -accounts-table T [-id NAME] [-unmetered]
-//	irongalld account key -accounts-table T -account ID -uses N -ttl D
-//	irongalld account drop -boxes-table T -accounts-table T -account ID -box ADDR
-//	irongalld limits clear -socket PATH -ip ADDR
+//	dromasd serve -boxes-table T -msgs-table T -accounts-table T -bucket B -names NAMES [-listen addr] [options] [limits]
+//	dromasd serve --dev [-listen addr] [limits]
+//	dromasd account create -accounts-table T [-id NAME] [-unmetered]
+//	dromasd account key -accounts-table T -account ID -uses N -ttl D
+//	dromasd account drop -boxes-table T -accounts-table T -account ID -box ADDR
+//	dromasd limits clear -socket PATH -ip ADDR
 //
 // The first keeps state in three DynamoDB tables, boxes, messages and
 // accounts, and an S3 Express One Zone directory bucket (ARCHITECTURE.md § Storage),
@@ -39,9 +39,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
-	"github.com/IronGall-dev/irongall-server/internal/server"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/dromas-dev/dromas-client/protocol"
+	"github.com/dromas-dev/dromas-server/internal/server"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -58,10 +58,10 @@ func main() {
 	case len(os.Args) >= 3 && os.Args[1] == "limits":
 		err = limits(os.Args[2], os.Args[3:])
 	default:
-		fmt.Fprintln(os.Stderr, "usage: irongalld serve (-boxes-table T -msgs-table T -accounts-table T -bucket B -names NAMES | --dev) [-listen addr] [options] [limits]")
-		fmt.Fprintln(os.Stderr, "       irongalld account (create | key | drop) [flags]")
-		fmt.Fprintln(os.Stderr, "       irongalld limits clear -socket PATH -ip ADDR")
-		fmt.Fprintln(os.Stderr, "       irongalld limits top -socket PATH -limit NAME [-n COUNT]")
+		fmt.Fprintln(os.Stderr, "usage: dromasd serve (-boxes-table T -msgs-table T -accounts-table T -bucket B -names NAMES | --dev) [-listen addr] [options] [limits]")
+		fmt.Fprintln(os.Stderr, "       dromasd account (create | key | drop) [flags]")
+		fmt.Fprintln(os.Stderr, "       dromasd limits clear -socket PATH -ip ADDR")
+		fmt.Fprintln(os.Stderr, "       dromasd limits top -socket PATH -limit NAME [-n COUNT]")
 		os.Exit(2)
 	}
 	if err != nil {
@@ -148,7 +148,7 @@ func serve(args []string) error {
 	fs.IntVar(&l.BodyMinRate, "body-min-rate", l.BodyMinRate, "bytes a second a body, or a write of a response, must keep up, as Apache's RequestReadTimeout MinRate; a write is credited in pieces of this many bytes, once each has gone (0: off)")
 	fs.IntVar(&l.HeadBytes, "max-header-bytes", l.HeadBytes, "the most of a request's head, its request line and headers, the server reads: what the longest call needs, its pass at the longest a pass can be, and no more; net/http answers a longer one 431 (0: net/http's default)")
 	fs.DurationVar(&l.HeadTimeout, "header-timeout", l.HeadTimeout, "how long a request's head, its request line and headers, may take to arrive before any handler sees it (0: off)")
-	adminSocket := fs.String("admin-socket", "", "a Unix socket for the operator's commands (irongalld limits): 0600 from the moment this process makes it, never on the API's listener (empty: none)")
+	adminSocket := fs.String("admin-socket", "", "a Unix socket for the operator's commands (dromasd limits): 0600 from the moment this process makes it, never on the API's listener (empty: none)")
 	idle := fs.Duration("idle-timeout", 75*time.Second, "how long an idle keep-alive connection stays open (nginx's default as a server): above the idle timeout of a proxy in front, which may otherwise reuse a connection this one has just closed")
 	metricsListen := fs.String("metrics-listen", "", "address to serve the operator's metrics on, at /metrics in Prometheus' text format: a listener of its own, never the API's (empty: none)")
 	siteDir := fs.String("site", "", "a directory of pages to serve at every path outside /v1/ and /to/, each at its own path and an index at its directory's, read once at start (empty: none; those paths are 404)")
@@ -217,7 +217,7 @@ func serve(args []string) error {
 			return errors.New("--dev takes no tables or -bucket")
 		}
 		cfg.Store = server.NewMemStore(time.Now)
-		logger.Printf("irongalld --dev on %s (in memory: nothing survives a restart)", *listen)
+		logger.Printf("dromasd --dev on %s (in memory: nothing survives a restart)", *listen)
 	case *boxes == "" || *msgs == "" || *accts == "" || *bucket == "" || len(cfg.Names) == 0:
 		return errors.New("name -boxes-table, -msgs-table, -accounts-table, -bucket and -names, or run --dev")
 	default:
@@ -254,7 +254,7 @@ func serve(args []string) error {
 			}()
 			return nil
 		}
-		logger.Printf("irongalld on %s: tables %s, %s and %s, bucket %s", *listen, *boxes, *msgs, *accts, *bucket)
+		logger.Printf("dromasd on %s: tables %s, %s and %s, bucket %s", *listen, *boxes, *msgs, *accts, *bucket)
 	}
 
 	api := server.New(cfg)

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // NewMemStore returns the dev server's store: Memory over a backend of maps

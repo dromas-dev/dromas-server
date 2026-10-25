@@ -14,21 +14,21 @@ import (
 	"time"
 
 	"filippo.io/age"
-	"github.com/IronGall-dev/irongall-client/protocol"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/dromas-dev/dromas-client/protocol"
 	"golang.org/x/crypto/ssh"
 )
 
 // Measurements for costing: what one box costs a process's memory,
 // and how large the items the store writes are. Evidence, not a test: it
-// asserts nothing and is skipped unless IRONGALL_COST=1.
+// asserts nothing and is skipped unless DROMAS_COST=1.
 //
-//	IRONGALL_COST=1 go test ./internal/server -run TestCost -v
+//	DROMAS_COST=1 go test ./internal/server -run TestCost -v
 
 func costOnly(t *testing.T) {
 	t.Helper()
-	if os.Getenv("IRONGALL_COST") == "" {
-		t.Skip("set IRONGALL_COST=1 to measure")
+	if os.Getenv("DROMAS_COST") == "" {
+		t.Skip("set DROMAS_COST=1 to measure")
 	}
 }
 
@@ -160,7 +160,7 @@ func TestCostMemoryPerBox(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := New(Config{Store: store, Limits: DefaultLimits()})
-	const name = "irongall.example"
+	const name = "dromas.example"
 	auth, _, err := protocol.NewPass(work, box.Addr, name, time.Now())
 	if err != nil {
 		t.Fatal(err)

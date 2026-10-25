@@ -15,12 +15,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/api/apitest"
-	"github.com/IronGall-dev/irongall-client/protocol"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodbstreams"
 	"github.com/aws/smithy-go/logging"
+	"github.com/dromas-dev/dromas-client/api/apitest"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // errorWithURL is the test store, but a read of box's record fails with the
@@ -59,7 +59,7 @@ func (s deadS3) PutMessage(ctx context.Context, box protocol.Address, h *Header,
 }
 
 // No line the server logs carries an address or a message id
-// (IronGall-dev/irongall-server#9, SECURITY.md): not a store's
+// (dromas-dev/dromas-server#9, SECURITY.md): not a store's
 // error, whose text holds a request's URL, not a real S3 client's, and not
 // a path that holds one inside a longer segment or in capitals. A line
 // about the box names it by the name redact gives it, so the store's error
@@ -103,7 +103,7 @@ func TestNoLogLineCarriesAnAddress(t *testing.T) {
 }
 
 // The access log writes one line a request, built from what the routers
-// matched and never from the path as sent (IronGall-dev/irongall-server#11,
+// matched and never from the path as sent (dromas-dev/dromas-server#11,
 // #62): a route's pattern, each wildcard's value as logName names it,
 // whatever the value holds; a site's page as the site's pattern and its
 // path's length; and a path no route answered by its length alone. So
@@ -116,7 +116,7 @@ func TestNoLogLineCarriesAnAddress(t *testing.T) {
 // written as its length alone, so it can carry no address split by a
 // character a token may hold, no run of 63 hex, no name that reads as one
 // redact gives (#79), and no run of 64 of the capitals A to F, which redact
-// would write as such a name (IronGall-dev/irongall-client#413 item 1).
+// would write as such a name (dromas-dev/dromas-client#413 item 1).
 // The server is not wrapped in apitest: a site's pages are a deployment's,
 // which api/openapi.yaml does not describe (site_test.go's are not either).
 func TestTheAccessLogWritesWhatTheRoutersMatched(t *testing.T) {
@@ -196,8 +196,8 @@ func TestTheAccessLogWritesWhatTheRoutersMatched(t *testing.T) {
 }
 
 // AWSLogger writes the AWS SDK's own lines through the redaction
-// (IronGall-dev/irongall-server#72). That serve and account load their
-// configuration with it is held in cmd/irongalld, where they run
+// (dromas-dev/dromas-server#72). That serve and account load their
+// configuration with it is held in cmd/dromasd, where they run
 // (TestServeAndAccountWriteTheSDKsLinesRedacted, #81).
 func TestTheAWSSDKsLinesAreRedacted(t *testing.T) {
 	t.Parallel()

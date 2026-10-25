@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/api/apitest"
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/api/apitest"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // stateAnswer is what a call about a box in a state is answered: its status,

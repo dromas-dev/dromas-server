@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # scripts/check.sh: the checks a change must pass, one definition for a laptop
-# and for CI (.github/workflows/ci.yml runs `full` and `vuln`; irongall-client's
+# and for CI (.github/workflows/ci.yml runs `full` and `vuln`; dromas-client's
 # CI runs `full` here against its own commit).
 #
 #   scripts/check.sh         quick: gofmt, vet and the tests -short keeps, while working
@@ -8,8 +8,8 @@
 #   scripts/check.sh push    full, then golangci-lint and govulncheck: before a push
 #   scripts/check.sh vuln    govulncheck alone, at the version pinned here
 #
-# The tests build with -tags irongall_nofsync, so the client they drive flushes
-# no write to the disk (irongall-client's client/fsync.go). -short skips the
+# The tests build with -tags dromas_nofsync, so the client they drive flushes
+# no write to the disk (dromas-client's client/fsync.go). -short skips the
 # long tests, each of which says so; CI never passes it. On macOS,
 # test/interop.sh needs bash 4 or later and GNU coreutils: Homebrew's go first
 # in PATH when installed.
@@ -17,7 +17,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 govulncheck=golang.org/x/vuln/cmd/govulncheck@v1.9.0
-tags=irongall_nofsync
+tags=dromas_nofsync
 darwin=
 [ "$(uname -s)" = Darwin ] && darwin=1
 if [ -n "$darwin" ] && command -v brew > /dev/null; then
@@ -25,11 +25,11 @@ if [ -n "$darwin" ] && command -v brew > /dev/null; then
     if [ -d "$d" ]; then PATH="$d:$PATH"; fi
   done
 fi
-unset IRONGALL_HOME IRONGALL_BOX IG_HOME IG_BOX # no test may meet a real box
+unset DROMAS_HOME DROMAS_BOX DR_HOME DR_BOX # no test may meet a real box
 
 # On the in-memory store the AWS tests and the cost measurement skip; any
 # other skip fails `full`.
-allowed=(-e 'needs IRONGALL_TEST_BOXES_TABLE, IRONGALL_TEST_MSGS_TABLE' -e 'needs the AWS tables' -e 'set IRONGALL_COST=1 to measure')
+allowed=(-e 'needs DROMAS_TEST_BOXES_TABLE, DROMAS_TEST_MSGS_TABLE' -e 'needs the AWS tables' -e 'set DROMAS_COST=1 to measure')
 if [ -n "$darwin" ]; then allowed+=(-e 'macOS loopback buffers'); fi
 
 fail() { # an annotation on GitHub's page, a line on a terminal

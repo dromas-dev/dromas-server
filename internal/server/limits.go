@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // Limits are the server's numbers. Decided ones are marked; the rest are
@@ -111,7 +111,7 @@ func (l Limits) ceiling() int { return max(l.MaxSize, l.AccountMaxSize) }
 
 // ReceiveCeiling is the shortest refill of any box's budget of new mail: no
 // box takes new mail faster than one each, ten a second, whatever its account
-// lifts, and irongalld serve does not start with flags that would (decided
+// lifts, and dromasd serve does not start with flags that would (decided
 // 2026-10-23). A box's messages are one item collection of the messages
 // table, which its LSI holds to 10 GB on one partition, and every message
 // leaves an item there until it expires (ARCHITECTURE.md § Storage).
@@ -236,7 +236,7 @@ func (r *reservation) keep() { r.settle(false, time.Time{}) }
 // Either does nothing to a reservation already settled. So each is settled
 // where its outcome is known, and also released by a defer made where it is
 // taken: it is settled on every path, a panic included
-// (IronGall-dev/irongall-server#36).
+// (dromas-dev/dromas-server#36).
 func (r *reservation) release(now time.Time) { r.settle(true, now) }
 
 func (r *reservation) settle(back bool, now time.Time) {
@@ -259,7 +259,7 @@ func (r *reservation) settle(back bool, now time.Time) {
 
 // perPeriod is buckets of n, refilled n per period: a number a day is one
 // back each day divided by it (Let's Encrypt's token bucket, and never a
-// window that empties at midnight: IronGall-dev/irongall-server#54).
+// window that empties at midnight: dromas-dev/dromas-server#54).
 func perPeriod(name string, n int, period time.Duration) *buckets {
 	if n == 0 {
 		return newBuckets(name, 0, 0)
@@ -387,7 +387,7 @@ func rangeKey(host string) string {
 // hostAddr reads a client's address as the limits key it: an IPv4 address
 // written as IPv6 is the IPv4 address, and an IPv6 zone, which names an
 // interface of this host and is no part of the address, is dropped
-// (IronGall-dev/irongall-server#48).
+// (dromas-dev/dromas-server#48).
 func hostAddr(host string) (netip.Addr, bool) {
 	ip, err := netip.ParseAddr(host)
 	if err != nil {

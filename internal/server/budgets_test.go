@@ -20,9 +20,9 @@ import (
 	"time"
 
 	"filippo.io/age"
-	"github.com/IronGall-dev/irongall-client/api/apitest"
-	"github.com/IronGall-dev/irongall-client/client"
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/api/apitest"
+	"github.com/dromas-dev/dromas-client/client"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // The budgets of LIMITS.md, and the rules they are taken by: every call
@@ -156,7 +156,7 @@ func errorsAs(err error, ae **client.APIError) bool {
 }
 
 // A lookup, the read of a box, is its caller's address's to pay for: it
-// takes no pass (PROTOCOL.md §11.8; IronGall-dev/irongall-client#352). Past
+// takes no pass (PROTOCOL.md §11.8; dromas-dev/dromas-client#352). Past
 // the gate, where it spends its address's flood budget whatever it carries,
 // a pass this process has checked among them, it spends nothing, as the
 // page a link opens spends nothing: memory answers both, and only a read
@@ -172,14 +172,14 @@ func TestLookupsArePaidByTheirCaller(t *testing.T) {
 		e.clock.Add(time.Second) // past the passes the registrations showed
 		pass := e.pass(a)
 		e.want(e.do(http.MethodGet, "/v1/"+a.Address().String()+"/acl", nil, pass), http.StatusOK, "") // a's one call, which checks its pass
-		before := counts(t, reg, "irongalld_passes_total")
+		before := counts(t, reg, "dromasd_passes_total")
 		read := "/v1/" + b.Address().String()
-		for _, auth := range []string{pass, e.pass(b), "irongall-pass nonsense", "Bearer x", ""} {
+		for _, auth := range []string{pass, e.pass(b), "dromas-pass nonsense", "Bearer x", ""} {
 			for range 3 {
 				e.want(e.do(http.MethodGet, read, nil, auth), http.StatusOK, "")
 			}
 		}
-		if d := moved(before, counts(t, reg, "irongalld_passes_total")); len(d) != 0 {
+		if d := moved(before, counts(t, reg, "dromasd_passes_total")); len(d) != 0 {
 			t.Errorf("reads of a box looked at passes: %v", d)
 		}
 		e.limited(e.do(http.MethodGet, "/v1/"+a.Address().String()+"/acl", nil, pass), protocol.QuotaCalls) // the one it spent, and none by the reads
@@ -272,7 +272,7 @@ func TestAStatementOutOfOrderIsRefusedBeforeItsSignature(t *testing.T) {
 // Registration never changes a box, so a registered box is answered from its
 // record whether this process holds it or reads it, and spends nothing of its
 // address's registrations (PROTOCOL.md §11.4, the order of refusals;
-// IronGall-dev/irongall-client#410): with the address's one registration
+// dromas-dev/dromas-client#410): with the address's one registration
 // spent, the box's identical retry is 200, and another statement is 409 with
 // no check, signed or not, with a pass or none.
 func TestARegisteredBoxIsAnsweredWhateverItsAddressSpentOfRegistrations(t *testing.T) {
@@ -315,7 +315,7 @@ func (s *failedReads) Box(ctx context.Context, a protocol.Address) (*Box, error)
 
 // A registration's read of an address its process's memory cannot answer is
 // counted once, as what it turns out to be (LIMITS.md rule 4; register;
-// IronGall-dev/irongall-client#410). The registrations it would spend, of
+// dromas-dev/dromas-client#410). The registrations it would spend, of
 // the address and of its /48, are reserved before the read and given back
 // when it finds a box or a revocation, or fails, and kept when it finds
 // nothing; it reserves no miss. Where they are spent, the read is a
@@ -501,7 +501,7 @@ func forgedFromPublic(t *testing.T, e *env, a protocol.Address) (protocol.Regist
 // registrations count, whether this process holds the box or reads it, so its
 // pass is checked as any call's is: one the process has not seen reserves a
 // miss of its caller's address, kept when it fails
-// (IronGall-dev/irongall-server#40). Past the misses it is refused before it
+// (dromas-dev/dromas-server#40). Past the misses it is refused before it
 // is checked, as on any other route.
 func TestAnIdenticalRetrysPassIsCounted(t *testing.T) {
 	t.Parallel()
@@ -527,7 +527,7 @@ func TestAnIdenticalRetrysPassIsCounted(t *testing.T) {
 // An identical retry of a registration, once its pass is checked, spends one
 // of the box's calls, as a renewal's identical retry does: so passes in turn,
 // each checked in full, are bounded by the box's budget
-// (IronGall-dev/irongall-server#40). An honest retry, with the same pass or a
+// (dromas-dev/dromas-server#40). An honest retry, with the same pass or a
 // new one, is taken.
 func TestAnIdenticalRetrySpendsTheBoxsCalls(t *testing.T) {
 	t.Parallel()
@@ -636,7 +636,7 @@ func concurrently(t *testing.T, e *env, l Limits, to *raw, froms []*raw, n int) 
 }
 
 // A sender's daily count is taken before the write: sends in flight at once
-// cannot all pass on one count (IronGall-dev/irongall-server#4).
+// cannot all pass on one count (dromas-dev/dromas-server#4).
 func TestDailySendsAreTakenBeforeTheWrite(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
@@ -649,7 +649,7 @@ func TestDailySendsAreTakenBeforeTheWrite(t *testing.T) {
 }
 
 // The pair and box caps count the sends in flight too, so sends made at once
-// cannot all pass on the same counts (IronGall-dev/irongall-server#4).
+// cannot all pass on the same counts (dromas-dev/dromas-server#4).
 func TestTheCapsCountSendsInFlight(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
@@ -682,7 +682,7 @@ func (s slowBox) Box(ctx context.Context, a protocol.Address) (*Box, error) {
 }
 
 // Lookups of one cold address at once share one read, and only its caller
-// is counted for it (IronGall-dev/irongall-server#6): twenty lookups of a box
+// is counted for it (dromas-dev/dromas-server#6): twenty lookups of a box
 // that does not exist, from an address with one miss to spend, are each
 // answered 404, from one read.
 func TestLookupsOfOneAddressShareARead(t *testing.T) {
@@ -742,7 +742,7 @@ func (s *ctxBox) Box(ctx context.Context, a protocol.Address) (*Box, error) {
 func (s *ctxBox) Known(protocol.Address) (*Box, bool) { return nil, false }
 
 // A lookup's shared read runs apart from the request that leads it
-// (IronGall-dev/irongall-server#32): a leader whose caller hangs up during
+// (dromas-dev/dromas-server#32): a leader whose caller hangs up during
 // the read fails none of the lookups waiting on it, each answered from that
 // one read.
 func TestALeaderWhoHangsUpFailsNoLookup(t *testing.T) {
@@ -808,7 +808,7 @@ func (s panicStore) Revoke(context.Context, protocol.Address, *Revocations, Expe
 }
 
 // A reservation is settled, and a shared read finished, however its call
-// ends, a panic included (IronGall-dev/irongall-server#36): after a panic in
+// ends, a panic included (dromas-dev/dromas-server#36): after a panic in
 // a lookup's read, a fetch of a held message, which counts it once memory
 // shows it held (#86), and a raise of a revocation of certificates, no
 // reservation is held and no read is in flight, and the next lookup of the
@@ -879,7 +879,7 @@ func TestAPanicSettlesItsReservations(t *testing.T) {
 
 // lockedBuffer is a buffer written by the server's goroutines and read by
 // the test's: net/http logs a panic before it closes the connection, an
-// order the race detector does not see (IronGall-dev/irongall-server#73).
+// order the race detector does not see (dromas-dev/dromas-server#73).
 type lockedBuffer struct {
 	mu sync.Mutex
 	b  bytes.Buffer

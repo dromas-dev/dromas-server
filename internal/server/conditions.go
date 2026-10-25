@@ -4,7 +4,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // targetState is what a route knows of its target when it evaluates its
@@ -58,7 +58,7 @@ func expected(r *http.Request) Expect {
 
 // conditions evaluates a request's If-Match and If-None-Match for its target,
 // as RFC 9110 §13.1.1 and §13.1.2 have an origin server evaluate each it
-// receives, in §13.2.2's order (IronGall-dev/irongall-server#86), for
+// receives, in §13.2.2's order (dromas-dev/dromas-server#86), for
 // precondition, the one step every route takes for them: so whatever the
 // route answers before that point, a refusal of the pass, a box that does
 // not exist, a body it reads first that is refused, is answered as without
@@ -93,8 +93,8 @@ func conditions(r *http.Request, exists bool, tag, hint string, also ...string) 
 	return &notModified{etag: tag, also: also}
 }
 
-// hintConditions is a 412's hint where no irongall client sends a condition.
-const hintConditions = "read what the server holds again, then send it with conditions that hold, or with none: irongall sends none here"
+// hintConditions is a 412's hint where no dromas client sends a condition.
+const hintConditions = "read what the server holds again, then send it with conditions that hold, or with none: dromas sends none here"
 
 // notModified is the answer to a GET whose If-None-Match is false: 304, with
 // no content.

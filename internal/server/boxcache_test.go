@@ -16,11 +16,11 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	stypes "github.com/aws/aws-sdk-go-v2/service/dynamodbstreams/types"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // put caches v whatever was written since it was read: how a test makes the
@@ -37,7 +37,7 @@ func (c *recCache[K, V]) put(v V) {
 // A copy read before a write is kept out of the record cache where the cache
 // did not hold its address: the stream's image of that write was dropped
 // there, so the copy may be older than the table
-// (IronGall-dev/irongall-server#12). A copy of an address the cache holds
+// (dromas-dev/dromas-server#12). A copy of an address the cache holds
 // merges, as a put does, and a write to another shard's address leaves a
 // read's token standing.
 func TestAFillAfterAWriteItDidNotSeeIsNotKept(t *testing.T) {
@@ -73,7 +73,7 @@ func TestAFillAfterAWriteItDidNotSeeIsNotKept(t *testing.T) {
 // counts before it applies, and applies under the lock, and a fill whose
 // token a write has passed never puts its copy, not even to evict it after,
 // while one whose token stands puts it under the lock
-// (IronGall-dev/irongall-server#95, #96). The cache is made here with a
+// (dromas-dev/dromas-server#95, #96). The cache is made here with a
 // clone that notes each copy it is handed to put, and whether the lock is
 // held then.
 func TestAWriteAndAFillAreEachOneStepUnderTheLock(t *testing.T) {
@@ -123,7 +123,7 @@ func TestAWriteAndAFillAreEachOneStepUnderTheLock(t *testing.T) {
 }
 
 // A registration that raced a revocation of its address leaves no copy
-// without the revocation in the record cache (IronGall-dev/irongall-server#41):
+// without the revocation in the record cache (dromas-dev/dromas-server#41):
 // the revocation's image came while the cache did not hold the address, and
 // the registration's view is put after it. A registration with no write to
 // its address meanwhile is cached, so the box's first call reads nothing.
@@ -155,7 +155,7 @@ func TestARegistrationThatRacedARevocationIsNotCachedWithoutIt(t *testing.T) {
 
 // Two copies of an address merge to every revocation either holds, whichever
 // is the newer record and whether or not a stored revocation of certificates
-// parses (IronGall-dev/irongall-server#64): one that does not parse stands in
+// parses (dromas-dev/dromas-server#64): one that does not parse stands in
 // place of one that does, so that its next use fails closed.
 func TestMergedCopiesKeepEveryRevocation(t *testing.T) {
 	t.Parallel()
@@ -383,7 +383,7 @@ func TestARegistrationThatFindsARecordCountsIt(t *testing.T) {
 // The stream's image of a box's record, and its record of a change to an
 // account or of an account's removal, are counted when they are applied, so
 // a fill whose read began before one keeps its copy out
-// (IronGall-dev/irongall-server#97): memory alone, nothing read.
+// (dromas-dev/dromas-server#97): memory alone, nothing read.
 func TestTheStreamsChangesAreCounted(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
@@ -424,7 +424,7 @@ func TestTheStreamsChangesAreCounted(t *testing.T) {
 
 // On DynamoDB: an image the stream brings while a read of the address is in
 // flight is not lost to that read's fill, neither a read of what is held of
-// the address (Box) nor a box's load (IronGall-dev/irongall-server#12): the
+// the address (Box) nor a box's load (dromas-dev/dromas-server#12): the
 // image of a newer record, or of a revocation of the address's certificates,
 // each through applyBoxImage, which counts it (#97).
 func TestAnImageDuringAReadKeepsItsFillOut(t *testing.T) {
@@ -567,7 +567,7 @@ func accountChange(op stypes.OperationType, id string, rev uint64) stypes.Record
 
 // What memory answers of an address with no read never goes back to before
 // a write this process has applied, in any order of a fill and the write
-// (IronGall-dev/irongall-server#12, #41, #95, #96), nor what it holds of an
+// (dromas-dev/dromas-server#12, #41, #95, #96), nor what it holds of an
 // account. Each actor is the code's own calls, a step for each stretch that
 // another can come between, and each order of the two actors' steps runs on
 // a store of its own, never started: memory alone. Each touches the cache in
@@ -729,7 +729,7 @@ func (s *heldRead) Box(context.Context, protocol.Address) (*Box, error) {
 // A lookup that comes once this process has applied a revocation of the
 // address and purged its record, and finds a read of the address in flight
 // that began before them, is not answered from that read: it reads again
-// (the fifth case of IronGall-dev/irongall-server#95's class). Control: one
+// (the fifth case of dromas-dev/dromas-server#95's class). Control: one
 // that comes before them shares the read, which costs one read, and is
 // answered what it found. The lookups run in a synctest bubble, so the test
 // knows each is waiting on the shared read before it lets the read go.
@@ -808,7 +808,7 @@ func TestALookupJoinedToAReadBegunBeforeARevocationReadsAgain(t *testing.T) {
 // the removed record (rev 5) lands once the new registration is held, puts
 // nothing of it over the new one, and the new record's next image (rev 2) is
 // taken; and an index that held the removed box takes the registration's
-// standing (IronGall-dev/irongall-client#407 item 2). Memory alone.
+// standing (dromas-dev/dromas-client#407 item 2). Memory alone.
 func TestARegistrationAfterTheTTLsRemovalIsNewerThanTheRemovedRecord(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
@@ -872,9 +872,9 @@ func standsAt(b *Box) string {
 // A fill's check of its token and its put are one step under the cache's
 // lock, and so are a miss's check and its record: no write can be counted
 // between them, which would leave a copy from before it kept
-// (IronGall-dev/irongall-server#95). The hook between the check and the put
+// (dromas-dev/dromas-server#95). The hook between the check and the put
 // sees the lock held, by the same taking of it as the check
-// (IronGall-dev/irongall-client#407 item 3).
+// (dromas-dev/dromas-client#407 item 3).
 func TestAFillAndAMissAreEachOneStepUnderTheLock(t *testing.T) {
 	t.Parallel()
 	var a, other protocol.Address

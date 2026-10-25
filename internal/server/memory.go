@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // Memory is the store: what this process holds in memory, over a Backend
@@ -228,10 +228,10 @@ func (s *Memory) retired(box protocol.Address, id [32]byte, received time.Time) 
 
 // apply applies one change of the backend's feed to memory: one rule for
 // each kind of change. An item whose image does not read is applied as one
-// gone, whatever its kind (IronGall-dev/irongall-client#407 item 1): the
+// gone, whatever its kind (dromas-dev/dromas-client#407 item 1): the
 // address forgotten, the account evicted, so that memory answers for none
 // of it, and its next use reads it, which fails, so nothing is served or
-// taken for it on what memory held before (IronGall-dev/irongall-server#87).
+// taken for it on what memory held before (dromas-dev/dromas-server#87).
 func (s *Memory) apply(c Change) {
 	if c.Err != nil {
 		s.logf("%s: an item that does not read, taken as gone: %v", c.Kind, c.Err)

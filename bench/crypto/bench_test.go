@@ -21,11 +21,11 @@ func init() {
 	var priv ed25519.PrivateKey
 	pub, priv, _ = ed25519.GenerateKey(rand.Reader)
 	// SSHSIG signs a small blob: magic, namespace, reserved, hash alg,
-	// H(message). The namespace is a pass's, irongall-pass-v1:<address>
+	// H(message). The namespace is a pass's, dromas-pass-v1:<address>
 	// (PROTOCOL.md §8), for an address of 64 hex characters.
 	h := sha512.Sum512(msg)
 	str := func(b []byte, s string) []byte { return append(binary.BigEndian.AppendUint32(b, uint32(len(s))), s...) }
-	sshsigBlob = str(str(str([]byte("SSHSIG"), "irongall-pass-v1:"+strings.Repeat("0a", 32)), ""), "sha512")
+	sshsigBlob = str(str(str([]byte("SSHSIG"), "dromas-pass-v1:"+strings.Repeat("0a", 32)), ""), "sha512")
 	sshsigBlob = append(binary.BigEndian.AppendUint32(sshsigBlob, uint32(len(h))), h[:]...)
 	sshsigSig = ed25519.Sign(priv, sshsigBlob)
 	rawSig = ed25519.Sign(priv, msg)

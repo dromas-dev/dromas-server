@@ -14,9 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/api/apitest"
-	"github.com/IronGall-dev/irongall-client/client"
-	"github.com/IronGall-dev/irongall-client/protocol"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -24,17 +21,20 @@ import (
 	stypes "github.com/aws/aws-sdk-go-v2/service/dynamodbstreams/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
+	"github.com/dromas-dev/dromas-client/api/apitest"
+	"github.com/dromas-dev/dromas-client/client"
+	"github.com/dromas-dev/dromas-client/protocol"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // The suite runs against the in-memory store, or, with
-// IRONGALL_TEST_BOXES_TABLE, IRONGALL_TEST_MSGS_TABLE,
-// IRONGALL_TEST_ACCOUNTS_TABLE and IRONGALL_TEST_BUCKET set, against DynamoDB
+// DROMAS_TEST_BOXES_TABLE, DROMAS_TEST_MSGS_TABLE,
+// DROMAS_TEST_ACCOUNTS_TABLE and DROMAS_TEST_BUCKET set, against DynamoDB
 // + S3 Express: every test, plus the ones here that need AWS. Name tables and
 // a directory bucket kept for tests, never the ones a running server uses.
 
-func onAWS() bool { return os.Getenv("IRONGALL_TEST_MSGS_TABLE") != "" }
+func onAWS() bool { return os.Getenv("DROMAS_TEST_MSGS_TABLE") != "" }
 
 func newTestStore(t *testing.T, now func() time.Time) (Store, func() bool) {
 	t.Helper()
@@ -55,10 +55,10 @@ func startDynamo(t *testing.T, now func() time.Time) *Memory {
 	}
 	s := NewDynamoStore(DynamoConfig{
 		AWS:            cfg,
-		BoxesTable:     os.Getenv("IRONGALL_TEST_BOXES_TABLE"),
-		MsgsTable:      os.Getenv("IRONGALL_TEST_MSGS_TABLE"),
-		AccountsTable:  os.Getenv("IRONGALL_TEST_ACCOUNTS_TABLE"),
-		Bucket:         os.Getenv("IRONGALL_TEST_BUCKET"),
+		BoxesTable:     os.Getenv("DROMAS_TEST_BOXES_TABLE"),
+		MsgsTable:      os.Getenv("DROMAS_TEST_MSGS_TABLE"),
+		AccountsTable:  os.Getenv("DROMAS_TEST_ACCOUNTS_TABLE"),
+		Bucket:         os.Getenv("DROMAS_TEST_BUCKET"),
 		Now:            now,
 		BoxCache:       100,
 		StreamInterval: 200 * time.Millisecond,
@@ -76,7 +76,7 @@ func startDynamo(t *testing.T, now func() time.Time) *Memory {
 func dynamoEnv(t *testing.T) (*env, *Memory) {
 	t.Helper()
 	if !onAWS() {
-		t.Skip("needs IRONGALL_TEST_BOXES_TABLE, IRONGALL_TEST_MSGS_TABLE, IRONGALL_TEST_ACCOUNTS_TABLE and IRONGALL_TEST_BUCKET")
+		t.Skip("needs DROMAS_TEST_BOXES_TABLE, DROMAS_TEST_MSGS_TABLE, DROMAS_TEST_ACCOUNTS_TABLE and DROMAS_TEST_BUCKET")
 	}
 	e := newEnv(t, relaxed())
 	return e, e.store.(*Memory)
@@ -409,7 +409,7 @@ func TestRestartLoadsLazily(t *testing.T) {
 
 // A revocation sent again to a process that has not loaded the address
 // carries no pass, and loads nothing there (ARCHITECTURE.md § Startup;
-// IronGall-dev/irongall-server#42).
+// dromas-dev/dromas-server#42).
 func TestAResentRevocationLoadsNothingElsewhere(t *testing.T) {
 	t.Parallel()
 	e, _ := dynamoEnv(t)
@@ -794,12 +794,12 @@ func TestTheRecordAndTheRevocationsAreMemorys(t *testing.T) {
 
 // A box record this build cannot read whole is no record: one in a state it
 // never writes, as "deleted" was until the box's delete was dropped
-// (IronGall-dev/irongall-client#312), or an active one whose stored ACL does
+// (dromas-dev/dromas-client#312), or an active one whose stored ACL does
 // not read. Reading it is an error, so nothing is served or taken for the
 // address, and its image on the stream makes memory forget the box wherever
 // it holds it, loaded or loading, its record cached, or its address
 // remembered missing, rather than keep answering for it as it was
-// (IronGall-dev/irongall-server#87). Control: an active image keeps it.
+// (dromas-dev/dromas-server#87). Control: an active image keeps it.
 func TestARecordInAStateNotWrittenIsRefused(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
@@ -902,7 +902,7 @@ func TestARecordInAStateNotWrittenIsRefused(t *testing.T) {
 // A process that served a box from its record cache, and then takes the
 // stream's image of the record in a state this build never writes, does not
 // serve it from the cache again: the read of the box after the image reads
-// the record, which fails (IronGall-dev/irongall-server#87). In process
+// the record, which fails (dromas-dev/dromas-server#87). In process
 // over canned tables.
 func TestADeletedImageIsNotServedFromTheCache(t *testing.T) {
 	t.Parallel()
@@ -1031,7 +1031,7 @@ func TestTheBoxsStateAnswersBeforeItsPass(t *testing.T) {
 		return e.do(http.MethodGet, "/v1/"+a.String()+"/messages", nil, pass)
 	}
 	b, c, d := e.box(protocol.Classic), e.box(protocol.Classic), e.box(protocol.Classic)
-	if r := poll(b.Address(), "irongall-pass not-a-pass"); r.code() != protocol.CodeUnauthorized {
+	if r := poll(b.Address(), "dromas-pass not-a-pass"); r.code() != protocol.CodeUnauthorized {
 		t.Fatalf("not a pass: %d %s", r.status, r.body)
 	}
 	if r := poll(b.Address(), e.pass(c)); r.code() != protocol.CodeUnauthorized {
@@ -1072,7 +1072,7 @@ func TestDynamoObservesTheItemCollection(t *testing.T) {
 	s.dynamo().metrics = m
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
 	send(t, a, b, "sized")
-	if err := testutil.CollectAndCompare(m.collections, strings.NewReader(collectionsWant(1)), "irongalld_item_collection_estimate_bytes"); err != nil {
+	if err := testutil.CollectAndCompare(m.collections, strings.NewReader(collectionsWant(1)), "dromasd_item_collection_estimate_bytes"); err != nil {
 		t.Error(err)
 	}
 }

@@ -17,14 +17,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/api/apitest"
-	"github.com/IronGall-dev/irongall-client/protocol"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/dromas-dev/dromas-client/api/apitest"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // Posts of the same ciphertext from one sender in flight at once are one
-// call (IronGall-dev/irongall-server#76): the second waits for the first and
+// call (dromas-dev/dromas-server#76): the second waits for the first and
 // is answered 200 with its receipt, never refused by a quota the first one
 // spent (PROTOCOL.md §11.5), for the sends a day, the pair cap and the box's
 // new mail alike. Another sender's post of the same bytes is its own, and is
@@ -146,7 +146,7 @@ func (s *heldDeletes) DeleteMessages(ctx context.Context, a protocol.Address) er
 }
 
 // Revocations sent for a revoked box while its delete is in flight start no
-// delete of their own (IronGall-dev/irongall-server#29): they wait for the
+// delete of their own (dromas-dev/dromas-server#29): they wait for the
 // one in flight and are answered 410, and the revoking PUT is answered with
 // its delete's result.
 func TestPUTsDuringARevocationsDeleteStartNoOther(t *testing.T) {
@@ -185,7 +185,7 @@ func TestPUTsDuringARevocationsDeleteStartNoOther(t *testing.T) {
 
 // On DynamoDB: a duplicate whose dedupe read missed an item acked meanwhile
 // puts the body again, and the write that finds the item not live deletes it
-// (IronGall-dev/irongall-server#16). The message is not served either way.
+// (dromas-dev/dromas-server#16). The message is not served either way.
 func TestADuplicateAfterAnAckLeavesNoBody(t *testing.T) {
 	t.Parallel()
 	e, s := dynamoEnv(t)
@@ -424,7 +424,7 @@ func (s *leadDedupe) Dedupe(ctx context.Context, box protocol.Address, id [32]by
 // their own: the single flight's key holds the query (send). A post naming a
 // stale serial, which leads, is refused stale_prekey; one naming the current
 // serials, which comes while it is in flight, is stored, never handed the
-// stale one's refusal (IronGall-dev/irongall-server#92).
+// stale one's refusal (dromas-dev/dromas-server#92).
 func TestAStaleSerialIsAPostOfItsOwn(t *testing.T) {
 	t.Parallel()
 	s := &leadDedupe{wait: time.Second, entered: make(chan struct{}), second: make(chan struct{}), read: make(chan struct{})}
@@ -495,7 +495,7 @@ func (s *panicOnce) Box(ctx context.Context, a protocol.Address) (*Box, error) {
 // calls: each caller's handler panics, which net/http reports and recovers,
 // the process goes on, and the next call of the same key is made afresh.
 // singleflight's DoChan would end the process on that panic, and Do hands it
-// to every caller (IronGall-dev/irongall-server#92).
+// to every caller (dromas-dev/dromas-server#92).
 func TestAPanicInEachSingleFlightEndsOnlyItsCalls(t *testing.T) {
 	t.Parallel()
 	const n = 8
@@ -575,7 +575,7 @@ func (s *changedBetween) Box(ctx context.Context, a protocol.Address) (*Box, err
 
 // A sender revoked, its current certificate revoked, or forgotten between its
 // pass's check and the send's read of its record is refused as its pass's
-// check would refuse it, and nothing is stored (send; IronGall-dev/irongall-server#92).
+// check would refuse it, and nothing is stored (send; dromas-dev/dromas-server#92).
 func TestASenderChangedBetweenItsPassAndItsRecordIsRefused(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -653,7 +653,7 @@ func (c *cannedAWS) Do(r *http.Request) (*http.Response, error) {
 // The DynamoDB backend's PutMessage, in process against canned answers: a duplicate
 // whose PutItem finds the id's item acked deletes the body it just put, under
 // the key it put it at, and one that finds the item live deletes nothing
-// (IronGall-dev/irongall-server#16, #92). TestADuplicateAfterAnAckLeavesNoBody
+// (dromas-dev/dromas-server#16, #92). TestADuplicateAfterAnAckLeavesNoBody
 // holds the first on AWS.
 func TestADuplicatesWriteDeletesOnlyAnAckedBody(t *testing.T) {
 	t.Parallel()

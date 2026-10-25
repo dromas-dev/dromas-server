@@ -19,7 +19,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // sent is the id of the message a send's answer r stored.
@@ -41,7 +41,7 @@ func metered(t *testing.T, l Limits) (*env, *Metrics, *prometheus.Registry) {
 	return newEnv(t, l, func(c *Config) { c.Metrics = m }), m, reg
 }
 
-// The metrics count what the server does and refuses (IronGall-dev/irongall-server#59):
+// The metrics count what the server does and refuses (dromas-dev/dromas-server#59):
 // each request by its route, status and code; each take of a limit by its
 // name, whom it counts and whether it was allowed; passes, lists and
 // fetches by kind; and how many keys each limit holds.
@@ -60,7 +60,7 @@ func TestMetricsCountWhatTheServerDoes(t *testing.T) {
 		e.want(e.do("GET", to+"/messages/"+id, nil, e.pass(b)), http.StatusOK, "")
 	}
 	e.caller()("192.0.2.1", "GET", to+"/nothing/here", nil, "")
-	e.want(e.do("GET", to+"/messages", nil, "irongall-pass nonsense"), http.StatusUnauthorized, protocol.CodeUnauthorized)
+	e.want(e.do("GET", to+"/messages", nil, "dromas-pass nonsense"), http.StatusUnauthorized, protocol.CodeUnauthorized)
 
 	for _, c := range []struct {
 		what string
@@ -114,7 +114,7 @@ func TestMetricsCarryNoCallerValue(t *testing.T) {
 	w := httptest.NewRecorder()
 	promhttp.HandlerFor(reg, promhttp.HandlerOpts{}).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	text := w.Body.String()
-	if !strings.Contains(text, `irongalld_limit_requests_total{decision="denied",limit="requests",subject="ip"}`) {
+	if !strings.Contains(text, `dromasd_limit_requests_total{decision="denied",limit="requests",subject="ip"}`) {
 		t.Fatalf("the scrape lacks the flood budget's refusals, so it shows nothing of these calls:\n%s", text)
 	}
 	for _, v := range []string{a.Address().String(), b.Address().String(), id, strings.Repeat("e", 64), "203.0.113.77", "127.0.0.1", "/made/up", a.Address().String()[:16]} {
@@ -164,10 +164,10 @@ func TestMetricsCountTheStoresCalls(t *testing.T) {
 	}
 }
 
-// collectionsWant is the exposition of irongalld_item_collection_estimate_bytes
+// collectionsWant is the exposition of dromasd_item_collection_estimate_bytes
 // after one observation of gb, DynamoDB's GB.
 func collectionsWant(gb float64) string {
-	const name = "irongalld_item_collection_estimate_bytes"
+	const name = "dromasd_item_collection_estimate_bytes"
 	var b strings.Builder
 	fmt.Fprintf(&b, "# HELP %s After each message written, the upper bound of DynamoDB's estimate of its box's item collection, the box's items and their LSI entries, at 2^30 bytes a GB: past 10 GB, the box takes no more mail.\n# TYPE %s histogram\n", name, name)
 	for _, le := range gigabytes {
@@ -206,7 +206,7 @@ func TestMetricsObserveTheItemCollectionAMessageWriteGrew(t *testing.T) {
 	if !asked.Load() {
 		t.Error("the message write did not ask for its item collection's size")
 	}
-	if err := testutil.CollectAndCompare(m.collections, strings.NewReader(collectionsWant(9)), "irongalld_item_collection_estimate_bytes"); err != nil {
+	if err := testutil.CollectAndCompare(m.collections, strings.NewReader(collectionsWant(9)), "dromasd_item_collection_estimate_bytes"); err != nil {
 		t.Error(err)
 	}
 }

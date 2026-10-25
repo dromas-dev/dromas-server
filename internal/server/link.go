@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // The one page of this server's own outside /v1/: the page a box's link
@@ -23,7 +23,7 @@ const pageMaxAge = "public, max-age=300"
 var toHTML string
 
 // linkPage serves the page a box's link opens, <server>/to/<address>: what
-// irongall is, for whoever was handed the link. It is fixed text, the
+// dromas is, for whoever was handed the link. It is fixed text, the
 // address and the link itself, never text a box supplied, for any 64
 // lowercase hex characters, the form clients take; it reads no store, so it
 // answers before the API is ready. The link is a send capability: the page

@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/api/apitest"
-	"github.com/IronGall-dev/irongall-client/client"
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/api/apitest"
+	"github.com/dromas-dev/dromas-client/client"
+	"github.com/dromas-dev/dromas-client/protocol"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -316,7 +316,7 @@ func TestPassRefusedAfterRekey(t *testing.T) {
 	e.want(e.do(http.MethodGet, messages, nil, old), http.StatusUnauthorized, protocol.CodeCertificateNotCurrent)
 	e.want(e.do(http.MethodGet, messages, nil, pass()), http.StatusOK, "")
 	// The client signing a new pass when one is refused is tested in
-	// irongall-client.
+	// dromas-client.
 }
 
 func mustHex(t *testing.T, s string) []byte {
@@ -341,7 +341,7 @@ func mustHex(t *testing.T, s string) []byte {
 }
 
 // A box whose prekey expired still works for its owner, and renews. (Senders
-// refusing the expired prekey is tested in irongall-client.)
+// refusing the expired prekey is tested in dromas-client.)
 func TestRenewalAfterExpiry(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())

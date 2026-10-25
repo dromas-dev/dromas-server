@@ -17,8 +17,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/IronGall-dev/irongall-client/api/apitest"
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/api/apitest"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // recorded is a request body that records whether anything read it, and
@@ -90,7 +90,7 @@ func respelled(t *testing.T, pass string) string {
 // Every request is counted before anything is done for it: every handler is
 // put on its router through one gate, and a request no route answers is
 // counted by the router's own (LIMITS.md, rule 1;
-// IronGall-dev/irongall-client#269, IronGall-dev/irongall-server#67, #69,
+// dromas-dev/dromas-client#269, dromas-dev/dromas-server#67, #69,
 // #74). So from an address past its flood budget, every route on a box in
 // every state (live, revoked, forgotten, its current certificate revoked,
 // and one the server holds nothing of), the link page, a site's page and a
@@ -99,11 +99,11 @@ func respelled(t *testing.T, pass string) string {
 // pass parsed or checked, no box looked up, nothing of its body read before
 // it was counted. What is read of the body after, the drain before its
 // answer (pacedBody.drain), is the connection's, as net/http's own drain
-// was (IronGall-dev/irongall-client#413 item 3). The one call that
+// was (dromas-dev/dromas-client#413 item 3). The one call that
 // goes on is a box's: a pass this process has checked, of a box that is
 // live, to a route that takes that box's pass (a send takes any box's, a
 // call about a box only its own, and the read of a box none:
-// IronGall-dev/irongall-client#352). Its answer moves a count of its box's,
+// dromas-dev/dromas-client#352). Its answer moves a count of its box's,
 // whatever it is. A new route is held to this by being one of routes(), and
 // a new state by being one of these; and each route that answers GET is
 // held to it for HEAD too.
@@ -208,7 +208,7 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 	for _, tg := range targets {
 		values := []struct{ name, auth string }{
 			{"no pass", ""},
-			{"5,600 bytes of commas", "irongall-pass " + strings.Repeat(",", protocol.MaxPassAuthorization-len("irongall-pass "))},
+			{"5,600 bytes of commas", "dromas-pass " + strings.Repeat(",", protocol.MaxPassAuthorization-len("dromas-pass "))},
 			{"a new pass of a live box", live.pass(1)},
 			{"a live box's checked pass, respelled", respelled(t, livePass)},
 			{"a live box's checked pass", livePass},
@@ -230,9 +230,9 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 			if v.auth != "" {
 				req.Header.Set("Authorization", v.auth)
 			}
-			limits, passes := counts(t, reg, "irongalld_limit_requests_total"), counts(t, reg, "irongalld_passes_total")
+			limits, passes := counts(t, reg, "dromasd_limit_requests_total"), counts(t, reg, "dromasd_passes_total")
 			body.counted = func() bool {
-				return moved(limits, counts(t, reg, "irongalld_limit_requests_total"))["decision=denied,limit=requests,subject=ip"] == 1
+				return moved(limits, counts(t, reg, "dromasd_limit_requests_total"))["decision=denied,limit=requests,subject=ip"] == 1
 			}
 			w := httptest.NewRecorder()
 			if tg.direct {
@@ -246,7 +246,7 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 				if q, _ := got.quota(); q == protocol.QuotaRequests {
 					t.Errorf("%s: refused for the address's flood budget, though its box's pass was checked", what)
 				}
-				if d := moved(limits, counts(t, reg, "irongalld_limit_requests_total")); len(d) == 0 {
+				if d := moved(limits, counts(t, reg, "dromasd_limit_requests_total")); len(d) == 0 {
 					t.Errorf("%s: answered %d with no count taken", what, got.status)
 				}
 				continue
@@ -255,10 +255,10 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 				t.Errorf("%s, past the address's flood budget: %d %s, want 429 requests", what, got.status, got.body)
 				continue
 			}
-			if d := moved(limits, counts(t, reg, "irongalld_limit_requests_total")); len(d) != 1 || d["decision=denied,limit=requests,subject=ip"] != 1 {
+			if d := moved(limits, counts(t, reg, "dromasd_limit_requests_total")); len(d) != 1 || d["decision=denied,limit=requests,subject=ip"] != 1 {
 				t.Errorf("%s: limits taken besides the one refusal: %v", what, d)
 			}
-			if d := moved(passes, counts(t, reg, "irongalld_passes_total")); len(d) != 0 {
+			if d := moved(passes, counts(t, reg, "dromasd_passes_total")); len(d) != 0 {
 				t.Errorf("%s: passes looked at: %v", what, d)
 			}
 			if body.early {
@@ -270,7 +270,7 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 
 // A server that is not ready yet answers 503 only to a call it has counted:
 // from an address past its flood budget, every route is refused 429
-// requests, before its 503 (IronGall-dev/irongall-server#75's note).
+// requests, before its 503 (dromas-dev/dromas-server#75's note).
 func TestAServerNotReadyCountsFirst(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
@@ -294,7 +294,7 @@ func TestAServerNotReadyCountsFirst(t *testing.T) {
 // Let's Encrypt limits every endpoint per address in front of its check of
 // a request's signature. So a box that signs a new pass for every call has
 // at most that budget of them checked from one address
-// (IronGall-dev/irongall-server#67), and a pass the process has checked
+// (dromas-dev/dromas-server#67), and a pass the process has checked
 // spends none of it: another box behind the same address goes on.
 func TestANewPassSpendsItsAddresssFloodBudget(t *testing.T) {
 	t.Parallel()
@@ -334,7 +334,7 @@ func TestANewPassSpendsItsAddresssFloodBudget(t *testing.T) {
 	// capitals, is checked in that form too: it goes on from that address.
 	d := e.box(protocol.Classic)
 	e.clock.Add(time.Second) // not the pass its registration showed
-	upper := strings.Replace(e.pass(d), "irongall-pass ", "IRONGALL-PASS ", 1)
+	upper := strings.Replace(e.pass(d), "dromas-pass ", "DROMAS-PASS ", 1)
 	e.want(call("198.51.100.9", "GET", "/v1/"+d.Address().String()+"/messages", nil, upper), http.StatusOK, "")
 	e.want(call(ip, "GET", "/v1/"+d.Address().String()+"/messages", nil, upper), http.StatusOK, "")
 
@@ -360,7 +360,7 @@ func TestANewPassSpendsItsAddresssFloodBudget(t *testing.T) {
 // that one pass to the server: answered from memory, with no second check
 // of its signatures, however its armor is spaced and however its SSHSIG blob
 // writes its version, a NUL after its namespace or its reserved field,
-// which nothing signs (IronGall-dev/irongall-server#69). A signature that
+// which nothing signs (dromas-dev/dromas-server#69). A signature that
 // differs in a bit is checked, and refused.
 func TestARespelledPassCostsNoSecondCheck(t *testing.T) {
 	t.Parallel()

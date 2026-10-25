@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -187,13 +187,13 @@ func unauthorized(hint, detail string) *problem {
 // that certificate is not taken, and the box has no other until it publishes
 // a prekey under a new one, which needs no pass under the old.
 func listedCertificate() *problem {
-	return fail(protocol.CodeCertificateRevoked, "publish a new prekey, which comes with a new certificate: irongall prekey renew", "the box's current certificate is one its identity revoked")
+	return fail(protocol.CodeCertificateRevoked, "publish a new prekey, which comes with a new certificate: dromas prekey renew", "the box's current certificate is one its identity revoked")
 }
 
 // The hints of a 401: what a client does about it.
 const (
-	hintPass    = "send the box's pass in Authorization, signed by its working key (irongall and ig_owner do this)" //nolint:gosec // a hint's words, not a credential
-	hintNewPass = "sign a new pass and retry once (irongall and ig_owner do this)"                                  //nolint:gosec // a hint's words, not a credential
+	hintPass    = "send the box's pass in Authorization, signed by its working key (dromas and dr_owner do this)" //nolint:gosec // a hint's words, not a credential
+	hintNewPass = "sign a new pass and retry once (dromas and dr_owner do this)"                                  //nolint:gosec // a hint's words, not a credential
 )
 
 // checkPass checks that the call carries the pass of box a: made for this
@@ -246,7 +246,7 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, cert
 	// A pass is remembered in the one form a client writes it, its signature
 	// as a verifier reads it, so the same pass written in another form a
 	// server reads (PROTOCOL.md §8, §3.2) is answered from memory too, and
-	// its many spellings cost one check (IronGall-dev/irongall-server#69).
+	// its many spellings cost one check (dromas-dev/dromas-server#69).
 	raw := sum
 	if one := sha256.Sum256([]byte(p.Authorization())); one != sum {
 		if s.passes.has(a, one, cert, now) {
@@ -292,11 +292,11 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, cert
 	under, err := p.VerifyUnder(cert, name, now)
 	switch {
 	case errors.Is(err, protocol.ErrCertificate):
-		return fail(protocol.CodeCertificateNotCurrent, "sign the pass with the working key of the box's newest prekey; if that key is lost, irongall prekey renew", "the pass is not under certificate %d, the one this call takes a pass under", certificateSerialValue(serial))
+		return fail(protocol.CodeCertificateNotCurrent, "sign the pass with the working key of the box's newest prekey; if that key is lost, dromas prekey renew", "the pass is not under certificate %d, the one this call takes a pass under", certificateSerialValue(serial))
 	case errors.Is(err, protocol.ErrCertificateNotBegun):
-		return fail(protocol.CodePassExpired, "a certificate starts an hour before it is made: check this machine's clock, then irongall prekey renew", "the certificate the pass is signed under has not begun")
+		return fail(protocol.CodePassExpired, "a certificate starts an hour before it is made: check this machine's clock, then dromas prekey renew", "the certificate the pass is signed under has not begun")
 	case errors.Is(err, protocol.ErrCertificateTime):
-		return fail(protocol.CodePassExpired, "publish a new prekey, which comes with a new certificate: irongall prekey renew", "the certificate the pass is signed under has ended")
+		return fail(protocol.CodePassExpired, "publish a new prekey, which comes with a new certificate: dromas prekey renew", "the certificate the pass is signed under has ended")
 	case err != nil:
 		return unauthorized(hintNewPass, "the pass is not this box's for this server")
 	}
@@ -310,7 +310,7 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, cert
 		if s.log != nil {
 			s.log.Printf("box %s: the certificate on record does not verify against the identity on record: %v", a, err) // the address redacted, as every line is
 		}
-		return fail(protocol.CodeCertificateNotCurrent, "publish a new prekey, which comes with a new certificate: irongall prekey renew", "the box's certificate on record, %d, does not verify against its identity", certificateSerialValue(serial))
+		return fail(protocol.CodeCertificateNotCurrent, "publish a new prekey, which comes with a new certificate: dromas prekey renew", "the box's certificate on record, %d, does not verify against its identity", certificateSerialValue(serial))
 	}
 	// A pass is never good for longer than the certificate it is under.
 	until := p.NotAfter
@@ -398,9 +398,9 @@ func (s *Server) sender(r *http.Request) (protocol.Address, error) {
 	case err != nil:
 		return a, err
 	case st.State == Revoked:
-		return a, fail(protocol.CodeSenderRevoked, "your box is revoked: make a new one, irongall init", "the sending box is revoked")
+		return a, fail(protocol.CodeSenderRevoked, "your box is revoked: make a new one, dromas init", "the sending box is revoked")
 	case !ok, st.State != Active:
-		return a, fail(protocol.CodeUnknownSender, "register your own box first: irongall init", "the box the pass names is not registered")
+		return a, fail(protocol.CodeUnknownSender, "register your own box first: dromas init", "the box the pass names is not registered")
 	case st.Listed:
 		return a, listedCertificate()
 	}

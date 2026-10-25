@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/IronGall-dev/irongall-client/client"
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/client"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // Every value an error's detail names is also a member of its own, of its

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/api/apitest"
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/api/apitest"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // These tests cover calls that once reached storage with no limit, and maps
@@ -148,7 +148,7 @@ func TestCursorIsNoWayAroundThePollRate(t *testing.T) {
 }
 
 // A page after the first is a continuation only with the cursor this process
-// handed the box last (IronGall-dev/irongall-server#5): a drain's pages come
+// handed the box last (dromas-dev/dromas-server#5): a drain's pages come
 // from the page allowance, and the same cursor again is a poll.
 func TestAContinuationIsTheCursorHandedOutLast(t *testing.T) {
 	t.Parallel()
@@ -263,7 +263,7 @@ func TestMissesPerIP(t *testing.T) {
 	// spelling of it costs no check, and the address past its count is no
 	// bar.
 	for _, respelled := range []string{
-		strings.Replace(pass, "irongall-pass ", "IRONGALL-PASS ", 1),
+		strings.Replace(pass, "dromas-pass ", "DROMAS-PASS ", 1),
 		strings.ReplaceAll(pass, `", `, `" ,  `),
 	} {
 		if r := e2.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages", nil, respelled); r.status != http.StatusOK {

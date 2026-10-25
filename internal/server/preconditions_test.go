@@ -13,12 +13,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // A fetch or an ack of a held message whose precondition is false is a call
 // like any other, and spends one of the box's calls (LIMITS.md rule 1;
-// IronGall-dev/irongall-server#102, the client repo's #412 item 1): with
+// dromas-dev/dromas-server#102, the client repo's #412 item 1): with
 // them spent, the next is refused, so a box cannot ask without end whether
 // its mail is still held.
 func TestAFalsePreconditionOnAHeldMessageSpendsOneOfTheBoxsCalls(t *testing.T) {
@@ -375,7 +375,7 @@ type reach struct {
 }
 
 // A false precondition is a call like any other, and does nothing else (the
-// client repo's #412 items 1, 2, 5 and 6; IronGall-dev/irongall-server#102):
+// client repo's #412 items 1, 2, 5 and 6; dromas-dev/dromas-server#102):
 // on every route of routes(), the link page and, on each that answers GET,
 // HEAD, in each state that reaches its preconditions, a false If-Match, and
 // an If-None-Match that matches, are answered 412, or 304 to a GET or a

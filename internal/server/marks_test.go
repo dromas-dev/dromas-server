@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"filippo.io/age"
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // A first page carries an ETag, the first 16 bytes of the SHA-256 of its
@@ -28,7 +28,7 @@ import (
 // of the page before, the old "<count>-<version>" form among them, is not
 // the page's. Weak comparison: W/ is read past, and * names any page. A page
 // after the first carries none, so no tag names it, and only * makes it 304
-// (IronGall-dev/irongall-server#86). Every answer carries the poll interval
+// (dromas-dev/dromas-server#86). Every answer carries the poll interval
 // in Retry-After, a 304's too.
 func TestAFirstPageIsNotModifiedWhileUnchanged(t *testing.T) {
 	t.Parallel()
@@ -108,7 +108,7 @@ func TestAFirstPageIsNotModifiedWhileUnchanged(t *testing.T) {
 // an origin server evaluate one, and compared strongly: a false one is 412
 // precondition_failed, before If-None-Match is read, and a page after the
 // first, which carries no tag, matches none but "*"
-// (IronGall-dev/irongall-server#71). It comes after the poll's count, as
+// (dromas-dev/dromas-server#71). It comes after the poll's count, as
 // If-None-Match does: a box past its poll rate is refused 429 whatever it
 // sends.
 func TestAPollsIfMatchIsEvaluatedFirst(t *testing.T) {
@@ -288,7 +288,7 @@ func (f *tagFront) honest() {
 // A tag a hostile server hands an empty box once is one tag to this server,
 // whatever commas and "*" it holds: the box's polls are answered in full while
 // it keeps that tag, and the mail sent after is delivered
-// (IronGall-dev/irongall-client#149).
+// (dromas-dev/dromas-client#149).
 func TestAPlantedTagHidesNoMailAtAnHonestServer(t *testing.T) {
 	t.Parallel()
 	for _, plant := range []string{`",*,"`, `"x,*,y"`, `W/"a,W/*,b"`} {

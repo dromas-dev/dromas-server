@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 var update = flag.Bool("update", false, "write testdata/aws-requests.golden again from what the store sends")

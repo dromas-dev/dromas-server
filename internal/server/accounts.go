@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"regexp"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // Accounts (PROTOCOL.md §11.16): a box may belong to one account, which
@@ -62,7 +62,7 @@ func (s *Server) adopt(w http.ResponseWriter, r *http.Request) error {
 	// parameter sent without a value is an omitted one (RFC 6749 §3.1): the
 	// request is wrong, not the key.
 	if req.Key == "" {
-		return fail(protocol.CodeBadRequest, "irongall account adopt sends the key it reads on stdin", "missing field %q", memberValue("key"))
+		return fail(protocol.CodeBadRequest, "dromas account adopt sends the key it reads on stdin", "missing field %q", memberValue("key"))
 	}
 	account, hash, ok := parseAdopt(req.Key)
 	if !ok {
@@ -98,7 +98,7 @@ func (s *Server) adopt(w http.ResponseWriter, r *http.Request) error {
 		case errors.Is(err, ErrKeyRefused):
 			return keyRefused()
 		case errors.Is(err, ErrStale):
-			return fail(protocol.CodeBoxChanged, "retry: irongall account adopt", "the box changed during the request")
+			return fail(protocol.CodeBoxChanged, "retry: dromas account adopt", "the box changed during the request")
 		case err != nil:
 			return err
 		}
@@ -131,7 +131,7 @@ func (s *Server) leave(w http.ResponseWriter, r *http.Request) error {
 	if b.Account != "" {
 		switch err := s.store.Leave(detached(r.Context()), b); {
 		case errors.Is(err, ErrStale):
-			return fail(protocol.CodeBoxChanged, "retry: irongall account leave", "the box changed during the request")
+			return fail(protocol.CodeBoxChanged, "retry: dromas account leave", "the box changed during the request")
 		case err != nil:
 			return err
 		}

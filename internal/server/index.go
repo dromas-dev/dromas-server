@@ -9,7 +9,7 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // index is what a process holds in memory so that a poll never leaves it
@@ -39,7 +39,7 @@ type indexShard struct {
 // A message is known by its tag, which nobody outside the server can choose
 // or compute: the id is the SHA-256 of a ciphertext its sender chose, so 8
 // bytes of it are the sender's to steer: an id that only shares a held
-// message's prefix would pass for it (IronGall-dev/irongall-server#10).
+// message's prefix would pass for it (dromas-dev/dromas-server#10).
 // The plain prefix stays for one thing: ordering two messages of one
 // millisecond as the list orders them.
 type mark struct {

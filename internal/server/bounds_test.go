@@ -1,7 +1,7 @@
 package server
 
 // The bound of every call to AWS the store makes, and of each read a send's
-// shared call makes apart from its request (IronGall-dev/irongall-server#91).
+// shared call makes apart from its request (dromas-dev/dromas-server#91).
 // awsfake_test.go has the fake of AWS.
 
 import (
@@ -18,10 +18,10 @@ import (
 	"time"
 
 	"filippo.io/age"
-	"github.com/IronGall-dev/irongall-client/protocol"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodbstreams"
 	stypes "github.com/aws/aws-sdk-go-v2/service/dynamodbstreams/types"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // streamOp is the prefix of a DynamoDB Streams operation's name, as the fake
@@ -32,9 +32,9 @@ const streamOp = "DynamoDBStreams_20120810."
 // context its caller handed it with no deadline and no end, against a
 // DynamoDB, its streams and an S3 that never answer: the reads as the
 // writes, whoever calls them, and a stream follower's
-// (IronGall-dev/irongall-server#91). The bound is in one place for each
+// (dromas-dev/dromas-server#91). The bound is in one place for each
 // client (bound, boundedStreams), not at each call
-// (IronGall-dev/irongall-client#411 item 4). Where a call comes after
+// (dromas-dev/dromas-client#411 item 4). Where a call comes after
 // another, the fake answers the first and holds the one named: a delete of
 // a box's mail reaches its delete of the bodies so.
 func TestEveryCallToAWSEndsAtItsBound(t *testing.T) {
@@ -279,7 +279,7 @@ func postBytes(c *http.Client, url string, ct []byte, pass string) int {
 // which runs apart from the request that leads it, and each post waits on
 // it however its own request ends: its dedupe read ends at its bound, though
 // every post that waited on it has gone and a later post joined it
-// (IronGall-dev/irongall-server#91). The controls: a post of other bytes from
+// (dromas-dev/dromas-server#91). The controls: a post of other bytes from
 // the same sender is answered at once, and a lookup's shared read (lead) is
 // bounded the same way.
 func TestAPostsSharedReadEndsAtItsBound(t *testing.T) {
@@ -354,7 +354,7 @@ func (s *holdDedupe) Dedupe(ctx context.Context, box protocol.Address, id [32]by
 // its client goes while the send's dedupe read is held: the send holds the
 // one large read until that read ends, and gives it back within storeTimeout,
 // though a large send meanwhile, from any sender, is refused 503
-// (IronGall-dev/irongall-server#91).
+// (dromas-dev/dromas-server#91).
 func TestAHeldReadGivesBackTheLargeRead(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -467,7 +467,7 @@ func (s *readDeadlines) Box(ctx context.Context, a protocol.Address) (*Box, erro
 // leads it, and is handed a context bounded by storeTimeout, so the bound
 // holds on any store: the dedupe, the pair and box caps' reads, the
 // recipient's account and its record read again after the write
-// (IronGall-dev/irongall-server#91).
+// (dromas-dev/dromas-server#91).
 func TestEveryReadOfASendsSharedCallIsBounded(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -520,7 +520,7 @@ func (b *boundedFirstRead) GetRecords(ctx context.Context, in *dynamodbstreams.G
 
 // A stream follower's read is handed a bound of its own, and one that ends
 // there is no lost place: the follower logs it and reads the shard again at
-// its next pass, as after any failed read (IronGall-dev/irongall-server#91).
+// its next pass, as after any failed read (dromas-dev/dromas-server#91).
 func TestAFollowersReadEndedAtItsBoundIsReadAgain(t *testing.T) {
 	t.Parallel()
 	fs, f, s, box, now := feedFixture(t)

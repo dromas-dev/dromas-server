@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/api/apitest"
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/api/apitest"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // caller makes requests from any address straight to e's server, wrapped as
@@ -88,11 +88,11 @@ func TestEveryRefusalNamesItsLimit(t *testing.T) {
 
 // A refusal of a box's calls gives the longest wait among the box's other
 // counts in memory that the same call would spend, under that count's name
-// (RFC 8555 §6.6; IronGall-dev/irongall-server#56): a renewal's renewals a
+// (RFC 8555 §6.6; dromas-dev/dromas-server#56): a renewal's renewals a
 // day. A send's sends a day are not among them: only the dedupe, behind the
 // body, shows whether a send is new mail that spends them, so a send past
 // its calls is told their wait, and one past its sends too meets them once
-// that wait is over (IronGall-dev/irongall-server#61).
+// that wait is over (dromas-dev/dromas-server#61).
 func TestARefusalGivesTheLongestWait(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
@@ -135,7 +135,7 @@ func TestARefusalGivesTheLongestWait(t *testing.T) {
 // refused by a quota; a budget may defer it (PROTOCOL.md §11.5, §11.10 step 6). A
 // retry past its sender's calls, with its sends a day spent, is told the
 // calls' wait, and is then answered with the original receipt
-// (IronGall-dev/irongall-server#61).
+// (dromas-dev/dromas-server#61).
 func TestARetryPastTheCallsIsDeferredByTheCalls(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
@@ -163,7 +163,7 @@ func TestARetryPastTheCallsIsDeferredByTheCalls(t *testing.T) {
 }
 
 // A registration is counted by the caller's IPv6 /48 as well as by its /64
-// (IronGall-dev/irongall-server#57): a /48 cannot register more by moving
+// (dromas-dev/dromas-server#57): a /48 cannot register more by moving
 // from one /64 to the next, a refusal by either spends neither, and an IPv4
 // address has no /48 count. The operator's clear forgets both.
 func TestRegistrationsAreCountedByTheRange(t *testing.T) {
@@ -198,10 +198,10 @@ func TestRegistrationsAreCountedByTheRange(t *testing.T) {
 
 // Every call with no pass, and every request no route matches, the link page
 // and a site's pages among them, spends one flood budget of its caller's
-// address (IronGall-dev/irongall-server#58), refused rate_limited naming
+// address (dromas-dev/dromas-server#58), refused rate_limited naming
 // requests. So do a registration and a renewal, whose bodies are read before
 // any pass, and they are refused before their bodies are read
-// (IronGall-dev/irongall-server#34). A call whose pass comes first spends its
+// (dromas-dev/dromas-server#34). A call whose pass comes first spends its
 // box's budgets, never this one, and another address's budget is its own.
 func TestTheFloodBudget(t *testing.T) {
 	t.Parallel()
@@ -307,7 +307,7 @@ func TestWhatNoRouteAnswersIsCounted(t *testing.T) {
 // A request is counted once, by the router or by the route it reaches, never
 // by both, whatever its path escapes and whatever its method: the router
 // matches the path as sent, where an escaped dot or slash is no separator,
-// and leaves a CONNECT's path as sent (IronGall-dev/irongall-server#60). A
+// and leaves a CONNECT's path as sent (dromas-dev/dromas-server#60). A
 // route that takes a pass spends none of the flood budget.
 func TestARequestIsCountedOnceWhateverItsPathEscapes(t *testing.T) {
 	t.Parallel()
@@ -373,7 +373,7 @@ func TestLimitsTop(t *testing.T) {
 }
 
 // limits top orders by the exact time to full, not by the seconds it shows
-// (IronGall-dev/irongall-server#63). With the flood budget at its defaults,
+// (dromas-dev/dromas-server#63). With the flood budget at its defaults,
 // 100 at once and one back each 20 ms, an address that spent 100 of 100 is
 // deeper in debt than one that spent 51, though both show 2 s, and is the
 // one -n 1 lists.

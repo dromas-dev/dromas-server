@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"filippo.io/age"
-	"github.com/IronGall-dev/irongall-client/api/apitest"
-	"github.com/IronGall-dev/irongall-client/client"
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/api/apitest"
+	"github.com/dromas-dev/dromas-client/client"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // Revoking certificates (PROTOCOL.md §10.2) as this server enforces it: the
@@ -345,7 +345,7 @@ func TestTheClientRevokesItsEarlierCertificates(t *testing.T) {
 	}
 	// The working key from before: its pass is refused as under another
 	// certificate than the current one, revoked or not, which the answer
-	// names (IronGall-dev/irongall-client#263), and a prekey it signs at the
+	// names (dromas-dev/dromas-client#263), and a prekey it signs at the
 	// highest serial there is, is refused too.
 	e.wantNotCurrent(e.do("GET", "/v1/"+a.Address().String()+"/messages", nil, old), second)
 	key, _ := age.GenerateX25519Identity()

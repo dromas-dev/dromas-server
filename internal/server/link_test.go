@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/api/apitest"
-	"github.com/IronGall-dev/irongall-client/client"
+	"github.com/dromas-dev/dromas-client/api/apitest"
+	"github.com/dromas-dev/dromas-client/client"
 )
 
 // With no site, outside /v1/ the server has the link page and nothing else.
@@ -67,7 +67,7 @@ func TestLinkPage(t *testing.T) {
 		h.Get("Referrer-Policy") != "no-referrer" || h.Get("X-Robots-Tag") != "noindex" || !strings.HasPrefix(h.Get("Content-Security-Policy"), "default-src 'none';") {
 		t.Fatalf("GET /to/<address>: %d %v", resp.StatusCode, h)
 	}
-	for _, want := range []string{"<code>" + a + "</code>", "echo hello | irongall send " + srv.URL + "/to/" + a + "</code>", `<meta property="og:url" content="` + srv.URL + "/to/" + a + `">`, `<meta name="robots" content="noindex">`} {
+	for _, want := range []string{"<code>" + a + "</code>", "echo hello | dromas send " + srv.URL + "/to/" + a + "</code>", `<meta property="og:url" content="` + srv.URL + "/to/" + a + `">`, `<meta name="robots" content="noindex">`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the page lacks %q", want)
 		}
@@ -86,7 +86,7 @@ func TestLinkPage(t *testing.T) {
 		t.Error("POST: 200")
 	}
 	for _, p := range []string{"/to/" + strings.ToUpper(a), "/to/" + a[:63], "/to/" + a + "0", "/to/" + a + "/", "/to/", "/to/%3Cscript%3E" + a[13:]} {
-		if resp, body := get(http.MethodGet, p); resp.StatusCode != http.StatusNotFound || strings.Contains(body, "irongall send") {
+		if resp, body := get(http.MethodGet, p); resp.StatusCode != http.StatusNotFound || strings.Contains(body, "dromas send") {
 			t.Errorf("GET %s: %d", p, resp.StatusCode)
 		}
 	}
@@ -129,7 +129,7 @@ func TestTheLinkPageNamesItsOwnServer(t *testing.T) {
 			defer resp.Body.Close()
 			b, _ := io.ReadAll(resp.Body)
 			link := c.want + "/to/" + a
-			if resp.StatusCode != http.StatusOK || !strings.Contains(string(b), "<code>echo hello | irongall send "+link+"</code>") ||
+			if resp.StatusCode != http.StatusOK || !strings.Contains(string(b), "<code>echo hello | dromas send "+link+"</code>") ||
 				!strings.Contains(string(b), `<meta property="og:url" content="`+link+`">`) {
 				t.Errorf("the page does not name %s:\n%s", link, b)
 			}
@@ -141,13 +141,13 @@ var loopback = []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}
 
 // The page's command is the client README's: the echo box's link renders to
 // a line of the README, at the address the client code carries, on a server
-// called irongall.dev through TLS in front of it.
+// called dromas.dev through TLS in front of it.
 func TestLinkPageCommandIsInTheClientREADME(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: NewMemStore(time.Now), Limits: relaxed(), Names: []string{"irongall.dev"}, TrustedProxies: loopback}).Handler()))
+	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: NewMemStore(time.Now), Limits: relaxed(), Names: []string{"dromas.dev"}, TrustedProxies: loopback}).Handler()))
 	defer srv.Close()
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/to/"+client.EchoAddress, nil)
-	req.Host = "irongall.dev"
+	req.Host = "dromas.dev"
 	req.Header.Set("X-Forwarded-Proto", "https")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -155,11 +155,11 @@ func TestLinkPageCommandIsInTheClientREADME(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
-	readme, err := os.ReadFile("../../../irongall-client/README.md")
+	readme, err := os.ReadFile("../../../dromas-client/README.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	line := "echo hello | irongall send https://irongall.dev/to/" + client.EchoAddress
+	line := "echo hello | dromas send https://dromas.dev/to/" + client.EchoAddress
 	if !strings.Contains(string(b), "<code>"+line+"</code>") || !strings.Contains(string(readme), "\n"+line+"\n") {
 		t.Errorf("the page and the README do not both give %q", line)
 	}

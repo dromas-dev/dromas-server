@@ -1,5 +1,5 @@
 # The lint AGENTS.md names, run as `golangci-lint run ./...` here and in CI.
-# irongall-server keeps the same file: change both together.
+# dromas-server keeps the same file: change both together.
 version: "2"
 
 linters:
@@ -19,7 +19,7 @@ linters:
         # characters that are no token's as ASCII letters (U+017F as s, the
         # Kelvin sign as k), lowering and raising alike.
         - pattern: ^(strings|bytes)\.(EqualFold|ToLower|ToUpper|ToTitle)$
-          msg: compare a protocol token in any case with protocol.LowerASCII (irongall-client#405)
+          msg: compare a protocol token in any case with protocol.LowerASCII (dromas-client#405)
       analyze-types: true
   exclusions:
     # Test files are linted with the rest, but their findings are not reported:

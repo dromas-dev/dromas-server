@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"filippo.io/age"
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // call is one request a test makes.
@@ -54,7 +54,7 @@ func inAccount(e *env, r *raw, uses int) string {
 // Every route evaluates If-Match and If-None-Match, as RFC 9110 §13.1.1 and
 // §13.1.2 have an origin server evaluate each it receives, in §13.2.2's
 // order, once it knows its target's state and before it acts
-// (IronGall-dev/irongall-server#86): each route below, its target there or
+// (dromas-dev/dromas-server#86): each route below, its target there or
 // not, is sent each of four conditions on a world of its own. A tag no
 // target carries: If-Match is 412, If-None-Match holds. "*": If-Match holds
 // where the target exists and is 412 where it does not; If-None-Match is 304

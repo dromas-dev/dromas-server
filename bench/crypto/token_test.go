@@ -14,11 +14,11 @@ var kServer = make([]byte, 32)
 var boxH = make([]byte, 32)
 
 func tokenMsg(epoch uint32) []byte {
-	m := append([]byte("irongall-token-v1"), boxH...)
+	m := append([]byte("dromas-token-v1"), boxH...)
 	return binary.BigEndian.AppendUint32(m, epoch)
 }
 
-var presented = "igt1_" + base64.RawURLEncoding.EncodeToString(func() []byte {
+var presented = "drt1_" + base64.RawURLEncoding.EncodeToString(func() []byte {
 	h := hmac.New(sha256.New, kServer)
 	h.Write(tokenMsg(7))
 	return h.Sum(nil)

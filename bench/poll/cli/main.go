@@ -15,17 +15,17 @@ import (
 
 // With one argument, N, it polls ../srv, the model of an earlier design, N
 // times. With three, N URL AUTHORIZATION, it polls URL with that Authorization
-// value: a real irongalld, a box's /messages, and the contents of the box's
+// value: a real dromasd, a box's /messages, and the contents of the box's
 // pass file.
 func main() {
 	n, _ := strconv.Atoi(os.Args[1])
 	H := make([]byte, 32)
 	H[0] = 9
 	mac := hmac.New(sha256.New, make([]byte, 32))
-	mac.Write([]byte("irongall-token-v1"))
+	mac.Write([]byte("dromas-token-v1"))
 	mac.Write(H)
 	mac.Write([]byte{0, 0, 0, 0})
-	tok := "Bearer igt1_" + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	tok := "Bearer drt1_" + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 	url := "http://127.0.0.1:18777/v1/" + hex.EncodeToString(H) + "/messages"
 	want := "[]"
 	if len(os.Args) == 4 {

@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // siteFiles is a site as a renderer writes one: the front page, a page at a
@@ -159,7 +159,7 @@ func TestASitePageAnswersConditionally(t *testing.T) {
 }
 
 // A page of the site spends its caller's flood budget, which is for floods
-// alone (IronGall-dev/irongall-server#58): thirty views of three pages each,
+// alone (dromas-dev/dromas-server#58): thirty views of three pages each,
 // a 404 among them, from one address at once, are each answered under the
 // default limits, while the API is not ready; a flood is refused.
 func TestASitePageSpendsOnlyAFloodBudget(t *testing.T) {
@@ -185,7 +185,7 @@ func TestASitePageSpendsOnlyAFloodBudget(t *testing.T) {
 
 // A directory's path without its slash redirects to its index, escaped, as
 // Location is a URI reference, and with the request's query
-// (IronGall-dev/irongall-server#44): each lands on its page.
+// (dromas-dev/dromas-server#44): each lands on its page.
 func TestADirectorysRedirectNamesItsPath(t *testing.T) {
 	t.Parallel()
 	site, err := LoadSite(writeSite(t, map[string]string{
@@ -233,7 +233,7 @@ func TestNoSiteIsNotFound(t *testing.T) {
 
 // A site is what its renderer wrote: a file of a type it holds none of, a
 // second index in one directory, a link, or a file under v1/ or to/, which it
-// could never serve at its path (IronGall-dev/irongall-server#43), is refused
+// could never serve at its path (dromas-dev/dromas-server#43), is refused
 // at start.
 func TestASiteOfAnythingElseIsRefused(t *testing.T) {
 	t.Parallel()
@@ -261,7 +261,7 @@ func TestASiteOfAnythingElseIsRefused(t *testing.T) {
 }
 
 // A site's root may be a link to its directory, as a web server's root may
-// (IronGall-dev/irongall-server#45); a link inside it is still refused
+// (dromas-dev/dromas-server#45); a link inside it is still refused
 // (above), and a root that is no directory is refused as one.
 func TestASitesRootMayBeALink(t *testing.T) {
 	t.Parallel()

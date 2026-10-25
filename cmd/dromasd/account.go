@@ -8,9 +8,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
-	"github.com/IronGall-dev/irongall-server/internal/server"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/dromas-dev/dromas-client/protocol"
+	"github.com/dromas-dev/dromas-server/internal/server"
 )
 
 // account runs one operator command on accounts (PROTOCOL.md §11.16).

@@ -11,12 +11,12 @@ import (
 )
 
 // The operator's socket is never open to another user, not for a moment,
-// whatever the umask (IronGall-dev/irongall-server#47): under umask 0000,
+// whatever the umask (dromas-dev/dromas-server#47): under umask 0000,
 // its mode is watched while listenAdmin runs again and again, and never has
 // a bit but its owner's; the umask is given back. A socket chmod'ed after
 // its bind is seen at 0777 within a few starts.
 func TestTheAdminSocketIsNeverTheUmasks(t *testing.T) {
-	dir, err := os.MkdirTemp("", "ig") // a short path: a Unix socket's is at most 108 bytes
+	dir, err := os.MkdirTemp("", "dr") // a short path: a Unix socket's is at most 108 bytes
 	if err != nil {
 		t.Fatal(err)
 	}

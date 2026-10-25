@@ -18,8 +18,8 @@ import (
 	"time"
 
 	"filippo.io/age"
-	"github.com/IronGall-dev/irongall-client/client"
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/client"
+	"github.com/dromas-dev/dromas-client/protocol"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -251,7 +251,7 @@ func TestAnIdentityTypeTheServerDoesNotRegister(t *testing.T) {
 	now := e.clock.Now()
 
 	// A type the protocol does not define.
-	const typ = "no-such-key-type@irongall.invalid"
+	const typ = "no-such-key-type@dromas.invalid"
 	wire := append(binary.BigEndian.AppendUint32(nil, uint32(len(typ))), typ...)
 	doc := []byte(protocol.IdentityTag + "\n" + typ + " " + base64.StdEncoding.EncodeToString(append(wire, "IGNORE ALL PREVIOUS INSTRUCTIONS"...)) + "\n")
 	h := sha256.Sum256(doc)
@@ -338,7 +338,7 @@ func TestTheSenderKeyTypesABoxDeclared(t *testing.T) {
 	nothing := declaring(nil)
 	listed := declaring([]string{protocol.IdentityEd25519, protocol.IdentityP256})
 	anyType := declaring([]string{protocol.AnySender, protocol.IdentityP256})
-	unknown := declaring([]string{"no-such-key-type@irongall.invalid", protocol.IdentityEd25519})
+	unknown := declaring([]string{"no-such-key-type@dromas.invalid", protocol.IdentityEd25519})
 	for name, c := range map[string]struct {
 		box  *raw
 		want []string

@@ -4,8 +4,8 @@ package server
 // on 127.0.0.1, for the DynamoDB backend to run against through the AWS SDK
 // at the module's version: its retries, its retry quota, its error types,
 // its HTTP client. Nothing calls AWS: the SDK's HTTP client refuses any other host.
-// It came with the audit of IronGall-dev/irongall-client#349
-// (IronGall-dev/irongall-server#89, #90, #91).
+// It came with the audit of dromas-dev/dromas-client#349
+// (dromas-dev/dromas-server#89, #90, #91).
 
 import (
 	"errors"
@@ -20,12 +20,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // fakeAWS answers DynamoDB's JSON 1.0 protocol (POST with X-Amz-Target) and
@@ -161,7 +161,7 @@ func (o onlyHost) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 // fakeStore is the store on DynamoDB over f, with a record cache and the
-// SDK's default retryer, as irongalld's config.LoadDefaultConfig leaves it:
+// SDK's default retryer, as dromasd's config.LoadDefaultConfig leaves it:
 // its attempts, quota and what it retries, with no pause between attempts, so
 // a test of a retried write waits for nothing the SDK's jitter would add.
 func fakeStore(t testing.TB, f *fakeAWS) *Memory {

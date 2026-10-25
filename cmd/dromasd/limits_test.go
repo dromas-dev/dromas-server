@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IronGall-dev/irongall-server/internal/server"
+	"github.com/dromas-dev/dromas-server/internal/server"
 )
 
 // The operator's socket: made 0600, a stale one replaced, anything else at
 // its path refused, and limits clear answered through it.
 func TestTheAdminSocket(t *testing.T) {
-	dir, err := os.MkdirTemp("", "ig") // a short path: a Unix socket's is at most 108 bytes
+	dir, err := os.MkdirTemp("", "dr") // a short path: a Unix socket's is at most 108 bytes
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestTheAdminSocket(t *testing.T) {
 	}
 	// A socket file left by a process that is gone: net.Listen's listener
 	// unlinks its file as it closes, so this one is told not to
-	// (IronGall-dev/irongall-server#49).
+	// (dromas-dev/dromas-server#49).
 	first.(*net.UnixListener).SetUnlinkOnClose(false)
 	_ = first.Close()
 	if fi, err := os.Lstat(path); err != nil || fi.Mode().Type() != fs.ModeSocket {

@@ -20,13 +20,13 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol"
 )
 
 // Every answer is paced, so no connection outlives the deadline its peer
 // sets by not sending or not reading (LIMITS.md, a body's and a response's
-// time; IronGall-dev/irongall-server#28, #31, #75, #77). These run through
-// HTTPServer, the server irongalld serves the API with, on a port of their
+// time; dromas-dev/dromas-server#28, #31, #75, #77). These run through
+// HTTPServer, the server dromasd serves the API with, on a port of their
 // own, since net/http's own reading and writing is what they hold.
 
 // pacedLimits are limits with every body and answer paced at a second, and
@@ -38,7 +38,7 @@ func pacedLimits() Limits {
 	return l
 }
 
-// served serves s's handler as irongalld does, and returns its address and
+// served serves s's handler as dromasd does, and returns its address and
 // how many of its connections have closed.
 func served(t *testing.T, s *Server, l Limits) (string, *atomic.Int64) {
 	t.Helper()
@@ -99,7 +99,7 @@ func closesWithin(conn net.Conn, d time.Duration) (bool, string) {
 // §15.5.9); behind an answer written first, the drain is cut and that
 // answer goes out after it (#82), then the connection ends. Either way the
 // cut is counted once, in the one place every cut is
-// (IronGall-dev/irongall-client#413 item 3).
+// (dromas-dev/dromas-client#413 item 3).
 func TestABodyThatStopsIsCutBehindEveryAnswer(t *testing.T) {
 	t.Parallel()
 	nobody := strings.Repeat("ab", 32)
@@ -157,11 +157,11 @@ func TestABodyThatStopsIsCutBehindEveryAnswer(t *testing.T) {
 			if c.status == "408" && !strings.Contains(got, `"code":"request_timeout"`) {
 				t.Errorf("a 408 that is not request_timeout: %q", got)
 			}
-			if d := counts(t, reg, "irongalld_limit_requests_total")["decision=denied,limit=requests,subject=ip"]; c.limited && d != 1 {
+			if d := counts(t, reg, "dromasd_limit_requests_total")["decision=denied,limit=requests,subject=ip"]; c.limited && d != 1 {
 				t.Errorf("refused for the flood budget %v times, want 1", d)
 			}
-			if cut := counts(t, reg, "irongalld_bodies_cut_total")[""]; cut != 1 {
-				t.Errorf("a body cut off at its deadline: irongalld_bodies_cut_total %v, want 1", cut)
+			if cut := counts(t, reg, "dromasd_bodies_cut_total")[""]; cut != 1 {
+				t.Errorf("a body cut off at its deadline: dromasd_bodies_cut_total %v, want 1", cut)
 			}
 			t.Logf("cut after %v", time.Since(start).Round(10*time.Millisecond))
 		})
@@ -198,8 +198,8 @@ func TestAChunkedBodyCutInItsTrailerIs408(t *testing.T) {
 			if _, got := closesWithin(conn, 5*time.Second); !strings.HasPrefix(got, "HTTP/1.1 408 ") || !strings.Contains(got, `"code":"request_timeout"`) {
 				t.Errorf("a body cut off at its deadline where its handler reads it: %.200q, want 408 request_timeout", got)
 			}
-			if cut := counts(t, reg, "irongalld_bodies_cut_total")[""]; cut != 1 {
-				t.Errorf("irongalld_bodies_cut_total %v, want 1", cut)
+			if cut := counts(t, reg, "dromasd_bodies_cut_total")[""]; cut != 1 {
+				t.Errorf("dromasd_bodies_cut_total %v, want 1", cut)
 			}
 		})
 	}
@@ -210,7 +210,7 @@ func TestAChunkedBodyCutInItsTrailerIs408(t *testing.T) {
 // through the paced body, before the answer's first byte goes out, and no
 // byte of the drain moves the read deadline, so the drain is cut at
 // -body-timeout from the head, counted as every cut is
-// (IronGall-dev/irongall-client#413 item 3), and the answer goes out after
+// (dromas-dev/dromas-client#413 item 3), and the answer goes out after
 // it. Each body is 3,000 bytes at 2,000 a second, where a handler's reads
 // would give it a second and three more; the control is a body its handler
 // reads, answered after the whole of it.
@@ -256,7 +256,7 @@ func TestAnAnswerWrittenFirstOutlivesTheDrainOfItsBody(t *testing.T) {
 			if !strings.HasPrefix(status, "HTTP/1.1 "+c.status+" ") {
 				t.Errorf("a body moving at twice -body-min-rate: answered %q, want %s", status, c.status)
 			}
-			cut := counts(t, reg, "irongalld_bodies_cut_total")[""]
+			cut := counts(t, reg, "dromasd_bodies_cut_total")[""]
 			switch control := c.name == "read by its handler (control)"; {
 			case control && (sent != 3000 || at < last || cut != 0):
 				t.Errorf("a body its handler reads: answered at %v with %d of 3000 bytes sent, the last at %v, %v cut; want the answer after the whole body, none cut", at.Round(10*time.Millisecond), sent, last.Round(10*time.Millisecond), cut)
@@ -316,7 +316,7 @@ func trickle(t *testing.T, addr, head string, size, rate int) (status string, at
 // one that waits for 100 Continue, which is never sent, and one whose
 // Content-Length leaves more than net/http's bound. Each is answered at
 // once, long before its deadline, with no cut, and the connection is
-// closed (IronGall-dev/irongall-client#413 item 3).
+// closed (dromas-dev/dromas-client#413 item 3).
 func TestABodyTheServerWouldNotDrainIsNotRead(t *testing.T) {
 	t.Parallel()
 	nobody := strings.Repeat("ab", 32)
@@ -346,8 +346,8 @@ func TestABodyTheServerWouldNotDrainIsNotRead(t *testing.T) {
 			if !ok || !strings.HasPrefix(got, "HTTP/1.1 404 ") {
 				t.Errorf("a body the server would not drain: %.60q, closed %v; want 404 at once, then the connection closed", got, ok)
 			}
-			if cut := counts(t, reg, "irongalld_bodies_cut_total")[""]; cut != 0 {
-				t.Errorf("irongalld_bodies_cut_total %v, want 0: nothing was read to cut", cut)
+			if cut := counts(t, reg, "dromasd_bodies_cut_total")[""]; cut != 0 {
+				t.Errorf("dromasd_bodies_cut_total %v, want 0: nothing was read to cut", cut)
 			}
 		})
 	}
@@ -356,7 +356,7 @@ func TestABodyTheServerWouldNotDrainIsNotRead(t *testing.T) {
 // A body that keeps coming past net/http's bound, behind an answer written
 // first, is drained to that bound and no further: the answer goes out
 // while the body is still coming, and the connection is closed, as net/http
-// closes one it will not drain (IronGall-dev/irongall-client#413 item 3).
+// closes one it will not drain (dromas-dev/dromas-client#413 item 3).
 // The body is chunked, so nothing says how long it is, and comes at four
 // times the bound a second for two seconds.
 func TestADrainStopsAtNetHTTPsBound(t *testing.T) {
@@ -616,7 +616,7 @@ func TestOptionsStarIsCounted(t *testing.T) {
 }
 
 // A write is credited only for the bytes it has already written, in pieces
-// of at most -body-min-rate, as a read is (IronGall-dev/irongall-client#413
+// of at most -body-min-rate, as a read is (dromas-dev/dromas-client#413
 // item 2): each piece goes out under the deadline the pieces before it
 // earned, from -body-timeout after the write began, so a peer that takes
 // none of an answer is cut at -body-timeout and what the buffers between
@@ -678,7 +678,7 @@ func (d *deadlines) SetReadDeadline(time.Time) error    { return nil }
 
 // A peer that takes none of a fetch holds the connection -body-timeout and
 // what the buffers between took, never what the ciphertext's size would
-// earn (IronGall-dev/irongall-client#413 item 2): the fetch writes the whole
+// earn (dromas-dev/dromas-client#413 item 2): the fetch writes the whole
 // ciphertext in one write, which was credited for all of it before any of
 // it moved. At this -body-min-rate the ciphertext would earn a minute.
 func TestAFetchNeverReadIsCutWhateverItsSize(t *testing.T) {

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IronGall-dev/irongall-client/protocol"
-	"github.com/IronGall-dev/irongall-server/internal/server"
+	"github.com/dromas-dev/dromas-client/protocol"
+	"github.com/dromas-dev/dromas-server/internal/server"
 )
 
 // headOf sends head, a request's head, to addr, and returns the status of
@@ -59,7 +59,7 @@ func TestTheHeadIsReadToWhatTheLongestCallNeeds(t *testing.T) {
 	if err := protocol.CheckServerName(host); err != nil || len(host) != 255 {
 		t.Fatalf("not a server's name: %v", err)
 	}
-	pass := "irongall-pass " + strings.Repeat("a", protocol.MaxPassAuthorization-len("irongall-pass "))
+	pass := "dromas-pass " + strings.Repeat("a", protocol.MaxPassAuthorization-len("dromas-pass "))
 	serial := fmt.Sprint(protocol.MaxSerial)
 	longest := "POST /v1/" + strings.Repeat("0", 64) + "/messages?prekey_serial=" + serial + "&certificate_serial=" + serial + " HTTP/1.1\r\n" +
 		"Host: " + host + "\r\n" +

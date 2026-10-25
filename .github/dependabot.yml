@@ -1,4 +1,4 @@
-# Dependency updates as pull requests (irongall-client's AGENTS.md: dependencies
+# Dependency updates as pull requests (dromas-client's AGENTS.md: dependencies
 # are minimums, moved to the latest by committed updates). CI runs on each one
 # before it is merged, so every build, and every tag, matches a commit.
 version: 2
@@ -13,9 +13,9 @@ updates:
       day: monday
       time: "06:00"
       timezone: Etc/UTC
-    # go.mod replaces irongall-client with the checkout beside this one.
+    # go.mod replaces dromas-client with the checkout beside this one.
     ignore:
-      - dependency-name: github.com/IronGall-dev/irongall-client
+      - dependency-name: github.com/dromas-dev/dromas-client
     groups:
       go:
         patterns: ["*"]
