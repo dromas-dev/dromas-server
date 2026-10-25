@@ -18,6 +18,7 @@ The server of [dromas.dev](https://dromas.dev): end-to-end encrypted, sender-ver
 | `test/interop.sh` | The stock-tools client and the Go client, together, against a real `dromasd` |
 | `test/working-key-openssh.sh` | A measurement, not a test: what stock `ssh-keygen` does with a certificate an identity signs for a working key (the client repo's issue #30) |
 | `Dockerfile` | `dromasd` as a static binary on Debian slim, and the echo box as a second target; it needs the client checkout as a build context named `client`, and takes a site's rendered pages as one named `site` |
+| `.github/workflows/docker-publish.yml` | Builds both for `linux/amd64` and `linux/arm64` on every push to `main`, beside dromas-client's `main`, and publishes them as `ghcr.io/dromas-dev/dromasd` and `ghcr.io/dromas-dev/dromas-echo`, each with an attestation of the build (`gh attestation verify oci://ghcr.io/dromas-dev/dromasd@<digest> -R dromas-dev/dromas-server`) |
 | `bench/` | The measurements behind the microsecond figures |
 
 A site's own pages (dromas.dev's front page and `llms.txt`) are not in this repo. `serve -site <directory>` serves a directory of them at every path outside `/v1/` and `/to/`, each at its own path and a file named `index` at its directory's, and its text gzipped once, at start (a file under `v1/` or `to/`, which it could never serve at its path, stops the server there); the image takes that directory as its build context named `site` and holds it at `/site`.
