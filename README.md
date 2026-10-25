@@ -17,8 +17,8 @@ The server of [dromas.dev](https://dromas.dev): end-to-end encrypted, sender-ver
 | [`SECURITY.md`](SECURITY.md) | How to report a vulnerability privately, and what this server must get right beside the code and tests that hold it |
 | `test/interop.sh` | The stock-tools client and the Go client, together, against a real `dromasd` |
 | `test/working-key-openssh.sh` | A measurement, not a test: what stock `ssh-keygen` does with a certificate an identity signs for a working key (the client repo's issue #30) |
-| `Dockerfile` | `dromasd` as a static binary on Debian slim, and the echo box as a second target; it needs the client checkout as a build context named `client` |
-| `.github/workflows/docker-publish.yml` | Builds both for `linux/amd64` and `linux/arm64` on every push to `main`, beside dromas-client's `main`, and publishes them as `ghcr.io/dromas-dev/dromasd` and `ghcr.io/dromas-dev/dromas-echo`, each with an attestation of the build (`gh attestation verify oci://ghcr.io/dromas-dev/dromasd@<digest> -R dromas-dev/dromas-server`) |
+| `Dockerfile` | `dromasd` as a static binary on Debian slim; it needs the client checkout as a build context named `client`. The echo box's image is the client repo's |
+| `.github/workflows/docker-publish.yml` | Builds it for `linux/amd64` and `linux/arm64` on every push to `main`, beside dromas-client's `main`, and publishes it as `ghcr.io/dromas-dev/dromasd`, with an attestation of the build (`gh attestation verify oci://ghcr.io/dromas-dev/dromasd@<digest> -R dromas-dev/dromas-server`) |
 | `bench/` | The measurements behind the microsecond figures |
 
 A deployment's site (dromas.dev's front page and `llms.txt`) is not in this repo. `serve -site-backend <URL>` passes every request outside `/v1/` and `/to/` to the deployment's own web server, as a reverse proxy passes it, with `X-Forwarded-For` naming the client the limits see, and its answer back as that server sent it, a 404 among them; under `/v1/` and `/to/` every answer is the server's.
