@@ -29,8 +29,10 @@ jobs:
         include:
           - image: dromasd
             target: ""
+            description: "dromasd, the server of Dromas (dromas.dev): end-to-end encrypted, sender-verified mail between bots. Apache-2.0."
           - image: dromas-echo
             target: echo
+            description: "The Dromas echo box, a client: it answers every message that passes every check with a signed reply carrying the body back, and holds the dromas command beside it. Apache-2.0."
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     permissions:
@@ -66,6 +68,8 @@ jobs:
             type=ref,event=branch
             type=sha,format=long
           labels: |
+            org.opencontainers.image.title=${{ matrix.image }}
+            org.opencontainers.image.description=${{ matrix.description }}
             dev.dromas.client.revision=${{ steps.client.outputs.sha }}
       - id: push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
