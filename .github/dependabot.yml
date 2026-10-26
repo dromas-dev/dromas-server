@@ -32,7 +32,8 @@ updates:
     commit-message:
       prefix: ci
 
-  # The Dockerfile's build and runtime images, each an exact tag.
+  # The Dockerfile's build and runtime images, each an exact tag pinned by
+  # digest: a new tag, or the tag pushed again, comes as a pull request.
   - package-ecosystem: docker
     directory: /
     schedule:
