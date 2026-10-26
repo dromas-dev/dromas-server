@@ -109,23 +109,6 @@ func TestAWriteRetriedAfterAnAmbiguousAttemptMayHaveBeenApplied(t *testing.T) {
 	}
 }
 
-// The same for a raise of a revocation of certificates (Revoke, with its
-// condition on through): applied and answered 500, then the retry's failed
-// condition, and the raise is counted.
-func TestARaiseRetriedAfterAnAmbiguousAttemptMayHaveBeenApplied(t *testing.T) {
-	t.Parallel()
-	_, r, _ := heldRecord(t)
-	f := newFakeAWS()
-	f.dynamo = scripted("UpdateItem", applied(answer500), answerCCF)
-	s := fakeStore(t, f)
-	err := s.Revoke(context.WithoutCancel(t.Context()), r.id.Address(), &Revocations{Identity: r.id.Document(), Certs: []byte("c"), CertsSig: []byte("s"), Through: 7}, ExpectAnything)
-	calls, applied := f.count("UpdateItem")
-	t.Logf("%d UpdateItem calls, %d applied; err %v (ErrStale %v); mayHaveApplied %v", calls, applied, err, errors.Is(err, ErrStale), mayHaveApplied(err))
-	if !mayHaveApplied(err) {
-		t.Errorf("a raise the fake applied is taken for a refusal AWS stated: its count would be given back")
-	}
-}
-
 // The SDK draws on its retry quota only after an attempt failed with an
 // error it retries, a 500 among them, and once the quota is out it returns
 // that attempt's error joined with the quota's, which reads as a throttle: a
@@ -312,7 +295,9 @@ func TestARefusalAWSStatedGivesTheCountBack(t *testing.T) {
 // changes nothing in memory; a failed condition with nothing applied evicts
 // the cached copy, counted as a write, since the store holds what this
 // process never applied, so a read begun before it puts nothing, and leaves
-// the index (Memory.write).
+// the index (Memory.write). Its caller is told the write may have been
+// applied, so the count reserved for it is kept, and a refusal stated is
+// not (mayHaveApplied).
 func TestAWriteThatMayHaveBeenAppliedForgetsItsAddress(t *testing.T) {
 	t.Parallel()
 	_, r, box := heldRecord(t)
@@ -398,6 +383,9 @@ func TestAWriteThatMayHaveBeenAppliedForgetsItsAddress(t *testing.T) {
 				err, mayHaveApplied(err), held, filled, outs[i].indexed)
 			if err == nil {
 				t.Fatal("the write did not fail")
+			}
+			if mayHaveApplied(err) == c.kept {
+				t.Errorf("mayHaveApplied %v, want %v: the count reserved for the write would be %s", mayHaveApplied(err), !c.kept, map[bool]string{true: "kept", false: "given back"}[mayHaveApplied(err)])
 			}
 			if held == c.evicted {
 				t.Errorf("after the write the cache holds the record read before it %v; want %v", held, !c.evicted)
@@ -976,5 +964,50 @@ func TestAnAckWhoseBodyWasNotDeletedChangesNothing(t *testing.T) {
 				t.Errorf("an ack whose retire may have been applied: mayHaveApplied %v, the box held %v, its record cached %v; want true, false, false", mayHaveApplied(err), held, cached)
 			}
 		})
+	}
+}
+
+// A message retired by another write between DeleteFrom's Query and its own
+// retire, acked or retired by a fetch that found no body, is skipped, and the
+// rest are retired: a message already gone is no error (Backend.DeleteFrom;
+// dromas-dev/dromas-client#453 item 1). The fake answers the Query with two
+// messages of the sender, the first one's retire as DynamoDB answers a
+// retire of an item an ack has taken out of the list, a failed condition, and
+// the second one's as applied.
+func TestDeleteFromSkipsAMessageRetiredMeanwhile(t *testing.T) {
+	t.Parallel()
+	box, from := protocol.Address{4}, protocol.Address{5}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	acked := &Header{ID: [32]byte{1}, From: from, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
+	left := &Header{ID: [32]byte{2}, From: from, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
+	query, err := json.Marshal(map[string]any{"Items": []any{itemJSON(msgItem(box, acked)), itemJSON(msgItem(box, left))}, "Count": 2, "ScannedCount": 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	retire, err := json.Marshal(map[string]any{"Attributes": itemJSON(map[string]types.AttributeValue{"live": bin(liveKey(ms(now), left.ID))})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newFakeAWS()
+	f.dynamo = func(op string, _ int, body []byte) answer {
+		switch {
+		case op == "Query":
+			return answer{status: http.StatusOK, body: string(query)}
+		case op == "UpdateItem" && strings.Contains(string(body), base64.StdEncoding.EncodeToString(acked.ID[:])):
+			return answerCCF
+		case op == "UpdateItem":
+			return applied(answer{status: http.StatusOK, body: string(retire)})
+		}
+		return answer500
+	}
+	s := fakeStore(t, f)
+	var retired [][32]byte
+	err = s.dynamo().DeleteFrom(context.WithoutCancel(t.Context()), box, func(a protocol.Address) bool { return a == from }, func(id [32]byte, _ time.Time) {
+		retired = append(retired, id)
+	})
+	retires, _ := f.count("UpdateItem")
+	t.Logf("err %v; %d retires sent; retired %x", err, retires, retired)
+	if err != nil || retires != 2 || len(retired) != 1 || retired[0] != left.ID {
+		t.Errorf("a delete of the sender's mail, one message acked meanwhile: err %v, %d retires sent, retired %x; want no error, 2, and the other message alone", err, retires, retired)
 	}
 }

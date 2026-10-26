@@ -2,8 +2,11 @@ package server
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"filippo.io/age"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/dromas-dev/dromas-client/protocol"
@@ -264,6 +268,58 @@ func TestAnAnswerWrittenFirstOutlivesTheDrainOfItsBody(t *testing.T) {
 				t.Errorf("behind an answer written first: answered at %v, the body's last bytes at %v, %v cut; want the drain cut at -body-timeout, before the body's end, and counted once", at.Round(10*time.Millisecond), last.Round(10*time.Millisecond), cut)
 			}
 		})
+	}
+}
+
+// An answer larger than net/http's buffer, written before a body that stops
+// is read, goes out whole once the drain of the body is cut, and the cut is
+// counted once (dromas-dev/dromas-client#437 item 1): every other test's
+// answer fits the buffer, which net/http writes only as the handler
+// returns, after the drain there. This one is a fetch of a 32 KiB message,
+// with a body of 1,000 bytes that stops after one. Control: with no drain
+// before the first write (pacedWriter.Write), net/http drains the body
+// itself inside that write, to the read deadline, and the write's deadline
+// has passed when it ends: nothing is answered.
+func TestALargeAnswerWrittenFirstGoesOutAfterTheDrainOfItsBody(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, relaxed())
+	from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
+	var ct bytes.Buffer
+	w, err := age.Encrypt(&ct, to.keys[1].Recipient())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = w.Write(make([]byte, 32<<10))
+	_ = w.Close()
+	e.want(e.do(http.MethodPost, to.path("/messages"), sealedTo(1, 1, ct.Bytes()), from.pass(1)), http.StatusCreated, "")
+	id := sha256.Sum256(ct.Bytes())
+	l := pacedLimits()
+	reg := prometheus.NewRegistry()
+	s := New(Config{Store: e.store, Limits: l, Metrics: NewMetrics(reg), Now: e.clock.Now})
+	addr, _ := served(t, s, l)
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	pass := e.passFor(to.work[1], to.id.Address(), addr)
+	if _, err := io.WriteString(conn, "GET "+to.path("/messages/"+hex.EncodeToString(id[:]))+" HTTP/1.1\r\nHost: "+addr+"\r\nAuthorization: "+pass+"\r\nContent-Length: 1000\r\n\r\n{"); err != nil {
+		t.Fatal(err)
+	}
+	ok, got := closesWithin(conn, 5*time.Second)
+	if !ok {
+		t.Fatal("the connection was held past 5 s")
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(strings.NewReader(got)), nil)
+	if err != nil {
+		t.Fatalf("no answer: %v: %.80q", err, got)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || err != nil || !bytes.Equal(body, ct.Bytes()) {
+		t.Errorf("answered %s with %d of the message's %d bytes (%v), want 200 and all of them", resp.Status, len(body), ct.Len(), err)
+	}
+	if cut := counts(t, reg, "dromasd_bodies_cut_total")[""]; cut != 1 {
+		t.Errorf("dromasd_bodies_cut_total %v, want 1", cut)
 	}
 }
 

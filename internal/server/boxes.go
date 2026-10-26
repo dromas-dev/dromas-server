@@ -649,7 +649,7 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) error {
 				}
 				writeJSON(w, http.StatusOK, struct{}{})
 				return nil
-			default:
+			default: // refused from what is held, before the preconditions, so as without them (PROTOCOL.md §11.4 rule 3)
 				return fail(protocol.CodeConflict, "GET the same path for the one held: it covers every certificate yours does", "a revocation of this address's certificates through serial %d is held, and nothing revokes fewer", throughValue(held.Through))
 			}
 		}

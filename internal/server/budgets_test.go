@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -377,6 +378,65 @@ func TestARegistrationsReadIsCountedAsWhatItFinds(t *testing.T) {
 	e.want(register(box), http.StatusOK, "")
 }
 
+// readsMeet holds the first read of address a's record until a second has
+// begun, so two registrations of a read it before either writes. late is
+// set if no second began within 5 s.
+type readsMeet struct {
+	Store
+	a    protocol.Address
+	n    atomic.Int32
+	both chan struct{}
+	late atomic.Bool
+}
+
+func (s *readsMeet) Box(ctx context.Context, a protocol.Address) (*Box, error) {
+	if a == s.a {
+		switch s.n.Add(1) {
+		case 1:
+			select {
+			case <-s.both:
+			case <-time.After(5 * time.Second):
+				s.late.Store(true)
+			}
+		case 2:
+			close(s.both)
+		}
+	}
+	return s.Store.Box(ctx, a)
+}
+
+// Two identical registrations of a new address at once, each reading it
+// before either writes, make one box: one is 201, and the other meets the
+// box at its write and is answered 200 from its record (registered,
+// bounded). Each kept its registration before its signatures (register,
+// g.keep), so the two have spent two: this pins that spend, and whether the
+// second's is given back is open (dromas-dev/dromas-client#443 item 1).
+func TestIdenticalRegistrationsAtOnceSpendARegistrationEach(t *testing.T) {
+	t.Parallel()
+	l := relaxed()
+	l.RegistrationsPerHour = 2
+	meet := &readsMeet{both: make(chan struct{})}
+	e := newEnv(t, l, func(c *Config) { meet.Store, c.Store = c.Store, unknownStore{meet} })
+	r := e.raw()
+	r.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+	meet.a = r.id.Address()
+	reg, pass := r.registration(1), r.pass(1)
+	answers := make(chan reply, 2)
+	for range 2 {
+		go func() { answers <- e.do("PUT", r.path(""), reg, pass) }()
+	}
+	a, b := <-answers, <-answers
+	if meet.late.Load() {
+		t.Fatal("the second registration never read the address while the first waited")
+	}
+	if got := fmt.Sprint(a.status, " ", b.status); got != "201 200" && got != "200 201" {
+		t.Fatalf("two identical registrations at once: %s %s, %s %s; want 201 and 200", got, a.code(), b.code(), b.body)
+	}
+	fresh := e.raw()
+	fresh.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+	e.limited(e.do("PUT", fresh.path(""), fresh.registration(1), fresh.pass(1)), protocol.QuotaRegistrations)
+}
+
 // A revocation of certificates through a serial no higher than the one held
 // changes nothing, and is answered so before its signature is checked: the
 // same serial 200, a lower one 409, whatever the signature. Nothing is
@@ -497,22 +557,37 @@ func forgedFromPublic(t *testing.T, e *env, a protocol.Address) (protocol.Regist
 	return protocol.RegisterRequest{Identity: br.Identity, Prekey: br.Prekey, PrekeySignature: br.PrekeySignature}, pass
 }
 
+// retryFinds is each way a registration's identical retry finds its box:
+// in its process's memory; read, with its address's registrations left; and
+// read by a lookup, with them spent by the box's own registration
+// (register).
+var retryFinds = map[string]struct {
+	spent bool
+	with  []func(*Config)
+}{
+	"a box this process holds":                                            {},
+	"a box this process does not hold":                                    {false, []func(*Config){func(c *Config) { c.Store = unknownStore{c.Store} }}},
+	"a box this process does not hold, its address's registrations spent": {true, []func(*Config){func(c *Config) { c.Store = unknownStore{c.Store} }}},
+}
+
 // A registration of a registered box is answered from its record, before the
 // registrations count, whether this process holds the box or reads it, so its
 // pass is checked as any call's is: one the process has not seen reserves a
 // miss of its caller's address, kept when it fails
 // (dromas-dev/dromas-server#40). Past the misses it is refused before it
-// is checked, as on any other route.
+// is checked, as on any other route. A box read where its address's
+// registrations are spent is read by a lookup, and its pass checked the
+// same (dromas-dev/dromas-client#450 item 2).
 func TestAnIdenticalRetrysPassIsCounted(t *testing.T) {
 	t.Parallel()
-	for name, with := range map[string][]func(*Config){
-		"a box this process holds":         nil,
-		"a box this process does not hold": {func(c *Config) { c.Store = unknownStore{c.Store} }},
-	} {
+	for name, c := range retryFinds {
 		t.Run(name, func(t *testing.T) {
 			l := relaxed()
 			l.MissesPerMinute = 2
-			e := newEnv(t, l, with...)
+			if c.spent {
+				l.RegistrationsPerHour = 1
+			}
+			e := newEnv(t, l, c.with...)
 			r := e.raw().register(protocol.MaxPrekeyLifetime)
 			reg, forged := forgedFromPublic(t, e, r.id.Address())
 			for range 2 {
@@ -528,20 +603,29 @@ func TestAnIdenticalRetrysPassIsCounted(t *testing.T) {
 // of the box's calls, as a renewal's identical retry does: so passes in turn,
 // each checked in full, are bounded by the box's budget
 // (dromas-dev/dromas-server#40). An honest retry, with the same pass or a
-// new one, is taken.
+// new one, is taken. So it is whether this process holds the box or reads
+// it, with its address's registrations left or spent
+// (dromas-dev/dromas-client#450 item 2).
 func TestAnIdenticalRetrySpendsTheBoxsCalls(t *testing.T) {
 	t.Parallel()
-	l := relaxed()
-	l.CallBurst, l.CallRefill = 2, time.Hour
-	e := newEnv(t, l)
-	r := e.raw().register(protocol.MaxPrekeyLifetime)
-	reg, p1 := r.registration(1), r.pass(1)
-	e.clock.Add(time.Second)
-	p2 := r.pass(1)
-	e.want(e.do("PUT", r.path(""), reg, p1), http.StatusOK, "")
-	e.want(e.do("PUT", r.path(""), reg, p2), http.StatusOK, "")
-	e.limited(e.do("PUT", r.path(""), reg, p1), protocol.QuotaCalls)
-	e.limited(e.do("GET", r.path("/acl"), nil, p2), protocol.QuotaCalls)
+	for name, c := range retryFinds {
+		t.Run(name, func(t *testing.T) {
+			l := relaxed()
+			l.CallBurst, l.CallRefill = 2, time.Hour
+			if c.spent {
+				l.RegistrationsPerHour = 1
+			}
+			e := newEnv(t, l, c.with...)
+			r := e.raw().register(protocol.MaxPrekeyLifetime)
+			reg, p1 := r.registration(1), r.pass(1)
+			e.clock.Add(time.Second)
+			p2 := r.pass(1)
+			e.want(e.do("PUT", r.path(""), reg, p1), http.StatusOK, "")
+			e.want(e.do("PUT", r.path(""), reg, p2), http.StatusOK, "")
+			e.limited(e.do("PUT", r.path(""), reg, p1), protocol.QuotaCalls)
+			e.limited(e.do("GET", r.path("/acl"), nil, p2), protocol.QuotaCalls)
+		})
+	}
 }
 
 // A reservation that would be refused only because others of its key are in
@@ -779,7 +863,8 @@ func TestALeaderWhoHangsUpFailsNoLookup(t *testing.T) {
 }
 
 // panicStore is the test store, but a read of box's record, a first fetch's
-// count and a revocation panic, as a bug in decoding a record would.
+// count and a revocation panic, as a bug in decoding a record would. Memory
+// holds nothing of box, so a lookup and a registration of it read.
 type panicStore struct {
 	Store
 	box protocol.Address
@@ -809,14 +894,16 @@ func (s panicStore) Revoke(context.Context, protocol.Address, *Revocations, Expe
 
 // A reservation is settled, and a shared read finished, however its call
 // ends, a panic included (dromas-dev/dromas-server#36): after a panic in
-// a lookup's read, a fetch of a held message, which counts it once memory
-// shows it held (#86), and a raise of a revocation of certificates, no
-// reservation is held and no read is in flight, and the next lookup of the
-// address is answered.
+// a lookup's read, a registration's read, under the registrations it
+// reserved (dromas-dev/dromas-client#450 item 1), a fetch of a held
+// message, which counts it once memory shows it held (#86), and a raise of
+// a revocation of certificates, no reservation is held and no read is in
+// flight, and the next lookup of the address is answered.
 func TestAPanicSettlesItsReservations(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	l.MissesPerMinute, l.DrainBurst, l.DrainRefill, l.CertificateRevocationsPerDay = 10, 10, time.Minute, 10
+	l.RegistrationsPerHour = 10
 	e := newEnv(t, l)
 	victim, owner := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 	s := New(Config{Store: panicStore{e.store, victim.id.Address()}, Limits: l, Now: e.clock.Now})
@@ -860,6 +947,11 @@ func TestAPanicSettlesItsReservations(t *testing.T) {
 		_ = resp.Body.Close()
 	}
 
+	call(http.MethodPut, victim.path(""), victim.registration(1), api.passFor(victim.work[1], victim.id.Address(), api.name()))
+	if n := held(s.regs); n != 0 {
+		t.Errorf("after a panic in a registration's read: %d registration reservations held", n)
+	}
+
 	ct := ciphertextTo(t, owner)
 	e.want(e.do(http.MethodPost, owner.path("/messages"), sealedTo(1, 1, ct), victim.pass(1)), http.StatusCreated, "")
 	id := sha256.Sum256(ct)
@@ -872,8 +964,8 @@ func TestAPanicSettlesItsReservations(t *testing.T) {
 	if n := held(s.raises); n != 0 {
 		t.Errorf("after a panic in a raise's write: %d reservations held", n)
 	}
-	if got := panics.String(); strings.Count(got, "http: panic serving") != 4 {
-		t.Errorf("%d of the four calls panicked: %s", strings.Count(got, "http: panic serving"), got)
+	if got := panics.String(); strings.Count(got, "http: panic serving") != 5 {
+		t.Errorf("%d of the five calls panicked: %s", strings.Count(got, "http: panic serving"), got)
 	}
 }
 

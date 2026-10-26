@@ -76,17 +76,26 @@ func TestPostsOfTheSameBytesInFlightAreOneCall(t *testing.T) {
 
 	// A sender at its sends a day and one with sends left post the same
 	// bytes at once: the second is never handed the first one's refusal.
+	// The first leads, held at its dedupe until the second's begins, and
+	// reads before it (leadDedupe), so the second comes while the first is
+	// in flight, and is stored after the first has read.
 	l := relaxed()
 	l.SendsPerDay = 1
-	e = newEnv(t, l, func(cfg *Config) { cfg.Store = slowDedupe{cfg.Store, 40 * time.Millisecond} })
+	lead := &armedDedupe{leadDedupe: &leadDedupe{wait: time.Second, entered: make(chan struct{}), second: make(chan struct{}), read: make(chan struct{})}}
+	e = newEnv(t, l, func(cfg *Config) { lead.Store, cfg.Store = cfg.Store, lead })
 	to, spent, fresh := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 	e.want(e.sendTo(to, 1, 1, spent, 1), http.StatusCreated, "")
+	lead.on.Store(true)
 	ct = sealFor(t, to, 1)
-	wg.Add(2)
-	go func() { defer wg.Done(); ra = e.do("POST", to.path("/messages"), sealedTo(1, 1, ct), spent.pass(1)) }()
-	time.Sleep(5 * time.Millisecond)
-	go func() { defer wg.Done(); rb = e.do("POST", to.path("/messages"), sealedTo(1, 1, ct), fresh.pass(1)) }()
-	wg.Wait()
+	led := make(chan reply, 1)
+	go func() { led <- e.do("POST", to.path("/messages"), sealedTo(1, 1, ct), spent.pass(1)) }()
+	select {
+	case <-lead.entered:
+	case r := <-led:
+		t.Fatalf("the post at its limit was answered before its dedupe: %d %s", r.status, r.code())
+	}
+	rb = e.do("POST", to.path("/messages"), sealedTo(1, 1, ct), fresh.pass(1))
+	ra = <-led
 	if ra.status != http.StatusTooManyRequests || rb.status != http.StatusCreated {
 		t.Errorf("a sender at its limit and one with sends left posting the same bytes at once: %d %s and %d %s; want 429 and 201", ra.status, ra.code(), rb.status, rb.code())
 	}
@@ -205,18 +214,6 @@ func TestADuplicateAfterAnAckLeavesNoBody(t *testing.T) {
 	if s.bodyExists(t, b.Address(), id) {
 		t.Error("a duplicate after the message's ack left its body in the bucket")
 	}
-}
-
-// slowDedupe makes every dedupe read take d, so that a post refused at its
-// counts is refused after a post that came later has reached its own.
-type slowDedupe struct {
-	Store
-	d time.Duration
-}
-
-func (s slowDedupe) Dedupe(ctx context.Context, box protocol.Address, id [32]byte) (*Header, error) {
-	time.Sleep(s.d)
-	return s.Store.Dedupe(ctx, box, id)
 }
 
 // slowRead makes a read of address x take a while.
@@ -418,6 +415,20 @@ func (s *leadDedupe) Dedupe(ctx context.Context, box protocol.Address, id [32]by
 		<-s.read
 	}
 	return s.Store.Dedupe(ctx, box, id)
+}
+
+// armedDedupe is leadDedupe once on: every dedupe read before is the
+// store's own.
+type armedDedupe struct {
+	*leadDedupe
+	on atomic.Bool
+}
+
+func (s *armedDedupe) Dedupe(ctx context.Context, box protocol.Address, id [32]byte) (*Header, error) {
+	if !s.on.Load() {
+		return s.Store.Dedupe(ctx, box, id)
+	}
+	return s.leadDedupe.Dedupe(ctx, box, id)
 }
 
 // Posts of the same bytes from one sender naming other serials are posts of

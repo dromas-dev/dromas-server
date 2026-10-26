@@ -381,8 +381,12 @@ type reach struct {
 // an If-None-Match that matches, are answered 412, or 304 to a GET or a
 // HEAD; and the call spends the call's own budget and nothing else (every
 // limit of the server, read from limitsByName), takes and puts no cursor,
-// marks no message fetched and makes no write of the store. The routes are
-// read from the code: one without its states here fails.
+// marks no message fetched and makes no write of the store. A state refused
+// before its preconditions, a revocation of certificates through a serial
+// lower than the one held, is answered so whatever they are (PROTOCOL.md
+// §11.4 rule 3; dromas-dev/dromas-client#448 item 2), and spends and changes
+// the same nothing. The routes are read from the code: one without its
+// states here fails.
 func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
@@ -440,6 +444,11 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 				r := live(e)
 				e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), http.StatusOK, "")
 				return call{"PUT", r.path("/revocations"), r.certs(2), ""}, ""
+			}},
+			{"through a lower serial", true, none, func(e *env) (call, string) {
+				r := live(e)
+				e.want(e.do("PUT", r.path("/revocations"), r.certs(2), ""), http.StatusOK, "")
+				return call{"PUT", r.path("/revocations"), r.certs(1), ""}, ""
 			}},
 			{"the address's, with its certificates revoked", true, none, func(e *env) (call, string) {
 				r := live(e)
@@ -563,6 +572,9 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 			return call{"GET", protocol.LinkPath + strings.Repeat("ab", 32), nil, ""}, ""
 		}}},
 	}
+	// refusedFirst is the refusal of each state refused before its
+	// preconditions, by its route's pattern and its name.
+	refusedFirst := map[string]protocol.Code{"PUT /v1/{addr}/revocations through a lower serial": protocol.CodeConflict}
 	type route struct {
 		pattern string // the pattern its states are kept under
 		method  string
@@ -610,6 +622,10 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 						if f.field == "If-None-Match" && (rt.method == http.MethodGet || rt.method == http.MethodHead) {
 							want = http.StatusNotModified
 						}
+						refused := refusedFirst[rt.pattern+" "+st.name]
+						if refused != "" {
+							want = refused.Status()
+						}
 						spends := maps.Clone(st.spends)
 						if rt.gate {
 							spends[string(protocol.QuotaRequests)]++
@@ -623,6 +639,8 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 							got := e.doWith(q.method, q.path, q.body, q.pass, f.field, value)
 							status = got.status
 							switch {
+							case refused != "" && got.code() != refused:
+								t.Errorf("refused before its preconditions with %s, want %s: %s", got.code(), refused, got.body)
 							case want == http.StatusPreconditionFailed && got.code() != protocol.CodePreconditionFailed:
 								t.Errorf("a 412 that is not precondition_failed: %s", got.body)
 							case want == http.StatusNotModified && len(got.body) != 0:

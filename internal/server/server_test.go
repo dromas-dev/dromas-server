@@ -561,17 +561,14 @@ func (s *boxReads) Box(ctx context.Context, a protocol.Address) (*Box, error) {
 	return s.Store.Box(ctx, a)
 }
 
-// A registration that memory cannot answer reads what is kept of its address
-// once, under the registrations it would spend, reserved before the read, and
-// no more: one that makes a box, one of an address whose identity revoked
-// certificates before it had a box, and one answered from a registered box's
-// record (register; dromas-dev/dromas-server#94,
-// dromas-dev/dromas-client#410).
-func TestARegistrationReadsItsAddressOnce(t *testing.T) {
-	t.Parallel()
+// readOnce is an env with limits l whose memory holds no box, and a call of
+// it that wants a registration answered with status and code, and its
+// address read once.
+func readOnce(t *testing.T, l Limits) (*env, func(what string, r *raw, req protocol.RegisterRequest, pass string, status int, code protocol.Code)) {
+	t.Helper()
 	reads := &boxReads{}
-	e := newEnv(t, relaxed(), func(c *Config) { reads.Store, c.Store = c.Store, unknownStore{reads} })
-	once := func(what string, r *raw, req protocol.RegisterRequest, pass string, status int, code protocol.Code) {
+	e := newEnv(t, l, func(c *Config) { reads.Store, c.Store = c.Store, unknownStore{reads} })
+	return e, func(what string, r *raw, req protocol.RegisterRequest, pass string, status int, code protocol.Code) {
 		t.Helper()
 		reads.a = r.id.Address()
 		reads.n.Store(0)
@@ -580,6 +577,17 @@ func TestARegistrationReadsItsAddressOnce(t *testing.T) {
 			t.Errorf("%s: %d reads of its address, want 1", what, n)
 		}
 	}
+}
+
+// A registration that memory cannot answer reads what is kept of its address
+// once, under the registrations it would spend, reserved before the read, and
+// no more: one that makes a box, one of an address whose identity revoked
+// certificates before it had a box, and one answered from a registered box's
+// record (register; dromas-dev/dromas-server#94,
+// dromas-dev/dromas-client#410).
+func TestARegistrationReadsItsAddressOnce(t *testing.T) {
+	t.Parallel()
+	e, once := readOnce(t, relaxed())
 	r := e.raw()
 	r.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	once("a new box", r, r.registration(1), r.pass(1), 201, "")
@@ -591,6 +599,26 @@ func TestARegistrationReadsItsAddressOnce(t *testing.T) {
 	e.want(e.do("PUT", m.path("/revocations"), m.certs(2), ""), 200, "")
 	m.prekey(5, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	once("an address whose identity revoked certificates", m, m.registration(5), m.pass(5), 201, "")
+}
+
+// So it is where its address's registrations are spent, when the read is a
+// lookup's, under a miss (register; dromas-dev/dromas-client#450 item 3):
+// the box's identical retry, another statement, and a registration of a new
+// address, refused for the registrations, each read the address once.
+func TestARegistrationReadsItsAddressOnceWithItsRegistrationsSpent(t *testing.T) {
+	t.Parallel()
+	l := relaxed()
+	l.RegistrationsPerHour = 1
+	e, once := readOnce(t, l)
+	r := e.raw()
+	r.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+	once("a new box, the address's one registration", r, r.registration(1), r.pass(1), 201, "")
+	once("a registered box, its statement again", r, r.registration(1), r.pass(1), 200, "")
+	r.prekey(2, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+	once("a registered box, another statement", r, r.registration(2), r.pass(2), 409, protocol.CodeConflict)
+	n := e.raw()
+	n.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+	once("a new address", n, n.registration(1), n.pass(1), 429, protocol.CodeRateLimited)
 }
 
 func TestOwnerCalls(t *testing.T) {

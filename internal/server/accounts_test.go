@@ -302,6 +302,35 @@ func TestAccounts(t *testing.T) {
 	})
 }
 
+// A box revoked while it is in an account leaves it: an account lists no
+// boxes, a box's membership is its record's, and the revocation deletes the
+// record (purge; dromas-dev/dromas-client#434 item 1). Then the account
+// routes answer 410 revoked, with the box's pass or none.
+func TestARevokedBoxLeavesItsAccount(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, relaxed())
+	acc, key := accountEnv(t, e, true, 2)
+	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	if got := adopt(t, a, key); got != acc.ID || e.accountOf(a) != acc.ID {
+		t.Fatalf("adopted into %q, the record says %q", got, e.accountOf(a))
+	}
+	send(t, b, a, "waiting in A's box when it is revoked")
+	pass := e.pass(a)
+	e.want(e.do("PUT", revocationPath(a.Address()), record(t, a), ""), http.StatusCreated, "")
+	if got := e.accountOf(a); got != "" {
+		t.Fatalf("a revoked box is still in the account %q", got)
+	}
+	account := boxPath(a.Address()) + "/account"
+	for what, p := range map[string]string{"with its pass": pass, "with no pass": ""} {
+		if got := e.do(http.MethodPut, account, protocol.AdoptRequest{Key: key}, p); got.status != http.StatusGone || got.code() != protocol.CodeRevoked {
+			t.Errorf("PUT …/account of a revoked box, %s: %d %s, want 410 revoked", what, got.status, got.code())
+		}
+		if got := e.do(http.MethodDelete, account, nil, p); got.status != http.StatusGone || got.code() != protocol.CodeRevoked {
+			t.Errorf("DELETE …/account of a revoked box, %s: %d %s, want 410 revoked", what, got.status, got.code())
+		}
+	}
+}
+
 // Adopt and Leave write only over the record they were given.
 func TestAdoptAndLeaveNameTheRecord(t *testing.T) {
 	t.Parallel()
@@ -654,7 +683,12 @@ func TestAStalledBodyGivesTheLargeReadBack(t *testing.T) {
 	query := sealedTo(1, 1, nil).Encode()
 	_, _ = io.WriteString(conn, "POST /v1/"+to.Address().String()+"/messages?"+query+" HTTP/1.1\r\nHost: "+addr+"\r\nAuthorization: "+e.pass(lifted)+
 		"\r\nContent-Type: application/octet-stream\r\nContent-Length: 60000\r\n\r\n"+strings.Repeat("a", 30000)) // past the free size, then nothing
-	time.Sleep(50 * time.Millisecond) // the stalled send holds the large read
+	// The stalled send holds the large read before the second is sent.
+	for wait := time.Now().Add(5 * time.Second); testutil.ToFloat64(m.largeRead.WithLabelValues("taken")) != 1; time.Sleep(time.Millisecond) {
+		if time.Now().After(wait) {
+			t.Fatal("the stalled send never took the large read")
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, e.srv.URL+"/v1/"+to.Address().String()+"/messages?"+query, bytes.NewReader(make([]byte, 30000)))
