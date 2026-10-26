@@ -39,7 +39,7 @@
 
 ### After a push: `needs-audit`
 
-A change that ships with no second reader (nobody else read it, or what was written after its review has not been read), and that touches a check, a signature, a key, a time or what is deleted, gets a new issue labelled `needs-audit` in the client repo, whichever repo changed; a change to docs, wording or tests alone gets none. The issue the change fixes closes as usual.
+A change that needs a second reader, never by default, gets a new issue labelled `needs-audit` in the client repo, whichever repo changed: one to what the server or a client checks, signs, keys, times or deletes, that its tests and their controls do not show right by themselves, and that nobody else read as it shipped (or what was written after its review has not been read). A change its tests hold, one to the client repo's shell client alone, and one to docs, wording or tests get none. The issue the change fixes closes as usual.
 - 🛑 **The issue is the auditor's whole brief:** the commits, the claims to try to break, where to look first, what is already known and open, how to run it, and what closes it. An outside agent with no other context must be able to work from it.
 - **Nothing waits on one:** it is not a gate.
 - **Whoever audits closes it,** saying what was read, run and tried, and files what it found as one issue in the client repo, `findings: the audit of #N`, as the client repo's `AGENTS.md` says: each finding a numbered item; one of Medium or above, or one that breaks a `SECURITY.md` claim or the wire, also an issue of its own, here when it is this repo's code. The client repo's #45 is the pattern of a brief.
