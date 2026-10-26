@@ -18,15 +18,15 @@
 # The recipe runs a box of its own: the two clients meet over the wire, never in one box directory.
 # Every script step runs in a FRESH shell (agents run each command in a new one). Every box is post-quantum: where the
 # local age is older than 1.3, the client module's own (its go.mod's tool, built by go tool) goes first in PATH.
-# Needs: go, bash ≥ 4, ssh-keygen, curl, jq, sha256sum, base64, od. Run from anywhere:
+# Needs: go, bash ≥ 4, ssh-keygen, curl, jq, sha256sum, base64, od, GNU date (passof's date -d). Run from anywhere:
 #   test/interop.sh            SCRIPT=<path> overrides the dromas.sh it sources.
 # With DROMAS_TEST_BOXES_TABLE, DROMAS_TEST_MSGS_TABLE, DROMAS_TEST_ACCOUNTS_TABLE and DROMAS_TEST_BUCKET set, the server runs on those tables and
 # that bucket instead of --dev: tables and a bucket kept for tests, never the ones a running server uses.
-# The work dir is a LITERAL path, so no rm -rf ever runs on a variable. A run that passes deletes it, since /tmp may
-# be tmpfs (memory) and it holds two builds; one that fails leaves it to look at.
+# The work dir is mktemp -d's, under $TMPDIR or /tmp, its own for each run. A run that passes deletes it, since it may be
+# on tmpfs (memory) and it holds two builds; one that fails leaves it to look at, and names it.
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd); repo=$(dirname "$here")
-rm -rf /tmp/dromas-interop; mkdir -p /tmp/dromas-interop; work=/tmp/dromas-interop
+work=$(mktemp -d "${TMPDIR:-/tmp}/dromas-interop.XXXXXX") || { echo "no work dir"; exit 1; }
 pass=0; fail=0
 ok(){ echo "PASS $*"; pass=$((pass + 1)); }
 bad(){ echo "FAIL $*"; fail=$((fail + 1)); }
@@ -296,5 +296,5 @@ other="127.0.0.2:$port"
   && ok "a pass made for a name the server is not called by is refused, and one made for the name it is called by is taken" || bad "the pass's name check"
 
 echo "interop: $pass PASS, $fail FAIL"
-[ "$fail" -eq 0 ] || exit 1
-rm -rf /tmp/dromas-interop
+[ "$fail" -eq 0 ] || { echo "work dir: $work"; exit 1; }
+rm -rf -- "${work:?}"
