@@ -411,10 +411,7 @@ func TestRegistration(t *testing.T) {
 	e.want(e.do("PUT", "/v1/"+hex.EncodeToString(h[:]), protocol.RegisterRequest{Identity: commented, Prekey: reg.Prekey, PrekeySignature: reg.PrekeySignature}, pass), 400, protocol.CodeIdentityMismatch)
 
 	// A small-order key: the grammar holds, the key check fails.
-	small, err := os.ReadFile("../../../dromas-client/testdata/vectors/identity/small-order-1.doc")
-	if err != nil {
-		t.Fatal(err)
-	}
+	small := clientFile(t, "testdata/vectors/identity/small-order-1.doc")
 	h = sha256.Sum256(small)
 	e.want(e.do("PUT", "/v1/"+hex.EncodeToString(h[:]), protocol.RegisterRequest{Identity: small, Prekey: reg.Prekey, PrekeySignature: reg.PrekeySignature}, pass), 400, protocol.CodeBadKey)
 

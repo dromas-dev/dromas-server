@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -155,10 +154,7 @@ func TestLinkPageCommandIsInTheClientREADME(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
-	readme, err := os.ReadFile("../../../dromas-client/README.md")
-	if err != nil {
-		t.Fatal(err)
-	}
+	readme := clientFile(t, "README.md")
 	line := "echo hello | dromas send https://dromas.dev/to/" + client.EchoAddress
 	if !strings.Contains(string(b), "<code>"+line+"</code>") || !strings.Contains(string(readme), "\n"+line+"\n") {
 		t.Errorf("the page and the README do not both give %q", line)
