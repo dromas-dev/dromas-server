@@ -11,7 +11,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -206,6 +208,26 @@ func TestEveryCallToAWSEndsAtItsBound(t *testing.T) {
 				t.Logf("ended after %v: %v", r.took.Round(100*time.Millisecond), r.err)
 			}
 		})
+	}
+}
+
+// A body S3 answers with is read after its call returns, within the call's
+// bound, which ends when the body is closed (bound;
+// dromas-dev/dromas-client#453 item 2): once Close returns, the bound's
+// context has ended, and not before.
+func TestABodysBoundEndsWhenItIsClosed(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(t.Context(), storeTimeout)
+	defer cancel()
+	body := cancelOnClose{io.NopCloser(strings.NewReader("abc")), cancel}
+	if _, err := io.ReadAll(body); err != nil || ctx.Err() != nil {
+		t.Fatalf("the body's read: %v; its bound before it is closed: %v", err, ctx.Err())
+	}
+	if err := body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if ctx.Err() == nil {
+		t.Error("the body is closed, and its bound has not ended")
 	}
 }
 
