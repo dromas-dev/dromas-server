@@ -30,7 +30,7 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/dromas-interop.XXXXXX") || { echo "no work dir
 pass=0; fail=0
 ok(){ echo "PASS $*"; pass=$((pass + 1)); }
 bad(){ echo "FAIL $*"; fail=$((fail + 1)); }
-trap '[ -n "${srv:-}" ] && kill "$srv" 2> /dev/null' EXIT
+trap 'rc=$?; [ -n "${srv:-}" ] && kill "$srv" 2> /dev/null; [ "$rc" -eq 0 ] || { echo "work dir: $work"; [ -s "$work/server.log" ] && { echo "the server'"'"'s log, its end:"; tail -n 40 "$work/server.log"; }; }' EXIT   # a run that fails, however it ends, names its work dir and shows the server's log
 
 export PATH=$PATH:/usr/local/go/bin
 # The client is the module go.mod requires (go list -m answers with a go.work's checkout when there is one). Its commands are built in
@@ -46,7 +46,7 @@ echo "stock client: $SCRIPT ($(grep -c '^dr_[a-z_]*()' "$SCRIPT") functions)"
 age-keygen -pq > /dev/null 2>&1 || PATH=$(cd "$client" && dirname "$(go tool -n age)"):$(cd "$client" && dirname "$(go tool -n age-keygen)"):$PATH
 age-keygen -pq > /dev/null 2>&1 || { echo "no age that makes post-quantum keys"; exit 1; }
 echo "age: $(age --version)"
-port=$((20000 + RANDOM % 20000))
+port=$((20000 + RANDOM % 12768))   # below Linux's ephemeral ports (32768 up: ip_local_port_range), which an outgoing connection may hold
 if [ -n "${DROMAS_TEST_MSGS_TABLE:-}" ]; then
   store=(-boxes-table "$DROMAS_TEST_BOXES_TABLE" -msgs-table "$DROMAS_TEST_MSGS_TABLE" -accounts-table "$DROMAS_TEST_ACCOUNTS_TABLE" -bucket "$DROMAS_TEST_BUCKET" -names "127.0.0.1:$port")
 else
@@ -58,6 +58,7 @@ export DR_BASE="http://127.0.0.1:$port" DROMAS_BASE="http://127.0.0.1:$port"
 for _ in $(seq 300); do   # up once the API answers other than 503 (loading)
   code=$(curl -s -o /dev/null -w '%{http_code}' "$DR_BASE/v1/$(printf '0%.0s' $(seq 64))"); [ "$code" != 000 ] && [ "$code" != 503 ] && break; sleep 0.1
 done
+[ "$code" != 000 ] && [ "$code" != 503 ] || { echo "the server did not answer on port $port"; exit 1; }
 
 R="$work/r"; G="$work/g"
 recipe(){ local home=$1; shift; DR_HOME=$home bash -c ". '$SCRIPT'; $*"; }   # a fresh shell per call
@@ -296,5 +297,5 @@ other="127.0.0.2:$port"
   && ok "a pass made for a name the server is not called by is refused, and one made for the name it is called by is taken" || bad "the pass's name check"
 
 echo "interop: $pass PASS, $fail FAIL"
-[ "$fail" -eq 0 ] || { echo "work dir: $work"; exit 1; }
+[ "$fail" -eq 0 ] || exit 1
 rm -rf -- "${work:?}"
