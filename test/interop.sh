@@ -35,10 +35,12 @@ trap '[ -n "${srv:-}" ] && kill "$srv" 2> /dev/null' EXIT
 
 export PATH=$PATH:/usr/local/go/bin
 # The client's commands are built in the client's own module, which lists what they import and the server's does not.
-(cd "$repo" && go build -o "$work/dromasd" ./cmd/dromasd) && (cd "$(dirname "$repo")/dromas-client" && go build -o "$work/dromas" ./cmd/dromas) || { echo "build failed"; exit 1; }
+(cd "$repo" && go build -o "$work/dromasd" ./cmd/dromasd) && (cd "$(dirname "$repo")/dromas-client" && go mod download && go build -o "$work/dromas" ./cmd/dromas) || { echo "build failed"; exit 1; }
 [ -r "$SCRIPT" ] || { echo "no $SCRIPT"; exit 1; }
 echo "stock client: $SCRIPT ($(grep -c '^dr_[a-z_]*()' "$SCRIPT") functions)"
 
+# The client module's modules, its tools' among them, came with its build
+# above (go mod download), so go tool builds age here without a fetch.
 age-keygen -pq > /dev/null 2>&1 || PATH=$(cd "$(dirname "$repo")/dromas-client" && dirname "$(go tool -n age)"):$(cd "$(dirname "$repo")/dromas-client" && dirname "$(go tool -n age-keygen)"):$PATH
 age-keygen -pq > /dev/null 2>&1 || { echo "no age that makes post-quantum keys"; exit 1; }
 echo "age: $(age --version)"
