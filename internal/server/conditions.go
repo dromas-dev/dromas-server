@@ -21,13 +21,15 @@ type targetState struct {
 }
 
 // precondition is every route's one step for its If-Match and
-// If-None-Match: taken once the route has read its target, after the call's
-// own budget, and before any of its work, the work's budgets, a cursor
-// taken or put, a mark, a write (PROTOCOL.md §11.4; the client repo's
-// #412). It evaluates them as conditions does, against t. A false one does
-// nothing but count as a call (LIMITS.md, rule 1): where the route has spent
-// none of the call's budget, t.spend spends it, and a refusal of that is
-// the answer; otherwise the 412, or the 304.
+// If-None-Match: taken once the route has read its target, and before any of
+// its work, the work's budgets, a cursor taken or put, a mark, a write
+// (PROTOCOL.md §11.4; the client repo's #412). Where the route spent the
+// call's own budget before its read, it is taken after that budget; where
+// the route spent none of it (a fetch, an ack, a list's continuation), it is
+// taken before, and t.spend spends it here. It evaluates them as conditions
+// does, against t. A false one does nothing but count as a call (LIMITS.md,
+// rule 1): t.spend, where there is one, spends the call's budget, and a
+// refusal of that is the answer; otherwise the 412, or the 304.
 func precondition(r *http.Request, t targetState) error {
 	err := conditions(r, t.exists, t.tag, t.hint, t.also...)
 	if err == nil || t.spend == nil {
