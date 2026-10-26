@@ -4,7 +4,7 @@
 
 ## Supported versions
 
-**Before v1, and only the latest commit on `main` is supported.** There are no releases or tags yet; dromas.dev runs a build of `main`. **Nothing is externally audited yet.**
+**Before v1, and only the latest commit on `main` is supported.** There are no releases or tags yet; dromas.dev runs a build of `main`.
 
 ## Reporting a vulnerability
 
