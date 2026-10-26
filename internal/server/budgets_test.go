@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -375,6 +376,65 @@ func TestARegistrationsReadIsCountedAsWhatItFinds(t *testing.T) {
 	e.limited(register(box), protocol.QuotaMisses) // the retry is deferred by the misses, never refused for the registrations
 	e.clock.Add(time.Minute)                       // the miss back, no registration
 	e.want(register(box), http.StatusOK, "")
+}
+
+// readsMeet holds the first read of address a's record until a second has
+// begun, so two registrations of a read it before either writes. late is
+// set if no second began within 5 s.
+type readsMeet struct {
+	Store
+	a    protocol.Address
+	n    atomic.Int32
+	both chan struct{}
+	late atomic.Bool
+}
+
+func (s *readsMeet) Box(ctx context.Context, a protocol.Address) (*Box, error) {
+	if a == s.a {
+		switch s.n.Add(1) {
+		case 1:
+			select {
+			case <-s.both:
+			case <-time.After(5 * time.Second):
+				s.late.Store(true)
+			}
+		case 2:
+			close(s.both)
+		}
+	}
+	return s.Store.Box(ctx, a)
+}
+
+// Two identical registrations of a new address at once, each reading it
+// before either writes, make one box: one is 201, and the other meets the
+// box at its write and is answered 200 from its record (registered,
+// bounded). Each kept its registration before its signatures (register,
+// g.keep), so the two have spent two: this pins that spend, and whether the
+// second's is given back is open (dromas-dev/dromas-client#443 item 1).
+func TestIdenticalRegistrationsAtOnceSpendARegistrationEach(t *testing.T) {
+	t.Parallel()
+	l := relaxed()
+	l.RegistrationsPerHour = 2
+	meet := &readsMeet{both: make(chan struct{})}
+	e := newEnv(t, l, func(c *Config) { meet.Store, c.Store = c.Store, unknownStore{meet} })
+	r := e.raw()
+	r.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+	meet.a = r.id.Address()
+	reg, pass := r.registration(1), r.pass(1)
+	answers := make(chan reply, 2)
+	for range 2 {
+		go func() { answers <- e.do("PUT", r.path(""), reg, pass) }()
+	}
+	a, b := <-answers, <-answers
+	if meet.late.Load() {
+		t.Fatal("the second registration never read the address while the first waited")
+	}
+	if got := fmt.Sprint(a.status, " ", b.status); got != "201 200" && got != "200 201" {
+		t.Fatalf("two identical registrations at once: %s %s, %s %s; want 201 and 200", got, a.code(), b.code(), b.body)
+	}
+	fresh := e.raw()
+	fresh.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+	e.limited(e.do("PUT", fresh.path(""), fresh.registration(1), fresh.pass(1)), protocol.QuotaRegistrations)
 }
 
 // A revocation of certificates through a serial no higher than the one held
