@@ -1,11 +1,9 @@
 # The gate AGENTS.md lists before every push, run on every push to main and
 # every pull request, so each commit's result is on the public record, and
-# once a day, when govulncheck meets advisories published since and the
-# client's main has moved. Actions are pinned by commit, each with its
-# release beside it.
-#
-# go.mod replaces the client module with ../dromas-client, so every job
-# checks this repo out beside dromas-client's main.
+# once a day, when govulncheck meets advisories published since. Actions are
+# pinned by commit, each with its release beside it. go.mod requires a
+# release of dromas-client; dromas-client's own CI runs `check.sh full` here
+# against its commit, through a go.work.
 name: ci
 
 on:
@@ -27,7 +25,6 @@ concurrency:
 defaults:
   run:
     shell: bash
-    working-directory: dromas-server
 
 jobs:
   test:
@@ -41,24 +38,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          path: dromas-server
-          persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: dromas-dev/dromas-client
-          path: dromas-client
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: stable
           check-latest: true
-          cache-dependency-path: |
-            dromas-server/go.sum
-            dromas-client/go.sum
       - name: tools
         run: |
           go version; ssh -V; jq --version; curl --version | head -1; bash --version | head -1
-          echo "dromas-client at $(git -C ../dromas-client rev-parse HEAD)"
+          go list -m github.com/dromas-dev/dromas-client
       - name: check
         # gofmt, vet, every test (a skip fails the job, but the AWS tests' and
         # the cost measurement's), and test/interop.sh: scripts/check.sh, which a laptop runs too.
@@ -70,24 +58,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          path: dromas-server
-          persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: dromas-dev/dromas-client
-          path: dromas-client
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: stable
           check-latest: true
-          cache-dependency-path: |
-            dromas-server/go.sum
-            dromas-client/go.sum
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.15.0
-          working-directory: dromas-server
 
   govulncheck:
     runs-on: ubuntu-26.04
@@ -95,18 +73,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          path: dromas-server
-          persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: dromas-dev/dromas-client
-          path: dromas-client
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: stable
           check-latest: true
-          cache-dependency-path: |
-            dromas-server/go.sum
-            dromas-client/go.sum
       - run: scripts/check.sh vuln

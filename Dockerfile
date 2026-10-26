@@ -1,18 +1,12 @@
 # dromasd, the dromas.dev server: a static binary on Debian slim.
 #
-# go.mod replaces dromas-client with ../dromas-client, so the build needs
-# that checkout too: pass it as the build context named "client"
-# (docker build --build-context client=../dromas-client .).
-#
 # The Go stages run on the builder's own platform and cross-compile for the
 # target's (docker build --platform linux/amd64,linux/arm64), so no stage
 # runs under emulation: the images they are copied into only copy.
 FROM --platform=$BUILDPLATFORM golang:1.27.3-trixie AS build
 WORKDIR /src/dromas-server
-COPY --from=client go.mod go.sum /src/dromas-client/
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
-COPY --from=client . /src/dromas-client
 COPY . .
 ARG TARGETOS TARGETARCH
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \

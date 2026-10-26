@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/check.sh: the checks a change must pass, one definition for a laptop
 # and for CI (.github/workflows/ci.yml runs `full` and `vuln`; dromas-client's
-# CI runs `full` here against its own commit).
+# CI runs `full` here against its own commit, through a go.work).
 #
 #   scripts/check.sh         quick: gofmt, vet and the tests -short keeps, while working
 #   scripts/check.sh full    CI's test job: gofmt, vet, every test, the skip check, test/interop.sh

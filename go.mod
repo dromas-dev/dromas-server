@@ -11,7 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/dynamodbstreams v1.46.1
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.3
 	github.com/aws/smithy-go v1.28.5
-	github.com/dromas-dev/dromas-client v0.0.0
+	github.com/dromas-dev/dromas-client v0.1.1
 	github.com/prometheus/client_golang v1.25.0
 	golang.org/x/crypto v0.58.0
 	golang.org/x/sync v0.24.0
@@ -57,8 +57,3 @@ require (
 	golang.org/x/text v0.43.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 )
-
-// The server imports the protocol from the client repo, never the reverse.
-// A build needs the client checked out beside this repo, and uses whatever
-// that checkout holds.
-replace github.com/dromas-dev/dromas-client => ../dromas-client

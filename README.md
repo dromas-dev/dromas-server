@@ -18,17 +18,16 @@ The server of [dromas.dev](https://dromas.dev): end-to-end encrypted, sender-ver
 | `test/interop.sh` | The stock-tools client and the Go client, together, against a real `dromasd` |
 | `test/working-key-openssh.sh` | A measurement, not a test: what stock `ssh-keygen` does with a certificate an identity signs for a working key (the client repo's issue #30) |
 | `Dockerfile` | `dromasd` as a static binary on Debian slim; it needs the client checkout as a build context named `client`. The echo box's image is the client repo's |
-| `.github/workflows/docker-publish.yml` | Builds it for `linux/amd64` and `linux/arm64` on every push to `main`, beside dromas-client's `main`, and publishes it as `ghcr.io/dromas-dev/dromasd`, with an attestation of the build (`gh attestation verify oci://ghcr.io/dromas-dev/dromasd@<digest> -R dromas-dev/dromas-server`) |
+| `.github/workflows/docker-publish.yml` | Builds it for `linux/amd64` and `linux/arm64` on every push to `main`, and publishes it as `ghcr.io/dromas-dev/dromasd`, with an attestation of the build (`gh attestation verify oci://ghcr.io/dromas-dev/dromasd@<digest> -R dromas-dev/dromas-server`) |
 | `bench/` | The measurements behind the microsecond figures |
 
 A deployment's site (dromas.dev's front page and `llms.txt`) is not in this repo. `serve -site-backend <URL>` passes every request outside `/v1/` and `/to/` to the deployment's own web server, as a reverse proxy passes it, with `X-Forwarded-For` naming the client the limits see, and its answer back as that server sent it, a 404 among them; under `/v1/` and `/to/` every answer is the server's.
 
 ## Build and run
 
-`go.mod` replaces the client module with `../dromas-client`, so check the two out side by side:
+`go.mod` requires a release of the client module, which `go` fetches:
 
 ```sh
-git clone https://github.com/dromas-dev/dromas-client
 git clone https://github.com/dromas-dev/dromas-server
 cd dromas-server
 scripts/check.sh          # vet and the short tests; scripts/check.sh full is what CI runs
@@ -37,7 +36,7 @@ go run ./cmd/dromasd serve --dev
 
 `serve --dev` is the whole server on an in-memory store, with no AWS, listening on `127.0.0.1:8080`: nothing survives a restart. Point a client at it with `DROMAS_BASE=http://127.0.0.1:8080`.
 
-`test/interop.sh` runs both clients from the checkout beside this one against a real `serve --dev`: mail both ways, renewal, revocation, certificates and the sender ACL. Its header says what it needs, and how to test post-quantum boxes when the packaged age is older than 1.3.
+`test/interop.sh` runs both clients, from the release `go.mod` requires, against a real `serve --dev`: mail both ways, renewal, revocation, certificates and the sender ACL. Its header says what it needs, and how to test post-quantum boxes when the packaged age is older than 1.3.
 
 The other store is three DynamoDB tables and an S3 Express One Zone directory bucket. `dromasd serve -h` lists every flag, and `ARCHITECTURE.md` § Storage has the layout. That mode also needs `-names`, the names clients call the server by: a box's pass is made for one server by name, and the server takes one only on a request that calls it by a name of its own (`ARCHITECTURE.md` § The pass check).
 

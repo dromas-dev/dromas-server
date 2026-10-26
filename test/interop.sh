@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# interop.sh — the stock client, sh/dromas.sh from the public dromas-client checkout beside this repo, with its real dr_api (curl),
+# interop.sh — the stock client, sh/dromas.sh from the dromas-client release this module requires (a go.work, if there is one, swaps in a checkout), with its real dr_api (curl),
 # against a real `dromasd serve --dev`, interoperating with the Go client `dromas` from the public client repo:
 #   1. mail both ways between a recipe box and a Go box, sent to each box's link, across a prekey renewal on each side; the page each link opens;
 #   2. the recipe's error path on a real problem+json body;
@@ -18,7 +18,7 @@
 # The recipe runs a box of its own: the two clients meet over the wire, never in one box directory.
 # Every script step runs in a FRESH shell (agents run each command in a new one). Every box is post-quantum: where the
 # local age is older than 1.3, the client module's own (its go.mod's tool, built by go tool) goes first in PATH.
-# Needs: go, bash ≥ 4, ssh-keygen, curl, jq, sha256sum, base64, od, and the client checkout beside this repo. Run from anywhere:
+# Needs: go, bash ≥ 4, ssh-keygen, curl, jq, sha256sum, base64, od. Run from anywhere:
 #   test/interop.sh            SCRIPT=<path> overrides the dromas.sh it sources.
 # With DROMAS_TEST_BOXES_TABLE, DROMAS_TEST_MSGS_TABLE, DROMAS_TEST_ACCOUNTS_TABLE and DROMAS_TEST_BUCKET set, the server runs on those tables and
 # that bucket instead of --dev: tables and a bucket kept for tests, never the ones a running server uses.
@@ -26,7 +26,6 @@
 # be tmpfs (memory) and it holds two builds; one that fails leaves it to look at.
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd); repo=$(dirname "$here")
-SCRIPT=${SCRIPT:-$(dirname "$repo")/dromas-client/sh/dromas.sh}
 rm -rf /tmp/dromas-interop; mkdir -p /tmp/dromas-interop; work=/tmp/dromas-interop
 pass=0; fail=0
 ok(){ echo "PASS $*"; pass=$((pass + 1)); }
@@ -34,14 +33,17 @@ bad(){ echo "FAIL $*"; fail=$((fail + 1)); }
 trap '[ -n "${srv:-}" ] && kill "$srv" 2> /dev/null' EXIT
 
 export PATH=$PATH:/usr/local/go/bin
-# The client's commands are built in the client's own module, which lists what they import and the server's does not.
-(cd "$repo" && go build -o "$work/dromasd" ./cmd/dromasd) && (cd "$(dirname "$repo")/dromas-client" && go mod download && go build -o "$work/dromas" ./cmd/dromas) || { echo "build failed"; exit 1; }
+# The client is the module go.mod requires (go list -m answers with a go.work's checkout when there is one). Its commands are built in
+# its own module, which lists what they import and the server's does not; the module cache is read-only, so go build only writes elsewhere.
+client=$(cd "$repo" && go mod download github.com/dromas-dev/dromas-client && go list -m -f '{{.Dir}}' github.com/dromas-dev/dromas-client) || { echo "no client module"; exit 1; }
+SCRIPT=${SCRIPT:-$client/sh/dromas.sh}
+(cd "$repo" && go build -o "$work/dromasd" ./cmd/dromasd) && (cd "$client" && go mod download && go build -o "$work/dromas" ./cmd/dromas) || { echo "build failed"; exit 1; }
 [ -r "$SCRIPT" ] || { echo "no $SCRIPT"; exit 1; }
 echo "stock client: $SCRIPT ($(grep -c '^dr_[a-z_]*()' "$SCRIPT") functions)"
 
 # The client module's modules, its tools' among them, came with its build
 # above (go mod download), so go tool builds age here without a fetch.
-age-keygen -pq > /dev/null 2>&1 || PATH=$(cd "$(dirname "$repo")/dromas-client" && dirname "$(go tool -n age)"):$(cd "$(dirname "$repo")/dromas-client" && dirname "$(go tool -n age-keygen)"):$PATH
+age-keygen -pq > /dev/null 2>&1 || PATH=$(cd "$client" && dirname "$(go tool -n age)"):$(cd "$client" && dirname "$(go tool -n age-keygen)"):$PATH
 age-keygen -pq > /dev/null 2>&1 || { echo "no age that makes post-quantum keys"; exit 1; }
 echo "age: $(age --version)"
 port=$((20000 + RANDOM % 20000))

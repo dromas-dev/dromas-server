@@ -13,9 +13,6 @@ updates:
       day: monday
       time: "06:00"
       timezone: Etc/UTC
-    # go.mod replaces dromas-client with the checkout beside this one.
-    ignore:
-      - dependency-name: github.com/dromas-dev/dromas-client
     groups:
       go:
         patterns: ["*"]
