@@ -109,23 +109,6 @@ func TestAWriteRetriedAfterAnAmbiguousAttemptMayHaveBeenApplied(t *testing.T) {
 	}
 }
 
-// The same for a raise of a revocation of certificates (Revoke, with its
-// condition on through): applied and answered 500, then the retry's failed
-// condition, and the raise is counted.
-func TestARaiseRetriedAfterAnAmbiguousAttemptMayHaveBeenApplied(t *testing.T) {
-	t.Parallel()
-	_, r, _ := heldRecord(t)
-	f := newFakeAWS()
-	f.dynamo = scripted("UpdateItem", applied(answer500), answerCCF)
-	s := fakeStore(t, f)
-	err := s.Revoke(context.WithoutCancel(t.Context()), r.id.Address(), &Revocations{Identity: r.id.Document(), Certs: []byte("c"), CertsSig: []byte("s"), Through: 7}, ExpectAnything)
-	calls, applied := f.count("UpdateItem")
-	t.Logf("%d UpdateItem calls, %d applied; err %v (ErrStale %v); mayHaveApplied %v", calls, applied, err, errors.Is(err, ErrStale), mayHaveApplied(err))
-	if !mayHaveApplied(err) {
-		t.Errorf("a raise the fake applied is taken for a refusal AWS stated: its count would be given back")
-	}
-}
-
 // The SDK draws on its retry quota only after an attempt failed with an
 // error it retries, a 500 among them, and once the quota is out it returns
 // that attempt's error joined with the quota's, which reads as a throttle: a
@@ -312,7 +295,9 @@ func TestARefusalAWSStatedGivesTheCountBack(t *testing.T) {
 // changes nothing in memory; a failed condition with nothing applied evicts
 // the cached copy, counted as a write, since the store holds what this
 // process never applied, so a read begun before it puts nothing, and leaves
-// the index (Memory.write).
+// the index (Memory.write). Its caller is told the write may have been
+// applied, so the count reserved for it is kept, and a refusal stated is
+// not (mayHaveApplied).
 func TestAWriteThatMayHaveBeenAppliedForgetsItsAddress(t *testing.T) {
 	t.Parallel()
 	_, r, box := heldRecord(t)
@@ -398,6 +383,9 @@ func TestAWriteThatMayHaveBeenAppliedForgetsItsAddress(t *testing.T) {
 				err, mayHaveApplied(err), held, filled, outs[i].indexed)
 			if err == nil {
 				t.Fatal("the write did not fail")
+			}
+			if mayHaveApplied(err) == c.kept {
+				t.Errorf("mayHaveApplied %v, want %v: the count reserved for the write would be %s", mayHaveApplied(err), !c.kept, map[bool]string{true: "kept", false: "given back"}[mayHaveApplied(err)])
 			}
 			if held == c.evicted {
 				t.Errorf("after the write the cache holds the record read before it %v; want %v", held, !c.evicted)
