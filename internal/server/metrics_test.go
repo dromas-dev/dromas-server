@@ -183,7 +183,9 @@ func collectionsWant(gb float64) string {
 
 // A message write asks DynamoDB for the size of its box's item collection,
 // and the upper bound of the estimate is observed, in GB: AWS's advice for a
-// table with an LSI, whose item collections are capped at 10 GB.
+// table with an LSI, whose item collections are capped at 10 GB. The fake's
+// answer is made up, so the test holds the conversion at 2^30 bytes a GB,
+// not AWS's unit, which AWS does not state (gigabytes).
 func TestMetricsObserveTheItemCollectionAMessageWriteGrew(t *testing.T) {
 	t.Parallel()
 	f := newFakeAWS()

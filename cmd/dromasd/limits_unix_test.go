@@ -16,7 +16,7 @@ import (
 // a bit but its owner's; the umask is given back. A socket chmod'ed after
 // its bind is seen at 0777 within a few starts.
 func TestTheAdminSocketIsNeverTheUmasks(t *testing.T) {
-	dir, err := os.MkdirTemp("", "dr") // a short path: a Unix socket's is at most 108 bytes
+	dir, err := os.MkdirTemp("", "dr") // a short path: sockaddr_un's sun_path is 108 bytes on Linux and 104 on macOS
 	if err != nil {
 		t.Fatal(err)
 	}

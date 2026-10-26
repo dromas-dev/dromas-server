@@ -30,7 +30,11 @@ const hintDocument = "the identity document is \"dromas-v1\", LF, one SSH public
 // before any signature, and a box registered there, or an address revoked,
 // is answered from it, held in memory or read, by one path (registered),
 // spending none of the address's registrations (PROTOCOL.md §11.4, the order
-// of refusals; dromas-dev/dromas-client#410). Memory answers with
+// of refusals; dromas-dev/dromas-client#410), but for one that found nothing
+// at its read and meets a box at its write (ErrExists), one an identical
+// registration made meanwhile among them: it kept its counts before its
+// signatures, and is answered as registered with them spent (registered's
+// bounded; dromas-dev/dromas-client#443). Memory answers with
 // nothing counted. A read is counted once, as what it turns out to be: the
 // registrations it would spend, the address's and its /48's, are reserved
 // before it, given back if it finds a box or a revocation, and kept if it

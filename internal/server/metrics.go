@@ -52,8 +52,12 @@ var seconds = []float64{.0001, .00025, .0005, .001, .0025, .005, .01, .025, .05,
 
 // gigabytes are the item collection's buckets, in bytes, as Prometheus
 // names a size, from the GB DynamoDB estimates in and caps an item
-// collection at, 10, each taken as 2^30 bytes: so the alert AWS advises, at
-// 8 GB, fires early if a GB is 10^9 bytes, never late.
+// collection at, 10, each taken as 2^30 bytes. AWS does not say whether its
+// GB is 10^9 or 2^30 bytes (ItemCollectionMetrics: "in gigabytes"), and 2^30
+// is the safe side: the bytes observed are never fewer than the estimate's,
+// and 7.4% more if a GB is 10^9. Each bucket is a whole number of AWS's GB
+// whichever it means, so the one at 8 is the alert AWS advises, and the one
+// at 10 the cap.
 var gigabytes = []float64{1 << 30, 2 << 30, 4 << 30, 6 << 30, 8 << 30, 9 << 30, 10 << 30}
 
 // NewMetrics makes the server's metrics and registers them with reg.
