@@ -978,3 +978,48 @@ func TestAnAckWhoseBodyWasNotDeletedChangesNothing(t *testing.T) {
 		})
 	}
 }
+
+// A message retired by another write between DeleteFrom's Query and its own
+// retire, acked or retired by a fetch that found no body, is skipped, and the
+// rest are retired: a message already gone is no error (Backend.DeleteFrom;
+// dromas-dev/dromas-client#453 item 1). The fake answers the Query with two
+// messages of the sender, the first one's retire as DynamoDB answers a
+// retire of an item an ack has taken out of the list, a failed condition, and
+// the second one's as applied.
+func TestDeleteFromSkipsAMessageRetiredMeanwhile(t *testing.T) {
+	t.Parallel()
+	box, from := protocol.Address{4}, protocol.Address{5}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	acked := &Header{ID: [32]byte{1}, From: from, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
+	left := &Header{ID: [32]byte{2}, From: from, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
+	query, err := json.Marshal(map[string]any{"Items": []any{itemJSON(msgItem(box, acked)), itemJSON(msgItem(box, left))}, "Count": 2, "ScannedCount": 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	retire, err := json.Marshal(map[string]any{"Attributes": itemJSON(map[string]types.AttributeValue{"live": bin(liveKey(ms(now), left.ID))})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newFakeAWS()
+	f.dynamo = func(op string, _ int, body []byte) answer {
+		switch {
+		case op == "Query":
+			return answer{status: http.StatusOK, body: string(query)}
+		case op == "UpdateItem" && strings.Contains(string(body), base64.StdEncoding.EncodeToString(acked.ID[:])):
+			return answerCCF
+		case op == "UpdateItem":
+			return applied(answer{status: http.StatusOK, body: string(retire)})
+		}
+		return answer500
+	}
+	s := fakeStore(t, f)
+	var retired [][32]byte
+	err = s.dynamo().DeleteFrom(context.WithoutCancel(t.Context()), box, func(a protocol.Address) bool { return a == from }, func(id [32]byte, _ time.Time) {
+		retired = append(retired, id)
+	})
+	retires, _ := f.count("UpdateItem")
+	t.Logf("err %v; %d retires sent; retired %x", err, retires, retired)
+	if err != nil || retires != 2 || len(retired) != 1 || retired[0] != left.ID {
+		t.Errorf("a delete of the sender's mail, one message acked meanwhile: err %v, %d retires sent, retired %x; want no error, 2, and the other message alone", err, retires, retired)
+	}
+}
