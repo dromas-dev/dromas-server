@@ -779,7 +779,8 @@ func TestALeaderWhoHangsUpFailsNoLookup(t *testing.T) {
 }
 
 // panicStore is the test store, but a read of box's record, a first fetch's
-// count and a revocation panic, as a bug in decoding a record would.
+// count and a revocation panic, as a bug in decoding a record would. Memory
+// holds nothing of box, so a lookup and a registration of it read.
 type panicStore struct {
 	Store
 	box protocol.Address
@@ -809,14 +810,16 @@ func (s panicStore) Revoke(context.Context, protocol.Address, *Revocations, Expe
 
 // A reservation is settled, and a shared read finished, however its call
 // ends, a panic included (dromas-dev/dromas-server#36): after a panic in
-// a lookup's read, a fetch of a held message, which counts it once memory
-// shows it held (#86), and a raise of a revocation of certificates, no
-// reservation is held and no read is in flight, and the next lookup of the
-// address is answered.
+// a lookup's read, a registration's read, under the registrations it
+// reserved (dromas-dev/dromas-client#450 item 1), a fetch of a held
+// message, which counts it once memory shows it held (#86), and a raise of
+// a revocation of certificates, no reservation is held and no read is in
+// flight, and the next lookup of the address is answered.
 func TestAPanicSettlesItsReservations(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	l.MissesPerMinute, l.DrainBurst, l.DrainRefill, l.CertificateRevocationsPerDay = 10, 10, time.Minute, 10
+	l.RegistrationsPerHour = 10
 	e := newEnv(t, l)
 	victim, owner := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 	s := New(Config{Store: panicStore{e.store, victim.id.Address()}, Limits: l, Now: e.clock.Now})
@@ -860,6 +863,11 @@ func TestAPanicSettlesItsReservations(t *testing.T) {
 		_ = resp.Body.Close()
 	}
 
+	call(http.MethodPut, victim.path(""), victim.registration(1), api.passFor(victim.work[1], victim.id.Address(), api.name()))
+	if n := held(s.regs); n != 0 {
+		t.Errorf("after a panic in a registration's read: %d registration reservations held", n)
+	}
+
 	ct := ciphertextTo(t, owner)
 	e.want(e.do(http.MethodPost, owner.path("/messages"), sealedTo(1, 1, ct), victim.pass(1)), http.StatusCreated, "")
 	id := sha256.Sum256(ct)
@@ -872,8 +880,8 @@ func TestAPanicSettlesItsReservations(t *testing.T) {
 	if n := held(s.raises); n != 0 {
 		t.Errorf("after a panic in a raise's write: %d reservations held", n)
 	}
-	if got := panics.String(); strings.Count(got, "http: panic serving") != 4 {
-		t.Errorf("%d of the four calls panicked: %s", strings.Count(got, "http: panic serving"), got)
+	if got := panics.String(); strings.Count(got, "http: panic serving") != 5 {
+		t.Errorf("%d of the five calls panicked: %s", strings.Count(got, "http: panic serving"), got)
 	}
 }
 
