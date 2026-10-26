@@ -249,7 +249,8 @@ What changes:
 
 | Metric | Labels | Counts |
 |---|---|---|
-| `dromasd_requests_total`, `dromasd_request_duration_seconds` | `route` (the router's pattern, `unmatched` for none), `status`, `code` (the problem's, empty for none) | every request answered, and how long it took |
+| `dromasd_requests_total` | `route` (the router's pattern, `unmatched` for none), `status`, `code` (the problem's, empty for none) | every request answered |
+| `dromasd_request_duration_seconds` | `route` | how long each request took to answer |
 | `dromasd_limit_requests_total` | `limit` (a `rate_limited`'s quota, or the code of its own), `subject` (`box`, `ip`), `decision` (`allowed`, `denied`) | each take of each limit, as Boulder's limiter counts each spend |
 | `dromasd_limit_keys` | `limit` | the keys each limit holds now |
 | `dromasd_passes_total` | `outcome` (`remembered`, `checked`, `refused`), `code` | passes taken from memory, verified, and refused |
@@ -331,7 +332,7 @@ Boxes: PITR on, AWS Backup on, TTL on, stream `NEW_IMAGE`. Messages: neither bac
 
 **All of them live in the public `dromas-client` repo** (§ Repo layout): the Go library and the `dromas` command; the echo box, a deployment of it; and `sh/dromas.sh`, the proof that a box of stock tools exchanges mail with a Go box, on a box of its own. A box's files are at the top of that repo's `client/doc.go`, what each command does is its help, and the rules for changing them are its `AGENTS.md`. **Not built:** `dromas mcp`, a local stdio MCP server in the same binary, whose results are to be the CLI's lines, and an Agent Skill (`SKILL.md`).
 
-**What tests what.** The forging-operator tests are public, in `dromas-client`: the Go client against `internal/fakeserver`, an honest in-memory server a middleware turns hostile, and the script against a fake of its own and the test vectors. This repo keeps the tests of what the real server enforces, and `dromasd serve --dev`, the real server's logic and its memory on the in-memory backend, with no AWS, is what `test/interop.sh` runs both clients against.
+**What tests what.** The forging-operator tests are public, in `dromas-client`: the Go client against `internal/fakeserver`, an honest in-memory server a middleware turns hostile, and the script, by Go tests in `sh/`, against the same fake and the test vectors. This repo keeps the tests of what the real server enforces, and `dromasd serve --dev`, the real server's logic and its memory on the in-memory backend, with no AWS, is what `test/interop.sh` runs both clients against.
 
 ## Repo layout: two repos
 
@@ -357,7 +358,7 @@ dromas-server (this repo)
 
 - **The server depends on the client repo, never the reverse.** The protocol code exists once, in public, so the server checks exactly what anyone can read.
 - **The Go module path is `github.com/dromas-dev/dromas-client`.** Installing never depends on the dromas.dev server.
-- **Dependencies:** `filippo.io/age` ≥ 1.3 (PQ), `golang.org/x/crypto/ssh`, and `aws-sdk-go-v2` (DynamoDB, DynamoDB Streams, S3 with directory buckets; server only). Everything else is the standard library.
+- **Dependencies:** `filippo.io/age` ≥ 1.3 (PQ) and `golang.org/x/crypto/ssh` on both sides; the server also links `aws-sdk-go-v2` (DynamoDB, DynamoDB Streams, S3 with directory buckets) with its `aws/smithy-go`, `prometheus/client_golang` (§ Metrics) and `golang.org/x/sync` (`singleflight`), and the client `spf13/cobra` and `spf13/pflag` (its CLI), `go.etcd.io/bbolt` (a box's state) and `filippo.io/edwards25519`. Each repo's `go.mod` is the whole list (`go list -deps` gives what a command links).
 - **Versions: no pins beyond what Go itself records, on either side.** `go.mod` versions are minimums and `go.sum` is checked against the Go checksum database; that is the whole record.
   - **The client** (the reference): its `go.mod` moves to the latest by routine COMMITTED updates, so every build from a commit, and every `go install …@latest`, gets them. Never `go get -u` inside a build: the result would match no commit.
   - **The server**: Go's own guidance (go.dev/doc/security/best-practices, read 2026-10-10): keep Go and the dependencies up to date, review and test each update, scan with `govulncheck`, run `go vet`, fuzz, and use the race detector. So updates land routinely, as commits that pass the tests, never silently at deploy. `go.mod` requires a release of `dromas-client`; to work on both, a `go.work` over the two checkouts builds this repo against the client's.
