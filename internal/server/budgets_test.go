@@ -497,22 +497,37 @@ func forgedFromPublic(t *testing.T, e *env, a protocol.Address) (protocol.Regist
 	return protocol.RegisterRequest{Identity: br.Identity, Prekey: br.Prekey, PrekeySignature: br.PrekeySignature}, pass
 }
 
+// retryFinds is each way a registration's identical retry finds its box:
+// in its process's memory; read, with its address's registrations left; and
+// read by a lookup, with them spent by the box's own registration
+// (register).
+var retryFinds = map[string]struct {
+	spent bool
+	with  []func(*Config)
+}{
+	"a box this process holds":                                            {},
+	"a box this process does not hold":                                    {false, []func(*Config){func(c *Config) { c.Store = unknownStore{c.Store} }}},
+	"a box this process does not hold, its address's registrations spent": {true, []func(*Config){func(c *Config) { c.Store = unknownStore{c.Store} }}},
+}
+
 // A registration of a registered box is answered from its record, before the
 // registrations count, whether this process holds the box or reads it, so its
 // pass is checked as any call's is: one the process has not seen reserves a
 // miss of its caller's address, kept when it fails
 // (dromas-dev/dromas-server#40). Past the misses it is refused before it
-// is checked, as on any other route.
+// is checked, as on any other route. A box read where its address's
+// registrations are spent is read by a lookup, and its pass checked the
+// same (dromas-dev/dromas-client#450 item 2).
 func TestAnIdenticalRetrysPassIsCounted(t *testing.T) {
 	t.Parallel()
-	for name, with := range map[string][]func(*Config){
-		"a box this process holds":         nil,
-		"a box this process does not hold": {func(c *Config) { c.Store = unknownStore{c.Store} }},
-	} {
+	for name, c := range retryFinds {
 		t.Run(name, func(t *testing.T) {
 			l := relaxed()
 			l.MissesPerMinute = 2
-			e := newEnv(t, l, with...)
+			if c.spent {
+				l.RegistrationsPerHour = 1
+			}
+			e := newEnv(t, l, c.with...)
 			r := e.raw().register(protocol.MaxPrekeyLifetime)
 			reg, forged := forgedFromPublic(t, e, r.id.Address())
 			for range 2 {
@@ -528,20 +543,29 @@ func TestAnIdenticalRetrysPassIsCounted(t *testing.T) {
 // of the box's calls, as a renewal's identical retry does: so passes in turn,
 // each checked in full, are bounded by the box's budget
 // (dromas-dev/dromas-server#40). An honest retry, with the same pass or a
-// new one, is taken.
+// new one, is taken. So it is whether this process holds the box or reads
+// it, with its address's registrations left or spent
+// (dromas-dev/dromas-client#450 item 2).
 func TestAnIdenticalRetrySpendsTheBoxsCalls(t *testing.T) {
 	t.Parallel()
-	l := relaxed()
-	l.CallBurst, l.CallRefill = 2, time.Hour
-	e := newEnv(t, l)
-	r := e.raw().register(protocol.MaxPrekeyLifetime)
-	reg, p1 := r.registration(1), r.pass(1)
-	e.clock.Add(time.Second)
-	p2 := r.pass(1)
-	e.want(e.do("PUT", r.path(""), reg, p1), http.StatusOK, "")
-	e.want(e.do("PUT", r.path(""), reg, p2), http.StatusOK, "")
-	e.limited(e.do("PUT", r.path(""), reg, p1), protocol.QuotaCalls)
-	e.limited(e.do("GET", r.path("/acl"), nil, p2), protocol.QuotaCalls)
+	for name, c := range retryFinds {
+		t.Run(name, func(t *testing.T) {
+			l := relaxed()
+			l.CallBurst, l.CallRefill = 2, time.Hour
+			if c.spent {
+				l.RegistrationsPerHour = 1
+			}
+			e := newEnv(t, l, c.with...)
+			r := e.raw().register(protocol.MaxPrekeyLifetime)
+			reg, p1 := r.registration(1), r.pass(1)
+			e.clock.Add(time.Second)
+			p2 := r.pass(1)
+			e.want(e.do("PUT", r.path(""), reg, p1), http.StatusOK, "")
+			e.want(e.do("PUT", r.path(""), reg, p2), http.StatusOK, "")
+			e.limited(e.do("PUT", r.path(""), reg, p1), protocol.QuotaCalls)
+			e.limited(e.do("GET", r.path("/acl"), nil, p2), protocol.QuotaCalls)
+		})
+	}
 }
 
 // A reservation that would be refused only because others of its key are in
