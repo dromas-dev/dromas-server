@@ -683,7 +683,12 @@ func TestAStalledBodyGivesTheLargeReadBack(t *testing.T) {
 	query := sealedTo(1, 1, nil).Encode()
 	_, _ = io.WriteString(conn, "POST /v1/"+to.Address().String()+"/messages?"+query+" HTTP/1.1\r\nHost: "+addr+"\r\nAuthorization: "+e.pass(lifted)+
 		"\r\nContent-Type: application/octet-stream\r\nContent-Length: 60000\r\n\r\n"+strings.Repeat("a", 30000)) // past the free size, then nothing
-	time.Sleep(50 * time.Millisecond) // the stalled send holds the large read
+	// The stalled send holds the large read before the second is sent.
+	for wait := time.Now().Add(5 * time.Second); testutil.ToFloat64(m.largeRead.WithLabelValues("taken")) != 1; time.Sleep(time.Millisecond) {
+		if time.Now().After(wait) {
+			t.Fatal("the stalled send never took the large read")
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, e.srv.URL+"/v1/"+to.Address().String()+"/messages?"+query, bytes.NewReader(make([]byte, 30000)))
