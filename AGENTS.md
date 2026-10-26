@@ -46,7 +46,7 @@ A change that ships with no second reader (nobody else read it, or what was writ
 
 ### The maintainers' own commits
 
-On a pull request the DCO app checks every commit, and `main` requires its check. 🛑 A direct push by an org admin bypasses that rule and nothing checks it: the sign-off there is on whoever pushes. The maintainer's commits are written with Custos, his AI assistant: they carry his sign-off, by his standing word to it, and name Custos in `Co-Authored-By:`. 🛑 That is his arrangement with his own assistant. A contributor's commits are theirs, with their own sign-off (above).
+`main` takes changes only through a pull request, squash-merged once every CI job and the DCO check pass on it, up to date with `main`; nobody bypasses that, an org admin included (the repo's rulesets: `gh api repos/dromas-dev/dromas-server/rules/branches/main`). 🛑 A CI job renamed, added or removed is a required check changed in the ruleset in the same change, or every pull request waits on a check that never reports. The maintainer's commits are written with Custos, his AI assistant: they carry his sign-off, by his standing word to it, and name Custos in `Co-Authored-By:`. 🛑 That is his arrangement with his own assistant. A contributor's commits are theirs, with their own sign-off (above).
 
 ## Invariants — they hold from the first line of code
 
