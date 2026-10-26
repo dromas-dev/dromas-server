@@ -302,6 +302,35 @@ func TestAccounts(t *testing.T) {
 	})
 }
 
+// A box revoked while it is in an account leaves it: an account lists no
+// boxes, a box's membership is its record's, and the revocation deletes the
+// record (purge; dromas-dev/dromas-client#434 item 1). Then the account
+// routes answer 410 revoked, with the box's pass or none.
+func TestARevokedBoxLeavesItsAccount(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, relaxed())
+	acc, key := accountEnv(t, e, true, 2)
+	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	if got := adopt(t, a, key); got != acc.ID || e.accountOf(a) != acc.ID {
+		t.Fatalf("adopted into %q, the record says %q", got, e.accountOf(a))
+	}
+	send(t, b, a, "waiting in A's box when it is revoked")
+	pass := e.pass(a)
+	e.want(e.do("PUT", revocationPath(a.Address()), record(t, a), ""), http.StatusCreated, "")
+	if got := e.accountOf(a); got != "" {
+		t.Fatalf("a revoked box is still in the account %q", got)
+	}
+	account := boxPath(a.Address()) + "/account"
+	for what, p := range map[string]string{"with its pass": pass, "with no pass": ""} {
+		if got := e.do(http.MethodPut, account, protocol.AdoptRequest{Key: key}, p); got.status != http.StatusGone || got.code() != protocol.CodeRevoked {
+			t.Errorf("PUT …/account of a revoked box, %s: %d %s, want 410 revoked", what, got.status, got.code())
+		}
+		if got := e.do(http.MethodDelete, account, nil, p); got.status != http.StatusGone || got.code() != protocol.CodeRevoked {
+			t.Errorf("DELETE …/account of a revoked box, %s: %d %s, want 410 revoked", what, got.status, got.code())
+		}
+	}
+}
+
 // Adopt and Leave write only over the record they were given.
 func TestAdoptAndLeaveNameTheRecord(t *testing.T) {
 	t.Parallel()
