@@ -350,23 +350,6 @@ func TestAnACLsGETReadsItsPreconditions(t *testing.T) {
 	e.want(e.doWith("GET", path, nil, e.pass(other), "If-None-Match", tag), 401, protocol.CodeUnauthorized)
 }
 
-// With no bound on its entries, an ACL's body is still bounded, to keep the
-// record one item: a body over that is too_large with the body's bytes as
-// its limit, the one limit there is (PROTOCOL.md §11.3).
-func TestAnUnboundedACLNamesItsBodysBytes(t *testing.T) {
-	t.Parallel()
-	l := relaxed()
-	l.ACLEntries = 0
-	e := newEnv(t, l)
-	b := e.box(protocol.Classic)
-	huge := aclOf([]string{"*"}, []string{strings.Repeat(" ", int(e.server.aclBodyLimit()))})
-	r := e.do("PUT", "/v1/"+b.Address().String()+"/acl", huge, e.pass(b))
-	e.want(r, 413, protocol.CodeTooLarge)
-	if p := r.problem(); p.Limit == nil || *p.Limit != uint64(aclBodyUnbounded) {
-		t.Errorf("an unbounded ACL's body over its bound is told the limit %v, want its %d bytes: %s", p.Limit, aclBodyUnbounded, r.body)
-	}
-}
-
 // A send the ACL refuses is refused with one code and one wording, whether
 // its sender is denied or only not allowed, before anything of the sender's
 // quotas is spent; a sender it lets in is taken.

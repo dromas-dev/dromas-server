@@ -1,10 +1,12 @@
 package main
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/dromas-dev/dromas-client/protocol"
 	"github.com/dromas-dev/dromas-server/internal/server"
 )
 
@@ -41,5 +43,33 @@ func TestNewMailAtTheCeilingPasses(t *testing.T) {
 	}
 	if err := receiveRate(server.DefaultLimits()); err != nil {
 		t.Errorf("the defaults: %v", err)
+	}
+}
+
+// dromasd serve refuses to start on an ACL bound that is off or over the
+// protocol's (PROTOCOL.md §11.14), naming the flag, before it listens.
+func TestServeRefusesAnACLBoundOffOrOverTheProtocols(t *testing.T) {
+	for _, v := range []string{"0", "-1", strconv.Itoa(protocol.MaxACLEntries + 1)} {
+		done := make(chan error, 1)
+		go func() { done <- serve([]string{"--dev", "-listen", "127.0.0.1:0", "-acl-entries", v}) }()
+		select {
+		case err := <-done:
+			if err == nil || !strings.Contains(err.Error(), "-acl-entries:") {
+				t.Errorf("-acl-entries %s: %v, want a refusal naming the flag", v, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("-acl-entries %s: serve started", v)
+		}
+	}
+}
+
+// Control: one, the protocol's bound and the default pass.
+func TestAnACLBoundInRangePasses(t *testing.T) {
+	for _, n := range []int{1, protocol.MaxACLEntries, server.DefaultLimits().ACLEntries} {
+		l := server.DefaultLimits()
+		l.ACLEntries = n
+		if err := aclEntries(l); err != nil {
+			t.Errorf("%d: %v", n, err)
+		}
 	}
 }

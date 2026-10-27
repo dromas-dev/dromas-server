@@ -35,6 +35,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -104,6 +105,16 @@ func receiveRate(l server.Limits) error {
 	return nil
 }
 
+// aclEntries refuses a bound on an ACL's entries that is off or over the
+// protocol's, which a client refuses in an answer (PROTOCOL.md §11.14).
+// serve checks it before anything starts.
+func aclEntries(l server.Limits) error {
+	if l.ACLEntries <= 0 || l.ACLEntries > protocol.MaxACLEntries {
+		return fmt.Errorf("-acl-entries: %d is not from 1 to %d, the most entries the protocol lets an ACL hold (PROTOCOL.md §11.14)", l.ACLEntries, protocol.MaxACLEntries)
+	}
+	return nil
+}
+
 func serve(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	dev := fs.Bool("dev", false, "keep everything in memory, with no AWS")
@@ -142,7 +153,7 @@ func serve(args []string) error {
 	fs.DurationVar(&l.CallRefill, "call-refill", l.CallRefill, "one more such call each")
 	fs.IntVar(&l.CertificatesPerDay, "certificates-per-day", l.CertificatesPerDay, "per box a day, as -sends-per-day: renewals under a later certificate, but for one that replaces a revoked certificate (0: off)")
 	fs.IntVar(&l.CertificateRevocationsPerDay, "certificate-revocations-per-day", l.CertificateRevocationsPerDay, "per box a day, as -sends-per-day: raises of its revocation of certificates (0: off)")
-	fs.IntVar(&l.ACLEntries, "acl-entries", l.ACLEntries, "the most entries a box's ACL holds, its two lists together (0: off)")
+	fs.IntVar(&l.ACLEntries, "acl-entries", l.ACLEntries, "the most entries a box's ACL holds, its two lists together: from 1 to the protocol's "+strconv.Itoa(protocol.MaxACLEntries)+", or serve does not start")
 	fs.DurationVar(&l.BodyTimeout, "body-timeout", l.BodyTimeout, "how long a request body, or each write of a response, may take before one more second for each -body-min-rate bytes of it moved; what a handler leaves of a body is read before the answer, to the deadline the handler's reads left, and the answer has this from then; also the longest wait for the one large read (0: off)")
 	fs.IntVar(&l.BodyMinRate, "body-min-rate", l.BodyMinRate, "bytes a second a body, or a write of a response, must keep up, as Apache's RequestReadTimeout MinRate; a write is credited in pieces of this many bytes, once each has gone (0: off)")
 	fs.IntVar(&l.HeadBytes, "max-header-bytes", l.HeadBytes, "the most of a request's head, its request line and headers, the server reads: what the longest call needs, its pass at the longest a pass can be, and no more; net/http answers a longer one 431 (0: net/http's default)")
@@ -158,6 +169,9 @@ func serve(args []string) error {
 		return err
 	}
 	if err := receiveRate(l); err != nil {
+		return err
+	}
+	if err := aclEntries(l); err != nil {
 		return err
 	}
 	logger := log.New(server.Redacting(os.Stderr), "", log.LstdFlags|log.LUTC)

@@ -45,7 +45,9 @@ type Limits struct {
 
 	// ACLEntries is the most entries a box's ACL holds, its two lists
 	// together [tunable]: a box's record, with its ACL, is held in the box
-	// cache, so this bounds what one record costs memory there.
+	// cache, so this bounds what one record costs memory there. Never off,
+	// and at most protocol.MaxACLEntries: dromasd serve does not start
+	// otherwise.
 	ACLEntries int
 
 	// How long a body may take: BodyTimeout, and one second more for each

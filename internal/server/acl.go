@@ -11,19 +11,13 @@ import (
 
 // The bound on a PUT …/acl body, before it is parsed: each entry as JSON
 // writes it, an address in quotes with a comma, and room for a client that
-// indents its lists, plus the rest of the document. With no bound on the
-// entries, the body is bounded so that the record stays one DynamoDB item,
-// which holds at most 400 KB.
+// indents its lists, plus the rest of the document.
 const (
 	aclEntryBytes    = 96
 	aclBodyAllowance = 1 << 10
-	aclBodyUnbounded = 256 << 10
 )
 
 func (s *Server) aclBodyLimit() int64 {
-	if s.limits.ACLEntries <= 0 {
-		return aclBodyUnbounded
-	}
 	return int64(s.limits.ACLEntries)*aclEntryBytes + aclBodyAllowance
 }
 
@@ -72,10 +66,9 @@ func (s *Server) putACL(w http.ResponseWriter, r *http.Request) error {
 	var doc protocol.ACLDocument
 	if err := decodeBody(w, r, s.aclBodyLimit(), &doc); err != nil {
 		// The bound is drawn from the entries, so a body over it is answered
-		// for them: an ACL's limit is in entries (PROTOCOL.md §11.3). With
-		// them unbounded, the body's bytes are the one limit there is.
+		// for them: an ACL's limit is in entries (PROTOCOL.md §11.3).
 		var p *problem
-		if errors.As(err, &p) && p.code == protocol.CodeTooLarge && s.limits.ACLEntries > 0 {
+		if errors.As(err, &p) && p.code == protocol.CodeTooLarge {
 			return s.aclTooLarge()
 		}
 		return err

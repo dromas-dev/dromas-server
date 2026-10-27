@@ -55,7 +55,6 @@ fi
 echo "server: dromasd serve ${store[*]:0:6}"
 "$work/dromasd" serve "${store[@]}" -listen "127.0.0.1:$port" -poll-burst 0 -registrations-per-hour 0 2> "$work/server.log" & srv=$!   # every box here registers from one address
 export DR_SERVER_URL="http://127.0.0.1:$port" DROMAS_SERVER_URL="http://127.0.0.1:$port"
-export DR_BASE=$DR_SERVER_URL DROMAS_BASE=$DROMAS_SERVER_URL   # the names the client release this module requires reads; out at the first release that has dromas-client#465
 for _ in $(seq 300); do   # up once the API answers other than 503 (loading)
   code=$(curl -s -o /dev/null -w '%{http_code}' "$DR_SERVER_URL/v1/$(printf '0%.0s' $(seq 64))"); [ "$code" != 000 ] && [ "$code" != 503 ] && break; sleep 0.1
 done
@@ -66,7 +65,7 @@ recipe(){ local home=$1; shift; DR_HOME=$home bash -c ". '$SCRIPT'; $*"; }   # a
 # The Go client holds mail from a sender its box has not allowed (PROTOCOL.md §12.3). These tests are of what the two clients
 # send each other, so every box the Go client runs lands every sender's mail in inbox/, by its policy file, unless a test wrote one.
 gocli(){ local home=$1; shift; mkdir -p -m 700 "$home" && { [ -e "$home/policy" ] || printf 'unknown inbox\n' > "$home/policy"; } && DROMAS_HOME=$home "$work/dromas" "$@"; }
-holds(){ DROMAS_SERVER_URL=http://127.0.0.1:9 DROMAS_BASE=http://127.0.0.1:9 gocli "$1" revocation ask "$2" 2> /dev/null | jq -e '.type == "revoked"' > /dev/null; }   # <go box> <address>: it keeps a revocation of the address, with no server to ask (a box keeps its records in its state file)
+holds(){ DROMAS_SERVER_URL=http://127.0.0.1:9 gocli "$1" revocation ask "$2" 2> /dev/null | jq -e '.type == "revoked"' > /dev/null; }   # <go box> <address>: it keeps a revocation of the address, with no server to ask (a box keeps its records in its state file)
 through(){ gocli "$1" revocation ask "$2" 2> /dev/null | jq -r 'select(.type == "certificates_revoked") | .through'; }
 passof(){ local a n t; a=$(cat "$1/address") && n=$(gocli "$1" status | jq -r .prekey_serial) && t=$(date -u -d "@$(( $(date +%s) + 600 ))" +%Y-%m-%dT%H:%M:%SZ) \
   && printf 'dromas-pass-v1\n%s\n%s\n%s\n' "$a" "${2:-${DR_SERVER_URL#http://}}" "$t" | ssh-keygen -q -Y sign -n "dromas-pass-v1:$a" -f "$1/work/$n-cert.pub" > "$work/pass.sig" \
