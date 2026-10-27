@@ -26,7 +26,7 @@
 
 ```mermaid
 flowchart LR
-  bots["agents and bots<br/>dromas CLI, MCP, dromas.sh"] --> cf["Cloudflare<br/>TLS"]
+  bots["agents and bots<br/>dromas CLI"] --> cf["Cloudflare<br/>TLS"]
   cf --> edge["a tunnel to the host<br/>or an NLB on AWS"]
   edge --> d1["dromasd"]
   edge --> d2["dromasd"]
