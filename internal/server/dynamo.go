@@ -307,6 +307,19 @@ func (it item) uint(name string) (uint64, error) {
 	return 0, fmt.Errorf("item: %s is missing or not a number", name)
 }
 
+// size reads a message's size: a number no larger than the protocol's
+// largest ciphertext, so it is an int on every platform.
+func (it item) size(name string) (int, error) {
+	if v, ok := it[name].(*types.AttributeValueMemberN); ok {
+		n, err := strconv.ParseUint(v.Value, 10, 31)
+		if err != nil || n > protocol.MaxCiphertext {
+			return 0, fmt.Errorf("item: %s is not a size of at most %d bytes", name, protocol.MaxCiphertext)
+		}
+		return int(n), nil
+	}
+	return 0, fmt.Errorf("item: %s is missing or not a number", name)
+}
+
 func (it item) string(name string) (string, error) {
 	if v, ok := it[name].(*types.AttributeValueMemberS); ok {
 		return v.Value, nil
@@ -617,11 +630,11 @@ func decodeMsg(it item) (*Header, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	size, err := it.uint("size")
+	size, err := it.size("size")
 	if err != nil {
 		return nil, false, err
 	}
-	h := &Header{ID: id, Size: int(size), ReceivedAt: fromMs(recv), ExpiresAt: fromMs(recv + ttlMs)} //nolint:gosec // sizes are small
+	h := &Header{ID: id, Size: size, ReceivedAt: fromMs(recv), ExpiresAt: fromMs(recv + ttlMs)}
 	_, live := it["live"]
 	return h, live, nil
 }
@@ -636,11 +649,11 @@ func decodeLive(it item) (*Header, error) {
 	if err != nil {
 		return nil, err
 	}
-	size, err := it.uint("size")
+	size, err := it.size("size")
 	if err != nil {
 		return nil, err
 	}
-	return &Header{ID: id, Size: int(size), ReceivedAt: fromMs(recv), ExpiresAt: fromMs(recv + ttlMs)}, nil //nolint:gosec // sizes are small
+	return &Header{ID: id, Size: size, ReceivedAt: fromMs(recv), ExpiresAt: fromMs(recv + ttlMs)}, nil
 }
 
 func isConditionFailed(err error) (*types.ConditionalCheckFailedException, bool) {
