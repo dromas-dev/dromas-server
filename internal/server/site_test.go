@@ -207,19 +207,22 @@ func TestEveryOtherRequestIsTheSites(t *testing.T) {
 
 // The site is told who the client is as the limits read it: X-Forwarded-For
 // is the CF-Connecting-IP of a trusted proxy, else the peer, and
-// X-Forwarded-Proto a trusted proxy's, else this connection's. What any
-// other peer says of the client, in those headers or in Forwarded, is not
-// passed on.
+// X-Forwarded-Proto a trusted proxy's, else this connection's. Nothing else
+// a peer says of the client or of the hops before, in Forwarded, another
+// X-Forwarded-* or X-Real-IP, is passed on, and CF-Connecting-IP only from a
+// trusted proxy (dromas-dev/dromas-client#504 item 2).
 func TestTheSiteIsToldTheClientTheLimitsSee(t *testing.T) {
 	t.Parallel()
-	claims := []string{"CF-Connecting-IP", "203.0.113.9", "X-Forwarded-For", "198.51.100.1", "X-Forwarded-Proto", "https", "Forwarded", "for=192.0.2.1", "Host", "dromas.example"}
+	claims := []string{"CF-Connecting-IP", "203.0.113.9", "X-Forwarded-For", "198.51.100.1", "X-Forwarded-Proto", "https", "Forwarded", "for=192.0.2.1", "Host", "dromas.example",
+		"X-Forwarded-Port", "8443", "X-Forwarded-Prefix", "/admin", "X-Forwarded-Ssl", "on", "X-Forwarded-Server", "edge", "x-forwarded-uri", "/x", "X-Real-IP", "198.51.100.2"}
 	for _, c := range []struct {
 		name          string
 		proxies       []netip.Prefix
 		client, proto string
+		connecting    string // the CF-Connecting-IP the site is told
 	}{
-		{"from a trusted proxy", []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("::1/128")}, "203.0.113.9", "https"},
-		{"from any other peer", nil, "127.0.0.1", "http"},
+		{"from a trusted proxy", []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("::1/128")}, "203.0.113.9", "https", "203.0.113.9"},
+		{"from any other peer", nil, "127.0.0.1", "http", ""},
 	} {
 		rec := &recorder{}
 		srv := httptest.NewServer(New(Config{Store: NewMemStore(time.Now), Limits: relaxed(), TrustedProxies: c.proxies, SiteBackend: backendOf(t, rec)}).Handler())
@@ -231,8 +234,13 @@ func TestTheSiteIsToldTheClientTheLimitsSee(t *testing.T) {
 		}
 		h := asks[0].header
 		if h.Get("X-Forwarded-For") != c.client || len(h.Values("X-Forwarded-For")) != 1 || h.Get("X-Forwarded-Proto") != c.proto ||
-			h.Get("X-Forwarded-Host") != "dromas.example" || h.Get("Forwarded") != "" {
+			h.Get("X-Forwarded-Host") != "dromas.example" || h.Get("Forwarded") != "" || h.Get("X-Real-IP") != "" || h.Get("CF-Connecting-IP") != c.connecting {
 			t.Errorf("%s: the site was told %v", c.name, h)
+		}
+		for name := range h {
+			if strings.HasPrefix(name, "X-Forwarded-") && name != "X-Forwarded-For" && name != "X-Forwarded-Host" && name != "X-Forwarded-Proto" {
+				t.Errorf("%s: the site was told the client's %s: %q", c.name, name, h.Values(name))
+			}
 		}
 	}
 }

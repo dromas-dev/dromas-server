@@ -36,12 +36,15 @@ func SiteBackend(raw string) (*url.URL, error) {
 // query, headers and body as they came, with the Host the client asked for.
 // X-Forwarded-For names the client by the address the limits key on
 // (clientIP), X-Forwarded-Host is the request's Host, and X-Forwarded-Proto
-// is a trusted proxy's, else this connection's; the Forwarded and
-// X-Forwarded-* headers that came with the request are dropped, as Rewrite
-// drops them. The backend is asked for the codings the client asked for and
-// no other: net/http's transport would ask for gzip itself where the client
-// asked for none, and undo it on the way back, so its own compression is
-// off. A backend that does not answer is a 502. A path that is the
+// is a trusted proxy's, else this connection's. What came with the request
+// of the client's address or of the hops before is dropped, from every
+// peer: Forwarded, every X-Forwarded-* and X-Real-IP (Rewrite drops only
+// Forwarded and X-Forwarded-{For,Host,Proto}; dromas-dev/dromas-client#504
+// item 2); and CF-Connecting-IP, which clientIP believes only of a trusted
+// proxy, from any other. The backend is asked for the codings the client
+// asked for and no other: net/http's transport would ask for gzip itself
+// where the client asked for none, and undo it on the way back, so its own
+// compression is off. A backend that does not answer is a 502. A path that is the
 // server's once decoded and cleaned (serversPath) is 404, and never passed.
 func (s *Server) siteProxy(backend *url.URL) http.Handler {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
@@ -51,6 +54,11 @@ func (s *Server) siteProxy(backend *url.URL) http.Handler {
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetURL(backend)
 			r.Out.Host = r.In.Host
+			for name := range r.Out.Header {
+				if strings.HasPrefix(name, "X-Forwarded-") || name == "X-Real-Ip" || name == "Cf-Connecting-Ip" && !s.fromProxy(r.In) {
+					delete(r.Out.Header, name)
+				}
+			}
 			r.SetXForwarded()
 			r.Out.Header.Set("X-Forwarded-For", s.clientIP(r.In))
 			if proto := r.In.Header.Get("X-Forwarded-Proto"); s.fromProxy(r.In) && (proto == "http" || proto == "https") {
