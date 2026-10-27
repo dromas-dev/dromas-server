@@ -29,10 +29,13 @@ import (
 )
 
 // The suite runs against the in-memory store, or, with
-// DROMAS_TEST_BOXES_TABLE, DROMAS_TEST_MSGS_TABLE,
-// DROMAS_TEST_ACCOUNTS_TABLE and DROMAS_TEST_BUCKET set, against DynamoDB
-// + S3 Express: every test, plus the ones here that need AWS. Name tables and
-// a directory bucket kept for tests, never the ones a running server uses.
+// DROMAS_TEST_MSGS_TABLE set, against DynamoDB + S3 Express: every test,
+// plus the ones here that need AWS, on the tables and the bucket that
+// variable and the three of awsTestNames name, each of which must then be
+// set. Name tables and a directory bucket kept for tests, never the ones a
+// running server uses.
+
+var awsTestNames = []string{"DROMAS_TEST_BOXES_TABLE", "DROMAS_TEST_MSGS_TABLE", "DROMAS_TEST_ACCOUNTS_TABLE", "DROMAS_TEST_BUCKET"}
 
 func onAWS() bool { return os.Getenv("DROMAS_TEST_MSGS_TABLE") != "" }
 
@@ -47,6 +50,11 @@ func newTestStore(t *testing.T, now func() time.Time) (Store, func() bool) {
 
 func startDynamo(t *testing.T, now func() time.Time) *Memory {
 	t.Helper()
+	for _, name := range awsTestNames {
+		if os.Getenv(name) == "" {
+			t.Fatalf("DROMAS_TEST_MSGS_TABLE is set, and %s is not: the tests on AWS need all four of %s", name, strings.Join(awsTestNames, ", "))
+		}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion("us-east-1"))
@@ -76,7 +84,7 @@ func startDynamo(t *testing.T, now func() time.Time) *Memory {
 func dynamoEnv(t *testing.T) (*env, *Memory) {
 	t.Helper()
 	if !onAWS() {
-		t.Skip("needs DROMAS_TEST_BOXES_TABLE, DROMAS_TEST_MSGS_TABLE, DROMAS_TEST_ACCOUNTS_TABLE and DROMAS_TEST_BUCKET")
+		t.Skip("needs the AWS tables: DROMAS_TEST_MSGS_TABLE and the three beside it (awsTestNames)")
 	}
 	e := newEnv(t, relaxed())
 	return e, e.store.(*Memory)

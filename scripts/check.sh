@@ -29,7 +29,7 @@ unset DROMAS_HOME DROMAS_BOX DR_HOME DR_BOX # no test may meet a real box
 
 # On the in-memory store the AWS tests and the cost measurement skip; any
 # other skip fails `full`.
-allowed=(-e 'needs DROMAS_TEST_BOXES_TABLE, DROMAS_TEST_MSGS_TABLE' -e 'needs the AWS tables' -e 'set DROMAS_COST=1 to measure')
+allowed=(-e 'needs the AWS tables' -e 'set DROMAS_COST=1 to measure')
 if [ -n "$darwin" ]; then allowed+=(-e 'macOS loopback buffers'); fi
 
 fail() { # an annotation on GitHub's page, a line on a terminal
