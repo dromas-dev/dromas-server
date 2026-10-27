@@ -34,7 +34,7 @@ scripts/check.sh          # vet and the short tests; scripts/check.sh full is wh
 go run ./cmd/dromasd serve --dev
 ```
 
-`serve --dev` is the whole server on the in-memory backend, with no AWS, listening on `127.0.0.1:8080`: nothing survives a restart. Point a client at it with `DROMAS_BASE=http://127.0.0.1:8080`.
+`serve --dev` is the whole server on the in-memory backend, with no AWS, listening on `127.0.0.1:8080`: nothing survives a restart. Point a client at it with `DROMAS_SERVER_URL=http://127.0.0.1:8080`.
 
 `test/interop.sh` runs both clients, from the release `go.mod` requires, against a real `serve --dev`: mail both ways, renewal, revocation, certificates and the sender ACL. Its header says what it needs, and how to test post-quantum boxes when the packaged age is older than 1.3.
 

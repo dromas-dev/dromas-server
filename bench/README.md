@@ -18,9 +18,9 @@ go build -o "$out/dromasd" ./cmd/dromasd
 go build -o "$out/dromas" github.com/dromas-dev/dromas-client/cmd/dromas
 GOMAXPROCS=1 "$out/dromasd" serve --dev -listen 127.0.0.1:18777 -poll-burst 0 2> "$out/server.log" &
 SP=$(pgrep -f "$out/dromasd serve")                      # the server's OWN pid, never $!
-export DROMAS_HOME=$box DROMAS_BASE=http://127.0.0.1:18777
+export DROMAS_HOME=$box DROMAS_SERVER_URL=http://127.0.0.1:18777
 A=$("$out/dromas" init --no-pq); A=${A##*/}             # a box; init leaves its pass in $box/pass
-U=$DROMAS_BASE/v1/$A/messages
+U=$DROMAS_SERVER_URL/v1/$A/messages
 GOMAXPROCS=1 "$out/poll-cli" 2000 "$U" "$(cat "$box/pass")"    # warm up
 awk '{print $14+$15}' /proc/$SP/stat                      # CPU ticks before (1 tick = 10 ms)
 GOMAXPROCS=1 "$out/poll-cli" 40000 "$U" "$(cat "$box/pass")"   # prints "requests 40000 bad 0"
