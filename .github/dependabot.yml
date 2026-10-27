@@ -8,9 +8,10 @@ updates:
     # Indirect modules too, as go get -u ./... moves them.
     allow:
       - dependency-type: all
+    # Daily, so a dromas-client release reaches this repo the next day: this
+    # pull request is how the server moves to it.
     schedule:
-      interval: weekly
-      day: monday
+      interval: daily
       time: "06:00"
       timezone: Etc/UTC
     groups:
