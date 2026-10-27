@@ -1,7 +1,9 @@
 package server
 
 import (
+	"bufio"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -129,7 +131,9 @@ func (rec *recorder) taken() []seen {
 // asked for, and answered with the backend's status, headers and body, a 404
 // among them. Under /v1/ and /to/ nothing is: the API, the link page and
 // the router answer there, 404 and 405 among them, and the router sends /v1
-// and /to to them.
+// and /to to them. Nor is a path that is under them once decoded and
+// cleaned, which the router matches as sent and a site's web server may
+// read decoded: a 404 (dromas-dev/dromas-client#504 item 1).
 func TestEveryOtherRequestIsTheSites(t *testing.T) {
 	t.Parallel()
 	rec := &recorder{}
@@ -144,6 +148,11 @@ func TestEveryOtherRequestIsTheSites(t *testing.T) {
 		{"POST", "/pay/checkout", `{"plan":"one"}`},
 		{"PUT", "/tools", "x"},
 		{"DELETE", "/v1x", ""},
+		{"GET", "/V1/x", ""},
+		{"GET", "/v1;x/y", ""},
+		{"GET", "/v1x%2Fy", ""},
+		{"GET", "/x/%2e%2e/y", ""},
+		{"GET", "/x/%2e%2e/v1x", ""},
 	} {
 		before := len(rec.taken())
 		resp, body := request(t, srv, c.method, c.target, strings.NewReader(c.body), "Host", "dromas.example")
@@ -178,6 +187,15 @@ func TestEveryOtherRequestIsTheSites(t *testing.T) {
 		{"POST", protocol.LinkPath + addr, http.StatusMethodNotAllowed, ""},
 		{"GET", protocol.LinkPath, http.StatusNotFound, ""},
 		{"GET", protocol.LinkPath + addr + "/more", http.StatusNotFound, ""},
+		{"GET", "/v1%2Fx", http.StatusNotFound, ""},
+		{"GET", "/v1%2fx", http.StatusNotFound, ""},
+		{"POST", "/v1%2F" + addr + "%2Fmessages", http.StatusNotFound, ""},
+		{"GET", "/v1%2F", http.StatusNotFound, ""},
+		{"GET", "/to%2F" + addr, http.StatusNotFound, ""},
+		{"GET", "/x/%2e%2e/v1/y", http.StatusNotFound, ""},
+		{"GET", "/x/%2E%2E/to/" + addr, http.StatusNotFound, ""},
+		{"GET", "/x%2F..%2Fv1%2Fy", http.StatusNotFound, ""},
+		{"GET", "/%2e/v1/y", http.StatusNotFound, ""},
 	} {
 		resp, body := request(t, srv, c.method, c.target, nil)
 		if resp.StatusCode != c.status || resp.Header.Get("X-Site") != "" || !strings.Contains(body, string(c.code)) {
@@ -191,19 +209,22 @@ func TestEveryOtherRequestIsTheSites(t *testing.T) {
 
 // The site is told who the client is as the limits read it: X-Forwarded-For
 // is the CF-Connecting-IP of a trusted proxy, else the peer, and
-// X-Forwarded-Proto a trusted proxy's, else this connection's. What any
-// other peer says of the client, in those headers or in Forwarded, is not
-// passed on.
+// X-Forwarded-Proto a trusted proxy's, else this connection's. Nothing else
+// a peer says of the client or of the hops before, in Forwarded, another
+// X-Forwarded-* or X-Real-IP, is passed on, and CF-Connecting-IP only from a
+// trusted proxy (dromas-dev/dromas-client#504 item 2).
 func TestTheSiteIsToldTheClientTheLimitsSee(t *testing.T) {
 	t.Parallel()
-	claims := []string{"CF-Connecting-IP", "203.0.113.9", "X-Forwarded-For", "198.51.100.1", "X-Forwarded-Proto", "https", "Forwarded", "for=192.0.2.1", "Host", "dromas.example"}
+	claims := []string{"CF-Connecting-IP", "203.0.113.9", "X-Forwarded-For", "198.51.100.1", "X-Forwarded-Proto", "https", "Forwarded", "for=192.0.2.1", "Host", "dromas.example",
+		"X-Forwarded-Port", "8443", "X-Forwarded-Prefix", "/admin", "X-Forwarded-Ssl", "on", "X-Forwarded-Server", "edge", "x-forwarded-uri", "/x", "X-Real-IP", "198.51.100.2"}
 	for _, c := range []struct {
 		name          string
 		proxies       []netip.Prefix
 		client, proto string
+		connecting    string // the CF-Connecting-IP the site is told
 	}{
-		{"from a trusted proxy", []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("::1/128")}, "203.0.113.9", "https"},
-		{"from any other peer", nil, "127.0.0.1", "http"},
+		{"from a trusted proxy", []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("::1/128")}, "203.0.113.9", "https", "203.0.113.9"},
+		{"from any other peer", nil, "127.0.0.1", "http", ""},
 	} {
 		rec := &recorder{}
 		srv := httptest.NewServer(New(Config{Store: NewMemStore(time.Now), Limits: relaxed(), TrustedProxies: c.proxies, SiteBackend: backendOf(t, rec)}).Handler())
@@ -215,8 +236,13 @@ func TestTheSiteIsToldTheClientTheLimitsSee(t *testing.T) {
 		}
 		h := asks[0].header
 		if h.Get("X-Forwarded-For") != c.client || len(h.Values("X-Forwarded-For")) != 1 || h.Get("X-Forwarded-Proto") != c.proto ||
-			h.Get("X-Forwarded-Host") != "dromas.example" || h.Get("Forwarded") != "" {
+			h.Get("X-Forwarded-Host") != "dromas.example" || h.Get("Forwarded") != "" || h.Get("X-Real-IP") != "" || h.Get("CF-Connecting-IP") != c.connecting {
 			t.Errorf("%s: the site was told %v", c.name, h)
+		}
+		for name := range h {
+			if strings.HasPrefix(name, "X-Forwarded-") && name != "X-Forwarded-For" && name != "X-Forwarded-Host" && name != "X-Forwarded-Proto" {
+				t.Errorf("%s: the site was told the client's %s: %q", c.name, name, h.Values(name))
+			}
 		}
 	}
 }
@@ -318,5 +344,45 @@ func TestTheSiteIsAskedTheClientsCodings(t *testing.T) {
 		if got := asks[len(asks)-1].header.Get("Accept-Encoding"); got != ae {
 			t.Errorf("the client asked for %q: the site was asked for %q", ae, got)
 		}
+	}
+}
+
+// A body that stops coming on its way to the site is cut at its deadline,
+// as one to the API is, and answered 408 (RFC 9110 §15.5.9), not 502: the
+// client was slow, not the site (dromas-dev/dromas-client#504 item 3). A
+// body that came whole is the site's to answer, however long past the
+// body's deadline the site takes.
+func TestAStalledBodyToTheSiteIsATimeout(t *testing.T) {
+	t.Parallel()
+	l := relaxed()
+	l.BodyTimeout, l.BodyMinRate = 300*time.Millisecond, 1<<20
+	slow := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		time.Sleep(3 * l.BodyTimeout)
+		w.WriteHeader(299)
+	})
+	srv := httptest.NewServer(New(Config{Store: NewMemStore(time.Now), Limits: l, SiteBackend: backendOf(t, slow)}).Handler())
+	t.Cleanup(srv.Close)
+	send := func(head, body string) int {
+		t.Helper()
+		conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+		_, _ = io.WriteString(conn, head+"\r\nHost: dromas.example\r\n\r\n"+body)
+		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+		if err != nil {
+			t.Fatalf("%s: %v", head, err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if got := send("POST /page HTTP/1.1\r\nContent-Length: 1000", "abc"); got != http.StatusRequestTimeout {
+		t.Errorf("a body that stops coming: %d, want 408", got)
+	}
+	if got := send("POST /page HTTP/1.1\r\nContent-Length: 3", "abc"); got != 299 {
+		t.Errorf("a body that came whole, to a site slower than its deadline: %d, want the site's 299", got)
 	}
 }

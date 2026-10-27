@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -745,9 +746,12 @@ func TestLargeReadsTakeTurns(t *testing.T) {
 }
 
 // A large body that stops coming is cut off by its deadline, and gives the
-// one large read back (dromas-dev/dromas-server#7): a large send after it
-// is read at once, not after the stalled one's peer gives up. The metrics
-// count the cut and both reads.
+// one large read back (dromas-dev/dromas-server#7): its answer, 408, comes
+// while its peer still holds the connection, and a large send after it is
+// read, with no wait for the allowance. The metrics count the cut and both
+// reads. Ordered by what each step waits for, not by a clock: the large
+// send once went before the cut gave the allowance back, and the wait it
+// is allowed, the body timeout too, ran out first on a loaded run.
 func TestAStalledBodyGivesTheLargeReadBack(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
@@ -767,27 +771,37 @@ func TestAStalledBodyGivesTheLargeReadBack(t *testing.T) {
 	query := sealedTo(1, 1, nil).Encode()
 	_, _ = io.WriteString(conn, "POST /v1/"+to.Address().String()+"/messages?"+query+" HTTP/1.1\r\nHost: "+addr+"\r\nAuthorization: "+e.pass(lifted)+
 		"\r\nContent-Type: application/octet-stream\r\nContent-Length: 60000\r\n\r\n"+strings.Repeat("a", 30000)) // past the free size, then nothing
-	// The stalled send holds the large read before the second is sent.
 	for wait := time.Now().Add(5 * time.Second); testutil.ToFloat64(m.largeRead.WithLabelValues("taken")) != 1; time.Sleep(time.Millisecond) {
 		if time.Now().After(wait) {
 			t.Fatal("the stalled send never took the large read")
 		}
 	}
+	// The cut's answer is written once the send has returned, and so given
+	// the allowance back; the peer has not closed.
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	stalled, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("the stalled send was not cut: %v", err)
+	}
+	_ = stalled.Body.Close()
+	if stalled.StatusCode != http.StatusRequestTimeout || len(e.server.largeRead) != 0 {
+		t.Fatalf("the stalled send: %d, with %d large reads held, want 408 and none", stalled.StatusCode, len(e.server.largeRead))
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, e.srv.URL+"/v1/"+to.Address().String()+"/messages?"+query, bytes.NewReader(make([]byte, 30000)))
 	req.Header.Set("Authorization", e.pass(lifted))
-	start := time.Now()
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("a large send behind a stalled one: %v", err)
+		t.Fatalf("a large send after a stalled one: %v", err)
 	}
 	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest || time.Since(start) > 2*time.Second { // read, then not_age
-		t.Fatalf("a large send behind a stalled one: %d after %s, want 400 at once", resp.StatusCode, time.Since(start))
+	if resp.StatusCode != http.StatusBadRequest { // read, then not_age
+		t.Fatalf("a large send after a stalled one: %d, want 400", resp.StatusCode)
 	}
-	if cut, taken := testutil.ToFloat64(m.cut), testutil.ToFloat64(m.largeRead.WithLabelValues("taken")); cut != 1 || taken != 2 {
-		t.Fatalf("the metrics: %v bodies cut, %v large reads taken, want 1 and 2", cut, taken)
+	cut, taken, waited := testutil.ToFloat64(m.cut), testutil.ToFloat64(m.largeRead.WithLabelValues("taken")), testutil.ToFloat64(m.largeRead.WithLabelValues("timed_out"))
+	if cut != 1 || taken != 2 || waited != 0 {
+		t.Fatalf("the metrics: %v bodies cut, %v large reads taken, %v waits timed out, want 1, 2 and 0", cut, taken, waited)
 	}
 }
 

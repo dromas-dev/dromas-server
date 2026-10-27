@@ -18,6 +18,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/smithy-go/logging"
@@ -534,10 +535,17 @@ type pacedBody struct {
 	length    int64
 	undrained bool
 	drained   bool
+	// mu guards deadline, ended and cut, whether a read was cut at the
+	// deadline, for stalled, which a proxy's error handler calls while its
+	// transport may still be reading the body on a goroutine of its own.
+	mu  sync.Mutex
+	cut bool
 }
 
 func (p *pacedBody) Read(b []byte) (int, error) {
 	n, err := p.ReadCloser.Read(b)
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.got += int64(n)
 	if n > 0 && err == nil && !p.draining {
 		p.deadline = p.start.Add(p.timeout + time.Duration(p.got/p.rate)*time.Second)
@@ -555,9 +563,24 @@ func (p *pacedBody) Read(b []byte) (int, error) {
 		err = fmt.Errorf("%w: %w", os.ErrDeadlineExceeded, err)
 	}
 	if errors.Is(err, os.ErrDeadlineExceeded) {
+		p.cut = true
 		p.m.bodyCut()
 	}
 	return n, err
+}
+
+// stalled reports whether the body was cut at its deadline, or has not
+// ended and is past it: a read on another goroutine, a proxy's transport's,
+// may not yet have returned the cut, which cancels the request's context
+// as it happens (net/http's connReader), and so ends the proxy's round
+// trip first.
+func (p *pacedBody) stalled() bool {
+	if p == nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.cut || !p.ended && !time.Now().Before(p.deadline)
 }
 
 // drainBound is the most of a body its handler left that drain reads,
@@ -582,10 +605,15 @@ func (p *pacedBody) drain() {
 		return
 	}
 	p.drained = true
-	if !p.ended && !p.undrained && (p.length < 0 || p.length-p.got < drainBound) {
-		p.draining = true
+	p.mu.Lock()
+	drain := !p.ended && !p.undrained && (p.length < 0 || p.length-p.got < drainBound)
+	p.draining = drain
+	p.mu.Unlock()
+	if drain {
 		_, _ = io.CopyN(io.Discard, p, drainBound+1)
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if !p.ended {
 		_ = p.rc.SetReadDeadline(time.Now())
 	}
@@ -678,9 +706,15 @@ func readProblem(err, tooLarge error) error {
 	case errors.As(err, &tooBig):
 		return tooLarge
 	case errors.Is(err, os.ErrDeadlineExceeded):
-		return fail(protocol.CodeRequestTimeout, "send it again", "the request body did not arrive in the time this server waits for one")
+		return bodyTimedOut()
 	}
 	return fail(protocol.CodeBadRequest, "", "the request body could not be read")
+}
+
+// bodyTimedOut is the answer to a body cut off at its deadline (paced): 408
+// (RFC 9110 §15.5.9).
+func bodyTimedOut() *problem {
+	return fail(protocol.CodeRequestTimeout, "send it again", "the request body did not arrive in the time this server waits for one")
 }
 
 // decodeJSON reads a JSON body into v as every reader of the protocol reads
