@@ -1135,7 +1135,7 @@ func TestSendPipeline(t *testing.T) {
 	_ = json.Unmarshal(first.body, &rcpt)
 	listed := e.do("GET", "/v1/"+b.Address().String()+"/messages", nil, e.pass(b))
 	list := listOf(t, listed)
-	if len(list.Messages) != 1 || list.Messages[0].ID != rcpt.ID || list.Messages[0].From != "" || list.Messages[0].Size != int64(len(ok.ciphertext)) {
+	if len(list.Messages) != 1 || list.Messages[0].ID != rcpt.ID || list.Messages[0].Size != int64(len(ok.ciphertext)) {
 		t.Fatalf("the list: %+v", list)
 	}
 	if bytes.Contains(listed.body, []byte(`"from"`)) {
