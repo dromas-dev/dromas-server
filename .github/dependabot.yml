@@ -8,11 +8,16 @@ updates:
     # Indirect modules too, as go get -u ./... moves them.
     allow:
       - dependency-type: all
+    # Daily, so a dromas-client release reaches this go.mod the next day.
     schedule:
-      interval: weekly
-      day: monday
+      interval: daily
       time: "06:00"
       timezone: Etc/UTC
+    # Our own signed, attested client waits for no cooldown (Dependabot's
+    # default is 3 days, for third-party releases).
+    cooldown:
+      exclude:
+        - github.com/dromas-dev/*
     groups:
       go:
         patterns: ["*"]
