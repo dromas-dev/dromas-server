@@ -85,11 +85,10 @@ func TestTheTwoClocksFurthestApart(t *testing.T) {
 
 // Further off, the box is refused: more than 50 minutes ahead, for its
 // certificate, before its pass is read, since that certificate would not have
-// begun for a reader 10 minutes slow, a clock this server takes. The client
-// says in its own words what the server dates its answer, beside its own
-// clock: the server's words are
-// not shown (PROTOCOL.md §11.3), and the date on every answer is how the server
-// says what its clock reads.
+// begun for a reader 10 minutes slow, a clock this server takes. The date on
+// every answer is how the server says what its clock reads (the client's
+// words for it are the client's to test, and the server's are not shown:
+// PROTOCOL.md §11.3).
 // A box that cannot register leaves nothing in the way of registering once
 // its clock is right.
 func TestABoxWhoseClockIsTooFarOffIsRefusedAndTold(t *testing.T) {
