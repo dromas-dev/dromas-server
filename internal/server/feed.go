@@ -331,8 +331,9 @@ func boxStreamChange(r stypes.Record) (Change, error) {
 }
 
 // msgStreamChange is the change a record of the -msgs-table stream makes to
-// a message: in the list, out of it (acked, or its body found gone), or
-// gone, which only the TTL makes, after the message expired.
+// a message: in the list, or gone (acked, its body found gone, its box's
+// address revoked, or expired and taken by the TTL). A deletion's record
+// carries the item's keys alone (NEW_IMAGE), so its Header is the id.
 func msgStreamChange(r stypes.Record) (Change, error) {
 	if r.Dynamodb == nil {
 		return Change{}, nil
@@ -349,7 +350,13 @@ func msgStreamChange(r stypes.Record) (Change, error) {
 	c := Change{Kind: MessageChange, Addr: box, Gone: gone}
 	if !gone {
 		c.Header, c.Live, c.Err = decodeMsg(it)
+		return c, nil
 	}
+	id, err := it.hash("id")
+	if err != nil {
+		return Change{}, err
+	}
+	c.Header = &Header{ID: id}
 	return c, nil
 }
 

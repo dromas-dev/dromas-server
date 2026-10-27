@@ -108,7 +108,6 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
 		for _, h := range page {
 			resp.Messages = append(resp.Messages, protocol.MessageInfo{
 				ID:         hexID(h.ID),
-				From:       h.From.String(),
 				Size:       int64(h.Size),
 				ReceivedAt: formatTime(h.ReceivedAt),
 				ExpiresAt:  formatTime(h.ExpiresAt),
@@ -380,7 +379,7 @@ func (s *Server) fetch(w http.ResponseWriter, r *http.Request) error {
 }
 
 // ack is DELETE /v1/<address>/messages/<id>. Reading does not delete; this
-// does. The dedupe record stays until the TTL. A held message's ack is paid
+// does, and nothing of the message is kept (PROTOCOL.md §13). A held message's ack is paid
 // for by its receive; one whose preconditions are false spends one of the
 // box's calls (precondition). The delete is of a live message only, so an
 // If-Match that held is held at it: one acked meanwhile is gone.

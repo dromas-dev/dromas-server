@@ -118,7 +118,7 @@ func (f *fakeStream) GetRecords(_ context.Context, in *dynamodbstreams.GetRecord
 }
 
 // msgEvent is a message item's stream record: an insert lists the message;
-// an ack is a modify whose image has no live key.
+// an ack deletes the item, a removal whose record carries its keys alone.
 func msgEvent(op stypes.OperationType, box protocol.Address, id byte, recvMs uint64) stypes.Record {
 	var mid [32]byte
 	mid[0] = id
@@ -127,15 +127,13 @@ func msgEvent(op stypes.OperationType, box protocol.Address, id byte, recvMs uin
 		return &stypes.AttributeValueMemberN{Value: strconv.FormatUint(v, 10)}
 	}
 	img := map[string]stypes.AttributeValue{
-		"box": b(box[:]), "id": b(mid[:]), "from": b(make([]byte, 32)), "size": n(1), "received_at": n(recvMs),
+		"box": b(box[:]), "id": b(mid[:]), "size": n(1), "received_at": n(recvMs), "live": b(liveKey(recvMs, mid)),
 	}
-	if op == stypes.OperationTypeInsert {
-		img["live"] = b(liveKey(recvMs, mid))
+	keys := map[string]stypes.AttributeValue{"box": img["box"], "id": img["id"]}
+	if op == stypes.OperationTypeRemove {
+		img = nil
 	}
-	return stypes.Record{EventName: op, Dynamodb: &stypes.StreamRecord{
-		Keys:     map[string]stypes.AttributeValue{"box": img["box"], "id": img["id"]},
-		NewImage: img,
-	}}
+	return stypes.Record{EventName: op, Dynamodb: &stypes.StreamRecord{Keys: keys, NewImage: img}}
 }
 
 func feedFixture(t *testing.T) (*fakeStream, *feed, *Memory, protocol.Address, uint64) {
@@ -161,7 +159,7 @@ func (s *Memory) countOf(box protocol.Address) int {
 func TestFeed(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	insert, ack := stypes.OperationTypeInsert, stypes.OperationTypeModify
+	insert, ack := stypes.OperationTypeInsert, stypes.OperationTypeRemove
 
 	t.Run("closed shards are skipped and open ones start at LATEST", func(t *testing.T) {
 		fs, f, s, box, now := feedFixture(t)

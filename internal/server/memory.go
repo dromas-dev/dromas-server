@@ -164,7 +164,7 @@ func (s *Memory) readBox(ctx context.Context, a protocol.Address) (boxRead, erro
 		return r, err
 	}
 	for _, h := range live {
-		r.marks = append(r.marks, s.idx.newMark(h.ID, h.From, ms(h.ReceivedAt)+ttlMs))
+		r.marks = append(r.marks, s.idx.newMark(h.ID, ms(h.ReceivedAt)+ttlMs))
 	}
 	return r, nil
 }
@@ -220,8 +220,8 @@ func (s *Memory) forget(a protocol.Address) {
 	s.idx.forget(a)
 }
 
-// retired takes a message this process retired out of memory, leaving a
-// tomb until the feed's echo (index.remove).
+// retired takes a message this process deleted out of memory, leaving a
+// tomb until the feed's echo (index.remove, index.deleted).
 func (s *Memory) retired(box protocol.Address, id [32]byte, received time.Time) {
 	s.idx.remove(box, s.idx.tagOf(id), ms(received)+ttlMs, s.nowMs(), false)
 }
@@ -270,11 +270,13 @@ func (s *Memory) apply(c Change) {
 		case c.Err != nil:
 			s.forget(c.Addr)
 		case c.Gone:
-			// Only the TTL deletes a message item, after it expired, and
-			// memory drops a mark at its expiry.
+			// Acked, its body found gone, its box's address revoked, or
+			// expired and taken by the TTL, whose mark memory dropped at its
+			// expiry.
+			s.idx.deleted(c.Addr, s.idx.tagOf(c.Header.ID), s.nowMs())
 		case c.Live:
-			s.idx.insert(c.Addr, s.idx.newMark(c.Header.ID, c.Header.From, ms(c.Header.ReceivedAt)+ttlMs), s.nowMs())
-		default: // acked, or its body found gone
+			s.idx.insert(c.Addr, s.idx.newMark(c.Header.ID, ms(c.Header.ReceivedAt)+ttlMs), s.nowMs())
+		default: // out of the list and kept, as an ack of a build before dromas-dev/dromas-client#507 left it
 			s.idx.remove(c.Addr, s.idx.tagOf(c.Header.ID), ms(c.Header.ReceivedAt)+ttlMs, s.nowMs(), true)
 		}
 	case AccountChange:
@@ -423,18 +425,18 @@ func (s *Memory) Account(ctx context.Context, id string) (*Account, error) {
 	return a, nil
 }
 
-// Dedupe implements Store: the message's item, acked or not. A stale miss is
-// caught by PutMessage's conditional write.
+// Dedupe implements Store: the live message's item. A stale miss is caught by
+// PutMessage's conditional write.
 func (s *Memory) Dedupe(ctx context.Context, box protocol.Address, id [32]byte) (*Header, error) {
 	return s.backend.Dedupe(ctx, box, id)
 }
 
 // PutMessage implements Store: stored, the message's mark joins memory; met
-// by another send's item of the same ciphertext, that item's header is
+// by another send's live item of the same ciphertext, that item's header is
 // returned.
 func (s *Memory) PutMessage(ctx context.Context, box protocol.Address, h *Header, body []byte) (*Header, error) {
 	err := s.write(ofAddress(box), func() error { return s.backend.PutMessage(ctx, box, h, body) }, func() {
-		s.idx.insert(box, s.idx.newMark(h.ID, h.From, ms(h.ReceivedAt)+ttlMs), s.nowMs())
+		s.idx.insert(box, s.idx.newMark(h.ID, ms(h.ReceivedAt)+ttlMs), s.nowMs())
 	})
 	var d duplicate
 	if errors.As(err, &d) {
@@ -467,8 +469,8 @@ func (s *Memory) Message(ctx context.Context, box protocol.Address, id [32]byte,
 	return h, body, nil
 }
 
-// retire takes a live message out of the list, and out of memory: its item
-// stays as the dedupe record until it expires. ErrNotFound if it is not live.
+// retire deletes a live message's item, so it leaves the list, and takes it
+// out of memory. ErrNotFound if it is not live.
 func (s *Memory) retire(ctx context.Context, box protocol.Address, id [32]byte) error {
 	var received time.Time
 	return s.write(ofAddress(box), func() (err error) {
@@ -477,9 +479,9 @@ func (s *Memory) retire(ctx context.Context, box protocol.Address, id [32]byte) 
 	}, func() { s.retired(box, id, received) })
 }
 
-// DeleteMessage implements Store (ack): the body, then the item leaves the
-// list. Both steps are safe to repeat, so a crash between them is finished by
-// the client's next ack, and a fetch in between finds no body and retires it.
+// DeleteMessage implements Store (ack): the body, then the item. Both steps
+// are safe to repeat, so a crash between them is finished by the client's
+// next ack, and a fetch in between finds no body and retires it.
 func (s *Memory) DeleteMessage(ctx context.Context, box protocol.Address, id [32]byte) error {
 	var received time.Time
 	return s.write(ofAddress(box), func() (err error) {
@@ -489,16 +491,10 @@ func (s *Memory) DeleteMessage(ctx context.Context, box protocol.Address, id [32
 }
 
 // DeleteMessages implements Store (a revocation): every live message in the
-// box, as acks.
+// box, as acks, each out of memory as its item is deleted.
 func (s *Memory) DeleteMessages(ctx context.Context, box protocol.Address) error {
-	return s.DeleteFrom(ctx, box, func(protocol.Address) bool { return true })
-}
-
-// DeleteFrom implements Store: the live messages in the box whose sender
-// matches, each out of memory as it is taken out of the list.
-func (s *Memory) DeleteFrom(ctx context.Context, box protocol.Address, from func(protocol.Address) bool) error {
 	return s.write(ofAddress(box), func() error {
-		return s.backend.DeleteFrom(ctx, box, from, func(id [32]byte, received time.Time) { s.retired(box, id, received) })
+		return s.backend.DeleteAll(ctx, box, func(id [32]byte, received time.Time) { s.retired(box, id, received) })
 	}, nil)
 }
 
@@ -509,19 +505,6 @@ func (s *Memory) Count(ctx context.Context, box protocol.Address) (int, error) {
 		return 0, err
 	}
 	return s.idx.count(box, s.nowMs()), nil
-}
-
-// PairCount implements Store: from memory, after the box's load on its
-// first use.
-func (s *Memory) PairCount(ctx context.Context, box, from protocol.Address) (int, time.Time, error) {
-	if err := s.ensure(ctx, box); err != nil {
-		return 0, time.Time{}, err
-	}
-	n, oldest := s.idx.pair(box, prefix8(from[:]), s.nowMs())
-	if n == 0 {
-		return 0, time.Time{}, nil
-	}
-	return n, fromMs(oldest), nil
 }
 
 // After implements Store: from memory, after the box's load on its first use.

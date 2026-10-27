@@ -149,26 +149,36 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 
-	// 6 to 9, one call for the posts of this ciphertext to this box from
-	// this sender, naming the same serials, in flight at once
+	// 6 to 9, one call for the posts of this ciphertext to this box naming
+	// the same serials in flight at once, from any sender
 	// (dromas-dev/dromas-server#76, #16): one that arrives while the
 	// first is in them waits for it, and is answered as step 6 answers a
-	// post of bytes the box holds, or with the first's own refusal, which it
-	// would meet as well. The call runs apart from the request that leads
-	// it, so its caller going fails none of the others, and each of its reads
-	// is bounded (deliver).
+	// post of bytes the box holds, or with the first's own refusal, which a
+	// post from the same sender would meet as well. A refusal of another
+	// sender's post may be that sender's alone (its ACL entry, its sends, its
+	// key type), so a post handed one is made again, in a call of its own
+	// sender's. Each call runs apart from the request that leads it, so its
+	// caller going fails none of the others, and each of its reads is
+	// bounded (deliver).
 	p := &post{from: from, to: to, id: sha256.Sum256(ciphertext), ciphertext: ciphertext, stanzas: stanzas, q: q, sender: sender, rcpt: rcpt, lim: lim, now: now}
+	key := string(p.to[:]) + string(p.id[:]) + p.q.Encode()
 	led := false
-	v, err, _ := s.posts.Do(string(p.to[:])+string(p.id[:])+string(p.from[:])+p.q.Encode(), func() (any, error) {
+	call := func() (any, error) {
 		led = true
-		return s.deliver(context.WithoutCancel(ctx), p)
-	})
-	if err != nil {
-		return err
+		d, err := s.deliver(context.WithoutCancel(ctx), p)
+		return posted{d, err, from}, nil
 	}
-	d := v.(delivered)
+	v, _, _ := s.posts.Do(key, call)
+	if o := v.(posted); o.err != nil && !led && o.from != from {
+		v, _, _ = s.posts.Do(key+string(from[:]), call)
+	}
+	o := v.(posted)
+	if o.err != nil {
+		return o.err
+	}
+	d := o.d
 	if !d.fresh || !led {
-		return s.duplicate(w, d.h, from)
+		return s.duplicate(w, d.h)
 	}
 	// The message made, which only its recipient may fetch (RFC 9110 §15.3.2).
 	w.Header().Set("Location", "/v1/"+to.String()+"/messages/"+hexID(d.h.ID))
@@ -195,6 +205,14 @@ type delivered struct {
 	fresh bool
 }
 
+// posted is one call of steps 6 to 9 (send), as the posts that share it
+// read it: what it made, or its refusal, and whose post led it.
+type posted struct {
+	d    delivered
+	err  error
+	from protocol.Address
+}
+
 // deliver is steps 6 to 9 of a send (send): the dedupe, whether the box
 // takes new mail, the counts, the write. It runs on a context apart from the
 // request that leads it, and every post of its ciphertext waits on it, so no
@@ -205,10 +223,12 @@ type delivered struct {
 func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 	from, to, msgID, rcpt, now, q := p.from, p.to, p.id, p.rcpt, p.now, p.q
 
-	// 6. Dedupe, before anything asks whether the box takes new mail: a
-	// retry gets the original receipt, whatever has changed since it was
-	// stored, a renewal of the box's prekey included. What those checks
-	// keep from the box is new mail, and a retry is none.
+	// 6. Dedupe, while the message is live, before anything asks whether
+	// the box takes new mail: a post of bytes the box holds unacked, from any
+	// sender, gets the receipt held, whatever has changed since it was
+	// stored, a renewal of the box's prekey included. What those checks keep
+	// from the box is new mail, and that is none. Nothing is kept once a
+	// message is acked or expired, so the same bytes after that are new mail.
 	read, cancel := bounded(ctx)
 	orig, err := s.store.Dedupe(read, to, msgID)
 	cancel()
@@ -272,7 +292,7 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 		}()
 	}
 	read, cancel = bounded(ctx)
-	release, refused, err := s.reserveCaps(read, to, from)
+	release, refused, err := s.reserveCaps(read, to)
 	cancel()
 	if err != nil {
 		return delivered{}, err
@@ -308,7 +328,6 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 	// 9. Write, and the counts above stand.
 	h := &Header{
 		ID:         msgID,
-		From:       from,
 		Size:       len(p.ciphertext),
 		ReceivedAt: now.UTC().Truncate(time.Millisecond),
 		ExpiresAt:  now.UTC().Truncate(time.Millisecond).Add(protocol.Retention), // the TTL less the hour and a post's own time (PROTOCOL.md §3.4, §13)
@@ -345,24 +364,23 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 	return delivered{h: h, fresh: true}, nil
 }
 
-// inFlight is, for each box, the sends this process has let past the pair
-// and box caps and not yet stored, kept beside the store's counts and read
-// with them under one lock, so sends in flight at once cannot all pass on
-// the same counts (dromas-dev/dromas-server#4). It is this process's
-// alone, as every count is (LIMITS.md).
+// inFlight is, for each box, the sends this process has let past the box
+// cap and not yet stored, kept beside the store's count and read with it
+// under one lock, so sends in flight at once cannot all pass on the same
+// count (dromas-dev/dromas-server#4). It is this process's alone, as
+// every count is (LIMITS.md).
 type inFlight struct {
-	mu   sync.Mutex
-	box  map[protocol.Address]int
-	pair map[[2]protocol.Address]int
+	mu  sync.Mutex
+	box map[protocol.Address]int
 }
 
-// reserveCaps checks the pair and box caps for one more message from from
-// to box to, counting the sends in flight, and counts this one in. release
-// takes it out once the send is over: by then a stored message is in the
-// store's counts, so a send checked between the two sees both and is
-// refused one early, never let past. A refusal is p.
-func (s *Server) reserveCaps(ctx context.Context, to, from protocol.Address) (release func(), p *problem, err error) {
-	if s.limits.PairCap == 0 && s.limits.BoxCap == 0 {
+// reserveCaps checks the box cap for one more message to box to, counting
+// the sends in flight, and counts this one in. release takes it out once
+// the send is over: by then a stored message is in the store's count, so a
+// send checked between the two sees both and is refused one early, never
+// let past. A refusal is p.
+func (s *Server) reserveCaps(ctx context.Context, to protocol.Address) (release func(), p *problem, err error) {
+	if s.limits.BoxCap == 0 {
 		return func() {}, nil, nil
 	}
 	// Load the box first, so what is read under the lock is memory.
@@ -370,44 +388,26 @@ func (s *Server) reserveCaps(ctx context.Context, to, from protocol.Address) (re
 		return nil, nil, err
 	}
 	f := &s.inFlight[to[0]]
-	pair := [2]protocol.Address{to, from}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if s.limits.PairCap > 0 {
-		n, oldest, err := s.store.PairCount(ctx, to, from)
-		if err != nil {
-			return nil, nil, err
-		}
-		if n += f.pair[pair]; n >= s.limits.PairCap {
-			p := fail(protocol.CodePairFull, "the box holds the most unacked mail it takes from you: retry after it reads some", "%d unacked messages from this sender, the oldest expiring %s", unackedValue(n), oldestValue(oldest))
-			p.retryAfter = time.Duration(s.limits.PollAfter) * time.Second
-			return nil, p, nil
-		}
+	n, err := s.store.Count(ctx, to)
+	if err != nil {
+		return nil, nil, err
 	}
-	if s.limits.BoxCap > 0 {
-		n, err := s.store.Count(ctx, to)
-		if err != nil {
-			return nil, nil, err
-		}
-		if n += f.box[to]; n >= s.limits.BoxCap {
-			p := fail(protocol.CodeMailboxFull, "the box is full: retry later", "the box holds %d messages", countValue(n))
-			p.retryAfter = time.Duration(s.limits.PollAfter) * time.Second
-			return nil, p, nil
-		}
+	if n += f.box[to]; n >= s.limits.BoxCap {
+		p := fail(protocol.CodeMailboxFull, "the box is full: retry later", "the box holds %d messages", countValue(n))
+		p.retryAfter = time.Duration(s.limits.PollAfter) * time.Second
+		return nil, p, nil
 	}
 	if f.box == nil {
-		f.box, f.pair = map[protocol.Address]int{}, map[[2]protocol.Address]int{}
+		f.box = map[protocol.Address]int{}
 	}
 	f.box[to]++
-	f.pair[pair]++
 	return func() {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		if f.box[to]--; f.box[to] <= 0 {
 			delete(f.box, to)
-		}
-		if f.pair[pair]--; f.pair[pair] <= 0 {
-			delete(f.pair, pair)
 		}
 	}, nil, nil
 }
@@ -425,13 +425,9 @@ func receipt(h *Header) protocol.Receipt {
 	return protocol.Receipt{ID: hexID(h.ID), ReceivedAt: formatTime(h.ReceivedAt), ExpiresAt: formatTime(h.ExpiresAt)}
 }
 
-// duplicate answers a send whose ciphertext the box already holds, acked or
-// not (its dedupe record): the same sender's retry gets the original
-// receipt, and another sender a conflict, which claims no delivery.
-func (s *Server) duplicate(w http.ResponseWriter, orig *Header, from protocol.Address) error {
-	if orig.From != from {
-		return fail(protocol.CodeConflict, "", "this ciphertext was already sent by another box")
-	}
+// duplicate answers a send whose ciphertext the box holds unacked, from
+// whichever sender: the receipt held (PROTOCOL.md §11.10, step 6).
+func (s *Server) duplicate(w http.ResponseWriter, orig *Header) error {
 	writeJSON(w, http.StatusOK, receipt(orig))
 	return nil
 }

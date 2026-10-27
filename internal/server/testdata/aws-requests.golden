@@ -306,7 +306,6 @@ Query {
  "ConsistentRead": true,
  "ExpressionAttributeNames": {
   "#b": "box",
-  "#f": "from",
   "#l": "live",
   "#s": "size"
  },
@@ -323,7 +322,7 @@ Query {
  },
  "IndexName": "live",
  "KeyConditionExpression": "#b = :b AND #l BETWEEN :lo AND :hi",
- "ProjectionExpression": "#l, #f, #s",
+ "ProjectionExpression": "#l, #s",
  "TableName": "msgs"
 }
 ## Dedupe
@@ -342,9 +341,9 @@ GetItem {
 ## PutMessage
 S3 PUT /bodies/b001000000000000000000000000000000000000000000000000000000000000/1d04000000000000000000000000000000000000000000000000000000000000?x-id=PutObject
 PutItem {
- "ConditionExpression": "attribute_not_exists(#id) OR #r \u003c= :cutoff",
+ "ConditionExpression": "attribute_not_exists(#l) OR #r \u003c= :cutoff",
  "ExpressionAttributeNames": {
-  "#id": "id",
+  "#l": "live",
   "#r": "received_at"
  },
  "ExpressionAttributeValues": {
@@ -358,9 +357,6 @@ PutItem {
   },
   "expires_at": {
    "N": "1795687080"
-  },
-  "from": {
-   "B": "8AMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
   },
   "id": {
    "B": "HQQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
@@ -384,7 +380,6 @@ Query {
  "ConsistentRead": false,
  "ExpressionAttributeNames": {
   "#b": "box",
-  "#f": "from",
   "#l": "live",
   "#s": "size"
  },
@@ -402,7 +397,7 @@ Query {
  "IndexName": "live",
  "KeyConditionExpression": "#b = :b AND #l BETWEEN :lo AND :hi",
  "Limit": 50,
- "ProjectionExpression": "#l, #f, #s",
+ "ProjectionExpression": "#l, #s",
  "TableName": "msgs"
 }
 ## List, after a cursor
@@ -421,7 +416,6 @@ Query {
  },
  "ExpressionAttributeNames": {
   "#b": "box",
-  "#f": "from",
   "#l": "live",
   "#s": "size"
  },
@@ -439,7 +433,7 @@ Query {
  "IndexName": "live",
  "KeyConditionExpression": "#b = :b AND #l BETWEEN :lo AND :hi",
  "Limit": 50,
- "ProjectionExpression": "#l, #f, #s",
+ "ProjectionExpression": "#l, #s",
  "TableName": "msgs"
 }
 ## Message, whole
@@ -472,7 +466,7 @@ GetItem {
 S3 GET /bodies/b001000000000000000000000000000000000000000000000000000000000000/1d04000000000000000000000000000000000000000000000000000000000000?x-id=GetObject Range: bytes=40-
 ## DeleteMessage
 S3 DELETE /bodies/b001000000000000000000000000000000000000000000000000000000000000/1d04000000000000000000000000000000000000000000000000000000000000?x-id=DeleteObject
-UpdateItem {
+DeleteItem {
  "ConditionExpression": "attribute_exists(#l) AND #r \u003e :cutoff",
  "ExpressionAttributeNames": {
   "#l": "live",
@@ -491,16 +485,14 @@ UpdateItem {
    "B": "HQQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
   }
  },
- "ReturnValues": "UPDATED_OLD",
- "TableName": "msgs",
- "UpdateExpression": "REMOVE #l"
+ "ReturnValues": "ALL_OLD",
+ "TableName": "msgs"
 }
-## DeleteFrom
+## DeleteMessages
 Query {
  "ConsistentRead": true,
  "ExpressionAttributeNames": {
   "#b": "box",
-  "#f": "from",
   "#l": "live",
   "#s": "size"
  },
@@ -517,12 +509,12 @@ Query {
  },
  "IndexName": "live",
  "KeyConditionExpression": "#b = :b AND #l BETWEEN :lo AND :hi",
- "ProjectionExpression": "#l, #f, #s",
+ "ProjectionExpression": "#l, #s",
  "TableName": "msgs"
 }
 S3 POST /bodies?delete=
 <Delete xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Object><Key>b001000000000000000000000000000000000000000000000000000000000000/1d04000000000000000000000000000000000000000000000000000000000000</Key></Object><Quiet>true</Quiet></Delete>
-UpdateItem {
+DeleteItem {
  "ConditionExpression": "attribute_exists(#l) AND #r \u003e :cutoff",
  "ExpressionAttributeNames": {
   "#l": "live",
@@ -541,9 +533,8 @@ UpdateItem {
    "B": "HQQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
   }
  },
- "ReturnValues": "UPDATED_OLD",
- "TableName": "msgs",
- "UpdateExpression": "REMOVE #l"
+ "ReturnValues": "ALL_OLD",
+ "TableName": "msgs"
 }
 ## DeleteBox
 DeleteItem {

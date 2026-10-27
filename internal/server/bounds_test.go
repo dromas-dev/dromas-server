@@ -47,7 +47,7 @@ func TestEveryCallToAWSEndsAtItsBound(t *testing.T) {
 	_, _, box := heldRecord(t)
 	hang := answer{hang: true}
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	msg := &Header{ID: [32]byte{7}, From: box.Addr, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
+	msg := &Header{ID: [32]byte{7}, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
 	// answered is a 200 whose body is v as JSON (itemJSON writes an item).
 	answered := func(v any) answer {
 		b, err := json.Marshal(v)
@@ -128,8 +128,8 @@ func TestEveryCallToAWSEndsAtItsBound(t *testing.T) {
 		}},
 		{name: "DeleteMessage's body", call: func(ctx context.Context, s *Memory) error { return s.DeleteMessage(ctx, box.Addr, msg.ID) }},
 		{name: "DeleteMessage's item", s3: s3ok, call: func(ctx context.Context, s *Memory) error { return s.DeleteMessage(ctx, box.Addr, msg.ID) }},
-		{name: "DeleteFrom", call: func(ctx context.Context, s *Memory) error { return s.DeleteMessages(ctx, box.Addr) }},
-		{name: "DeleteFrom's delete of the bodies", dynamo: first("Query", answered(map[string]any{"Items": []any{itemJSON(msgItem(box.Addr, msg))}, "Count": 1, "ScannedCount": 1})),
+		{name: "DeleteMessages", call: func(ctx context.Context, s *Memory) error { return s.DeleteMessages(ctx, box.Addr) }},
+		{name: "DeleteMessages' delete of the bodies", dynamo: first("Query", answered(map[string]any{"Items": []any{itemJSON(msgItem(box.Addr, msg))}, "Count": 1, "ScannedCount": 1})),
 			call: func(ctx context.Context, s *Memory) error { return s.DeleteMessages(ctx, box.Addr) }},
 		{name: "Adopt", call: func(ctx context.Context, s *Memory) error {
 			return s.Adopt(ctx, cloneBox(box), "acct", [32]byte{1})
@@ -464,13 +464,6 @@ func (s *readDeadlines) Count(ctx context.Context, box protocol.Address) (int, e
 	return s.Store.Count(ctx, box)
 }
 
-func (s *readDeadlines) PairCount(ctx context.Context, box, from protocol.Address) (int, time.Time, error) {
-	if box == s.to {
-		s.note("PairCount", ctx)
-	}
-	return s.Store.PairCount(ctx, box, from)
-}
-
 func (s *readDeadlines) Account(ctx context.Context, id string) (*Account, error) {
 	if id == s.account {
 		s.note("Account", ctx)
@@ -487,7 +480,7 @@ func (s *readDeadlines) Box(ctx context.Context, a protocol.Address) (*Box, erro
 
 // Each read a send's shared call makes runs apart from the request that
 // leads it, and is handed a context bounded by storeTimeout, so the bound
-// holds on any store: the dedupe, the pair and box caps' reads, the
+// holds on any store: the dedupe, the box cap's reads, the
 // recipient's account and its record read again after the write
 // (dromas-dev/dromas-server#91).
 func TestEveryReadOfASendsSharedCallIsBounded(t *testing.T) {
@@ -509,7 +502,7 @@ func TestEveryReadOfASendsSharedCallIsBounded(t *testing.T) {
 	e.want(e.sendTo(to, 1, 1, from, 1), http.StatusCreated, "")
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, read := range []string{"Dedupe", "Count", "PairCount", "Account", "Box"} {
+	for _, read := range []string{"Dedupe", "Count", "Account", "Box"} {
 		d, ok := s.seen[read]
 		t.Logf("%s: deadline %v (-1: none)", read, d)
 		if !ok || d <= 0 || d > storeTimeout {

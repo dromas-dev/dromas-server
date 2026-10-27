@@ -24,9 +24,8 @@ func NewMemStore(now func() time.Time) *Memory {
 
 // memBackend keeps what a store keeps in maps, as the DynamoDB backend
 // keeps it in tables: each write has the outcome its DynamoDB write would
-// have, and each change it makes goes to its feed. Expired messages and
-// dedupe records vanish at their ExpiresAt, as reads of the tables judge
-// expiry. A box's record stays past its Expires, as one in DynamoDB does
+// have, and each change it makes goes to its feed. Expired messages vanish
+// at their ExpiresAt, as reads of the tables judge expiry. A box's record stays past its Expires, as one in DynamoDB does
 // until the TTL deletes it, which may be days after: a test stands in for
 // the TTL with DeleteBox, which is the delete the TTL makes.
 //
@@ -44,7 +43,6 @@ type memBackend struct {
 	boxes       map[protocol.Address]*Box         // each box's record, with none of its revocations
 	revocations map[protocol.Address]*Revocations // each address's revocations item
 	messages    map[protocol.Address]map[[32]byte]*memMessage
-	dedupe      map[protocol.Address]map[[32]byte]Header
 	accounts    map[string]*Account
 	keys        map[adoptKeyRef]*AdoptKey
 	pending     []Change // made since the last delivery, in order: under mu
@@ -70,7 +68,6 @@ func newMemBackend(now func() time.Time) *memBackend {
 		boxes:       map[protocol.Address]*Box{},
 		revocations: map[protocol.Address]*Revocations{},
 		messages:    map[protocol.Address]map[[32]byte]*memMessage{},
-		dedupe:      map[protocol.Address]map[[32]byte]Header{},
 		accounts:    map[string]*Account{},
 		keys:        map[adoptKeyRef]*AdoptKey{},
 	}
@@ -223,33 +220,27 @@ func (s *memBackend) Revoke(_ context.Context, a protocol.Address, rv *Revocatio
 func (s *memBackend) Dedupe(_ context.Context, box protocol.Address, id [32]byte) (*Header, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.dedupeLocked(box, id)
-}
-
-func (s *memBackend) dedupeLocked(box protocol.Address, id [32]byte) (*Header, error) {
-	h, ok := s.dedupe[box][id]
-	if !ok || !s.now().Before(h.ExpiresAt) {
+	m, ok := s.live(box)[id]
+	if !ok {
 		return nil, ErrNotFound
 	}
+	h := m.h
 	return &h, nil
 }
 
-// PutMessage implements Backend: an unexpired item of the id, live or
-// acked, refuses it, as the condition of DynamoDB's write does.
+// PutMessage implements Backend: a live message of the id refuses it, as
+// the condition of DynamoDB's write does.
 func (s *memBackend) PutMessage(_ context.Context, box protocol.Address, h *Header, body []byte) error {
 	s.deliver()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if orig, err := s.dedupeLocked(box, h.ID); err == nil {
-		return duplicate{orig}
-	}
-	if s.dedupe[box] == nil {
-		s.dedupe[box] = map[[32]byte]Header{}
+	if m, ok := s.live(box)[h.ID]; ok {
+		orig := m.h
+		return duplicate{&orig}
 	}
 	if s.messages[box] == nil {
 		s.messages[box] = map[[32]byte]*memMessage{}
 	}
-	s.dedupe[box][h.ID] = *h
 	s.messages[box][h.ID] = &memMessage{h: *h, body: bytes.Clone(body)}
 	echo := *h
 	s.changed(Change{Kind: MessageChange, Addr: box, Header: &echo, Live: true})
@@ -297,8 +288,9 @@ func (s *memBackend) Message(_ context.Context, box protocol.Address, id [32]byt
 	return &h, bytes.Clone(body), nil
 }
 
-// retireLocked takes a live message out of the list, its body with it, and
-// records the change. The caller holds mu.
+// retireLocked deletes a live message, its body with it, and records the
+// change: a deletion, which names the id alone, as DynamoDB's stream does.
+// The caller holds mu.
 func (s *memBackend) retireLocked(box protocol.Address, id [32]byte) (time.Time, error) {
 	m, ok := s.live(box)[id]
 	if !ok {
@@ -308,8 +300,7 @@ func (s *memBackend) retireLocked(box protocol.Address, id [32]byte) (time.Time,
 	if len(s.messages[box]) == 0 {
 		delete(s.messages, box)
 	}
-	echo := m.h
-	s.changed(Change{Kind: MessageChange, Addr: box, Header: &echo})
+	s.changed(Change{Kind: MessageChange, Addr: box, Header: &Header{ID: id}, Gone: true})
 	return m.h.ReceivedAt, nil
 }
 
@@ -326,8 +317,8 @@ func (s *memBackend) DeleteMessage(ctx context.Context, box protocol.Address, id
 	return s.Retire(ctx, box, id)
 }
 
-// DeleteFrom implements Backend.
-func (s *memBackend) DeleteFrom(_ context.Context, box protocol.Address, from func(protocol.Address) bool, retired func([32]byte, time.Time)) error {
+// DeleteAll implements Backend.
+func (s *memBackend) DeleteAll(_ context.Context, box protocol.Address, retired func([32]byte, time.Time)) error {
 	s.deliver()
 	type taken struct {
 		id       [32]byte
@@ -335,11 +326,9 @@ func (s *memBackend) DeleteFrom(_ context.Context, box protocol.Address, from fu
 	}
 	var out []taken
 	s.mu.Lock()
-	for id, msg := range s.live(box) {
-		if from(msg.h.From) {
-			if received, err := s.retireLocked(box, id); err == nil {
-				out = append(out, taken{id, received})
-			}
+	for id := range s.live(box) {
+		if received, err := s.retireLocked(box, id); err == nil {
+			out = append(out, taken{id, received})
 		}
 	}
 	s.mu.Unlock()

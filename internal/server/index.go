@@ -22,7 +22,8 @@ import (
 // it; a change that arrives while the box loads waits, and is applied after
 // the load, in order. Applying a change twice, or late, is harmless:
 // messages are a set keyed by (id, expiry), a count is the size of the set,
-// and a standing only moves to a newer record (version).
+// and a standing only moves to a newer record (version). A deletion, which
+// names no expiry, is the exception (deleted).
 type index struct {
 	shards [256]indexShard // by the address's first byte
 	// key tags each mark (markTag): random, made with the index.
@@ -43,11 +44,10 @@ type indexShard struct {
 // The plain prefix stays for one thing: ordering two messages of one
 // millisecond as the list orders them.
 type mark struct {
-	tag  uint64 // markTag of the message id: what the mark is known by
-	id   uint64 // first 8 bytes of the message id, for the list's order within a millisecond only
-	from uint64 // first 8 bytes of the sender's address, for the per-pair cap
-	exp  uint64 // expiry in unix ms: received_at + TTL
-	n    uint8  // fetches of it this process has served, to 255: a second one is a repeat
+	tag uint64 // markTag of the message id: what the mark is known by
+	id  uint64 // first 8 bytes of the message id, for the list's order within a millisecond only
+	exp uint64 // expiry in unix ms: received_at + TTL
+	n   uint8  // fetches of it this process has served, to 255: a second one is a repeat
 }
 
 // boxMem is one box in memory.
@@ -119,8 +119,8 @@ func markTag(key *[32]byte, id [32]byte) uint64 {
 // tagOf is markTag under this index's key.
 func (x *index) tagOf(id [32]byte) uint64 { return markTag(&x.key, id) }
 
-func (x *index) newMark(id [32]byte, from protocol.Address, exp uint64) mark {
-	return mark{tag: x.tagOf(id), id: prefix8(id[:]), from: prefix8(from[:]), exp: exp}
+func (x *index) newMark(id [32]byte, exp uint64) mark {
+	return mark{tag: x.tagOf(id), id: prefix8(id[:]), exp: exp}
 }
 
 // ensure loads box a unless memory holds it. read runs once however many
@@ -232,6 +232,38 @@ func (x *index) remove(box protocol.Address, tag, exp, now uint64, echo bool) {
 	})
 }
 
+// deleted removes a message whose item the stream says was deleted, which
+// names its id and not its expiry: of the marks and tombs of its tag, the one
+// of the earliest expiry. A box holds one item of an id at a time, and the
+// stream brings an item's changes in order, so that is the message whose item
+// went; a tomb is this process's own removal of it, echoed. It reads wrong
+// where it meets the mark of a later message of the same bytes this process
+// stored before the stream brought the deletion: one applied twice, or one
+// that comes after its message expired (by the TTL, or by an ack in its last
+// seconds). That mark goes, and the stream's insert of it, which comes after
+// the deletion, brings it back.
+func (x *index) deleted(box protocol.Address, tag, now uint64) {
+	x.apply(box, func(m *boxMem) {
+		m.prune(now)
+		first := func(ks []mark) int {
+			i := -1
+			for j, k := range ks {
+				if k.tag == tag && (i < 0 || k.exp < ks[i].exp) {
+					i = j
+				}
+			}
+			return i
+		}
+		i, t := first(m.marks), first(m.tombs)
+		switch {
+		case t >= 0 && (i < 0 || m.tombs[t].exp <= m.marks[i].exp):
+			m.tombs = slices.Delete(m.tombs, t, t+1)
+		case i >= 0:
+			m.marks = slices.Delete(m.marks, i, i+1)
+		}
+	})
+}
+
 // count returns the number of live messages in a box.
 func (x *index) count(box protocol.Address, now uint64) int {
 	sh := x.shard(box)
@@ -243,28 +275,6 @@ func (x *index) count(box protocol.Address, now uint64) int {
 	}
 	m.prune(now)
 	return len(m.marks)
-}
-
-// pair returns how many live messages from one sender a box holds, and the
-// earliest expiry among them.
-func (x *index) pair(box protocol.Address, from uint64, now uint64) (n int, oldest uint64) {
-	sh := x.shard(box)
-	sh.mu.Lock()
-	defer sh.mu.Unlock()
-	m := sh.held(box)
-	if m == nil {
-		return 0, 0
-	}
-	m.prune(now)
-	for _, k := range m.marks {
-		if k.from == from {
-			n++
-			if oldest == 0 || k.exp < oldest {
-				oldest = k.exp
-			}
-		}
-	}
-	return n, oldest
 }
 
 // after returns how many live messages a box holds past a list position: the

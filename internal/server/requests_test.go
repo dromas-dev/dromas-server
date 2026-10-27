@@ -33,7 +33,7 @@ var update = flag.Bool("update", false, "write testdata/aws-requests.golden agai
 func TestEveryStoreCallSendsAWSWhatItSentBefore(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
-	box, other, from := protocol.Address{0xb0, 1}, protocol.Address{0xb1, 2}, protocol.Address{0xf0, 3}
+	box, other := protocol.Address{0xb0, 1}, protocol.Address{0xb1, 2}
 	id := [32]byte{0x1d, 4}
 	received := now.Add(-time.Hour)
 	b64 := base64.StdEncoding.EncodeToString
@@ -65,8 +65,8 @@ func TestEveryStoreCallSendsAWSWhatItSentBefore(t *testing.T) {
 	}
 	// A message of the box's, live, as the live index and the messages table
 	// hold it; every other DynamoDB call is answered {}.
-	live := fmt.Sprintf(`"box":{"B":%q},"id":{"B":%q},"live":{"B":%q},"from":{"B":%q},"size":{"N":"100"}`,
-		b64(box[:]), b64(id[:]), b64(liveKey(ms(received), id)), b64(from[:]))
+	live := fmt.Sprintf(`"box":{"B":%q},"id":{"B":%q},"live":{"B":%q},"size":{"N":"100"}`,
+		b64(box[:]), b64(id[:]), b64(liveKey(ms(received), id)))
 	// And a box record, a registered box's under the address other, to every
 	// Query of the boxes table, so that a box's load reads its live entries.
 	_, _, held := heldRecord(t)
@@ -99,7 +99,7 @@ func TestEveryStoreCallSendsAWSWhatItSentBefore(t *testing.T) {
 		Rev:     3, Created: now.Add(-48 * time.Hour), Expires: now.Add(60 * 24 * time.Hour),
 		ACL: &protocol.ACL{Allow: protocol.ACLList{Any: true}, Deny: protocol.NewACLList(false, []protocol.Address{other})},
 	}
-	h := &Header{ID: id, From: from, Size: 100, ReceivedAt: received, ExpiresAt: received.Add(protocol.Retention)}
+	h := &Header{ID: id, Size: 100, ReceivedAt: received, ExpiresAt: received.Add(protocol.Retention)}
 	ctx := t.Context()
 	calls := []struct {
 		name string
@@ -128,7 +128,7 @@ func TestEveryStoreCallSendsAWSWhatItSentBefore(t *testing.T) {
 		{"Message, whole", func() { _, _, _ = s.Message(ctx, box, id, 0) }},
 		{"Message, from byte 40", func() { _, _, _ = s.Message(ctx, box, id, 40) }},
 		{"DeleteMessage", func() { _ = s.DeleteMessage(ctx, box, id) }},
-		{"DeleteFrom", func() { _ = s.DeleteFrom(ctx, box, func(protocol.Address) bool { return true }) }},
+		{"DeleteMessages", func() { _ = s.DeleteMessages(ctx, box) }},
 		{"DeleteBox", func() { _ = s.DeleteBox(ctx, box) }},
 		{"Account", func() { _, _ = s.Account(ctx, "an account") }},
 		{"CreateAccount", func() { _ = s.CreateAccount(ctx, &Account{ID: "an account", Unmetered: true}) }},

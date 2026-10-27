@@ -57,7 +57,6 @@ func TestAListWhosePreconditionIsFalseTakesNoCursor(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			l := relaxed()
-			l.PairCap = 0
 			l.PollBurst, l.PollRefill = 2, time.Hour
 			e := newEnv(t, l)
 			from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
@@ -390,7 +389,6 @@ type reach struct {
 func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.PairCap = 0
 	l.RequestBurst, l.RequestRefill = 1000, time.Hour
 	l.CallBurst, l.CallRefill = 1000, time.Hour
 	l.PollBurst, l.PollRefill = 1000, time.Hour
@@ -703,7 +701,6 @@ func drained(e *env, n int) (*raw, protocol.MessageList, string) {
 func TestAListsHeadMovesNoCursor(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.PairCap = 0
 	l.PollBurst, l.PollRefill = 100, time.Hour
 	e := newEnv(t, l)
 	to, first, cursor := drained(e, pageSize+2)
@@ -741,7 +738,7 @@ func TestAListsHeadMovesNoCursor(t *testing.T) {
 func TestARefusedPageLeavesTheBoxItsCursor(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.PairCap, l.BoxCap = 0, pageSize+1 // two pages to a full box: an allowance of four at once
+	l.BoxCap = pageSize + 1 // two pages to a full box: an allowance of four at once
 	l.PollBurst, l.PollRefill = 100, time.Hour
 	e := newEnv(t, l)
 	to, _, cursor := drained(e, pageSize+1)

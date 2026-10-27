@@ -272,26 +272,35 @@ func TestASendNamesTheMessageItMade(t *testing.T) {
 	}
 }
 
+// While the message is unacked, a post of its bytes gets the receipt held,
+// from any sender; once it is acked nothing of it is kept, and the same bytes
+// are new mail, which the reader skips, and acks (PROTOCOL.md §11.10 step 6,
+// §12.3 check 8).
 func TestRetryGetsOriginalReceipt(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b, c := e.box(protocol.Classic), e.box(protocol.Classic), e.box(protocol.Classic)
 	sent := capture(e, "/v1/"+b.Address().String())
 	r := send(t, a, b, "once")
 	e.setMiddle(nil)
 
-	retry := e.do(http.MethodPost, "/v1/"+b.Address().String()+"/messages", *sent, e.pass(a))
-	var again protocol.Receipt
-	if err := json.Unmarshal(retry.body, &again); err != nil || retry.status != http.StatusOK || again != *r {
-		t.Fatalf("retry: %d %s, want 200 and %+v", retry.status, retry.body, *r)
+	for _, from := range []*client.Box{a, c} {
+		retry := e.do(http.MethodPost, "/v1/"+b.Address().String()+"/messages", *sent, e.pass(from))
+		var again protocol.Receipt
+		if err := json.Unmarshal(retry.body, &again); err != nil || retry.status != http.StatusOK || again != *r {
+			t.Fatalf("a post of the bytes held: %d %s, want 200 and %+v", retry.status, retry.body, *r)
+		}
 	}
 	if res := receive(t, b); len(res.Delivered) != 1 {
 		t.Fatalf("delivered %d, want 1", len(res.Delivered))
 	}
-	// Still a retry after the ack: the dedupe record outlives it.
-	e.want(e.do(http.MethodPost, "/v1/"+b.Address().String()+"/messages", *sent, e.pass(a)), http.StatusOK, "")
+	e.want(e.do(http.MethodPost, "/v1/"+b.Address().String()+"/messages", *sent, e.pass(a)), http.StatusCreated, "")
+	// The reader skips an id it has taken, and acks it.
 	if res := receive(t, b); len(res.Delivered) != 0 {
-		t.Fatal("a retry after the ack was delivered again")
+		t.Fatalf("the same bytes after the ack were delivered again: %d", len(res.Delivered))
+	}
+	if n, err := e.store.Count(t.Context(), b.Address()); err != nil || n != 0 {
+		t.Fatalf("after the reader's drain the box holds %d, %v; want none", n, err)
 	}
 }
 
@@ -385,7 +394,6 @@ func TestRecoveryWithIdentityAlone(t *testing.T) {
 func TestPagination(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.PairCap = 0
 	l.PollBurst = 1 // a drain of two pages is one poll, and a continuation
 	e := newEnv(t, l)
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
@@ -409,25 +417,6 @@ func TestPagination(t *testing.T) {
 func TestLimits(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	t.Run("pair_full", func(t *testing.T) {
-		l := relaxed()
-		l.PairCap = 2
-		e := newEnv(t, l)
-		a, b := e.box(protocol.Classic), e.box(protocol.Classic)
-		send(t, a, b, "1")
-		send(t, a, b, "2")
-		_, err := a.Send(ctx, b.Address(), "3")
-		var ae *client.APIError
-		if !errors.As(err, &ae) || ae.Problem.Code != protocol.CodePairFull || ae.Status != 429 ||
-			ae.RetryAfter == 0 || ae.Problem.Unacked == nil || *ae.Problem.Unacked != 2 || ae.Problem.OldestExpiresAt == "" {
-			t.Fatalf("third send: %v %+v", err, ae)
-		}
-		// Nothing is dropped to make room; the message waits in the outbox.
-		receive(t, b)
-		if rs, err := a.Flush(ctx); err != nil || len(rs) != 1 {
-			t.Fatalf("flush: %v", err)
-		}
-	})
 	t.Run("mailbox_full", func(t *testing.T) {
 		l := relaxed()
 		l.BoxCap = 2
@@ -440,6 +429,11 @@ func TestLimits(t *testing.T) {
 		if !errors.As(err, &ae) || ae.Problem.Code != protocol.CodeMailboxFull || ae.Status != 429 || ae.RetryAfter == 0 ||
 			ae.Problem.Count == nil || *ae.Problem.Count != 2 {
 			t.Fatalf("send to a full box: %v %+v", err, ae)
+		}
+		// Nothing is dropped to make room; the message waits in the outbox.
+		receive(t, b)
+		if rs, err := c.Flush(ctx); err != nil || len(rs) != 1 {
+			t.Fatalf("flush: %v", err)
 		}
 	})
 	t.Run("sends per day", func(t *testing.T) {
@@ -490,8 +484,8 @@ func TestLimits(t *testing.T) {
 }
 
 // The Go client against this server: a block reaches the server, which
-// refuses the blocked sender's next send for good and deleted what it held
-// from it; under "server allowed" a send to a new address tells the server
+// refuses the blocked sender's next send for good and deletes nothing it
+// holds, which the client drops on its drain (PROTOCOL.md §11.14); under "server allowed" a send to a new address tells the server
 // first, so the reply is taken and a stranger's send is refused.
 func TestTheGoClientsACL(t *testing.T) {
 	t.Parallel()
@@ -502,8 +496,8 @@ func TestTheGoClientsACL(t *testing.T) {
 	if _, err := b.Block(ctx, a.Address()); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := e.store.Count(ctx, b.Address()); err != nil || n != 0 {
-		t.Fatalf("the box still holds %d messages, %v", n, err)
+	if n, err := e.store.Count(ctx, b.Address()); err != nil || n != 1 {
+		t.Fatalf("after the block the box holds %d messages, %v; want the one sent", n, err)
 	}
 	_, err := a.Send(ctx, b.Address(), "refused")
 	if codeOf(err) != protocol.CodeSenderNotAllowed {
@@ -517,7 +511,7 @@ func TestTheGoClientsACL(t *testing.T) {
 	if _, err := stranger.Send(ctx, b.Address(), "refused"); codeOf(err) != protocol.CodeSenderNotAllowed {
 		t.Fatalf("a stranger's send: %v", err)
 	}
-	if res := receive(t, b); len(res.Delivered) != 1 || len(res.Held) != 0 {
+	if res := receive(t, b); len(res.Delivered) != 1 || len(res.Held) != 0 || len(res.Blocked) != 1 {
 		t.Fatalf("b received %+v", res)
 	}
 	rec, err := e.store.Box(ctx, b.Address())

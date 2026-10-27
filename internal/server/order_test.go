@@ -268,9 +268,9 @@ func emptyOK(_, got reply) string {
 // would make new (PROTOCOL.md §11.4, the order of refusals): a registration's
 // identical retry, with its address's registrations and its /48's spent, is
 // 200 {}; a renewal's, with the box's renewals and certificates spent, 200
-// {}; a send's retry, with its sender's sends a day, the pair and box caps
-// and its recipient's new mail received spent, its first receipt; a
-// revocation of an address held revoked, with the registrations a
+// {}; a send's retry, or another sender's post of the same bytes, with the
+// sender's sends a day, the box cap and its recipient's new mail received
+// spent, its first receipt; a revocation of an address held revoked, with the registrations a
 // revocation of an address held nothing of spends spent, 410 with the
 // record; and a revocation of certificates through the serial held, with
 // the raises a day spent, 200 {}, and one through a lower serial 409
@@ -340,19 +340,22 @@ func TestARetryIsAnsweredFromWhatIsKeptWhateverItWouldMakeNew(t *testing.T) {
 		}},
 		{"send", map[string]func(*Limits){
 			string(protocol.QuotaSends):      func(l *Limits) { l.SendsPerDay = 1 },
-			string(protocol.CodePairFull):    func(l *Limits) { l.PairCap = 1 },
 			string(protocol.CodeMailboxFull): func(l *Limits) { l.BoxCap = 1 },
 			string(protocol.CodeMailboxBusy): func(l *Limits) { l.ReceiveBurst, l.ReceiveRefill = 1, time.Hour },
 		}, func(e *env, call caller, _ []string) (reply, []retried, func() reply) {
-			from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
+			from, to, other := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 			post := sealedTo(1, 1, ciphertextTo(e.t, to))
+			held := func(first, got reply) string {
+				if got.status != http.StatusOK || string(got.body) != string(first.body) {
+					return fmt.Sprintf("%d %s, want 200 and the first receipt %s", got.status, got.body, first.body)
+				}
+				return ""
+			}
 			return e.do("POST", to.path("/messages"), post, from.pass(1)),
-				[]retried{{"the same ciphertext again", func() reply { return e.do("POST", to.path("/messages"), post, from.pass(1)) }, func(first, got reply) string {
-					if got.status != http.StatusOK || string(got.body) != string(first.body) {
-						return fmt.Sprintf("%d %s, want 200 and the first receipt %s", got.status, got.body, first.body)
-					}
-					return ""
-				}}},
+				[]retried{
+					{"the same ciphertext again", func() reply { return e.do("POST", to.path("/messages"), post, from.pass(1)) }, held},
+					{"the same ciphertext from another sender", func() reply { return e.do("POST", to.path("/messages"), post, other.pass(1)) }, held},
+				},
 				func() reply {
 					return e.do("POST", to.path("/messages"), sealedTo(1, 1, ciphertextTo(e.t, to)), from.pass(1))
 				}
@@ -425,7 +428,7 @@ func TestARetryIsAnsweredFromWhatIsKeptWhateverItWouldMakeNew(t *testing.T) {
 			for world, with := range worlds {
 				t.Run(fmt.Sprintf("%s, %s spent, %s", k.name, strings.Join(spent, " and "), world), func(t *testing.T) {
 					l := relaxed()
-					l.PairCap, l.BoxCap = 0, 0
+					l.BoxCap = 0
 					for _, n := range spent {
 						k.counts[n](&l)
 					}

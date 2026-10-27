@@ -23,12 +23,12 @@ import (
 	"github.com/dromas-dev/dromas-client/protocol"
 )
 
-// Posts of the same ciphertext from one sender in flight at once are one
-// call (dromas-dev/dromas-server#76): the second waits for the first and
+// Posts of the same ciphertext in flight at once are one call, from any
+// sender (dromas-dev/dromas-server#76): the second waits for the first and
 // is answered 200 with its receipt, never refused by a quota the first one
-// spent (PROTOCOL.md §11.5), for the sends a day, the pair cap and the box's
-// new mail alike. Another sender's post of the same bytes is its own, and is
-// answered 409 by the dedupe or the write.
+// spent (PROTOCOL.md §11.5), for the sends a day, the box cap and the box's
+// new mail alike. A post handed the refusal of another sender's is made
+// again, as its own.
 func TestPostsOfTheSameBytesInFlightAreOneCall(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -36,23 +36,29 @@ func TestPostsOfTheSameBytesInFlightAreOneCall(t *testing.T) {
 		set  func(*Limits)
 	}{
 		{"sends a day", func(l *Limits) { l.SendsPerDay = 2 }},
-		{"the pair cap", func(l *Limits) { l.PairCap = 2 }},
+		{"the box cap", func(l *Limits) { l.BoxCap = 2 }},
 		{"the box's new mail", func(l *Limits) { l.ReceiveBurst, l.ReceiveRefill = 2, time.Hour }},
 	} {
 		l := relaxed()
-		l.PairCap, l.BoxCap = 0, 0
+		l.BoxCap = 0
 		c.set(&l)
 		e := newEnv(t, l, func(cfg *Config) { cfg.Store = slowPut{cfg.Store, 40 * time.Millisecond} })
 		for i := range 5 {
 			to, from := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 			e.want(e.sendTo(to, 1, 1, from, 1), http.StatusCreated, "") // one of each budget spent
+			// The second post is from the same sender, and on odd trials
+			// from another.
+			second := from
+			if i%2 == 1 {
+				second = e.raw().register(protocol.MaxPrekeyLifetime)
+			}
 			ct := sealFor(t, to, 1)
 			var r1, r2 reply
 			var wg sync.WaitGroup
 			wg.Add(2)
 			go func() { defer wg.Done(); r1 = e.do("POST", to.path("/messages"), sealedTo(1, 1, ct), from.pass(1)) }()
 			time.Sleep(5 * time.Millisecond)
-			go func() { defer wg.Done(); r2 = e.do("POST", to.path("/messages"), sealedTo(1, 1, ct), from.pass(1)) }()
+			go func() { defer wg.Done(); r2 = e.do("POST", to.path("/messages"), sealedTo(1, 1, ct), second.pass(1)) }()
 			wg.Wait()
 			if got := fmt.Sprint(r1.status, " ", r2.status); got != "201 200" && got != "200 201" {
 				t.Errorf("%s, trial %d: the same bytes posted twice at once answered %s %s, %s %s; want 201 and 200, whichever won", c.name, i, got, r1.code(), r2.code(), r2.body)
@@ -70,8 +76,8 @@ func TestPostsOfTheSameBytesInFlightAreOneCall(t *testing.T) {
 	time.Sleep(5 * time.Millisecond)
 	go func() { defer wg.Done(); rb = e.do("POST", to.path("/messages"), sealedTo(1, 1, ct), b.pass(1)) }()
 	wg.Wait()
-	if got := fmt.Sprint(ra.status, " ", rb.status); got != "201 409" && got != "409 201" {
-		t.Errorf("the same bytes from two senders at once answered %s; want 201 and 409, whichever won", got)
+	if got := fmt.Sprint(ra.status, " ", rb.status); got != "201 200" && got != "200 201" {
+		t.Errorf("the same bytes from two senders at once answered %s; want 201 and 200, whichever won", got)
 	}
 
 	// A sender at its sends a day and one with sends left post the same
@@ -192,10 +198,10 @@ func TestPUTsDuringARevocationsDeleteStartNoOther(t *testing.T) {
 	}
 }
 
-// On DynamoDB: a duplicate whose dedupe read missed an item acked meanwhile
-// puts the body again, and the write that finds the item not live deletes it
-// (dromas-dev/dromas-server#16). The message is not served either way.
-func TestADuplicateAfterAnAckLeavesNoBody(t *testing.T) {
+// On DynamoDB: a write of an id whose message was acked is new mail, whatever
+// a dedupe read before it found: the ack deleted the item, so the write's
+// condition passes, and its item and its body are stored and served.
+func TestAPutAfterAnAckIsStored(t *testing.T) {
 	t.Parallel()
 	e, s := dynamoEnv(t)
 	ctx := context.Background()
@@ -205,14 +211,18 @@ func TestADuplicateAfterAnAckLeavesNoBody(t *testing.T) {
 	if res := receive(t, b); len(res.Delivered) != 1 {
 		t.Fatalf("delivered %d", len(res.Delivered))
 	}
+	e.clock.Add(time.Second)
 	now := e.clock.Now().UTC().Truncate(time.Millisecond)
-	h := &Header{ID: id, From: a.Address(), Size: 1, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
-	orig, err := s.PutMessage(ctx, b.Address(), h, []byte("the duplicate's body"))
-	if err != nil || orig == nil {
-		t.Fatalf("the duplicate's write: %v, %v; want the original's header", orig, err)
+	h := &Header{ID: id, Size: len("the same id again"), ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
+	orig, err := s.PutMessage(ctx, b.Address(), h, []byte("the same id again"))
+	if err != nil || orig != nil {
+		t.Fatalf("the write after the ack: %v, %v; want it stored", orig, err)
 	}
-	if s.bodyExists(t, b.Address(), id) {
-		t.Error("a duplicate after the message's ack left its body in the bucket")
+	if !s.listed(t, b.Address(), id) || !s.bodyExists(t, b.Address(), id) {
+		t.Fatal("the write after the ack is not listed, or its body not kept")
+	}
+	if got, body, err := s.Message(ctx, b.Address(), id, 0); err != nil || !got.ReceivedAt.Equal(now) || string(body) != "the same id again" {
+		t.Fatalf("fetch: %+v %q %v; want the new message", got, body, err)
 	}
 }
 
@@ -661,57 +671,37 @@ func (c *cannedAWS) Do(r *http.Request) (*http.Response, error) {
 		Body:   io.NopCloser(strings.NewReader(body)), Request: r}, nil
 }
 
-// The DynamoDB backend's PutMessage, in process against canned answers: a duplicate
-// whose PutItem finds the id's item acked deletes the body it just put, under
-// the key it put it at, and one that finds the item live deletes nothing
-// (dromas-dev/dromas-server#16, #92). TestADuplicateAfterAnAckLeavesNoBody
-// holds the first on AWS.
-func TestADuplicatesWriteDeletesOnlyAnAckedBody(t *testing.T) {
+// The DynamoDB backend's PutMessage, in process against canned answers: a
+// duplicate whose PutItem finds the id's item live answers with its header,
+// and deletes no body: the one it put is that message's, the same bytes
+// (dromas-dev/dromas-server#16, #92).
+func TestADuplicatesWriteDeletesNoBody(t *testing.T) {
 	t.Parallel()
-	var box, from protocol.Address
-	box[0], from[0] = 1, 2
+	var box protocol.Address
+	box[0] = 1
 	body := []byte("the same bytes")
 	id := [32]byte{3}
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	recv := ms(now) - 1000
 	b64 := base64.StdEncoding.EncodeToString
-	for _, c := range []struct {
-		name    string
-		live    bool
-		deletes bool
-	}{{"acked", false, true}, {"live", true, false}} {
-		t.Run(c.name, func(t *testing.T) {
-			it := fmt.Sprintf(`{"box":{"B":%q},"id":{"B":%q},"from":{"B":%q},"size":{"N":"%d"},"received_at":{"N":"%d"},"expires_at":{"N":"%d"}`,
-				b64(box[:]), b64(id[:]), b64(from[:]), len(body), recv, ttlSeconds(recv+ttlMs))
-			if c.live {
-				it += fmt.Sprintf(`,"live":{"B":%q}`, b64(liveKey(recv, id)))
-			}
-			it += "}"
-			fake := &cannedAWS{item: it}
-			var logged bytes.Buffer
-			s := NewDynamoStore(DynamoConfig{AWS: aws.Config{Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "x", ""),
-				HTTPClient: fake, BaseEndpoint: aws.String("http://127.0.0.1:1")}, BoxesTable: "b", MsgsTable: "m", AccountsTable: "a", Bucket: "s", Log: log.New(&logged, "", 0)})
-			h := &Header{ID: id, From: from, Size: len(body), ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
-			orig, err := s.PutMessage(context.Background(), box, h, body)
-			fake.mu.Lock()
-			calls := append([]string(nil), fake.calls...)
-			fake.mu.Unlock()
-			t.Logf("calls %q; logged %q", calls, logged.String())
-			if err != nil || orig == nil || orig.ID != id || orig.From != from {
-				t.Fatalf("a duplicate's write: %+v, %v; want the original's header", orig, err)
-			}
-			deleted := 0
-			for _, call := range calls {
-				if strings.HasPrefix(call, "DELETE ") {
-					deleted++
-					if !strings.HasSuffix(call, bodyKey(box, id)) {
-						t.Errorf("deleted %s, not the body it put at %s", call, bodyKey(box, id))
-					}
-				}
-			}
-			if (deleted == 1) != c.deletes || deleted > 1 {
-				t.Errorf("a duplicate that found the item %s deleted %d bodies", c.name, deleted)
-			}
-		})
+	it := fmt.Sprintf(`{"box":{"B":%q},"id":{"B":%q},"size":{"N":"%d"},"received_at":{"N":"%d"},"expires_at":{"N":"%d"},"live":{"B":%q}}`,
+		b64(box[:]), b64(id[:]), len(body), recv, ttlSeconds(recv+ttlMs), b64(liveKey(recv, id)))
+	fake := &cannedAWS{item: it}
+	var logged bytes.Buffer
+	s := NewDynamoStore(DynamoConfig{AWS: aws.Config{Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "x", ""),
+		HTTPClient: fake, BaseEndpoint: aws.String("http://127.0.0.1:1")}, BoxesTable: "b", MsgsTable: "m", AccountsTable: "a", Bucket: "s", Log: log.New(&logged, "", 0)})
+	h := &Header{ID: id, Size: len(body), ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
+	orig, err := s.PutMessage(context.Background(), box, h, body)
+	fake.mu.Lock()
+	calls := append([]string(nil), fake.calls...)
+	fake.mu.Unlock()
+	t.Logf("calls %q; logged %q", calls, logged.String())
+	if err != nil || orig == nil || orig.ID != id || ms(orig.ReceivedAt) != recv {
+		t.Fatalf("a duplicate's write: %+v, %v; want the original's header", orig, err)
+	}
+	for _, call := range calls {
+		if strings.HasPrefix(call, "DELETE ") {
+			t.Errorf("a duplicate that found the item live deleted %s", call)
+		}
 	}
 }

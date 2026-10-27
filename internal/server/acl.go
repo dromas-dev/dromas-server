@@ -43,8 +43,7 @@ func (s *Server) aclTooLarge() *problem {
 // them (precondition): a false If-Match is 412, and so is an If-None-Match
 // that is "*" or names the held ACL's tag, and nothing changes. The write is
 // conditional on the record's revision, so the ACL the If-Match was held to
-// is the one replaced. Then the box's unacked mail from every sender its deny
-// list matches is deleted, as acks delete it. It answers the ACL as held with
+// is the one replaced. It refuses later sends, and deletes no mail. It answers the ACL as held with
 // no ETag: the lists are sorted and each entry kept once, so what is held may
 // not be what was sent, and RFC 9110 §9.3.4 lets a PUT's answer carry a
 // validator only for content saved as it came.
@@ -99,17 +98,6 @@ func (s *Server) putACL(w http.ResponseWriter, r *http.Request) error {
 			return fail(protocol.CodeBoxChanged, "retry", "the box changed during the request")
 		}
 		return err
-	}
-	// After the record holds the ACL, so the sends it refuses are refused
-	// from here on. Memory says first whether the box holds any mail.
-	if acl.Deny.Len() > 0 {
-		if n, err := s.store.Count(ctx, a); err != nil {
-			return err
-		} else if n > 0 {
-			if err := s.store.DeleteFrom(ctx, a, acl.Deny.Has); err != nil {
-				return err
-			}
-		}
 	}
 	h := w.Header()
 	h.Set("Content-Type", "application/json")

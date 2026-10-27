@@ -201,7 +201,7 @@ func TestMetricsObserveTheItemCollectionAMessageWriteGrew(t *testing.T) {
 	m := NewMetrics(prometheus.NewRegistry())
 	s.dynamo().metrics = m
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	h := &Header{ID: [32]byte{7}, From: protocol.Address{6}, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
+	h := &Header{ID: [32]byte{7}, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
 	if _, err := s.PutMessage(t.Context(), protocol.Address{4}, h, []byte("abc")); err != nil {
 		t.Fatal(err)
 	}

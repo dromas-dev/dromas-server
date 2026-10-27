@@ -111,7 +111,7 @@ func TestCostMemoryPerBox(t *testing.T) {
 		for _, a := range addrs {
 			var marks []mark
 			for i := range k {
-				marks = append(marks, mark{id: uint64(i), from: 1, exp: 1 << 62})
+				marks = append(marks, mark{id: uint64(i), exp: 1 << 62})
 			}
 			_ = x.ensure(ctx, a, func() (boxRead, error) {
 				return boxRead{exists: true, st: Standing{State: Active, Key: string(bytes.Repeat([]byte{1}, 51)), Cert: a}, rev: 2, marks: marks}, nil
@@ -299,17 +299,10 @@ func TestCostItemSizes(t *testing.T) {
 	to := costAddrs(1)[0]
 	body := make([]byte, 4096)
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	h := &Header{ID: sha256.Sum256(body), From: costAddrs(1)[0], Size: len(body), ReceivedAt: now, ExpiresAt: now.Add(protocol.TTL)}
+	h := &Header{ID: sha256.Sum256(body), Size: len(body), ReceivedAt: now, ExpiresAt: now.Add(protocol.TTL)}
 	live := msgItem(to, h)
 	n := itemSize(live)
-	t.Logf("message item, unacked: %4d B = %d write unit", n, wcu(n))
-	index := map[string]types.AttributeValue{"box": live["box"], "live": live["live"], "id": live["id"], "from": live["from"], "size": live["size"]}
+	t.Logf("message item: %4d B = %d write unit; an ack deletes it", n, wcu(n))
+	index := map[string]types.AttributeValue{"box": live["box"], "live": live["live"], "id": live["id"], "size": live["size"]}
 	t.Logf("its entry in the live index: %4d B", itemSize(index))
-	acked := map[string]types.AttributeValue{}
-	for k, v := range live {
-		if k != "live" {
-			acked[k] = v
-		}
-	}
-	t.Logf("message item, acked (kept as the dedupe record): %4d B", itemSize(acked))
 }
