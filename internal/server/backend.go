@@ -27,9 +27,8 @@ import (
 //
 // A write of several steps is one operation, whose outcome is its item's
 // write: a send writes its body, then its item; an ack deletes its body,
-// then takes its item out of the list; DeleteFrom finds a box's messages,
-// deletes their bodies, then takes each out of the list, and hands each it
-// took to retired as it lands. A step that fails before the item's write is
+// then its item; DeleteAll finds a box's messages, deletes their bodies,
+// then each item, and hands each it took to retired as it lands. A step that fails before the item's write is
 // a refusal: it changed nothing a reader of the list sees.
 type Backend interface {
 	// ReadAddress reads what is held of address a, strongly consistent:
@@ -45,8 +44,8 @@ type Backend interface {
 	// from is inside it, above 0 and below its Size, and otherwise whole; or
 	// ErrNotFound; or errNoBody for a live item whose body is gone.
 	Message(ctx context.Context, box protocol.Address, id [32]byte, from int64) (*Header, []byte, error)
-	// Dedupe returns the header of the message box already holds with this
-	// id, acked or not, until it expires; or ErrNotFound.
+	// Dedupe returns the header of the live message box holds with this
+	// id, or ErrNotFound.
 	Dedupe(ctx context.Context, box protocol.Address, id [32]byte) (*Header, error)
 	// Account reads an account's record, strongly consistent, or returns
 	// ErrNotFound.
@@ -81,20 +80,19 @@ type Backend interface {
 	CreateAccount(ctx context.Context, a *Account) error
 	// PutAdoptKey stores a new adopt key's state, or returns ErrExists.
 	PutAdoptKey(ctx context.Context, k *AdoptKey) error
-	// PutMessage stores a message: its body, then its item, which is also
-	// its dedupe record. An item of another send of the id, live or acked
-	// and unexpired, refuses it (duplicate).
+	// PutMessage stores a message: its body, then its item. A live item of
+	// another send of the id refuses it (duplicate).
 	PutMessage(ctx context.Context, box protocol.Address, h *Header, body []byte) error
-	// Retire takes a live message out of the list, and returns when it was
-	// received; ErrNotFound if it is not live. Its item stays as the dedupe
-	// record until it expires.
+	// Retire deletes a live message's item, so it leaves the list and
+	// nothing of it is kept, and returns when it was received; ErrNotFound
+	// if it is not live.
 	Retire(ctx context.Context, box protocol.Address, id [32]byte) (time.Time, error)
 	// DeleteMessage acks a message: its body goes, then it is retired.
 	DeleteMessage(ctx context.Context, box protocol.Address, id [32]byte) (time.Time, error)
-	// DeleteFrom deletes, as acks do, every live message in a box whose
-	// sender from matches, and hands each retired as it is taken out of the
-	// list. A message already gone is no error.
-	DeleteFrom(ctx context.Context, box protocol.Address, from func(protocol.Address) bool, retired func(id [32]byte, received time.Time)) error
+	// DeleteAll deletes, as acks do, every live message in a box, and hands
+	// each retired as its item is deleted. A message already gone is no
+	// error.
+	DeleteAll(ctx context.Context, box protocol.Address, retired func(id [32]byte, received time.Time)) error
 
 	// Start hands every change to what the backend keeps, from then on, to
 	// apply: in order for each item, and at least once. It returns once the
@@ -142,7 +140,7 @@ type Change struct {
 
 	Box         *Box         // RecordChange
 	Revocations *Revocations // RevocationsChange
-	Header      *Header      // MessageChange
+	Header      *Header      // MessageChange: of an item deleted, its ID alone
 	Live        bool         // MessageChange: in the list
 	Account     *Account     // AccountChange
 }

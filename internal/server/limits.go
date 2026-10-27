@@ -13,7 +13,6 @@ import (
 // tunables, and a zero turns that limit off.
 type Limits struct {
 	MaxSize        int           // the cap on a ciphertext, in bytes, and what a send reads of its body; nothing may depend on its value
-	PairCap        int           // unacked per (sender → box) [tunable]
 	BoxCap         int           // total per box, a storage ceiling [tunable]
 	SendsPerDay    int           // per sender, a number a day: that many at once, one back each day divided by it (decided: 20)
 	PollBurst      int           // polls a box may make at once (decided: 10); also the fetches of messages already fetched
@@ -46,7 +45,9 @@ type Limits struct {
 
 	// ACLEntries is the most entries a box's ACL holds, its two lists
 	// together [tunable]: a box's record, with its ACL, is held in the box
-	// cache, so this bounds what one record costs memory there.
+	// cache, so this bounds what one record costs memory there. Never off,
+	// and at most protocol.MaxACLEntries: dromasd serve does not start
+	// otherwise.
 	ACLEntries int
 
 	// How long a body may take: BodyTimeout, and one second more for each
@@ -77,7 +78,6 @@ type Limits struct {
 func DefaultLimits() Limits {
 	return Limits{
 		MaxSize:                      64 << 10,
-		PairCap:                      10,
 		BoxCap:                       1000,
 		SendsPerDay:                  20,
 		PollBurst:                    10,

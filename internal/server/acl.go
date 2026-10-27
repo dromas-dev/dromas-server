@@ -11,19 +11,13 @@ import (
 
 // The bound on a PUT …/acl body, before it is parsed: each entry as JSON
 // writes it, an address in quotes with a comma, and room for a client that
-// indents its lists, plus the rest of the document. With no bound on the
-// entries, the body is bounded so that the record stays one DynamoDB item,
-// which holds at most 400 KB.
+// indents its lists, plus the rest of the document.
 const (
 	aclEntryBytes    = 96
 	aclBodyAllowance = 1 << 10
-	aclBodyUnbounded = 256 << 10
 )
 
 func (s *Server) aclBodyLimit() int64 {
-	if s.limits.ACLEntries <= 0 {
-		return aclBodyUnbounded
-	}
 	return int64(s.limits.ACLEntries)*aclEntryBytes + aclBodyAllowance
 }
 
@@ -43,8 +37,7 @@ func (s *Server) aclTooLarge() *problem {
 // them (precondition): a false If-Match is 412, and so is an If-None-Match
 // that is "*" or names the held ACL's tag, and nothing changes. The write is
 // conditional on the record's revision, so the ACL the If-Match was held to
-// is the one replaced. Then the box's unacked mail from every sender its deny
-// list matches is deleted, as acks delete it. It answers the ACL as held with
+// is the one replaced. It refuses later sends, and deletes no mail. It answers the ACL as held with
 // no ETag: the lists are sorted and each entry kept once, so what is held may
 // not be what was sent, and RFC 9110 §9.3.4 lets a PUT's answer carry a
 // validator only for content saved as it came.
@@ -73,10 +66,9 @@ func (s *Server) putACL(w http.ResponseWriter, r *http.Request) error {
 	var doc protocol.ACLDocument
 	if err := decodeBody(w, r, s.aclBodyLimit(), &doc); err != nil {
 		// The bound is drawn from the entries, so a body over it is answered
-		// for them: an ACL's limit is in entries (PROTOCOL.md §11.3). With
-		// them unbounded, the body's bytes are the one limit there is.
+		// for them: an ACL's limit is in entries (PROTOCOL.md §11.3).
 		var p *problem
-		if errors.As(err, &p) && p.code == protocol.CodeTooLarge && s.limits.ACLEntries > 0 {
+		if errors.As(err, &p) && p.code == protocol.CodeTooLarge {
 			return s.aclTooLarge()
 		}
 		return err
@@ -99,17 +91,6 @@ func (s *Server) putACL(w http.ResponseWriter, r *http.Request) error {
 			return fail(protocol.CodeBoxChanged, "retry", "the box changed during the request")
 		}
 		return err
-	}
-	// After the record holds the ACL, so the sends it refuses are refused
-	// from here on. Memory says first whether the box holds any mail.
-	if acl.Deny.Len() > 0 {
-		if n, err := s.store.Count(ctx, a); err != nil {
-			return err
-		} else if n > 0 {
-			if err := s.store.DeleteFrom(ctx, a, acl.Deny.Has); err != nil {
-				return err
-			}
-		}
 	}
 	h := w.Header()
 	h.Set("Content-Type", "application/json")

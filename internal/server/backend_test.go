@@ -159,7 +159,7 @@ var ownRefusal = map[string]error{
 	"PutMessage":    errNotStored,
 	"Retire":        ErrNotFound,
 	"DeleteMessage": ErrNotFound,
-	"DeleteFrom":    errStated,
+	"DeleteAll":     errStated,
 }
 
 // write runs do as method's fault says.
@@ -296,8 +296,8 @@ func (f *faults) DeleteMessage(ctx context.Context, box protocol.Address, id [32
 	return at, err
 }
 
-func (f *faults) DeleteFrom(ctx context.Context, box protocol.Address, from func(protocol.Address) bool, retired func([32]byte, time.Time)) error {
-	return f.write("DeleteFrom", func() error { return f.Backend.DeleteFrom(ctx, box, from, retired) })
+func (f *faults) DeleteAll(ctx context.Context, box protocol.Address, retired func([32]byte, time.Time)) error {
+	return f.write("DeleteAll", func() error { return f.Backend.DeleteAll(ctx, box, retired) })
 }
 
 // holdsBox reports whether the index holds box a loaded, with a record or
@@ -311,7 +311,7 @@ func (x *index) holdsBox(a protocol.Address) bool {
 
 // heldWorld is a store over the in-memory backend, with the injector
 // between them, that holds: box a, registered, its record cached and the
-// box loaded, with two live messages from sender from, in no account; an
+// box loaded, with two live messages, in no account; an
 // account, acct, its record cached, with an adopt key; and an address n
 // with no box, read, remembered missing, and loaded. Every change the setup
 // made has reached memory, so the write a test makes next is the only one
@@ -321,7 +321,6 @@ type heldWorld struct {
 	f        *faults
 	rec      *Box // a's record, as read
 	a, n     protocol.Address
-	from     protocol.Address
 	msgs     [2]*Header
 	acct     string
 	key      [32]byte // the adopt key's hash
@@ -336,7 +335,7 @@ func newHeldWorld(t *testing.T, inAccount bool) *heldWorld {
 	_, _, rec := heldRecord(t)
 	ctx := t.Context()
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	w := &heldWorld{s: NewMemStore(func() time.Time { return now }), a: rec.Addr, n: protocol.Address{0xee, 1}, from: protocol.Address{0xf0, 2},
+	w := &heldWorld{s: NewMemStore(func() time.Time { return now }), a: rec.Addr, n: protocol.Address{0xee, 1},
 		acct: "acct", key: [32]byte{0xad}, now: now, inAcct: inAccount}
 	w.backend = w.s.backend.(*memBackend)
 	must := func(err error) {
@@ -349,7 +348,7 @@ func newHeldWorld(t *testing.T, inAccount bool) *heldWorld {
 	must(w.s.CreateAccount(ctx, &Account{ID: w.acct}))
 	must(w.s.PutAdoptKey(ctx, &AdoptKey{Account: w.acct, Hash: w.key, Uses: 5, Expires: now.Add(time.Hour)}))
 	for i := range w.msgs {
-		w.msgs[i] = &Header{ID: [32]byte{0x1d, byte(i)}, From: w.from, Size: 3, ReceivedAt: now.Add(-time.Duration(i+1) * time.Minute)}
+		w.msgs[i] = &Header{ID: [32]byte{0x1d, byte(i)}, Size: 3, ReceivedAt: now.Add(-time.Duration(i+1) * time.Minute)}
 		w.msgs[i].ExpiresAt = w.msgs[i].ReceivedAt.Add(protocol.Retention)
 		_, err := w.s.PutMessage(ctx, w.a, w.msgs[i], []byte("abc"))
 		must(err)
@@ -497,7 +496,7 @@ func backendWrites() map[string]backendWrite {
 			return nil, w.s.PutAdoptKey(ctx, &AdoptKey{Account: w.acct, Hash: [32]byte{9}, Uses: 1, Expires: w.now.Add(time.Hour)})
 		}, refusals: []error{ErrExists}, applied: func(*heldWorld) string { return "" }},
 		"PutMessage": {on: onBox, run: func(ctx context.Context, w *heldWorld) (*Header, error) {
-			h := &Header{ID: [32]byte{0x1d, 9}, From: w.from, Size: 3, ReceivedAt: w.now, ExpiresAt: w.now.Add(protocol.Retention)}
+			h := &Header{ID: [32]byte{0x1d, 9}, Size: 3, ReceivedAt: w.now, ExpiresAt: w.now.Add(protocol.Retention)}
 			return w.s.PutMessage(ctx, w.a, h, []byte("abc"))
 		}, refusals: []error{errNotStored, duplicate{}}, applied: func(w *heldWorld) string {
 			if n := w.marks(); n != 3 {
@@ -521,8 +520,8 @@ func backendWrites() map[string]backendWrite {
 			}
 			return ""
 		}},
-		"DeleteFrom": {on: onBox, run: func(ctx context.Context, w *heldWorld) (*Header, error) {
-			return nil, w.s.DeleteFrom(ctx, w.a, func(a protocol.Address) bool { return a == w.from })
+		"DeleteAll": {on: onBox, run: func(ctx context.Context, w *heldWorld) (*Header, error) {
+			return nil, w.s.DeleteMessages(ctx, w.a)
 		}, refusals: []error{errStated}, applied: func(w *heldWorld) string {
 			if n := w.marks(); n != 0 {
 				return fmt.Sprintf("the index counts %d messages, want none", n)
@@ -707,7 +706,7 @@ func TestAnItemThatDoesNotReadIsGoneWhateverItsKind(t *testing.T) {
 				"identity": s("not the bytes of an identity document"), "revocation": b([]byte("the identity's revocation"))})
 		},
 		MessageChange: func(w *heldWorld) (func(stypes.Record) (Change, error), stypes.Record) {
-			return msgStreamChange, modify(map[string]stypes.AttributeValue{"box": b(w.a[:]), "id": b(make([]byte, 32)), "from": b(make([]byte, 32)),
+			return msgStreamChange, modify(map[string]stypes.AttributeValue{"box": b(w.a[:]), "id": b(make([]byte, 32)),
 				"size": &stypes.AttributeValueMemberN{Value: "3"}, "received_at": s("not a number")})
 		},
 		AccountChange: func(w *heldWorld) (func(stypes.Record) (Change, error), stypes.Record) {

@@ -337,7 +337,6 @@ type Retired struct {
 // Header is one message's metadata: everything but its body.
 type Header struct {
 	ID         [32]byte // SHA-256 of the ciphertext
-	From       protocol.Address
 	Size       int
 	ReceivedAt time.Time // to the millisecond
 	ExpiresAt  time.Time
@@ -467,9 +466,9 @@ func unknown(err error) error {
 	return fmt.Errorf("%w: %w", ErrUnknown, err)
 }
 
-// duplicate is a send's refusal, stated by the store: the message item of
-// another send of the same ciphertext was there first, live or acked, and
-// h is its header. A send answers from it (ARCHITECTURE.md § Storage).
+// duplicate is a send's refusal, stated by the store: the live message item
+// of another send of the same ciphertext was there first, and h is its
+// header. A send answers from it (ARCHITECTURE.md § Storage).
 type duplicate struct{ h *Header }
 
 func (d duplicate) Error() string { return "a message of the same ciphertext is held" }
@@ -571,8 +570,8 @@ func cloneAccount(a *Account) *Account {
 	return &c
 }
 
-// Store is the server's state: box records, message headers with their
-// dedupe records, and bodies, and what a poll needs of them in memory. Its
+// Store is the server's state: box records, message headers and bodies,
+// and what a poll needs of them in memory. Its
 // one implementation is Memory, over a Backend: DynamoDB and S3 Express
 // (NewDynamoStore), or maps in this process (NewMemStore, the dev server).
 type Store interface {
@@ -607,12 +606,12 @@ type Store interface {
 	// of them, some held or none.
 	Revoke(ctx context.Context, a protocol.Address, rv *Revocations, want Expect) error
 
-	// Dedupe returns the header of the message box already holds with this
-	// id, acked or not, until it expires; or ErrNotFound.
+	// Dedupe returns the header of the live message box holds with this
+	// id, or ErrNotFound: nothing is kept of one acked or expired.
 	Dedupe(ctx context.Context, box protocol.Address, id [32]byte) (*Header, error)
-	// PutMessage stores a message: its body, then its header, which is also
-	// its dedupe record. If a live record for the id appeared first, it
-	// returns that record's header instead.
+	// PutMessage stores a message: its body, then its header. If a live
+	// message of the id appeared first, it returns that one's header
+	// instead.
 	PutMessage(ctx context.Context, box protocol.Address, h *Header, body []byte) (*Header, error)
 	// List returns up to limit live headers, oldest first by (ReceivedAt,
 	// ID), after the given key (nil: from the start).
@@ -622,17 +621,13 @@ type Store interface {
 	// and otherwise whole, as a fetch answers a range (PROTOCOL.md §11.12).
 	// So a fetch that resumes reads only the rest from where a body is kept.
 	Message(ctx context.Context, box protocol.Address, id [32]byte, from int64) (*Header, []byte, error)
-	// DeleteMessage acks a message: its body goes, then it leaves the list;
-	// its dedupe record stays until it expires. ErrNotFound if it is not
+	// DeleteMessage acks a message: its body goes, then its item, and
+	// nothing of it is kept (PROTOCOL.md §13). ErrNotFound if it is not
 	// live.
 	DeleteMessage(ctx context.Context, box protocol.Address, id [32]byte) error
-	// DeleteMessages deletes every live message in a box (a revocation of
-	// its address).
+	// DeleteMessages deletes every live message in a box, as acks do (a
+	// revocation of its address). A message already gone is no error.
 	DeleteMessages(ctx context.Context, box protocol.Address) error
-	// DeleteFrom deletes every live message in a box whose sender from
-	// matches, as acks do: what an ACL's deny list now refuses (PROTOCOL.md
-	// §11.14). A message already gone is no error.
-	DeleteFrom(ctx context.Context, box protocol.Address, from func(protocol.Address) bool) error
 
 	// Account returns an account's record, or ErrNotFound: read on its
 	// first use, then answered from memory.
@@ -654,13 +649,9 @@ type Store interface {
 	// It clears b.Account and bumps b.Rev.
 	Leave(ctx context.Context, b *Box) error
 
-	// Count returns the number of live messages in a box. Count and
-	// PairCount answer from memory: the box is loaded on its first use, and
-	// answered from memory after that.
+	// Count returns the number of live messages in a box, from memory: the
+	// box is loaded on its first use, and answered from memory after that.
 	Count(ctx context.Context, box protocol.Address) (n int, err error)
-	// PairCount returns how many live messages from one sender a box holds,
-	// and when the oldest of them expires.
-	PairCount(ctx context.Context, box, from protocol.Address) (n int, oldest time.Time, err error)
 	// After returns how many live messages a box holds past a list position,
 	// from memory as Count does: what a list from that cursor would return.
 	After(ctx context.Context, box protocol.Address, c *Cursor) (int, error)

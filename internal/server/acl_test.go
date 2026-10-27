@@ -350,23 +350,6 @@ func TestAnACLsGETReadsItsPreconditions(t *testing.T) {
 	e.want(e.doWith("GET", path, nil, e.pass(other), "If-None-Match", tag), 401, protocol.CodeUnauthorized)
 }
 
-// With no bound on its entries, an ACL's body is still bounded, to keep the
-// record one item: a body over that is too_large with the body's bytes as
-// its limit, the one limit there is (PROTOCOL.md §11.3).
-func TestAnUnboundedACLNamesItsBodysBytes(t *testing.T) {
-	t.Parallel()
-	l := relaxed()
-	l.ACLEntries = 0
-	e := newEnv(t, l)
-	b := e.box(protocol.Classic)
-	huge := aclOf([]string{"*"}, []string{strings.Repeat(" ", int(e.server.aclBodyLimit()))})
-	r := e.do("PUT", "/v1/"+b.Address().String()+"/acl", huge, e.pass(b))
-	e.want(r, 413, protocol.CodeTooLarge)
-	if p := r.problem(); p.Limit == nil || *p.Limit != uint64(aclBodyUnbounded) {
-		t.Errorf("an unbounded ACL's body over its bound is told the limit %v, want its %d bytes: %s", p.Limit, aclBodyUnbounded, r.body)
-	}
-}
-
 // A send the ACL refuses is refused with one code and one wording, whether
 // its sender is denied or only not allowed, before anything of the sender's
 // quotas is spent; a sender it lets in is taken.
@@ -403,11 +386,12 @@ func TestACLRefusesSends(t *testing.T) {
 	e.limited(e.do("POST", to+"/messages", e.sealTo(b), e.pass(c)), protocol.QuotaSends)
 }
 
-// A deny list deletes the box's unacked mail from what it matches, and only
-// that; a retry of a message stored before is still answered with its
-// receipt, since a retry is no new mail (PROTOCOL.md §11.10 step 6). One that
-// denies everyone is how a box pauses, and a later ACL undoes it (§11.14).
-func TestACLDenyPurges(t *testing.T) {
+// An ACL deletes no mail: a deny refuses the sender's later sends, and what
+// the box holds stays until it is acked or expires (PROTOCOL.md §11.14). A
+// post of a message the box holds unacked is still answered with its
+// receipt, since step 6 comes before the ACL (§11.10). One that denies
+// everyone is how a box pauses, and a later ACL undoes it.
+func TestACLDeletesNoMail(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
@@ -418,25 +402,18 @@ func TestACLDenyPurges(t *testing.T) {
 	e.want(stored, 201, "")
 	e.want(e.do("POST", to+"/messages", e.sealTo(b), e.pass(a)), 201, "")
 	e.want(e.do("POST", to+"/messages", e.sealTo(b), e.pass(c)), 201, "")
-	count := func(from *client.Box) int {
+	held := func(when string) {
 		t.Helper()
-		n, _, err := e.store.PairCount(ctx, b.Address(), from.Address())
-		if err != nil {
-			t.Fatal(err)
+		if n, err := e.store.Count(ctx, b.Address()); err != nil || n != 3 {
+			t.Fatalf("%s the box holds %d, %v; want the 3 sent", when, n, err)
 		}
-		return n
-	}
-	if count(a) != 2 || count(c) != 1 {
-		t.Fatalf("before: %d from a, %d from c", count(a), count(c))
+		if l := listOf(t, e.do("GET", to+"/messages", nil, e.pass(b))); l.Count != 3 || len(l.Messages) != 3 {
+			t.Fatalf("%s the box lists %d of %d; want 3", when, len(l.Messages), l.Count)
+		}
 	}
 
 	e.want(e.do("PUT", to+"/acl", aclOf([]string{"*"}, []string{a.Address().String()}), e.pass(b)), 200, "")
-	if count(a) != 0 || count(c) != 1 {
-		t.Fatalf("after denying a: %d from a, %d from c", count(a), count(c))
-	}
-	if n, err := e.store.Count(ctx, b.Address()); err != nil || n != 1 {
-		t.Fatalf("the box holds %d, %v", n, err)
-	}
+	held("after denying a")
 	retry := e.do("POST", to+"/messages", first, e.pass(a))
 	e.want(retry, 200, "")
 	if !bytes.Equal(retry.body, stored.body) {
@@ -444,18 +421,15 @@ func TestACLDenyPurges(t *testing.T) {
 	}
 	e.want(e.do("POST", to+"/messages", e.sealTo(b), e.pass(a)), 403, protocol.CodeSenderNotAllowed)
 
-	// The pause (PROTOCOL.md §11.14), nobody allowed and everyone denied:
-	// everything goes, and nothing more comes until a later ACL undoes it.
-	// What the pause deleted stays deleted.
+	// The pause, nobody allowed and everyone denied: nothing more comes
+	// until a later ACL undoes it, and what is held stays.
 	e.want(e.do("PUT", to+"/acl", aclOf([]string{}, []string{"*"}), e.pass(b)), 200, "")
-	if n, err := e.store.Count(ctx, b.Address()); err != nil || n != 0 {
-		t.Fatalf("after denying everyone the box holds %d, %v", n, err)
-	}
+	held("after denying everyone")
 	e.want(e.do("POST", to+"/messages", e.sealTo(b), e.pass(c)), 403, protocol.CodeSenderNotAllowed)
 	e.want(e.do("PUT", to+"/acl", aclOf([]string{"*"}, nil), e.pass(b)), 200, "")
 	e.want(e.do("POST", to+"/messages", e.sealTo(b), e.pass(c)), 201, "")
-	if n, err := e.store.Count(ctx, b.Address()); err != nil || n != 1 {
-		t.Fatalf("after the pause is undone the box holds %d, %v; want the one sent since", n, err)
+	if n, err := e.store.Count(ctx, b.Address()); err != nil || n != 4 {
+		t.Fatalf("after the pause is undone the box holds %d, %v; want the 3 held and the one sent since", n, err)
 	}
 }
 

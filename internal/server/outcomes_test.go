@@ -63,7 +63,7 @@ func TestAWriteRetriedAfterAnAmbiguousAttemptMayHaveBeenApplied(t *testing.T) {
 	t.Parallel()
 	_, _, box := heldRecord(t)
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	msg := &Header{ID: [32]byte{7}, From: box.Addr, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
+	msg := &Header{ID: [32]byte{7}, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
 	cases := []struct {
 		name    string
 		op      string   // UpdateItem, by UpdateBox, or PutItem, by PutMessage
@@ -183,15 +183,13 @@ func putItemMeets(first answer, change func(item map[string]any)) func(string, i
 }
 
 // A send's PutItem applied and answered 500 meets, retried, its own item:
-// the failed condition returns the item this write made (its sender, its
-// time), so the message is stored, and memory has its mark
-// (dromas-dev/dromas-server#89). The controls: the same write answered
-// 200, stored; and a retry whose failed condition returns a live item of
-// another sender at the same time, or of the same sender at another, a send
-// of those bytes that got there first, which this write did not make.
+// the failed condition returns the item this write made (its time), so the
+// message is stored, and memory has its mark (dromas-dev/dromas-server#89).
+// The controls: the same write answered 200, stored; and a retry whose
+// failed condition returns a live item of another time, a send of those
+// bytes that got there first, which this write did not make.
 func TestAPutRetriedOntoItsOwnItemIsStored(t *testing.T) {
 	t.Parallel()
-	_, from, _ := heldRecord(t)
 	to := protocol.Address{1, 2, 3}
 	for _, c := range []struct {
 		name   string
@@ -202,12 +200,7 @@ func TestAPutRetriedOntoItsOwnItemIsStored(t *testing.T) {
 			return scripted("PutItem", applied(answer{status: http.StatusOK, body: "{}"}))
 		}, true},
 		{"applied and answered 500, then its own item", func() func(string, int, []byte) answer { return putItemOfItsOwn(answer500) }, true},
-		{"control: answered 500, then a live item of another sender at the same time", func() func(string, int, []byte) answer {
-			return putItemMeets(answer500, func(it map[string]any) {
-				it["from"] = map[string]string{"B": base64.StdEncoding.EncodeToString(make([]byte, 32))}
-			})
-		}, false},
-		{"control: answered 500, then a live item of its sender at another time", func() func(string, int, []byte) answer {
+		{"control: answered 500, then a live item of another time", func() func(string, int, []byte) answer {
 			return putItemMeets(answer500, func(it map[string]any) {
 				it["received_at"] = map[string]string{"N": strconv.FormatUint(ms(time.Now())-1000, 10)}
 			})
@@ -221,7 +214,7 @@ func TestAPutRetriedOntoItsOwnItemIsStored(t *testing.T) {
 				t.Fatal(err)
 			}
 			now := s.now().UTC().Truncate(time.Millisecond)
-			h := &Header{ID: [32]byte{9}, From: from.id.Address(), Size: 10, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
+			h := &Header{ID: [32]byte{9}, Size: 10, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
 			orig, err := s.PutMessage(context.WithoutCancel(t.Context()), to, h, []byte("0123456789"))
 			calls, applied := f.count("PutItem")
 			marks := s.idx.count(to, s.nowMs())
@@ -242,7 +235,7 @@ func TestAPutRetriedOntoItsOwnItemIsStored(t *testing.T) {
 // ResourceNotFound.
 func TestARefusalAWSStatedGivesTheCountBack(t *testing.T) {
 	t.Parallel()
-	_, from, box := heldRecord(t)
+	_, _, box := heldRecord(t)
 	t.Run("UpdateItem", func(t *testing.T) {
 		for _, code := range []string{"ValidationException", "AccessDeniedException", "ResourceNotFoundException"} {
 			t.Run(code, func(t *testing.T) {
@@ -272,7 +265,7 @@ func TestARefusalAWSStatedGivesTheCountBack(t *testing.T) {
 				f.s3 = func(string, int) answer { return c.a }
 				s := fakeStore(t, f)
 				now := s.now().UTC().Truncate(time.Millisecond)
-				h := &Header{ID: [32]byte{7}, From: from.id.Address(), Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
+				h := &Header{ID: [32]byte{7}, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
 				_, err := s.PutMessage(context.WithoutCancel(t.Context()), protocol.Address{4}, h, []byte("abc"))
 				items, _ := f.count("PutItem")
 				got := mayHaveApplied(err)
@@ -703,13 +696,13 @@ func TestEveryConditionalWriteRetriedAfterAnAmbiguousAttemptMayHaveBeenApplied(t
 		{"CreateBox applied and answered 500, then the retry's failed condition", "PutItem", []answer{applied(answer500), answerCCF}, createBox, nil},
 		{"Leave applied and answered 500, then the retry's failed condition", "UpdateItem", []answer{applied(answer500), answerCCF}, leave, nil},
 		{"DeleteBox applied and answered 500, then throttled twice", "DeleteItem", []answer{applied(answer500), answerPTEE, answerPTEE}, deleteBox, nil},
-		{"an ack's item applied and answered 500, then the retry's failed condition", "UpdateItem", []answer{applied(answer500), answerCCF}, ack, nil},
+		{"an ack's item applied and answered 500, then the retry's failed condition", "DeleteItem", []answer{applied(answer500), answerCCF}, ack, nil},
 		{"CreateAccount applied and answered 500, then the retry's failed condition", "PutItem", []answer{applied(answer500), answerCCF}, account, nil},
 		{"PutAdoptKey applied and answered 500, then the retry's failed condition", "PutItem", []answer{applied(answer500), answerCCF}, adoptKey, nil},
 		{"control: CreateBox's failed condition", "PutItem", []answer{answerCCF}, createBox, ErrExists},
 		{"control: Leave's failed condition", "UpdateItem", []answer{answerCCF}, leave, ErrStale},
 		{"control: DeleteBox throttled three times", "DeleteItem", []answer{answerPTEE, answerPTEE, answerPTEE}, deleteBox, nil},
-		{"control: an ack's failed condition", "UpdateItem", []answer{answerCCF}, ack, ErrNotFound},
+		{"control: an ack's failed condition", "DeleteItem", []answer{answerCCF}, ack, ErrNotFound},
 		{"control: CreateAccount's failed condition", "PutItem", []answer{answerCCF}, account, ErrExists},
 		{"control: PutAdoptKey's failed condition", "PutItem", []answer{answerCCF}, adoptKey, ErrExists},
 		{"control: Adopt answered 500, then its transaction cancelled for the box's condition", "TransactWriteItems", []answer{answer500, cancelled}, adopt, ErrStale},
@@ -939,7 +932,7 @@ func TestAnAckWhoseBodyWasNotDeletedChangesNothing(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			f := newFakeAWS()
 			f.s3 = func(string, int) answer { return c.s3 }
-			f.dynamo = scripted("UpdateItem", c.dynamo...)
+			f.dynamo = scripted("DeleteItem", c.dynamo...)
 			s := fakeStore(t, f)
 			s.cache.fill(cloneBox(box), s.cache.begin(box.Addr))
 			st, _, err := box.standing()
@@ -948,12 +941,12 @@ func TestAnAckWhoseBodyWasNotDeletedChangesNothing(t *testing.T) {
 			}
 			now := s.nowMs()
 			if err := s.idx.ensure(t.Context(), box.Addr, func() (boxRead, error) {
-				return boxRead{exists: true, st: st, rev: box.Rev, marks: []mark{s.idx.newMark(id, box.Addr, now+ttlMs)}}, nil
+				return boxRead{exists: true, st: st, rev: box.Rev, marks: []mark{s.idx.newMark(id, now+ttlMs)}}, nil
 			}); err != nil {
 				t.Fatal(err)
 			}
 			err = s.DeleteMessage(context.WithoutCancel(t.Context()), box.Addr, id)
-			retires, _ := f.count("UpdateItem")
+			retires, _ := f.count("DeleteItem")
 			_, cached := s.cache.get(box.Addr)
 			held := s.idx.holdsBox(box.Addr) && s.idx.count(box.Addr, now) == 1
 			t.Logf("err %v; refused %v, mayHaveApplied %v; %d retires sent; the box held with its message %v, its record cached %v", err, isRefusal(err), mayHaveApplied(err), retires, held, cached)
@@ -967,19 +960,18 @@ func TestAnAckWhoseBodyWasNotDeletedChangesNothing(t *testing.T) {
 	}
 }
 
-// A message retired by another write between DeleteFrom's Query and its own
+// A message retired by another write between DeleteAll's Query and its own
 // retire, acked or retired by a fetch that found no body, is skipped, and the
-// rest are retired: a message already gone is no error (Backend.DeleteFrom;
+// rest are retired: a message already gone is no error (Backend.DeleteAll;
 // dromas-dev/dromas-client#453 item 1). The fake answers the Query with two
-// messages of the sender, the first one's retire as DynamoDB answers a
-// retire of an item an ack has taken out of the list, a failed condition, and
-// the second one's as applied.
-func TestDeleteFromSkipsAMessageRetiredMeanwhile(t *testing.T) {
+// messages, the first one's retire as DynamoDB answers a delete of an item an
+// ack has deleted, a failed condition, and the second one's as applied.
+func TestDeleteAllSkipsAMessageRetiredMeanwhile(t *testing.T) {
 	t.Parallel()
-	box, from := protocol.Address{4}, protocol.Address{5}
+	box := protocol.Address{4}
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	acked := &Header{ID: [32]byte{1}, From: from, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
-	left := &Header{ID: [32]byte{2}, From: from, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
+	acked := &Header{ID: [32]byte{1}, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
+	left := &Header{ID: [32]byte{2}, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
 	query, err := json.Marshal(map[string]any{"Items": []any{itemJSON(msgItem(box, acked)), itemJSON(msgItem(box, left))}, "Count": 2, "ScannedCount": 2})
 	if err != nil {
 		t.Fatal(err)
@@ -993,21 +985,21 @@ func TestDeleteFromSkipsAMessageRetiredMeanwhile(t *testing.T) {
 		switch {
 		case op == "Query":
 			return answer{status: http.StatusOK, body: string(query)}
-		case op == "UpdateItem" && strings.Contains(string(body), base64.StdEncoding.EncodeToString(acked.ID[:])):
+		case op == "DeleteItem" && strings.Contains(string(body), base64.StdEncoding.EncodeToString(acked.ID[:])):
 			return answerCCF
-		case op == "UpdateItem":
+		case op == "DeleteItem":
 			return applied(answer{status: http.StatusOK, body: string(retire)})
 		}
 		return answer500
 	}
 	s := fakeStore(t, f)
 	var retired [][32]byte
-	err = s.dynamo().DeleteFrom(context.WithoutCancel(t.Context()), box, func(a protocol.Address) bool { return a == from }, func(id [32]byte, _ time.Time) {
+	err = s.dynamo().DeleteAll(context.WithoutCancel(t.Context()), box, func(id [32]byte, _ time.Time) {
 		retired = append(retired, id)
 	})
-	retires, _ := f.count("UpdateItem")
+	retires, _ := f.count("DeleteItem")
 	t.Logf("err %v; %d retires sent; retired %x", err, retires, retired)
 	if err != nil || retires != 2 || len(retired) != 1 || retired[0] != left.ID {
-		t.Errorf("a delete of the sender's mail, one message acked meanwhile: err %v, %d retires sent, retired %x; want no error, 2, and the other message alone", err, retires, retired)
+		t.Errorf("a delete of the box's mail, one message acked meanwhile: err %v, %d retires sent, retired %x; want no error, 2, and the other message alone", err, retires, retired)
 	}
 }

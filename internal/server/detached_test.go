@@ -134,15 +134,12 @@ func TestAWriteOutlivesItsCallersHangUp(t *testing.T) {
 	r.prekeyUnder(r.work[1], 3, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(3), r.pass(1)), http.StatusTooManyRequests, protocol.CodeRateLimited)
 
-	// An ACL put whose caller hangs up while it is written still deletes
-	// the mail its deny list matches, which comes after the write.
+	// An ACL put whose caller hangs up while it is written still refuses
+	// the sender its deny list matches.
 	denied := e.raw().register(protocol.MaxPrekeyLifetime)
-	e.want(e.sendTo(r, 2, 1, denied, 1), http.StatusCreated, "")
 	acl, _ := json.Marshal(aclOf([]string{"*"}, []string{denied.id.Address().String()}))
 	hangUp("PUT", r.path("/acl"), "application/json", acl, r.pass(1))
-	if n, _ := e.store.Count(ctx0, r.id.Address()); n != 0 {
-		t.Errorf("an ACL put whose caller hung up mid-write left %d messages from the sender it denies", n)
-	}
+	e.want(e.sendTo(r, 2, 1, denied, 1), http.StatusForbidden, protocol.CodeSenderNotAllowed)
 }
 
 // heldPut runs a hook before the next PutMessage, once.
@@ -228,7 +225,7 @@ func TestACountIsKeptWhenItsWriteMayHaveBeenApplied(t *testing.T) {
 			f := newFakeAWS()
 			f.dynamo, f.s3 = dynamo, s3
 			now := time.Now().UTC().Truncate(time.Millisecond)
-			h := &Header{ID: [32]byte{7}, From: protocol.Address{6}, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
+			h := &Header{ID: [32]byte{7}, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
 			_, err := fakeStore(t, f).PutMessage(ctx, protocol.Address{4}, h, []byte("abc"))
 			return err
 		}
@@ -247,7 +244,7 @@ func TestACountIsKeptWhenItsWriteMayHaveBeenApplied(t *testing.T) {
 			s := NewMemStore(time.Now)
 			injectFaults(s).set("PutMessage", unknownBefore)
 			now := time.Now().UTC().Truncate(time.Millisecond)
-			_, err := s.PutMessage(ctx, protocol.Address{4}, &Header{ID: [32]byte{7}, From: protocol.Address{6}, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}, []byte("abc"))
+			_, err := s.PutMessage(ctx, protocol.Address{4}, &Header{ID: [32]byte{7}, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}, []byte("abc"))
 			return err
 		}, true},
 		{"a throttle", put(ctx, every(answerPTEE), nil), false},

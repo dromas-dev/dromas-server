@@ -79,15 +79,6 @@ func memberValue(name string) value {
 	return value{name, func(p *protocol.Problem) { p.Member = name }}
 }
 
-func unackedValue(n int) value {
-	return value{n, func(p *protocol.Problem) { u := int64(n); p.Unacked = &u }}
-}
-
-func oldestValue(t time.Time) value {
-	s := t.UTC().Format(protocol.TimeLayout)
-	return value{s, func(p *protocol.Problem) { p.OldestExpiresAt = s }}
-}
-
 func fail(code protocol.Code, hint, format string, values ...value) *problem {
 	args := make([]any, len(values))
 	for i, v := range values {

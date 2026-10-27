@@ -33,7 +33,7 @@ import (
 func TestAFirstPageIsNotModifiedWhileUnchanged(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.PairCap, l.BoxCap = 0, 0
+	l.BoxCap = 0
 	e := newEnv(t, l)
 	from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 	poll := func(query, ifNoneMatch string) (*http.Response, []byte) {
@@ -114,7 +114,7 @@ func TestAFirstPageIsNotModifiedWhileUnchanged(t *testing.T) {
 func TestAPollsIfMatchIsEvaluatedFirst(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.PairCap, l.BoxCap = 0, 0
+	l.BoxCap = 0
 	e := newEnv(t, l)
 	from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 	var ct bytes.Buffer

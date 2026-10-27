@@ -30,8 +30,8 @@ import (
 )
 
 // dynamoBackend is the production backend (ARCHITECTURE.md § Storage): box
-// records in one DynamoDB table, messages in another (each item its header
-// and its dedupe record), accounts in a third, bodies in an S3 Express One
+// records in one DynamoDB table, messages in another (each item a live
+// message's header), accounts in a third, bodies in an S3 Express One
 // Zone directory bucket, and each table's stream for the feed (feed). It is
 // the mapping of the AWS SDK to the Backend's operations and their three
 // outcomes, and nothing more: what a write's answer means is read in one
@@ -39,7 +39,7 @@ import (
 // boundedStreams for the streams).
 //
 // A send writes the body, then the message item; an ack deletes the body,
-// then takes the item out of the list. Neither pair is atomic, and neither
+// then the item. Neither pair is atomic, and neither
 // needs to be: each step is safe to repeat.
 type dynamoBackend struct {
 	db     *dynamodb.Client
@@ -303,6 +303,19 @@ func (it item) hash(name string) ([32]byte, error) {
 func (it item) uint(name string) (uint64, error) {
 	if v, ok := it[name].(*types.AttributeValueMemberN); ok {
 		return strconv.ParseUint(v.Value, 10, 64)
+	}
+	return 0, fmt.Errorf("item: %s is missing or not a number", name)
+}
+
+// size reads a message's size: a number no larger than the protocol's
+// largest ciphertext, so it is an int on every platform.
+func (it item) size(name string) (int, error) {
+	if v, ok := it[name].(*types.AttributeValueMemberN); ok {
+		n, err := strconv.ParseUint(v.Value, 10, 31)
+		if err != nil || n > protocol.MaxCiphertext {
+			return 0, fmt.Errorf("item: %s is not a size of at most %d bytes", name, protocol.MaxCiphertext)
+		}
+		return int(n), nil
 	}
 	return 0, fmt.Errorf("item: %s is missing or not a number", name)
 }
@@ -592,12 +605,11 @@ func (s *dynamoBackend) ReadAddress(ctx context.Context, a protocol.Address) (*B
 
 // Message items.
 
-// msgItem is a new message's item: its header, its dedupe record, and its
-// entry in the live index.
+// msgItem is a new message's item: its header, and its entry in the live
+// index. It names no sender (PROTOCOL.md §13).
 func msgItem(box protocol.Address, h *Header) map[string]types.AttributeValue {
 	recv := ms(h.ReceivedAt)
 	it := msgKey(box, h.ID)
-	it["from"] = bin(h.From[:])
 	it["size"] = num(uint64(h.Size)) //nolint:gosec // a size is not negative
 	it["received_at"] = num(recv)
 	it["expires_at"] = num(ttlSeconds(recv + ttlMs))
@@ -605,14 +617,12 @@ func msgItem(box protocol.Address, h *Header) map[string]types.AttributeValue {
 	return it
 }
 
-// decodeMsg reads a message item, and whether it is still in the list
-// (unacked). Expiry is the caller's to judge.
+// decodeMsg reads a message item, and whether it is in the list: every item
+// this build writes is, until it is deleted; one out of it is an ack of a
+// build before dromas-dev/dromas-client#507, kept until its TTL, and no
+// message. Expiry is the caller's to judge.
 func decodeMsg(it item) (*Header, bool, error) {
 	id, err := it.hash("id")
-	if err != nil {
-		return nil, false, err
-	}
-	from, err := it.hash("from")
 	if err != nil {
 		return nil, false, err
 	}
@@ -620,16 +630,16 @@ func decodeMsg(it item) (*Header, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	size, err := it.uint("size")
+	size, err := it.size("size")
 	if err != nil {
 		return nil, false, err
 	}
-	h := &Header{ID: id, From: from, Size: int(size), ReceivedAt: fromMs(recv), ExpiresAt: fromMs(recv + ttlMs)} //nolint:gosec // sizes are small
+	h := &Header{ID: id, Size: size, ReceivedAt: fromMs(recv), ExpiresAt: fromMs(recv + ttlMs)}
 	_, live := it["live"]
 	return h, live, nil
 }
 
-// decodeLive reads an entry of the live index: the key, from and size.
+// decodeLive reads an entry of the live index: the key and the size.
 func decodeLive(it item) (*Header, error) {
 	k, err := it.bytes("live")
 	if err != nil {
@@ -639,15 +649,11 @@ func decodeLive(it item) (*Header, error) {
 	if err != nil {
 		return nil, err
 	}
-	from, err := it.hash("from")
+	size, err := it.size("size")
 	if err != nil {
 		return nil, err
 	}
-	size, err := it.uint("size")
-	if err != nil {
-		return nil, err
-	}
-	return &Header{ID: id, From: from, Size: int(size), ReceivedAt: fromMs(recv), ExpiresAt: fromMs(recv + ttlMs)}, nil //nolint:gosec // sizes are small
+	return &Header{ID: id, Size: size, ReceivedAt: fromMs(recv), ExpiresAt: fromMs(recv + ttlMs)}, nil
 }
 
 func isConditionFailed(err error) (*types.ConditionalCheckFailedException, bool) {
@@ -774,8 +780,8 @@ func (s *dynamoBackend) liveQuery(box protocol.Address, lo []byte, consistent bo
 		TableName:                 &s.msgs,
 		IndexName:                 aws.String(liveIndex),
 		KeyConditionExpression:    aws.String("#b = :b AND #l BETWEEN :lo AND :hi"),
-		ProjectionExpression:      aws.String("#l, #f, #s"),
-		ExpressionAttributeNames:  map[string]string{"#b": "box", "#l": "live", "#f": "from", "#s": "size"},
+		ProjectionExpression:      aws.String("#l, #s"),
+		ExpressionAttributeNames:  map[string]string{"#b": "box", "#l": "live", "#s": "size"},
 		ExpressionAttributeValues: map[string]types.AttributeValue{":b": bin(box[:]), ":lo": bin(lo), ":hi": bin(bytes.Repeat([]byte{0xff}, 40))},
 		ConsistentRead:            aws.Bool(consistent),
 	}
@@ -880,31 +886,30 @@ func (s *dynamoBackend) Revoke(ctx context.Context, a protocol.Address, rv *Revo
 	return held, nil
 }
 
-// getMsg reads a message's item, acked or not; ErrNotFound if there is none
-// or it has expired.
-func (s *dynamoBackend) getMsg(ctx context.Context, box protocol.Address, id [32]byte) (*Header, bool, error) {
+// getMsg reads a live message's item; ErrNotFound if there is none, it is
+// out of the list (decodeMsg), or it has expired.
+func (s *dynamoBackend) getMsg(ctx context.Context, box protocol.Address, id [32]byte) (*Header, error) {
 	out, err := s.db.GetItem(ctx, &dynamodb.GetItemInput{TableName: &s.msgs, Key: msgKey(box, id), ConsistentRead: aws.Bool(s.consistent)})
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	if out.Item == nil {
-		return nil, false, ErrNotFound
+		return nil, ErrNotFound
 	}
 	h, live, err := decodeMsg(out.Item)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	if ms(h.ExpiresAt) <= s.nowMs() {
-		return nil, false, ErrNotFound // expired; the TTL deletes it later
+	if !live || ms(h.ExpiresAt) <= s.nowMs() {
+		return nil, ErrNotFound // the TTL deletes it later
 	}
-	return h, live, nil
+	return h, nil
 }
 
-// Dedupe implements Backend: the message's item, acked or not. A stale miss
-// is caught by PutMessage's conditional write.
+// Dedupe implements Backend: the live message's item. A stale miss is
+// caught by PutMessage's conditional write.
 func (s *dynamoBackend) Dedupe(ctx context.Context, box protocol.Address, id [32]byte) (*Header, error) {
-	h, _, err := s.getMsg(ctx, box, id)
-	return h, err
+	return s.getMsg(ctx, box, id)
 }
 
 // crashed is a step of a two-step write failing as a crash there would.
@@ -920,9 +925,10 @@ func (s *dynamoBackend) crashed(step string) error {
 // the lifecycle rule reaps, and the retry writes both again. A body that
 // fails stores nothing, whatever S3 answered (errNotStored). A failed
 // condition that hands back the item it met tells, whatever came before it:
-// this write's own item (its sender, its time), which an attempt the SDK
-// retried applied, is the write, applied (dromas-dev/dromas-server#89);
-// another's is a duplicate.
+// one of this write's own time, which an attempt the SDK retried applied, is
+// the write, applied (dromas-dev/dromas-server#89), and so is another post's
+// of the same bytes in the same millisecond, whose item is this one's to the
+// byte; another's is a duplicate.
 func (s *dynamoBackend) PutMessage(ctx context.Context, box protocol.Address, h *Header, body []byte) error {
 	if _, err := s.s3.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: &s.bucket,
@@ -939,27 +945,19 @@ func (s *dynamoBackend) PutMessage(ctx context.Context, box protocol.Address, h 
 	out, err := s.db.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName:                           &s.msgs,
 		Item:                                msgItem(box, h),
-		ConditionExpression:                 aws.String("attribute_not_exists(#id) OR #r <= :cutoff"),
-		ExpressionAttributeNames:            map[string]string{"#id": "id", "#r": "received_at"},
+		ConditionExpression:                 aws.String("attribute_not_exists(#l) OR #r <= :cutoff"),
+		ExpressionAttributeNames:            map[string]string{"#l": "live", "#r": "received_at"},
 		ExpressionAttributeValues:           map[string]types.AttributeValue{":cutoff": num(now - ttlMs)},
 		ReturnValuesOnConditionCheckFailure: types.ReturnValuesOnConditionCheckFailureAllOld,
 		ReturnItemCollectionMetrics:         types.ReturnItemCollectionMetricsSize,
 	}, n.option())
 	if ccf, ok := isConditionFailed(err); ok {
-		orig, live, err := decodeMsg(ccf.Item) // a send of the same ciphertext got there first
+		orig, _, err := decodeMsg(ccf.Item) // a live send of the same ciphertext got there first, whose body is the same bytes
 		switch {
 		case err != nil:
 			return unknown(fmt.Errorf("the item its condition met does not read: %w", err))
-		case live && orig.From == h.From && orig.ReceivedAt.Equal(h.ReceivedAt):
+		case orig.ReceivedAt.Equal(h.ReceivedAt):
 			return nil // this send's own item, from an attempt the SDK retried: it is stored
-		case !live:
-			// Acked since this send's dedupe read missed it: the PUT above
-			// made its body again, which nothing would serve, and only the
-			// lifecycle rule would take (dromas-dev/dromas-server#16).
-			// A live one's body is that message's, the same bytes.
-			if err := s.deleteBody(ctx, box, h.ID); err != nil {
-				s.logf("msgs: deleting a body put again after its message's ack: %v", err)
-			}
 		}
 		return duplicate{orig}
 	}
@@ -972,19 +970,18 @@ func (s *dynamoBackend) PutMessage(ctx context.Context, box protocol.Address, h 
 	return nil
 }
 
-// Retire implements Backend: the item leaves the live index; it stays as
-// the dedupe record until it expires.
+// Retire implements Backend: the item is deleted, if it is live, and nothing
+// of the message is kept.
 func (s *dynamoBackend) Retire(ctx context.Context, box protocol.Address, id [32]byte) (time.Time, error) {
 	now := s.nowMs()
 	n := new(note)
-	out, err := s.db.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+	out, err := s.db.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName:                 &s.msgs,
 		Key:                       msgKey(box, id),
-		UpdateExpression:          aws.String("REMOVE #l"),
 		ConditionExpression:       aws.String("attribute_exists(#l) AND #r > :cutoff"),
 		ExpressionAttributeNames:  map[string]string{"#l": "live", "#r": "received_at"},
 		ExpressionAttributeValues: map[string]types.AttributeValue{":cutoff": num(now - ttlMs)},
-		ReturnValues:              types.ReturnValueUpdatedOld,
+		ReturnValues:              types.ReturnValueAllOld,
 	}, n.option())
 	if err := written(err, n, ErrNotFound); err != nil {
 		return time.Time{}, err
@@ -1012,12 +1009,9 @@ func (s *dynamoBackend) deleteBody(ctx context.Context, box protocol.Address, id
 // range (GetObject's Range, RFC 9110 §14.2), so a fetch that resumes moves
 // only the rest out of S3.
 func (s *dynamoBackend) Message(ctx context.Context, box protocol.Address, id [32]byte, from int64) (*Header, []byte, error) {
-	h, live, err := s.getMsg(ctx, box, id)
+	h, err := s.getMsg(ctx, box, id)
 	if err != nil {
 		return nil, nil, err
-	}
-	if !live {
-		return nil, nil, ErrNotFound
 	}
 	in := &s3.GetObjectInput{Bucket: &s.bucket, Key: aws.String(bodyKey(box, id))}
 	if from > 0 && from < int64(h.Size) {
@@ -1038,8 +1032,8 @@ func (s *dynamoBackend) Message(ctx context.Context, box protocol.Address, id [3
 	return h, body, nil
 }
 
-// DeleteMessage implements Backend (ack): the body, then the item leaves the
-// list. A body that was not deleted leaves the list as it was: a refusal.
+// DeleteMessage implements Backend (ack): the body, then the item. A body
+// that was not deleted leaves the list as it was: a refusal.
 func (s *dynamoBackend) DeleteMessage(ctx context.Context, box protocol.Address, id [32]byte) (time.Time, error) {
 	if err := s.deleteBody(ctx, box, id); err != nil {
 		return time.Time{}, refused(fmt.Errorf("the body was not deleted, and the message is listed as it was: %w", err))
@@ -1050,14 +1044,13 @@ func (s *dynamoBackend) DeleteMessage(ctx context.Context, box protocol.Address,
 	return s.Retire(ctx, box, id)
 }
 
-// DeleteFrom implements Backend: the live messages in the box whose sender
-// matches, as acks: bodies first, then each item leaves the list. The live
-// index carries each message's sender, so one Query of it finds them. The
-// Query is strongly consistent, which a local secondary index allows: a
-// message stored just before it is in it (dromas-dev/dromas-server#15).
-// Until a retire is made, nothing a reader of the list sees has changed: a
-// failure there is a refusal.
-func (s *dynamoBackend) DeleteFrom(ctx context.Context, box protocol.Address, from func(protocol.Address) bool, retired func([32]byte, time.Time)) error {
+// DeleteAll implements Backend: the box's live messages, as acks: bodies
+// first, then each item. One Query of the live index finds them, strongly
+// consistent, which a local secondary index allows: a message stored just
+// before it is in it (dromas-dev/dromas-server#15). Until a retire is made,
+// nothing a reader of the list sees has changed: a failure there is a
+// refusal.
+func (s *dynamoBackend) DeleteAll(ctx context.Context, box protocol.Address, retired func([32]byte, time.Time)) error {
 	var ids [][32]byte
 	p := dynamodb.NewQueryPaginator(s.db, s.liveQuery(box, s.liveFrom(), true))
 	for p.HasMorePages() {
@@ -1066,13 +1059,6 @@ func (s *dynamoBackend) DeleteFrom(ctx context.Context, box protocol.Address, fr
 			return refused(err)
 		}
 		for _, it := range out.Items {
-			sender, err := item(it).hash("from")
-			if err != nil {
-				return refused(err)
-			}
-			if !from(protocol.Address(sender)) {
-				continue
-			}
 			k, err := item(it).bytes("live")
 			if err != nil {
 				return refused(err)

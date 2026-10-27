@@ -93,16 +93,16 @@ type Server struct {
 	renewals  *buckets // per box, a number a day: renewals under its current certificate
 	certs     *buckets // per box, a number a day: renewals under a later certificate, which only its identity can make
 	raises    *buckets // per box, a number a day: raises of its revocation of certificates, which only its identity can make
-	// inFlight counts the sends let past the pair and box caps and not yet
-	// stored, by the recipient's first byte (reserveCaps).
+	// inFlight counts the sends let past the box cap and not yet stored, by
+	// the recipient's first byte (reserveCaps).
 	inFlight [256]inFlight
 	// drains is the cursor each box was handed last (list).
 	drains drains
 	// purges are the deletes of what is left of revoked boxes in flight, one
 	// per address (purge). Never DoChan (reads).
 	purges singleflight.Group
-	// posts are the posts of one ciphertext to one box from one sender in
-	// flight at once (send): one call, which the others wait for. Never
+	// posts are the posts of one ciphertext to one box in flight at once,
+	// from any sender (send): one call, which the others wait for. Never
 	// DoChan (reads).
 	posts singleflight.Group
 	// reads are the reads of box records in flight (lookup), one per

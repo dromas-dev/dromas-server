@@ -30,7 +30,7 @@ import (
 // spends from one, a count is taken before the work it guards, and what
 // would change nothing is answered before what costs.
 
-// A retry is answered as the first send was, from the dedupe record, though
+// A retry is answered as the first send was, from the message held, though
 // the box renewed its prekey since (PROTOCOL.md §11.10 step 6): stored once,
 // counted once. A new ciphertext to the retired prekey is still stale.
 func TestARetryAfterARenewalGetsItsReceipt(t *testing.T) {
@@ -724,7 +724,7 @@ func concurrently(t *testing.T, e *env, l Limits, to *raw, froms []*raw, n int) 
 func TestDailySendsAreTakenBeforeTheWrite(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.SendsPerDay, l.PairCap, l.BoxCap = 5, 0, 0
+	l.SendsPerDay, l.BoxCap = 5, 0
 	e := newEnv(t, l)
 	from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 	if stored := concurrently(t, e, l, to, []*raw{from}, 20); stored != 5 {
@@ -732,18 +732,19 @@ func TestDailySendsAreTakenBeforeTheWrite(t *testing.T) {
 	}
 }
 
-// The pair and box caps count the sends in flight too, so sends made at once
-// cannot all pass on the same counts (dromas-dev/dromas-server#4).
-func TestTheCapsCountSendsInFlight(t *testing.T) {
+// The box cap counts the sends in flight too, so sends made at once cannot
+// all pass on the same count (dromas-dev/dromas-server#4): from one sender,
+// and from several.
+func TestTheBoxCapCountsSendsInFlight(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.PairCap, l.BoxCap = 3, 0
+	l.BoxCap = 3
 	e := newEnv(t, l)
 	from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 	if stored := concurrently(t, e, l, to, []*raw{from}, 20); stored != 3 {
-		t.Fatalf("%d of 20 concurrent sends from one sender stored, with a pair cap of 3", stored)
+		t.Fatalf("%d of 20 concurrent sends from one sender stored, with a box cap of 3", stored)
 	}
-	l.PairCap, l.BoxCap = 0, 7
+	l.BoxCap = 7
 	e = newEnv(t, l)
 	to = e.raw().register(protocol.MaxPrekeyLifetime)
 	froms := []*raw{e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)}

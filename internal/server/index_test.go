@@ -45,8 +45,8 @@ func TestIndex(t *testing.T) {
 	var box protocol.Address
 	box[0] = 7
 	const now = 1_000_000
-	k1 := mark{tag: 1, id: 1, from: 10, exp: now + 500}
-	k2 := mark{tag: 2, id: 2, from: 10, exp: now + 900}
+	k1 := mark{tag: 1, id: 1, exp: now + 500}
+	k2 := mark{tag: 2, id: 2, exp: now + 900}
 
 	t.Run("a set: inserts twice count once", func(t *testing.T) {
 		x := loaded(t, box, boxRead{})
@@ -55,12 +55,6 @@ func TestIndex(t *testing.T) {
 		x.insert(box, k2, now)
 		if n := x.count(box, now); n != 2 || !x.holds(box, k1.tag, now) || !x.holds(box, k2.tag, now) {
 			t.Fatalf("count %d", n)
-		}
-		if n, oldest := x.pair(box, 10, now); n != 2 || oldest != k1.exp {
-			t.Fatalf("pair %d, oldest %d", n, oldest)
-		}
-		if n, _ := x.pair(box, 11, now); n != 0 {
-			t.Fatal("another sender counted")
 		}
 	})
 
@@ -72,7 +66,7 @@ func TestIndex(t *testing.T) {
 		if n := x.count(box, now); n != 0 {
 			t.Fatal("the acked message came back")
 		}
-		x.remove(box, k1.tag, k1.exp, now, true) // the removal's echo clears the tomb
+		x.deleted(box, k1.tag, now) // the deletion's echo clears the tomb
 		if x.tombs(box) != 0 {
 			t.Fatal("the tomb outlived its echo")
 		}
@@ -90,7 +84,7 @@ func TestIndex(t *testing.T) {
 	t.Run("a tomb whose echo came first dies at its expiry", func(t *testing.T) {
 		x := loaded(t, box, boxRead{})
 		x.insert(box, k1, now)
-		x.remove(box, k1.tag, k1.exp, now, true)  // the echo, first
+		x.deleted(box, k1.tag, now)               // the echo, first
 		x.remove(box, k1.tag, k1.exp, now, false) // then our own apply
 		x.count(box, k1.exp)
 		if x.tombs(box) != 0 {
@@ -114,15 +108,47 @@ func TestIndex(t *testing.T) {
 		}
 	})
 
-	t.Run("a removal names the message, not just its id", func(t *testing.T) {
-		// The same ciphertext, resent after the first expired: the late TTL
+	t.Run("a removal by image names the message, not just its id", func(t *testing.T) {
+		// The same ciphertext, resent after the first expired: the late
 		// removal of the first must not remove the second.
 		x := loaded(t, box, boxRead{})
-		again := mark{tag: k1.tag, id: k1.id, from: k1.from, exp: k1.exp + 1000}
+		again := mark{tag: k1.tag, id: k1.id, exp: k1.exp + 1000}
 		x.insert(box, again, k1.exp)
 		x.remove(box, k1.tag, k1.exp, k1.exp, true)
 		if n := x.count(box, k1.exp); n != 1 {
 			t.Fatal("the resent message was removed")
+		}
+	})
+
+	t.Run("a deletion takes the earliest of its id", func(t *testing.T) {
+		// The same ciphertext, posted again after an ack: the ack's
+		// deletion, which names the id alone, takes the first, whether
+		// this process acked it (a tomb) or the stream brought it (a mark),
+		// and leaves the second, which this process stored before the
+		// deletion's echo.
+		again := mark{tag: k1.tag, id: k1.id, exp: k1.exp + 100}
+		for _, ours := range []bool{true, false} {
+			x := loaded(t, box, boxRead{})
+			x.insert(box, k1, now)
+			if ours {
+				x.remove(box, k1.tag, k1.exp, now, false)
+			}
+			x.insert(box, again, now)
+			x.deleted(box, k1.tag, now)
+			x.insert(box, again, now) // the stream's insert of the second, after
+			if n := x.count(box, now); n != 1 || !x.holds(box, k1.tag, now) || x.tombs(box) != 0 {
+				t.Fatalf("acked by this process %v: count %d, tombs %d; want the second alone", ours, n, x.tombs(box))
+			}
+		}
+		// A deletion after the first expired, by the TTL, finds only the
+		// second: it goes, and the stream's insert of it, which comes after
+		// the deletion, brings it back.
+		x := loaded(t, box, boxRead{})
+		x.insert(box, again, k1.exp)
+		x.deleted(box, k1.tag, k1.exp)
+		x.insert(box, again, k1.exp)
+		if n := x.count(box, k1.exp); n != 1 {
+			t.Fatalf("after the TTL's late deletion and the second's insert: count %d", n)
 		}
 	})
 
@@ -189,8 +215,8 @@ func TestIndexLoad(t *testing.T) {
 	var box protocol.Address
 	box[0] = 7
 	const now = 1_000_000
-	k1 := mark{tag: 1, id: 1, from: 10, exp: now + 500}
-	k2 := mark{tag: 2, id: 2, from: 10, exp: now + 900}
+	k1 := mark{tag: 1, id: 1, exp: now + 500}
+	k2 := mark{tag: 2, id: 2, exp: now + 900}
 	ctx := context.Background()
 
 	t.Run("a change to a box memory does not hold is dropped", func(t *testing.T) {

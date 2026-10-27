@@ -93,7 +93,7 @@ func listOf(t *testing.T, r reply) protocol.MessageList {
 func TestCursorIsNoWayAroundThePollRate(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.PairCap, l.BoxCap = 0, pageSize // a box of one page: two continuations at once, one back each poll interval
+	l.BoxCap = pageSize // a box of one page: two continuations at once, one back each poll interval
 	l.PollBurst, l.PollRefill = 3, 50*time.Second
 	e := newEnv(t, l)
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
@@ -153,7 +153,7 @@ func TestCursorIsNoWayAroundThePollRate(t *testing.T) {
 func TestAContinuationIsTheCursorHandedOutLast(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.PairCap, l.BoxCap = 0, 0
+	l.BoxCap = 0
 	l.PollBurst, l.PollRefill = 2, 50*time.Second
 	e := newEnv(t, l)
 	from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
@@ -372,7 +372,7 @@ func TestIndexCountsFetches(t *testing.T) {
 	box[0] = 3
 	now := uint64(1000)
 	if err := x.ensure(context.Background(), box, func() (boxRead, error) {
-		return boxRead{exists: true, marks: []mark{{tag: 7, id: 7, from: 1, exp: now + 1}, {tag: 8, id: 8, from: 1, exp: now + 1}}}, nil
+		return boxRead{exists: true, marks: []mark{{tag: 7, id: 7, exp: now + 1}, {tag: 8, id: 8, exp: now + 1}}}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}

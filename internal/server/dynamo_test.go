@@ -182,41 +182,50 @@ func TestCrashAfterTheBody(t *testing.T) {
 	}
 }
 
-func TestRetryAfterAckIsNotRedelivered(t *testing.T) {
+// An ack deletes the message's item and its body, and nothing of it is
+// kept (PROTOCOL.md §13): the same bytes posted after it are new mail,
+// stored and listed again, which the reader skips, and acks (§11.10 step
+// 6, §12.3 check 8). No item names a sender or holds a signature.
+func TestTheSameBytesAfterAnAckAreNewMail(t *testing.T) {
 	t.Parallel()
 	e, s := dynamoEnv(t)
+	ctx := context.Background()
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
 	sent := capture(e, "/v1/"+b.Address().String())
 	send(t, a, b, "once")
 	e.setMiddle(nil)
-	receive(t, b)
-	// A retry of the same bytes after the ack: the original receipt, from the
-	// item the ack left as the dedupe record.
-	if r := e.do(http.MethodPost, "/v1/"+b.Address().String()+"/messages", *sent, e.pass(a)); r.status != http.StatusOK {
-		t.Fatalf("retry after the ack: %d %s", r.status, r.body)
-	}
-	if n, _ := s.Count(context.Background(), b.Address()); n != 0 {
-		t.Fatal("the retry brought back an acked message")
-	}
-	// In the table, too: memory's tomb for the ack would hide a message the
-	// retry listed again, until the stream brought it. No record holds a
-	// signature.
-	it := s.stored(t, b.Address(), sha256.Sum256(sent.ciphertext))
-	if _, ok := it["live"]; ok || it == nil {
-		t.Fatalf("after the ack and the retry: %v", it)
-	}
-	if _, ok := it["sig"]; ok {
-		t.Fatal("a message's record holds a signature")
-	}
 	id := sha256.Sum256(sent.ciphertext)
+	for k := range s.stored(t, b.Address(), id) {
+		if k == "from" || k == "sig" {
+			t.Fatalf("a message's item holds %q", k)
+		}
+	}
+	receive(t, b)
+	if it := s.stored(t, b.Address(), id); it != nil {
+		t.Fatalf("the ack left the item: %v", it)
+	}
 	if s.bodyExists(t, b.Address(), id) {
 		t.Fatal("the ack left the body")
 	}
-	if err := s.DeleteMessage(context.Background(), b.Address(), id); !errors.Is(err, ErrNotFound) {
+	if err := s.DeleteMessage(ctx, b.Address(), id); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a second ack: %v", err)
 	}
+	if r := e.do(http.MethodPost, "/v1/"+b.Address().String()+"/messages", *sent, e.pass(a)); r.status != http.StatusCreated {
+		t.Fatalf("the same bytes after the ack: %d %s; want 201", r.status, r.body)
+	}
+	// In the table, too: memory's tomb for the ack would hide a message the
+	// post listed again, until the stream brought it.
+	if !s.listed(t, b.Address(), id) || !s.bodyExists(t, b.Address(), id) {
+		t.Fatal("the same bytes after the ack are not listed, or have no body")
+	}
+	if n, _ := s.Count(ctx, b.Address()); n != 1 {
+		t.Fatalf("memory counts %d; want the one posted again", n)
+	}
 	if res := receive(t, b); len(res.Delivered) != 0 {
-		t.Fatal("delivered twice")
+		t.Fatalf("the same bytes after the ack were delivered again: %d", len(res.Delivered))
+	}
+	if s.listed(t, b.Address(), id) {
+		t.Fatal("the reader left the same bytes listed")
 	}
 }
 
@@ -267,9 +276,8 @@ func TestHeaderWithoutBodyIsGone(t *testing.T) {
 	}
 }
 
-// An acked message is never served, even if its body comes back: a send
-// whose dedupe read was stale writes the body before its conditional write
-// finds the acked item, leaving a body the lifecycle rule reaps.
+// An acked message is never served, even if its body comes back, as an
+// orphan the lifecycle rule reaps does: the ack deleted its item.
 func TestAckedMessageWithABodyAgainIsGone(t *testing.T) {
 	t.Parallel()
 	e, s := dynamoEnv(t)
@@ -367,7 +375,7 @@ func TestRestartLoadsLazily(t *testing.T) {
 	e, _ := dynamoEnv(t)
 	ctx := context.Background()
 	a, b, c, f := e.box(protocol.Classic), e.box(protocol.Classic), e.box(protocol.Classic), e.box(protocol.Classic)
-	send(t, a, b, "one")
+	one := send(t, a, b, "one")
 	send(t, a, b, "two")
 	send(t, a, f, "three")
 	if _, err := c.Rekey(ctx, ""); err != nil {
@@ -382,9 +390,9 @@ func TestRestartLoadsLazily(t *testing.T) {
 	if !fresh.Ready() || fresh.loads.Load() != 0 {
 		t.Fatalf("ready %v after %d loads: want ready with none", fresh.Ready(), fresh.loads.Load())
 	}
-	// Each of these is its box's first use.
-	if n, _, _ := fresh.PairCount(ctx, b.Address(), a.Address()); n != 2 {
-		t.Fatalf("pair count %d", n)
+	// Each of these is its box's first use, then b's second.
+	if held, _ := fresh.Holds(ctx, b.Address(), idOf(t, one)); !held {
+		t.Fatal("the message held is not in memory")
 	}
 	if n, _ := fresh.Count(ctx, f.Address()); n != 1 {
 		t.Fatalf("count %d", n)
@@ -523,10 +531,6 @@ func (c *countingStore) Count(ctx context.Context, box protocol.Address) (int, e
 	return c.s.Count(ctx, box)
 }
 
-func (c *countingStore) PairCount(ctx context.Context, box, from protocol.Address) (int, time.Time, error) {
-	return c.s.PairCount(ctx, box, from)
-}
-
 func (c *countingStore) After(ctx context.Context, box protocol.Address, cur *Cursor) (int, error) {
 	return c.s.After(ctx, box, cur)
 }
@@ -592,11 +596,6 @@ func (c *countingStore) DeleteMessage(ctx context.Context, box protocol.Address,
 func (c *countingStore) DeleteMessages(ctx context.Context, box protocol.Address) error {
 	c.count()
 	return c.s.DeleteMessages(ctx, box)
-}
-
-func (c *countingStore) DeleteFrom(ctx context.Context, box protocol.Address, from func(protocol.Address) bool) error {
-	c.count()
-	return c.s.DeleteFrom(ctx, box, from)
 }
 
 func (c *countingStore) Account(ctx context.Context, id string) (*Account, error) {
@@ -713,14 +712,14 @@ func TestExpiredHeadersAreNotListed(t *testing.T) {
 	}
 }
 
-// The dedupe record spans the message's life, the TTL less the hour
-// (protocol.Retention): the same bytes sent again inside it get the original
-// receipt. Past it, while the prekey they name lasts, they are new mail,
-// which only the sender's pass can post and its reader drops by its hash
-// (PROTOCOL.md §12.3 check 9), and that copy's dedupe record answers in its
-// turn. No client of this protocol posts the same bytes twice: a retry is
-// sealed afresh (§12.2).
-func TestTheDedupeRecordSpansTheMessagesLife(t *testing.T) {
+// The dedupe spans an unacked message's life, the TTL less the hour
+// (protocol.Retention): the same bytes sent again inside it get the receipt
+// held. Past it, while the prekey they name lasts, nothing of the message is
+// kept, and they are new mail, which any sender's pass can post and its
+// reader drops by its hash (PROTOCOL.md §12.3 check 8), and that copy answers
+// in its turn. No client of this protocol posts the same bytes twice: a retry
+// is sealed afresh (§12.2).
+func TestTheDedupeSpansAnUnackedMessagesLife(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
@@ -959,35 +958,6 @@ func TestUpdateBoxIsConditional(t *testing.T) {
 	}
 	if got, _ := e.store.Box(ctx, b.Address()); got.State != Active || got.CertSerial != first.CertSerial {
 		t.Fatalf("stored %v at certificate serial %d", got.State, got.CertSerial)
-	}
-}
-
-// A pause, an ACL that denies everyone, deletes the box's mail, bodies
-// included: a sender's retry once a later ACL has undone it is answered from
-// the dedupe record, and nothing comes back (PROTOCOL.md §11.14).
-func TestRetryAfterAPauseIsNotRedelivered(t *testing.T) {
-	t.Parallel()
-	e := newEnv(t, relaxed())
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
-	to := "/v1/" + b.Address().String()
-	sent := capture(e, to)
-	send(t, a, b, "deleted unread")
-	e.setMiddle(nil)
-	e.want(e.do("PUT", to+"/acl", aclOf([]string{}, []string{"*"}), e.pass(b)), 200, "")
-	e.want(e.do("PUT", to+"/acl", aclOf([]string{"*"}, nil), e.pass(b)), 200, "")
-	// A retry of the same bytes is answered as the first send was, from the
-	// dedupe record (PROTOCOL.md §11.10 step 6): it stores nothing, and what the
-	// pause deleted stays deleted.
-	if r := e.do(http.MethodPost, to+"/messages", *sent, e.pass(a)); r.status != http.StatusOK {
-		t.Fatalf("retry: %d %s", r.status, r.body)
-	}
-	if list := listOf(t, e.do("GET", to+"/messages", nil, e.pass(b))); len(list.Messages) != 0 {
-		t.Fatalf("mail the pause deleted came back: %+v", list)
-	}
-	if s, ok := onDynamo(e.store); ok {
-		if id := sha256.Sum256(sent.ciphertext); s.listed(t, b.Address(), id) || s.bodyExists(t, b.Address(), id) {
-			t.Fatal("mail the pause deleted is still listed, or its body kept")
-		}
 	}
 }
 

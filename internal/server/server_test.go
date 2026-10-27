@@ -1119,18 +1119,27 @@ func TestSendPipeline(t *testing.T) {
 	if !bytes.Equal(first.body, retry.body) {
 		t.Fatalf("a retry's receipt %s is not the original %s", retry.body, first.body)
 	}
-	// The same ciphertext under another box's pass: a conflict, never a
-	// receipt.
+	// The same ciphertext under another box's pass: the receipt held, as
+	// for any post of bytes the box holds unacked (PROTOCOL.md §11.10 step
+	// 6), and nothing new stored.
 	d := e.box(protocol.Classic)
-	e.want(e.do("POST", to+"/messages", ok, e.pass(d)), 409, protocol.CodeConflict)
-	// What the recipient is handed: in the list, the box whose pass the
-	// send carried and the ciphertext's size; on the fetch, the ciphertext
-	// exactly as posted, and nothing else.
+	again := e.do("POST", to+"/messages", ok, e.pass(d))
+	e.want(again, 200, "")
+	if !bytes.Equal(first.body, again.body) {
+		t.Fatalf("another sender's post of the same bytes: receipt %s, not the original %s", again.body, first.body)
+	}
+	// What the recipient is handed: in the list, the id and the
+	// ciphertext's size, and no sender (§11.11); on the fetch, the
+	// ciphertext exactly as posted, and nothing else.
 	var rcpt protocol.Receipt
 	_ = json.Unmarshal(first.body, &rcpt)
-	list := listOf(t, e.do("GET", "/v1/"+b.Address().String()+"/messages", nil, e.pass(b)))
-	if len(list.Messages) != 1 || list.Messages[0].ID != rcpt.ID || list.Messages[0].From != a.Address().String() || list.Messages[0].Size != int64(len(ok.ciphertext)) {
+	listed := e.do("GET", "/v1/"+b.Address().String()+"/messages", nil, e.pass(b))
+	list := listOf(t, listed)
+	if len(list.Messages) != 1 || list.Messages[0].ID != rcpt.ID || list.Messages[0].From != "" || list.Messages[0].Size != int64(len(ok.ciphertext)) {
 		t.Fatalf("the list: %+v", list)
+	}
+	if bytes.Contains(listed.body, []byte(`"from"`)) {
+		t.Fatalf("the list names a sender: %s", listed.body)
 	}
 	fetched := e.do("GET", "/v1/"+b.Address().String()+"/messages/"+rcpt.ID, nil, e.pass(b))
 	e.want(fetched, 200, "")
