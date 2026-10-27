@@ -1,7 +1,9 @@
 package server
 
 import (
+	"bufio"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -342,5 +344,45 @@ func TestTheSiteIsAskedTheClientsCodings(t *testing.T) {
 		if got := asks[len(asks)-1].header.Get("Accept-Encoding"); got != ae {
 			t.Errorf("the client asked for %q: the site was asked for %q", ae, got)
 		}
+	}
+}
+
+// A body that stops coming on its way to the site is cut at its deadline,
+// as one to the API is, and answered 408 (RFC 9110 §15.5.9), not 502: the
+// client was slow, not the site (dromas-dev/dromas-client#504 item 3). A
+// body that came whole is the site's to answer, however long past the
+// body's deadline the site takes.
+func TestAStalledBodyToTheSiteIsATimeout(t *testing.T) {
+	t.Parallel()
+	l := relaxed()
+	l.BodyTimeout, l.BodyMinRate = 300*time.Millisecond, 1<<20
+	slow := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		time.Sleep(3 * l.BodyTimeout)
+		w.WriteHeader(299)
+	})
+	srv := httptest.NewServer(New(Config{Store: NewMemStore(time.Now), Limits: l, SiteBackend: backendOf(t, slow)}).Handler())
+	t.Cleanup(srv.Close)
+	send := func(head, body string) int {
+		t.Helper()
+		conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+		_, _ = io.WriteString(conn, head+"\r\nHost: dromas.example\r\n\r\n"+body)
+		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+		if err != nil {
+			t.Fatalf("%s: %v", head, err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if got := send("POST /page HTTP/1.1\r\nContent-Length: 1000", "abc"); got != http.StatusRequestTimeout {
+		t.Errorf("a body that stops coming: %d, want 408", got)
+	}
+	if got := send("POST /page HTTP/1.1\r\nContent-Length: 3", "abc"); got != 299 {
+		t.Errorf("a body that came whole, to a site slower than its deadline: %d, want the site's 299", got)
 	}
 }

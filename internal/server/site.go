@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -44,7 +45,10 @@ func SiteBackend(raw string) (*url.URL, error) {
 // proxy, from any other. The backend is asked for the codings the client
 // asked for and no other: net/http's transport would ask for gzip itself
 // where the client asked for none, and undo it on the way back, so its own
-// compression is off. A backend that does not answer is a 502. A path that is the
+// compression is off. A backend that does not answer is a 502, and a
+// request whose body stops coming is cut at its deadline (paced) and
+// answered 408, as the API answers one (bodyTimedOut): the client was slow,
+// not the backend (dromas-dev/dromas-client#504 item 3). A path that is the
 // server's once decoded and cleaned (serversPath) is 404, and never passed.
 func (s *Server) siteProxy(backend *url.URL) http.Handler {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
@@ -64,6 +68,21 @@ func (s *Server) siteProxy(backend *url.URL) http.Handler {
 			if proto := r.In.Header.Get("X-Forwarded-Proto"); s.fromProxy(r.In) && (proto == "http" || proto == "https") {
 				r.Out.Header.Set("X-Forwarded-Proto", proto)
 			}
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			// r is the request as passed, its body the one paced
+			// gave, and its context the client's connection's, which
+			// the cut cancels.
+			if body, ok := r.Body.(*pacedBody); ok && r.Context().Err() != nil && body.stalled() {
+				writeProblem(w, bodyTimedOut())
+				return
+			}
+			if s.log != nil {
+				s.log.Printf("http: proxy error: %v", err)
+			} else {
+				log.Printf("http: proxy error: %v", err)
+			}
+			w.WriteHeader(http.StatusBadGateway)
 		},
 		ErrorLog: s.log,
 	}
