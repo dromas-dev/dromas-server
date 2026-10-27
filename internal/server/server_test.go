@@ -46,6 +46,21 @@ func codeOf(err error) protocol.Code {
 	return ""
 }
 
+// tooLarge reports whether err is a too_large refusal whose limit is limit.
+func tooLarge(err error, limit uint64) bool {
+	e, ok := errors.AsType[*client.APIError](err)
+	return ok && e.Problem.Code == protocol.CodeTooLarge && e.Problem.Limit != nil && *e.Problem.Limit == limit
+}
+
+// clockGap is how far the box's clock read from the date on the server's
+// answer, when err is a refusal the client read one on.
+func clockGap(err error) time.Duration {
+	if e, ok := errors.AsType[*client.APIError](err); ok && !e.Dated.IsZero() && !e.Read.IsZero() {
+		return e.Read.Sub(e.Dated)
+	}
+	return 0
+}
+
 func (r reply) code() protocol.Code {
 	return r.problem().Code
 }

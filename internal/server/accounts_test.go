@@ -174,12 +174,12 @@ func TestAccounts(t *testing.T) {
 			send(t, a, b, strings.Repeat("x", 100*i))
 		}
 		send(t, a, b, strings.Repeat("x", 5000)) // over 4096
-		if _, err := a.Send(ctx, b.Address(), strings.Repeat("x", 20000)); codeOf(err) != protocol.CodeTooLarge || !strings.Contains(err.Error(), "16384") {
+		if _, err := a.Send(ctx, b.Address(), strings.Repeat("x", 20000)); !tooLarge(err, 16384) {
 			t.Fatalf("over the largest cap: %v", err)
 		}
 		// A box in no account has the server's limits.
 		send(t, c, b, "1")
-		if _, err := c.Send(ctx, b.Address(), strings.Repeat("x", 5000)); codeOf(err) != protocol.CodeTooLarge || !strings.Contains(err.Error(), "4096") {
+		if _, err := c.Send(ctx, b.Address(), strings.Repeat("x", 5000)); !tooLarge(err, 4096) {
 			t.Fatalf("over the cap: %v", err)
 		}
 		send(t, c, b, "2")
@@ -198,7 +198,7 @@ func TestAccounts(t *testing.T) {
 		if err := a.Leave(ctx); err != nil {
 			t.Fatalf("leave again: %v", err)
 		}
-		if _, err := a.Send(ctx, b.Address(), strings.Repeat("x", 5000)); codeOf(err) != protocol.CodeTooLarge || !strings.Contains(err.Error(), "4096") {
+		if _, err := a.Send(ctx, b.Address(), strings.Repeat("x", 5000)); !tooLarge(err, 4096) {
 			t.Fatalf("after leaving, over the cap: %v", err)
 		}
 		send(t, a, b, "4")

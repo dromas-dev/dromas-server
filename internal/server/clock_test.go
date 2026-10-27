@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -86,11 +85,10 @@ func TestTheTwoClocksFurthestApart(t *testing.T) {
 
 // Further off, the box is refused: more than 50 minutes ahead, for its
 // certificate, before its pass is read, since that certificate would not have
-// begun for a reader 10 minutes slow, a clock this server takes. The client
-// says in its own words what the server dates its answer, beside its own
-// clock: the server's words are
-// not shown (PROTOCOL.md §11.3), and the date on every answer is how the server
-// says what its clock reads.
+// begun for a reader 10 minutes slow, a clock this server takes. The date on
+// every answer is how the server says what its clock reads (the client's
+// words for it are the client's to test, and the server's are not shown:
+// PROTOCOL.md §11.3).
 // A box that cannot register leaves nothing in the way of registering once
 // its clock is right.
 func TestABoxWhoseClockIsTooFarOffIsRefusedAndTold(t *testing.T) {
@@ -99,11 +97,10 @@ func TestABoxWhoseClockIsTooFarOffIsRefusedAndTold(t *testing.T) {
 	for _, c := range []struct {
 		off  time.Duration
 		code protocol.Code
-		says []string
 	}{
-		{-11 * time.Minute, protocol.CodePassExpired, []string{"as not valid at its clock", "11m0s behind that", "10 minutes or more behind its own"}},
-		{51 * time.Minute, protocol.CodePrekeyTime, []string{"not valid at its clock", "51m0s ahead of that", "made by a clock more than 50 ahead"}},
-		{61 * time.Minute, protocol.CodePrekeyTime, []string{"not valid at its clock", "1h1m0s ahead of that", "made by a clock more than 50 ahead"}},
+		{-11 * time.Minute, protocol.CodePassExpired},
+		{51 * time.Minute, protocol.CodePrekeyTime},
+		{61 * time.Minute, protocol.CodePrekeyTime},
 	} {
 		e := newEnv(t, relaxed())
 		off, dir := c.off, t.TempDir()
@@ -112,13 +109,10 @@ func TestABoxWhoseClockIsTooFarOffIsRefusedAndTold(t *testing.T) {
 			t.Errorf("a clock %v off: init: %v, want the code %s", c.off, err, c.code)
 			continue
 		}
-		for _, s := range c.says {
-			if !strings.Contains(err.Error(), s) {
-				t.Errorf("a clock %v off: the refusal does not say %q: %v", c.off, s, err)
-			}
-		}
-		if strings.Contains(strings.ToLower(err.Error()), "set this machine's clock") || strings.Contains(err.Error(), ": set it") {
-			t.Errorf("a clock %v off: the refusal tells its reader to set the clock by the server's: %v", c.off, err)
+		// What the client tells its reader is the client's to test; the
+		// server's part is the date on its answer, which shows the gap.
+		if gap := clockGap(err); gap != c.off {
+			t.Errorf("a clock %v off: the answer's date is %v from the box's clock", c.off, gap)
 		}
 		off = 0
 		if _, err := client.Init(ctx, dir, e.skewed(&off), protocol.Classic); err != nil {
@@ -158,7 +152,7 @@ func TestABoxWhoseClockGoesBackFetchesNothing(t *testing.T) {
 
 	off = -12 * time.Minute
 	res, err := b.Receive(ctx)
-	if codeOf(err) != protocol.CodePassExpired || !strings.Contains(err.Error(), "12m0s behind that") || (res != nil && len(res.Delivered)+len(res.Refused) != 0) {
+	if codeOf(err) != protocol.CodePassExpired || clockGap(err) != off || (res != nil && len(res.Delivered)+len(res.Refused) != 0) {
 		t.Fatalf("its clock set back 12 minutes: %+v, %v", res, err)
 	}
 	// Control: at that clock the mail would be refused, so the stop above is

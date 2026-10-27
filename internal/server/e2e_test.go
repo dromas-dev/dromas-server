@@ -506,7 +506,7 @@ func TestTheGoClientsACL(t *testing.T) {
 		t.Fatalf("the box still holds %d messages, %v", n, err)
 	}
 	_, err := a.Send(ctx, b.Address(), "refused")
-	if codeOf(err) != protocol.CodeSenderNotAllowed || !strings.Contains(err.Error(), "moved to outbox/failed/") {
+	if codeOf(err) != protocol.CodeSenderNotAllowed {
 		t.Fatalf("a send from a blocked sender: %v", err)
 	}
 	if err := b.SetPolicy(t.Context(), client.Policy{Unknown: client.LandHeld, Server: client.AdmitAllowed}); err != nil {
