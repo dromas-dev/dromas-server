@@ -14,8 +14,10 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -524,6 +526,88 @@ func TestAnAdoptThatMeetsAnotherIsSentAgain(t *testing.T) {
 	if strings.Contains(logged.String(), "internal error") {
 		t.Errorf("an adopt that met another is logged as an internal error: %s", logged.String())
 	}
+}
+
+// timedDynamo is cannedDynamo with the time of each call kept, and a hook
+// run at each.
+type timedDynamo struct {
+	cannedDynamo
+	mu     sync.Mutex
+	at     []time.Time
+	onCall func()
+}
+
+func (d *timedDynamo) Do(r *http.Request) (*http.Response, error) {
+	d.mu.Lock()
+	d.at = append(d.at, time.Now())
+	d.mu.Unlock()
+	if d.onCall != nil {
+		d.onCall()
+	}
+	return d.cannedDynamo.Do(r)
+}
+
+func (d *timedDynamo) store(logged *bytes.Buffer) *Memory {
+	return NewDynamoStore(DynamoConfig{AWS: aws.Config{Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "x", ""),
+		HTTPClient: d, BaseEndpoint: aws.String("http://127.0.0.1:1")}, BoxesTable: "b", MsgsTable: "m", AccountsTable: "a", Bucket: "s", Log: log.New(logged, "", 0)})
+}
+
+// An adopt that meets another pauses before each try after its first, for a
+// time drawn below a cap that doubles from transactPause, never none; and a
+// context that ends in a pause ends the adopt there, with no call more
+// (#438 item 1). On fake time, in a synctest bubble.
+func TestAnAdoptPausesBetweenItsTries(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t, relaxed())
+	acc, key := accountEnv(t, e, true, 5)
+	_, hash, _ := parseAdopt(key)
+	b, err := e.store.Box(ctx, e.box(protocol.Classic).Address())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflict := cancelled("None", "TransactionConflict")
+	synctest.Test(t, func(t *testing.T) {
+		var logged bytes.Buffer
+		d := &timedDynamo{cannedDynamo: cannedDynamo{answers: []string{conflict}}}
+		if err := d.store(&logged).Adopt(ctx, b, acc.ID, hash); !errors.Is(err, ErrStale) {
+			t.Fatalf("an adopt that met another every time: %v, want ErrStale", err)
+		}
+		if len(d.at) != transactTries {
+			t.Fatalf("%d calls, want %d", len(d.at), transactTries)
+		}
+		for i := 1; i < len(d.at); i++ {
+			gap, most := d.at[i].Sub(d.at[i-1]), transactPause<<(i-1)
+			if gap <= 0 || gap >= most {
+				t.Errorf("the pause before try %d: %s, want above none and below %s", i+1, gap, most)
+			}
+		}
+	})
+	synctest.Test(t, func(t *testing.T) {
+		var logged bytes.Buffer
+		cctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		d := &timedDynamo{cannedDynamo: cannedDynamo{answers: []string{conflict}}}
+		d.onCall = func() { // ends the context a nanosecond into the pause after the first try
+			d.onCall = nil
+			go func() {
+				time.Sleep(time.Nanosecond)
+				cancel()
+			}()
+		}
+		err := d.store(&logged).Adopt(cctx, b, acc.ID, hash)
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("an adopt whose context ended in a pause: %v, want context.Canceled", err)
+		}
+		if len(d.at) != 1 {
+			t.Fatalf("%d calls, want the one before the pause", len(d.at))
+		}
+		// The SDK refuses a call under an ended context by itself, so what
+		// shows the pause ends with it is the time: none waited past the end.
+		if waited := time.Since(d.at[0]); waited != time.Nanosecond {
+			t.Errorf("the adopt returned %s after its first call, want at its context's end, %s", waited, time.Nanosecond)
+		}
+	})
 }
 
 // A write of the box's record alone that meets a transaction on it is
