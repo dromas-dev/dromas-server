@@ -1,8 +1,12 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -183,4 +187,118 @@ func TestASecondProcessLearnsWhatIsRevoked(t *testing.T) {
 	}
 	e.want(e.do("PUT", revoked.path("/revocations"), protocol.Revocations{Identity: revoked.id.Document(), Revocation: rev}, ""), 201, "")
 	within("the address revoked", poll(revoked), 410, protocol.CodeRevoked)
+}
+
+// readsCounted is a backend that counts the reads of an address and of a
+// box's live mail: what a poll would make if it left the process.
+type readsCounted struct {
+	Backend
+	reads atomic.Int64
+}
+
+func (b *readsCounted) ReadAddress(ctx context.Context, a protocol.Address) (*Box, *Revocations, error) {
+	b.reads.Add(1)
+	return b.Backend.ReadAddress(ctx, a)
+}
+
+func (b *readsCounted) ReadLive(ctx context.Context, box protocol.Address) ([]Header, error) {
+	b.reads.Add(1)
+	return b.Backend.ReadLive(ctx, box)
+}
+
+// A second process in the window a revocation of an address opens there
+// (dromas-dev/dromas-client#365, #505): it holds the box, its record cache
+// has lost the record, as -box-cache's LRU does under load, and its feed
+// brings the image of the revocations item before the purge's deletion of
+// the record, two items whose changes DynamoDB Streams orders each alone.
+// In the window its poll is 410 revoked from memory, with no read, and
+// carries no record (revokedAt), and the read of the box is 410 with the
+// record. Once the deletion comes, the poll reads the address and carries
+// the record too. Two memories over one in-memory backend, the second's
+// feed handed over by the test in that order.
+func TestASecondProcessInARevocationsWindow(t *testing.T) {
+	t.Parallel()
+	clk := &clock{t: time.Now().UTC().Truncate(time.Second)}
+	b := newMemBackend(clk.Now)
+	first := newMemory(clk.Now, DefaultBoxCache, nil, nil)
+	first.backend = b
+	counted := &readsCounted{Backend: b}
+	second := newMemory(clk.Now, DefaultBoxCache, nil, nil)
+	second.backend = counted
+	var mu sync.Mutex
+	var feed []Change // the second's, not yet applied
+	_ = b.Start(context.Background(), func(c Change) {
+		first.apply(c)
+		mu.Lock()
+		feed = append(feed, c)
+		mu.Unlock()
+	})
+	// deliver applies to the second every change made so far, in order, but
+	// those hold keeps back, which it returns.
+	deliver := func(hold func(Change) bool) []Change {
+		b.deliver()
+		mu.Lock()
+		cs := feed
+		feed = nil
+		mu.Unlock()
+		var held []Change
+		for _, c := range cs {
+			if hold(c) {
+				held = append(held, c)
+				continue
+			}
+			second.apply(c)
+		}
+		return held
+	}
+	serve := func(m *Memory) *env {
+		srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: m, Limits: relaxed(), Now: clk.Now}).Handler()))
+		t.Cleanup(srv.Close)
+		return &env{t: t, clock: clk, srv: srv}
+	}
+	e, e2 := serve(first), serve(second)
+
+	r := e.raw().register(protocol.MaxPrekeyLifetime)
+	a := r.id.Address()
+	deliver(func(Change) bool { return false })
+	poll := func() reply { return e2.do("GET", r.path("/messages"), nil, e2.passFor(r.work[1], a, e2.name())) }
+	e2.want(poll(), http.StatusOK, "")   // the second process holds the box
+	second.cache.write(a, evicted[*Box]) // and its record cache loses it
+	sig, err := protocol.SignRevocation(r.signer, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.want(e.do("PUT", r.path("/revocations"), protocol.Revocations{Identity: r.id.Document(), Revocation: sig}, ""), http.StatusCreated, "")
+	deletion := deliver(func(c Change) bool { return c.Kind == RecordChange && c.Gone })
+	if len(deletion) != 1 {
+		t.Fatalf("the revocation's purge deleted the record %d times", len(deletion))
+	}
+	if st, ok := second.Held(a); !ok || st.State != Revoked {
+		t.Fatalf("the second process holds the address as %+v, %v: not the window", st, ok)
+	}
+	if rec, ok := second.Known(a); ok {
+		t.Fatalf("the second process's record cache holds %+v: not the window", rec)
+	}
+
+	before := counted.reads.Load()
+	got := poll()
+	e2.want(got, http.StatusGone, protocol.CodeRevoked)
+	if n := counted.reads.Load() - before; n != 0 {
+		t.Errorf("the poll in the window read the store %d times", n)
+	}
+	if held(t, got) != nil {
+		t.Error("the poll in the window carries a record, which memory does not hold")
+	}
+	read := e2.do("GET", r.path(""), nil, "")
+	e2.want(read, http.StatusGone, protocol.CodeRevoked)
+	if rec := held(t, read); rec == nil || !bytes.Equal(rec.Revocation, sig) || !bytes.Equal(rec.Identity, r.id.Document()) {
+		t.Errorf("the read in the window carries %s, want the revocation", read.body)
+	}
+
+	second.apply(deletion[0])
+	got = poll()
+	e2.want(got, http.StatusGone, protocol.CodeRevoked)
+	if rec := held(t, got); rec == nil || !bytes.Equal(rec.Revocation, sig) {
+		t.Errorf("the poll after the window carries %s, want the revocation", got.body)
+	}
 }
