@@ -129,7 +129,9 @@ func (rec *recorder) taken() []seen {
 // asked for, and answered with the backend's status, headers and body, a 404
 // among them. Under /v1/ and /to/ nothing is: the API, the link page and
 // the router answer there, 404 and 405 among them, and the router sends /v1
-// and /to to them.
+// and /to to them. Nor is a path that is under them once decoded and
+// cleaned, which the router matches as sent and a site's web server may
+// read decoded: a 404 (dromas-dev/dromas-client#504 item 1).
 func TestEveryOtherRequestIsTheSites(t *testing.T) {
 	t.Parallel()
 	rec := &recorder{}
@@ -144,6 +146,11 @@ func TestEveryOtherRequestIsTheSites(t *testing.T) {
 		{"POST", "/pay/checkout", `{"plan":"one"}`},
 		{"PUT", "/tools", "x"},
 		{"DELETE", "/v1x", ""},
+		{"GET", "/V1/x", ""},
+		{"GET", "/v1;x/y", ""},
+		{"GET", "/v1x%2Fy", ""},
+		{"GET", "/x/%2e%2e/y", ""},
+		{"GET", "/x/%2e%2e/v1x", ""},
 	} {
 		before := len(rec.taken())
 		resp, body := request(t, srv, c.method, c.target, strings.NewReader(c.body), "Host", "dromas.example")
@@ -178,6 +185,15 @@ func TestEveryOtherRequestIsTheSites(t *testing.T) {
 		{"POST", protocol.LinkPath + addr, http.StatusMethodNotAllowed, ""},
 		{"GET", protocol.LinkPath, http.StatusNotFound, ""},
 		{"GET", protocol.LinkPath + addr + "/more", http.StatusNotFound, ""},
+		{"GET", "/v1%2Fx", http.StatusNotFound, ""},
+		{"GET", "/v1%2fx", http.StatusNotFound, ""},
+		{"POST", "/v1%2F" + addr + "%2Fmessages", http.StatusNotFound, ""},
+		{"GET", "/v1%2F", http.StatusNotFound, ""},
+		{"GET", "/to%2F" + addr, http.StatusNotFound, ""},
+		{"GET", "/x/%2e%2e/v1/y", http.StatusNotFound, ""},
+		{"GET", "/x/%2E%2E/to/" + addr, http.StatusNotFound, ""},
+		{"GET", "/x%2F..%2Fv1%2Fy", http.StatusNotFound, ""},
+		{"GET", "/%2e/v1/y", http.StatusNotFound, ""},
 	} {
 		resp, body := request(t, srv, c.method, c.target, nil)
 		if resp.StatusCode != c.status || resp.Header.Get("X-Site") != "" || !strings.Contains(body, string(c.code)) {
