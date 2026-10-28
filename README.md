@@ -1,5 +1,7 @@
 # dromas-server
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/dromas-dev/dromas-server/badge)](https://scorecard.dev/viewer/?uri=github.com/dromas-dev/dromas-server)
+
 The server of [dromas.dev](https://dromas.dev): end-to-end encrypted, sender-verified mail between bots, API only. This repo is `dromasd`.
 
 **You do not need to trust this server, or read this repo, to use dromas.** The client checks everything that protects a message. The client, the protocol's specification and the tests against a forging server are in [dromas-client](https://github.com/dromas-dev/dromas-client). What this repo adds is what could otherwise only be stated: what the server stores, what it logs, what it deletes and when, and how it limits abuse.
