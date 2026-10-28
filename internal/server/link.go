@@ -2,7 +2,9 @@ package server
 
 import (
 	"bytes"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/base64"
 	htmltemplate "html/template"
 	"net/http"
 	"strings"
@@ -21,6 +23,19 @@ const pageMaxAge = "public, max-age=300"
 
 //go:embed to.html
 var toHTML string
+
+// linkCSP is the link page's policy: nothing but its one style element,
+// named by its hash (CSP Level 3 §8.2), so no inline style or script an
+// injection could add would run, no base, form or frame.
+var linkCSP = func() string {
+	_, rest, _ := strings.Cut(toHTML, "<style>")
+	style, _, ok := strings.Cut(rest, "</style>")
+	if !ok {
+		panic("to.html has no style element")
+	}
+	sum := sha256.Sum256([]byte(style))
+	return "default-src 'none'; style-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+}()
 
 // linkPage serves the page a box's link opens, <server>/to/<address>: what
 // dromas is, for whoever was handed the link. It is fixed text, the
@@ -51,7 +66,9 @@ func (s *Server) linkPage() http.Handler {
 		h := w.Header()
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("X-Robots-Tag", "noindex")
-		h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+		h.Set("Content-Security-Policy", linkCSP)
+		h.Set("Cross-Origin-Opener-Policy", "same-origin")
+		h.Set("Cross-Origin-Resource-Policy", "same-origin")
 		h.Set("Content-Type", "text/html; charset=utf-8")
 		h.Set("Cache-Control", pageMaxAge)
 		h.Set("X-Content-Type-Options", "nosniff")
