@@ -253,7 +253,7 @@ func TestALookupIsNeverRefusedForAnotherCallersMisses(t *testing.T) {
 		got := make(chan int, 1)
 		go func() {
 			req, _ := http.NewRequest(http.MethodGet, e.srv.URL+"/v1/"+a.String(), nil)
-			req.Header.Set("CF-Connecting-IP", ip)
+			req.Header.Set("X-Forwarded-For", ip)
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
 				got <- 0

@@ -37,10 +37,10 @@ type Config struct {
 	// it has, every call is answered 503 rather than wrong (ARCHITECTURE.md
 	// § Startup).
 	Ready func() bool
-	// TrustedProxies are the peers whose CF-Connecting-IP header names the
-	// client: behind a proxy every request arrives from the proxy's
-	// address. From any other peer the header is ignored. None: the
-	// peer is always the client.
+	// TrustedProxies are the peers whose X-Forwarded-For names the client
+	// (clientIP): behind a reverse proxy every request arrives from the
+	// proxy's address. From any other peer the header is ignored. None:
+	// the peer is always the client.
 	TrustedProxies []netip.Prefix
 	// Names are the names clients call this server by: the host of its URL,
 	// lowercase, with its port only when that is not the scheme's default. A
@@ -410,12 +410,21 @@ func (s *Server) whenReady(h http.Handler) http.Handler {
 	})
 }
 
-// clientIP is the address per-IP limits key on: the CF-Connecting-IP of a
-// request from a trusted proxy, otherwise the peer's own address.
+// clientIP is the address per-IP limits key on: for a request from a trusted
+// proxy, the last address in its X-Forwarded-For, the one that proxy wrote
+// of the peer it took the call from (nginx's $proxy_add_x_forwarded_for and
+// Go's httputil.ReverseProxy both append it, and nginx can set it alone);
+// otherwise, or when that entry is not an address, the peer's own. Entries
+// before the last were written by whoever called the proxy, and are never
+// read. Every X-Forwarded-For line is one list (RFC 9110 §5.3).
 func (s *Server) clientIP(r *http.Request) string {
 	if s.fromProxy(r) {
-		if ip, err := netip.ParseAddr(strings.TrimSpace(r.Header.Get("CF-Connecting-IP"))); err == nil {
-			return ip.String()
+		list := strings.Join(r.Header.Values("X-Forwarded-For"), ",")
+		if i := strings.LastIndexByte(list, ','); i >= 0 {
+			list = list[i+1:]
+		}
+		if ip, err := netip.ParseAddr(strings.TrimSpace(list)); err == nil {
+			return ip.WithZone("").String()
 		}
 	}
 	return peerHost(r)

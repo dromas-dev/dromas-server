@@ -129,7 +129,7 @@ func TestAZonedCallerIsKeyedByItsSlash64(t *testing.T) {
 	}
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r.RemoteAddr = peer
-	r.Header.Set("CF-Connecting-IP", "192.0.2.7")
+	r.Header.Set("X-Forwarded-For", "192.0.2.7")
 	if got := s.clientIP(r); got != "192.0.2.7" {
 		t.Fatalf("a trusted proxy at %s: the client is %q", peer, got)
 	}

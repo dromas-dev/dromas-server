@@ -20,16 +20,15 @@
 | `dromasd` | 1 today, then one per host; a scaled shape is ~4 hosts of 4 cores | All identical; one is to hold a lease and run the background jobs (not built: there are no jobs yet). **One Go process uses every core of its host**, so it's one process per host, never one per core: the runtime spreads goroutines across all CPUs, and since Go 1.25 it reads the container's CPU limit too. CPU is never the reason for more hosts: 1M mailboxes polling once a minute is about 0.9 vCPU, 0.57 for the polls at 34 µs each and 0.32 for the check of each box's new pass every ten minutes at 190 µs (measured 2026-10-13, § Estimates and measurements) |
 | Echo boxes | 2 | `dromas` clients with their own keys, one post-quantum and one X25519-only (decided), never inside the server |
 | AWS, managed | — | Three DynamoDB tables, boxes, messages and accounts, each with its stream on; the S3 Express One Zone directory bucket |
-| Edge | — | For dromas.dev today, Cloudflare (TLS) and its tunnel to one host; later an NLB on AWS |
+| Edge | — | A load balancer passing TCP, then a reverse proxy that terminates TLS (for dromas.dev, an NLB and nginx on each host) and calls `dromasd` over plain HTTP on one or more `-listen` addresses; `dromasd` takes the client's address from the proxy's `X-Forwarded-For` (§ Behind a reverse proxy) |
 | The site | — | A deployment's site is not in this repo: with `-site-backend`, `dromasd` passes every request outside `/v1/` and `/to/` to the deployment's own web server, as a reverse proxy does (`net/http/httputil`), and its answer back as that server sent it, a 404 among them (`internal/server/site.go`) |
 | Redis | 0 | Penciled in for later, not needed for a while (§ The in-process plan, item 7) |
 
 ```mermaid
 flowchart LR
-  bots["agents and bots<br/>dromas CLI"] --> cf["Cloudflare<br/>TLS"]
-  cf --> edge["a tunnel to the host<br/>or an NLB on AWS"]
-  edge --> d1["dromasd"]
-  edge --> d2["dromasd"]
+  bots["agents and bots<br/>dromas CLI"] --> lb["load balancer<br/>TCP"]
+  lb --> p1["reverse proxy<br/>TLS"] --> d1["dromasd"]
+  lb --> p2["reverse proxy<br/>TLS"] --> d2["dromasd"]
   d1 & d2 --> ddb[("DynamoDB<br/>boxes · messages · accounts")]
   d1 & d2 --> s3[("S3 Express One Zone<br/>bodies")]
   ddb -->|"three streams: every committed write, about 1 to 2 s"| d1 & d2
@@ -150,6 +149,15 @@ A pass that passes all three costs about 180 µs, two signature checks in all (`
 - **A change to what a backend keeps reaches memory as a typed `Change`, which the backend decodes from its own items, through one apply** (`Memory.apply`, § Following the stream). The in-memory backend hands each change a write made to it at the start of its next write, in the order the writes were made, on that write's goroutine: so the change comes after its writer has applied the write's outcome to memory, as DynamoDB's stream brings a write back a second or two after it, and no test waits on a goroutine for it.
 - **The tests inject faults at the boundary** (`faults` in `backend_test.go`): any write made refused, unknown before applying or unknown after applying, and a hook at any read's answer, where a write a read did not see lands. `TestEveryWriteOfTheBackendReachesMemoryByItsOutcome` holds every write of the interface, taken from its method set, to each outcome. A crash between a write's two steps on DynamoDB, which no boundary can reach, is the DynamoDB backend's own hook (`crash`).
 - **The three outcomes follow Go's `database/sql/driver` and the MongoDB Go driver** (`PRECEDENTS.md` Part 3 § 1, in the client repo).
+
+### Behind a reverse proxy
+
+`dromasd` speaks plain HTTP; TLS ends in a reverse proxy in front (dromas-dev/dromas-server#124). That keeps TLS above the server, so a restart of `dromasd` drops no client's TLS session, and it is where routing by a box's address goes once there is more than one process (§ Extreme scale).
+- **The client's address** is the last entry of `X-Forwarded-For` from a peer in `-trusted-proxy`, the one that proxy wrote of the connection it took (`clientIP`); every entry before it is the caller's own word and is never read, and from any other peer the header is ignored. Every per-IP limit keys on it (`LIMITS.md`), and the site is told it (`-site-backend`), with every other header a proxy or CDN names a client by dropped.
+- **`Host` is passed on unchanged** (§ The pass check), and `X-Forwarded-Proto` from a trusted proxy says the scheme (the link page's).
+- **Several listen addresses** (`-listen`, comma-separated) are served by one `http.Server`: each connection the proxy holds to `dromasd` is one 4-tuple, so one proxy address calling one `dromasd` address is bounded by the proxy host's range of ephemeral ports, and every address more is one range more. A held request (a long poll, the client repo's #510) holds one for its whole wait.
+- **`-idle-timeout` above the proxy's own idle timeout for its upstream connections** (`LIMITS.md`), so the proxy closes first.
+- **What a proxy does that the server also does:** a proxy that buffers a request's body before passing it (nginx's default) keeps a slow upload off `dromasd`'s large read; the server's own header and body timeouts and every count stand whatever is in front (`LIMITS.md`).
 
 ### Request paths
 
@@ -368,8 +376,8 @@ dromas-server (this repo)
 | Stage | Shape |
 |---|---|
 | Dev | `dromasd serve --dev`, the in-memory backend |
-| 1: first production (**live since 2026-10-10**, the echo boxes since 2026-10-11) | one host behind a tunnel: one `dromasd` with the stream on, and the echo boxes beside it |
-| 2: availability and scale | first a second host for availability, then 2–4 hosts across AZs, one `dromasd` each using every core (e.g. 4 hosts of 4 cores), behind an NLB or tunnel replicas |
+| 1: first production (**live since 2026-10-10**, the echo boxes since 2026-10-11) | one host: a reverse proxy terminating TLS, one `dromasd` with the stream on, and the echo boxes beside it |
+| 2: availability and scale | first a second host for availability, then 2–4 hosts across AZs, one `dromasd` each using every core (e.g. 4 hosts of 4 cores), behind a load balancer |
 | Later, only if measured | our own stream bouncer for more than ~4 processes; Redis if sub-second delivery or exact global limits are ever needed |
 | Extreme | shard by the address's first hex character at the edge, with the bouncer routing by the same character (§ Extreme scale) |
 

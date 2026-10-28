@@ -118,7 +118,7 @@ func aclEntries(l server.Limits) error {
 func serve(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	dev := fs.Bool("dev", false, "keep everything in memory, with no AWS")
-	listen := fs.String("listen", "127.0.0.1:8080", "address to listen on")
+	listen := fs.String("listen", "127.0.0.1:8080", "comma-separated TCP addresses to listen on, each served alike: a reverse proxy in front spreads its connections across several, and each is one more range of its ephemeral ports")
 	boxes := fs.String("boxes-table", "", "the DynamoDB table of boxes")
 	msgs := fs.String("msgs-table", "", "the DynamoDB table of messages")
 	accts := fs.String("accounts-table", "", "the DynamoDB table of accounts")
@@ -128,7 +128,7 @@ func serve(args []string) error {
 	region := fs.String("region", "us-east-1", "the AWS region")
 	boxCache := fs.Int("box-cache", server.DefaultBoxCache, "box records held in memory, for sends and reads of a box")
 	streamEvery := fs.Duration("stream-interval", time.Second, "how often each stream shard is read")
-	proxies := fs.String("trusted-proxy", "", "comma-separated CIDRs whose CF-Connecting-IP names the client: the proxy in front, if any")
+	proxies := fs.String("trusted-proxy", "", "comma-separated CIDRs of the reverse proxy in front, if any, whose X-Forwarded-For names the client: its last address, the one the proxy wrote")
 	l := server.DefaultLimits()
 	fs.IntVar(&l.MaxSize, "max-size", l.MaxSize, "cap on a ciphertext, bytes: a send reads its body to it. A whole number of its own padding blocks, at most the protocol's largest ciphertext (PROTOCOL.md §9.3, §11.10), or serve does not start")
 	fs.IntVar(&l.AccountMaxSize, "account-max-size", l.AccountMaxSize, "the most an account can lift -max-size to, bytes (up to -max-size: nothing). Held as -max-size is")
@@ -293,10 +293,16 @@ func serve(args []string) error {
 		defer metrics.Close() //nolint:errcheck // the process is ending
 		logger.Printf("metrics on %s", *metricsListen)
 	}
+	listeners, err := listenAll(*listen)
+	if err != nil {
+		return fmt.Errorf("-listen: %w", err)
+	}
 	srv := server.HTTPServer(*listen, api.Handler(), l, *idle)
 	srv.ConnState = cfg.Metrics.ConnState
-	errc := make(chan error, 1)
-	go func() { errc <- srv.ListenAndServe() }()
+	errc := make(chan error, len(listeners))
+	for _, ln := range listeners {
+		go func() { errc <- srv.Serve(ln) }()
+	}
 	if start != nil {
 		if err := start(); err != nil {
 			return err
@@ -316,4 +322,31 @@ func serve(args []string) error {
 		return errors.New("stopped: memory could not be shown current")
 	}
 	return nil
+}
+
+// listenAll listens on each of a comma-separated list of TCP addresses, for
+// one http.Server to serve on every one (Serve per listener; Shutdown closes
+// them all). Behind a reverse proxy each connection the proxy holds is one
+// 4-tuple, so one proxy address calling one of these is bounded by the
+// proxy's range of ephemeral ports; another address here is another range
+// (dromas-dev/dromas-server#124 item 6). On an error it closes what it opened.
+func listenAll(spec string) ([]net.Listener, error) {
+	var ls []net.Listener
+	for _, a := range strings.Split(spec, ",") {
+		if a = strings.TrimSpace(a); a == "" {
+			continue
+		}
+		l, err := net.Listen("tcp", a)
+		if err != nil {
+			for _, o := range ls {
+				_ = o.Close()
+			}
+			return nil, err
+		}
+		ls = append(ls, l)
+	}
+	if len(ls) == 0 {
+		return nil, errors.New("no address")
+	}
+	return ls, nil
 }
