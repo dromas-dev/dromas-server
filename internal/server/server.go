@@ -380,11 +380,28 @@ func HTTPServer(addr string, h http.Handler, l Limits, idle time.Duration) *http
 // answer served again from a cache would be this server's word outliving the
 // fact: a prekey that was replaced, or a box that has since been revoked. A
 // 410 is cacheable by default (RFC 9110 §15.5.11), so this is said outright.
+// Each answer also carries the headers OWASP's REST Security Cheat Sheet
+// gives an API (apiHeaders).
 func notStored(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
+		apiHeaders(w.Header())
 		h.ServeHTTP(w, r)
 	})
+}
+
+// apiHeaders are what a browser is told of an API answer, which is never a
+// page: render nothing it names and frame it nowhere (a CSP of
+// default-src 'none', frame-ancestors 'none'), never sniff its type, send
+// no Referer from it, and let no other origin load or open it
+// (Cross-Origin-Resource-Policy, -Opener-Policy). A client of the API reads
+// none of them.
+func apiHeaders(h http.Header) {
+	h.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Referrer-Policy", "no-referrer")
+	h.Set("Cross-Origin-Resource-Policy", "same-origin")
+	h.Set("Cross-Origin-Opener-Policy", "same-origin")
 }
 
 // dated dates every answer by the server's own clock, the one its checks
