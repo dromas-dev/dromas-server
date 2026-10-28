@@ -4,8 +4,7 @@ package server
 // on 127.0.0.1, for the DynamoDB backend to run against through the AWS SDK
 // at the module's version: its retries, its retry quota, its error types,
 // its HTTP client. Nothing calls AWS: the SDK's HTTP client refuses any other host.
-// It came with the audit of dromas-dev/dromas-client#349
-// (dromas-dev/dromas-server#89, #90, #91).
+// See dromas-dev/dromas-client#349 and dromas-dev/dromas-server#89, #90, #91.
 
 import (
 	"errors"

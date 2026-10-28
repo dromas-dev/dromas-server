@@ -25,7 +25,7 @@ import (
 // body, and a poll that sends it back is 304 while the page is unchanged
 // (PROTOCOL.md §11.11). The tag is the page's own: every process computes it
 // alike, with no key, and an empty box's is the same on every server. A tag
-// of the page before, the old "<count>-<version>" form among them, is not
+// of the page before, the "<count>-<version>" form among them, is not
 // the page's. Weak comparison: W/ is read past, and * names any page. A page
 // after the first carries none, so no tag names it, and only * makes it 304
 // (dromas-dev/dromas-server#86). Every answer carries the poll interval

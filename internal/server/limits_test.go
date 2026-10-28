@@ -14,8 +14,8 @@ import (
 	"github.com/dromas-dev/dromas-client/protocol"
 )
 
-// These tests cover calls that once reached storage with no limit, and maps
-// that once grew without bound: each now has its limit.
+// These tests cover the limits on calls that reach storage, and on maps
+// that would otherwise grow without bound.
 
 // A key whose bucket is full again is dropped; one still in use is kept.
 func TestBucketsDropKeysFullAgain(t *testing.T) {

@@ -1038,7 +1038,7 @@ func TestSendPipeline(t *testing.T) {
 	e.want(e.do("POST", to+"/messages?prekey_serial=9007199254740991&certificate_serial=9007199254740991", ok.ciphertext, pass), 409, protocol.CodeStalePrekey)
 
 	// The body is the ciphertext's bytes, whatever its Content-Type says. A
-	// body that is no age file, the JSON a send once was among them, is
+	// body that is no age file, a JSON object of a send's fields among them, is
 	// refused as no age file.
 	j, _ := json.Marshal(map[string]any{"prekey_serial": ok.PrekeySerial, "certificate_serial": ok.CertificateSerial, "ciphertext": ok.ciphertext})
 	for name, body := range map[string][]byte{"no body": nil, "a JSON object": j, "text": []byte("not an age file")} {
