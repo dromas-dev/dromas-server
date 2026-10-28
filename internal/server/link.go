@@ -74,9 +74,9 @@ func (s *Server) linkBase(r *http.Request) string {
 
 // scheme is the scheme the caller reached this server by: https over TLS to
 // this server, or what a trusted proxy says in X-Forwarded-Proto, which TLS
-// ending in front sets to the scheme its client used (Cloudflare does, and
-// overwrites a client's own); otherwise http. From any other peer the header
-// is ignored, as CF-Connecting-IP is.
+// ending in front sets to the scheme its client used, overwriting a client's
+// own; otherwise http. From any other peer the header is ignored, as
+// X-Forwarded-For is.
 func (s *Server) scheme(r *http.Request) string {
 	if r.TLS != nil {
 		return "https"

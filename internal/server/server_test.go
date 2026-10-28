@@ -1289,9 +1289,10 @@ func TestPerIPLimits(t *testing.T) {
 }
 
 // Behind a proxy every request comes from the proxy's address: per-IP limits
-// key on CF-Connecting-IP from a trusted proxy, and on the peer otherwise, so
-// no one outside can pick their own bucket. The limit read here is the one on
-// sends, which is taken before a send's pass is looked at.
+// key on the last address of X-Forwarded-For from a trusted proxy, the one
+// that proxy wrote, and on the peer otherwise, so no one outside can pick
+// their own bucket. The limit read here is the one on sends, which is taken
+// before a send's pass is looked at.
 func TestClientIPFromTrustedProxy(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
@@ -1301,7 +1302,7 @@ func TestClientIPFromTrustedProxy(t *testing.T) {
 	for _, c := range []struct {
 		name    string
 		trusted []netip.Prefix
-		second  int // the status of a second call from another CF-Connecting-IP
+		second  int // the status of a second call from another client
 	}{
 		{"trusted peer: one bucket per client", []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}, http.StatusUnauthorized},
 		{"untrusted peer: the header is ignored", nil, http.StatusTooManyRequests},
@@ -1311,7 +1312,7 @@ func TestClientIPFromTrustedProxy(t *testing.T) {
 			defer srv.Close()
 			call := func(ip string) int {
 				req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/"+protocol.Address{1}.String()+"/messages", nil)
-				req.Header.Set("CF-Connecting-IP", ip)
+				req.Header.Set("X-Forwarded-For", ip)
 				resp, err := http.DefaultClient.Do(req)
 				if err != nil {
 					t.Fatal(err)
@@ -1331,6 +1332,42 @@ func TestClientIPFromTrustedProxy(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The client is the LAST address of X-Forwarded-For from a trusted proxy,
+// read across every line of it as one list: the entries before it are the
+// caller's own words, and CF-Connecting-IP is no proxy's word here at all.
+// An entry that is not an address leaves the peer, and so does every header
+// from a peer that is not trusted.
+func TestTheClientIsTheLastForwardedAddress(t *testing.T) {
+	t.Parallel()
+	loopback := []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("::1/128")}
+	s := New(Config{Store: NewMemStore(time.Now), Limits: relaxed(), TrustedProxies: loopback})
+	other := New(Config{Store: NewMemStore(time.Now), Limits: relaxed()})
+	for _, c := range []struct {
+		name   string
+		s      *Server
+		header []string // name, value, …
+		want   string
+	}{
+		{"one address", s, []string{"X-Forwarded-For", "203.0.113.9"}, "203.0.113.9"},
+		{"the caller's own entries first", s, []string{"X-Forwarded-For", "192.0.2.1, 198.51.100.7,203.0.113.9"}, "203.0.113.9"},
+		{"two lines, one list", s, []string{"X-Forwarded-For", "192.0.2.1", "X-Forwarded-For", "2001:db8::9"}, "2001:db8::9"},
+		{"a zone is no part of it", s, []string{"X-Forwarded-For", "fe80::1%eth0"}, "fe80::1"},
+		{"the last is not an address", s, []string{"X-Forwarded-For", "203.0.113.9, unknown"}, "127.0.0.1"},
+		{"CF-Connecting-IP is not read", s, []string{"CF-Connecting-IP", "203.0.113.9"}, "127.0.0.1"},
+		{"no header", s, nil, "127.0.0.1"},
+		{"an untrusted peer", other, []string{"X-Forwarded-For", "203.0.113.9"}, "127.0.0.1"},
+	} {
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.RemoteAddr = "127.0.0.1:4321"
+		for i := 0; i+1 < len(c.header); i += 2 {
+			r.Header.Add(c.header[i], c.header[i+1])
+		}
+		if got := c.s.clientIP(r); got != c.want {
+			t.Errorf("%s: the client is %q, want %q", c.name, got, c.want)
+		}
 	}
 }
 

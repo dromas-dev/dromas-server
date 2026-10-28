@@ -40,6 +40,8 @@ go run ./cmd/dromasd serve --dev
 
 The other backend is three DynamoDB tables and an S3 Express One Zone directory bucket. `dromasd serve -h` lists every flag, and `ARCHITECTURE.md` § Storage has the layout. That mode also needs `-names`, the names clients call the server by: a box's pass is made for one server by name, and the server takes one only on a request that calls it by a name of its own (`ARCHITECTURE.md` § The pass check).
 
+Run behind a reverse proxy that terminates TLS: `-listen` takes one or more TCP addresses (comma-separated, served alike), and `-trusted-proxy` names the proxy's addresses, whose `X-Forwarded-For` (its last entry) names the client every per-IP limit counts (`ARCHITECTURE.md` § Behind a reverse proxy). Without `-trusted-proxy` the peer is the client.
+
 `-metrics-listen <address>` serves the operator's metrics at `/metrics` in Prometheus' text format, on a listener of its own: what they count is `ARCHITECTURE.md` § Metrics. Keep it off the internet: it is for the operator.
 
 ## Contributing

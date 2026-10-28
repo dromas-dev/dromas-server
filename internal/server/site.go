@@ -7,6 +7,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"path"
+	"slices"
 	"strings"
 
 	"github.com/dromas-dev/dromas-client/protocol"
@@ -39,10 +40,14 @@ func SiteBackend(raw string) (*url.URL, error) {
 // (clientIP), X-Forwarded-Host is the request's Host, and X-Forwarded-Proto
 // is a trusted proxy's, else this connection's. What came with the request
 // of the client's address or of the hops before is dropped, from every
-// peer: Forwarded, every X-Forwarded-* and X-Real-IP (Rewrite drops only
-// Forwarded and X-Forwarded-{For,Host,Proto}; dromas-dev/dromas-client#504
-// item 2); and CF-Connecting-IP, which clientIP believes only of a trusted
-// proxy, from any other. The backend is asked for the codings the client
+// peer, a trusted proxy's included: Forwarded, every X-Forwarded-*, and
+// each header a proxy or CDN names a client's address by (clientHeaders;
+// Rewrite drops only Forwarded and X-Forwarded-{For,Host,Proto};
+// dromas-dev/dromas-client#504 item 2, dromas-dev/dromas-server#124 item 2).
+// The answer is dated by this server's clock alone: the backend's own Date
+// is dropped, since dated has set this server's (a field that is not a list
+// is never sent twice, RFC 9110 §5.3; dromas-dev/dromas-server#135). The
+// backend is asked for the codings the client
 // asked for and no other: net/http's transport would ask for gzip itself
 // where the client asked for none, and undo it on the way back, so its own
 // compression is off. A backend that does not answer is a 502, and a
@@ -59,7 +64,7 @@ func (s *Server) siteProxy(backend *url.URL) http.Handler {
 			r.SetURL(backend)
 			r.Out.Host = r.In.Host
 			for name := range r.Out.Header {
-				if strings.HasPrefix(name, "X-Forwarded-") || name == "X-Real-Ip" || name == "Cf-Connecting-Ip" && !s.fromProxy(r.In) {
+				if strings.HasPrefix(name, "X-Forwarded-") || slices.Contains(clientHeaders, name) {
 					delete(r.Out.Header, name)
 				}
 			}
@@ -68,6 +73,10 @@ func (s *Server) siteProxy(backend *url.URL) http.Handler {
 			if proto := r.In.Header.Get("X-Forwarded-Proto"); s.fromProxy(r.In) && (proto == "http" || proto == "https") {
 				r.Out.Header.Set("X-Forwarded-Proto", proto)
 			}
+		},
+		ModifyResponse: func(resp *http.Response) error {
+			resp.Header.Del("Date")
+			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			// r is the request as passed, its body the one paced
@@ -93,6 +102,21 @@ func (s *Server) siteProxy(backend *url.URL) http.Handler {
 		}
 		proxy.ServeHTTP(w, r)
 	})
+}
+
+// clientHeaders are the headers, in canonical form, that proxies and CDNs
+// name a client's address by, besides Forwarded and X-Forwarded-*: a site
+// that read one would take the caller's word for who it is. The site is told
+// the client in X-Forwarded-For alone.
+var clientHeaders = []string{
+	"Forwarded",
+	"X-Real-Ip",
+	"Cf-Connecting-Ip",
+	"Cf-Connecting-Ipv6",
+	"True-Client-Ip",
+	"X-Client-Ip",
+	"X-Cluster-Client-Ip",
+	"Fastly-Client-Ip",
 }
 
 // serversPath reports whether a request's path, decoded (URL.Path) and
