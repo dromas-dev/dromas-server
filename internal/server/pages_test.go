@@ -13,10 +13,11 @@ import (
 // (AGENTS.md): a date is allowed only where it says when a source was read,
 // a measurement measured, a review made or an outside document dated, and
 // in the tag URIs of the protocol's error types, whose date is part of the
-// URI.
+// URI; a time written out (2006-01-02T15:04:05Z) is an example of a format,
+// not a date of anything.
 func TestEveryPageSaysWhatHoldsNow(t *testing.T) {
 	date := regexp.MustCompile(`20[0-9]{2}-[01][0-9]-[0-3][0-9]`)
-	allowed := regexp.MustCompile(`(?i)(\b(read|measured|review|dated) |tag:dromas\.dev,)20[0-9]{2}-[01][0-9]-[0-3][0-9]`)
+	allowed := regexp.MustCompile(`(?i)(\b(read|measured|review|dated) |tag:dromas\.dev,)20[0-9]{2}-[01][0-9]-[0-3][0-9]|20[0-9]{2}-[01][0-9]-[0-3][0-9]T[0-9]{2}:`)
 	root := filepath.Join("..", "..")
 	n := 0
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -34,9 +35,6 @@ func TestEveryPageSaysWhatHoldsNow(t *testing.T) {
 		var words func(string) string
 		switch ext := filepath.Ext(name); {
 		case ext == ".md":
-			if rel, _ := filepath.Rel(root, p); rel == "" {
-				return nil
-			}
 			words = func(l string) string { return l }
 		case ext == ".go":
 			words = func(l string) string { _, c, _ := strings.Cut(l, "//"); return c }
