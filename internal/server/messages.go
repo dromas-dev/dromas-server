@@ -35,10 +35,14 @@ const pageSize = 50
 func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
 	// The path and the query first, the cursor's decode among them, before
 	// the pass (PROTOCOL.md §11.11).
-	if _, err := pathAddr(r, cursorParam); err != nil {
+	if _, err := pathAddr(r, cursorParam, waitParam); err != nil {
 		return err
 	}
 	cursor, hasCursor := r.URL.Query()[cursorParam]
+	wait, err := listWait(r, hasCursor)
+	if err != nil {
+		return err
+	}
 	var after *Cursor
 	if hasCursor {
 		var err error
@@ -46,7 +50,7 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 	}
-	box, err := s.owner(r, cursorParam)
+	box, err := s.owner(r, cursorParam, waitParam)
 	if err != nil {
 		return err
 	}
@@ -90,6 +94,25 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
 	} else {
 		s.metrics.list(true)
 	}
+	// A first page asked to wait is held while the If-None-Match names it
+	// (PROTOCOL.md §11.11): read, held until the box changes, the wait
+	// passes or the server stops, and read again; then answered as any list.
+	// The box's change is taken before each read, so none is missed between.
+	var until time.Time
+	if wait > 0 && !hasCursor {
+		until = time.Now().Add(min(wait, s.limits.HoldMax))
+	}
+	holding := false
+	defer func() {
+		if holding {
+			s.unhold()
+		}
+	}()
+again:
+	var changed <-chan struct{}
+	if !until.IsZero() {
+		changed = s.store.Changed(box)
+	}
 	n, err := s.store.Count(r.Context(), box)
 	if err != nil {
 		return err
@@ -128,6 +151,33 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
 	var tag string
 	if !hasCursor {
 		tag = listTag(body)
+		if !until.IsZero() && time.Now().Before(until) && protocol.IfMatch(r.Header.Values("If-Match"), tag) && protocol.IfNoneMatch(r.Header.Values("If-None-Match"), tag) {
+			if !holding {
+				if holding = s.hold(); !holding {
+					s.metrics.heldEnded("refused")
+					p := fail(protocol.CodeUnavailable, "retry later", "this server holds as many lists as it may")
+					p.retryAfter = time.Duration(s.limits.PollAfter) * time.Second
+					return p
+				}
+			}
+			t := time.NewTimer(time.Until(until))
+			select {
+			case <-changed:
+				s.metrics.heldEnded("changed")
+			case <-t.C:
+				s.metrics.heldEnded("waited")
+				until = time.Time{}
+			case <-s.stopping:
+				s.metrics.heldEnded("stopped")
+				until = time.Time{}
+			case <-r.Context().Done():
+				t.Stop()
+				s.metrics.heldEnded("gone")
+				return r.Context().Err()
+			}
+			t.Stop()
+			goto again
+		}
 		if err := precondition(r, targetState{exists: true, tag: tag, hint: hintList, also: []string{"Retry-After", poll}}); err != nil {
 			return err
 		}
@@ -139,6 +189,48 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
 	writeList(w, body, tag, poll)
 	return nil
 }
+
+// waitParam is a list's long poll (PROTOCOL.md §11.11).
+const waitParam = "wait"
+
+// listWait reads a list's wait: zero for none, and a refusal for one that
+// is not delay-seconds or that comes with a cursor (PROTOCOL.md §11.11).
+func listWait(r *http.Request, hasCursor bool) (time.Duration, error) {
+	v, ok := r.URL.Query()[waitParam]
+	if !ok {
+		return 0, nil
+	}
+	n, err := protocol.Wait(v[0])
+	if err != nil || hasCursor {
+		return 0, fail(protocol.CodeBadRequest, "send the wait as whole seconds, on a list without a cursor", "the query parameter %s is not delay-seconds on a first page", memberValue(waitParam))
+	}
+	return time.Duration(min(n, uint64(maxWait/time.Second))) * time.Second, nil
+}
+
+// maxWait bounds a wait as read, far past any HoldMax.
+const maxWait = 24 * time.Hour
+
+// hold counts one more list held, and reports false, counting nothing, at
+// Limits.Holds.
+func (s *Server) hold() bool {
+	if s.holding.Add(1) > int64(s.limits.Holds) {
+		s.holding.Add(-1)
+		return false
+	}
+	s.metrics.holding(1)
+	return true
+}
+
+// unhold counts one list held fewer.
+func (s *Server) unhold() {
+	s.holding.Add(-1)
+	s.metrics.holding(-1)
+}
+
+// StopHolds answers every list held, now and from now on, at once: for
+// http.Server.RegisterOnShutdown, so the clients list again at once and
+// Shutdown waits for none of them.
+func (s *Server) StopHolds() { s.stopOnce.Do(func() { close(s.stopping) }) }
 
 // spendPoll spends one of box a's polls (Limits.PollBurst): every list that
 // does not continue a drain, a 304 among them.

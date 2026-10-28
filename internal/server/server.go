@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aws/smithy-go/logging"
@@ -98,6 +99,11 @@ type Server struct {
 	inFlight [256]inFlight
 	// drains is the cursor each box was handed last (list).
 	drains drains
+	// held counts the lists this process holds (list), and stopping is
+	// closed once it stops (StopHolds), which answers every one.
+	holding  atomic.Int64
+	stopping chan struct{}
+	stopOnce sync.Once
 	// purges are the deletes of what is left of revoked boxes in flight, one
 	// per address (purge). Never DoChan (reads).
 	purges singleflight.Group
@@ -149,6 +155,7 @@ func New(c Config) *Server {
 		raises:        perPeriod(string(protocol.QuotaCertificateRevocations), c.Limits.CertificateRevocationsPerDay, day),
 		largeRead:     make(chan struct{}, 1),
 		passes:        newPasses(),
+		stopping:      make(chan struct{}),
 	}
 	if s.now == nil {
 		s.now = time.Now

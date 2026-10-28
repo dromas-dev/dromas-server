@@ -334,6 +334,25 @@ func TestTwoProcesses(t *testing.T) {
 	took := waitFor("the ack reaching the first process", func() bool { return count(e.store) == 0 })
 	t.Logf("an ack on the second process reached the first in %s", took)
 
+	// A list held on the other process is woken by a send stored on this
+	// one, through the stream (PROTOCOL.md §11.11).
+	list := "/v1/" + b.Address().String() + "/messages"
+	tag := e2.do(http.MethodGet, list, nil, tok()).header.Get("ETag")
+	woke := make(chan reply, 1)
+	pass := tok()
+	go func() { woke <- e2.doWith(http.MethodGet, list+"?wait=60", nil, pass, "If-None-Match", tag) }()
+	time.Sleep(300 * time.Millisecond)
+	start := time.Now()
+	id = idOf(t, send(t, a, b, "woke a list held elsewhere"))
+	if r := <-woke; r.status != http.StatusOK || !strings.Contains(string(r.body), `"count":1`) {
+		t.Fatalf("the list held on the other process: %d %s", r.status, r.body)
+	}
+	t.Logf("a send on the first process woke a list held on the second in %s", time.Since(start))
+	if r := e2.do(http.MethodDelete, list+"/"+hexID(id), nil, tok()); r.status != http.StatusNoContent {
+		t.Fatalf("ack on the other process: %d %s", r.status, r.body)
+	}
+	waitFor("the ack reaching the first process", func() bool { return count(e.store) == 0 })
+
 	// A send reaches the other process's count.
 	send(t, a, b, "seen elsewhere")
 	took = waitFor("the send reaching the other process", func() bool { return count(other) == 1 })
@@ -522,6 +541,8 @@ type countingStore struct {
 func (c *countingStore) count() { c.calls.Add(1) }
 
 func (c *countingStore) Held(a protocol.Address) (Standing, bool) { return c.s.Held(a) }
+
+func (c *countingStore) Changed(a protocol.Address) <-chan struct{} { return c.s.Changed(a) }
 
 func (c *countingStore) Known(a protocol.Address) (*Box, bool) { return c.s.Known(a) }
 

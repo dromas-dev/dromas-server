@@ -172,6 +172,10 @@ func (s *Memory) readBox(ctx context.Context, a protocol.Address) (boxRead, erro
 // Held implements Store: the standing of a box memory has loaded.
 func (s *Memory) Held(a protocol.Address) (Standing, bool) { return s.idx.standing(a) }
 
+// Changed returns a channel closed at box a's next change in memory
+// (Store.Changed).
+func (s *Memory) Changed(a protocol.Address) <-chan struct{} { return s.idx.changed(a) }
+
 // applyBox records a box record this process wrote: b is what is held of
 // its address, the record and the revocations read with it. Those were read
 // before the write, so in the step that counts the write (recCache.write)

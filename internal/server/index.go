@@ -33,6 +33,9 @@ type index struct {
 type indexShard struct {
 	mu    sync.Mutex
 	boxes map[protocol.Address]*boxMem
+	// wake holds, for each box a list is held on, the channel closed at
+	// the box's next change (changed).
+	wake map[protocol.Address]chan struct{}
 }
 
 // mark is one live message (ARCHITECTURE.md § Memory).
@@ -100,6 +103,7 @@ func newIndex() *index {
 	_, _ = rand.Read(x.key[:])
 	for i := range x.shards {
 		x.shards[i].boxes = map[protocol.Address]*boxMem{}
+		x.shards[i].wake = map[protocol.Address]chan struct{}{}
 	}
 	return x
 }
@@ -169,17 +173,43 @@ func (x *index) ensure(ctx context.Context, a protocol.Address, read func() (box
 }
 
 // apply runs op on box a: now if memory holds it, after its load if it is
-// loading, and not at all if memory does not hold it.
+// loading, and not at all if memory does not hold it. Every change to a box
+// passes here, a write of this process's and one from the streams, so here
+// every list held on it is woken (changed).
 func (x *index) apply(a protocol.Address, op func(*boxMem)) {
 	sh := x.shard(a)
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
+	defer sh.woke(a)
 	switch m := sh.boxes[a]; {
 	case m == nil:
 	case m.loading != nil:
 		m.loading.queued = append(m.loading.queued, op)
 	default:
 		op(m)
+	}
+}
+
+// changed returns a channel closed at box a's next change in memory: a
+// list held on it waits on it, taken before it reads the box, so no change
+// is missed between the two (PROTOCOL.md §11.11).
+func (x *index) changed(a protocol.Address) <-chan struct{} {
+	sh := x.shard(a)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	c := sh.wake[a]
+	if c == nil {
+		c = make(chan struct{})
+		sh.wake[a] = c
+	}
+	return c
+}
+
+// woke wakes every list held on box a. The shard's lock is held.
+func (sh *indexShard) woke(a protocol.Address) {
+	if c := sh.wake[a]; c != nil {
+		close(c)
+		delete(sh.wake, a)
 	}
 }
 
@@ -358,6 +388,7 @@ func (x *index) forget(a protocol.Address) {
 	sh := x.shard(a)
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
+	defer sh.woke(a)
 	switch m := sh.boxes[a]; {
 	case m == nil:
 	case m.loading != nil:

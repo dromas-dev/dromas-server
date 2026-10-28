@@ -329,3 +329,48 @@ func TestIndexLoad(t *testing.T) {
 		}
 	})
 }
+
+// Every change memory applies to a box wakes the lists held on it, from
+// this process's writes and from the streams alike, since both pass
+// through apply; one box's change wakes no other's (PROTOCOL.md §11.11).
+func TestEveryChangeToABoxWakesItsHeldLists(t *testing.T) {
+	t.Parallel()
+	var box, other protocol.Address
+	box[0], other[0] = 7, 7 // one shard
+	other[1] = 1
+	const now = 1_000_000
+	k := mark{tag: 1, id: 1, exp: now + 500}
+	woken := func(c <-chan struct{}) bool {
+		select {
+		case <-c:
+			return true
+		default:
+			return false
+		}
+	}
+	for name, change := range map[string]func(x *index){
+		"insert":   func(x *index) { x.insert(box, k, now) },
+		"remove":   func(x *index) { x.remove(box, k.tag, k.exp, now, false) },
+		"deleted":  func(x *index) { x.deleted(box, k.tag, now) },
+		"standing": func(x *index) { x.setRevocations(box, true, 0) },
+		"forget":   func(x *index) { x.forget(box) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			x := loaded(t, box, boxRead{exists: true, marks: []mark{k}})
+			if err := x.ensure(context.Background(), other, func() (boxRead, error) { return boxRead{exists: true}, nil }); err != nil {
+				t.Fatal(err)
+			}
+			c, d := x.changed(box), x.changed(other)
+			if woken(c) {
+				t.Fatal("woken before any change")
+			}
+			change(x)
+			if !woken(c) || woken(d) {
+				t.Fatalf("after the change: this box's list woken %v, the other's %v", woken(c), woken(d))
+			}
+			if woken(x.changed(box)) {
+				t.Fatal("a list held after the change is woken by it")
+			}
+		})
+	}
+}

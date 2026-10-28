@@ -139,6 +139,8 @@ func serve(args []string) error {
 	fs.IntVar(&l.PollBurst, "poll-burst", l.PollBurst, "polls a box may make at once (0: off)")
 	fs.DurationVar(&l.PollRefill, "poll-refill", l.PollRefill, "one more poll each")
 	fs.IntVar(&l.PollAfter, "poll-after", l.PollAfter, "poll interval told to clients, seconds")
+	fs.DurationVar(&l.HoldMax, "hold-max", l.HoldMax, "the longest a list is held for a change, whatever its wait asks: under the read timeout of a proxy in front (0: none held)")
+	fs.IntVar(&l.Holds, "holds", l.Holds, "lists this process holds at once; past it a list that asks to wait is answered 503 (0: none held)")
 	fs.IntVar(&l.RegistrationsPerHour, "registrations-per-hour", l.RegistrationsPerHour, "registrations per IPv4 address or IPv6 /64 (0: off)")
 	fs.IntVar(&l.RangeRegistrationsPerHour, "range-registrations-per-hour", l.RangeRegistrationsPerHour, "registrations per IPv6 /48, beside -registrations-per-hour (0: off)")
 	fs.IntVar(&l.SendsPerMinutePerIP, "sends-per-minute-per-ip", l.SendsPerMinutePerIP, "pre-auth sends per IP (0: off)")
@@ -298,6 +300,9 @@ func serve(args []string) error {
 		return fmt.Errorf("-listen: %w", err)
 	}
 	srv := server.HTTPServer(*listen, api.Handler(), l, *idle)
+	// Every held list is answered at once when the server stops, so its
+	// client lists again at once, and Shutdown waits for none of them.
+	srv.RegisterOnShutdown(api.StopHolds)
 	srv.ConnState = cfg.Metrics.ConnState
 	errc := make(chan error, len(listeners))
 	for _, ln := range listeners {
