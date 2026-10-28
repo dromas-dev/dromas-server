@@ -1,0 +1,41 @@
+# OpenSSF Scorecard (https://scorecard.dev), published: the results replace
+# the weekly public scan's, at api.scorecard.dev, and each finding is a Code
+# scanning alert. The job is shaped by the action's rules for publishing (no
+# env or defaults, only its approved actions, write permissions in this job
+# alone), from ossf/scorecard's own scorecard-analysis.yml. Actions are pinned
+# by commit, each with its release beside it.
+name: scorecard
+
+on:
+  push:
+    branches: [main]
+  branch_protection_rule:
+  schedule:
+    - cron: "30 1 * * 6"
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  analysis:
+    runs-on: ubuntu-26.04
+    permissions:
+      security-events: write # the Code scanning upload
+      id-token: write # publish_results
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: SARIF file
+          path: results.sarif
+          retention-days: 5
+      - uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          sarif_file: results.sarif
