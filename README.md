@@ -19,15 +19,18 @@ The server of [dromas.dev](https://dromas.dev): end-to-end encrypted, sender-ver
 | [`SECURITY.md`](SECURITY.md) | How to report a vulnerability privately, and what this server must get right beside the code and tests that hold it |
 | `test/interop.sh` | The stock-tools client and the Go client, together, against a real `dromasd` |
 | `test/working-key-openssh.sh` | A measurement, not a test: what stock `ssh-keygen` does with a certificate an identity signs for a working key (the client repo's issue #30) |
-| `Dockerfile` | `dromasd` as a static binary on Debian slim; it needs the client checkout as a build context named `client`. The echo box's image is the client repo's |
-| `.github/workflows/docker-publish.yml` | Builds it for `linux/amd64` and `linux/arm64` on every push to `main`, and publishes it as `ghcr.io/dromas-dev/dromasd`, with an attestation of the build (`gh attestation verify oci://ghcr.io/dromas-dev/dromasd@<digest> -R dromas-dev/dromas-server`) |
+| `Dockerfile` | `dromasd` as a static binary on Debian slim, built from the client release `go.mod` requires. The echo box's image is the client repo's |
+| `.github/workflows/docker-publish.yml` | Builds it for `linux/amd64` and `linux/arm64` and publishes it as `ghcr.io/dromas-dev/dromasd`, with an SBOM and an attestation of the build (`gh attestation verify oci://ghcr.io/dromas-dev/dromasd@<digest> -R dromas-dev/dromas-server`): on every push to `main`, tagged `main`, and for each release, tagged with its version |
+| `Taskfile.yml`, `.github/workflows/release.yml`, `.goreleaser.yaml` | `dromasd`'s releases: `task release` signs the tag and pushes it, and the workflow checks it against `.github/allowed_signers`, runs CI on its commit, and publishes archives for Linux on `amd64` and `arm64`, with an SBOM of each, every file attested, and `checksums.txt`, signed with cosign by the workflow; then the image from the same tag, then it checks the release and the image as published and builds the release again to compare. The release's notes have the commands that check each |
 | `bench/` | The measurements behind the microsecond figures |
 
 A deployment's site (dromas.dev's front page and `llms.txt`) is not in this repo. `serve -site-backend <URL>` passes every request outside `/v1/` and `/to/` to the deployment's own web server, as a reverse proxy passes it, with `X-Forwarded-For` naming the client the limits see, and its answer back as that server sent it, a 404 among them; under `/v1/` and `/to/` every answer is the server's.
 
 ## Build and run
 
-`go.mod` requires a release of the client module, which `go` fetches:
+Each release is a static binary for Linux on `amd64` and `arm64` and an image, `ghcr.io/dromas-dev/dromasd:<version>`, both built from its signed tag by this repo's workflows after its tests pass on that commit (`SECURITY.md`); `go install github.com/dromas-dev/dromas-server/cmd/dromasd@<version>` builds the same source. The major version is the protocol's, shared with the client: both are 0.x until the protocol is frozen, and the freeze is v1 of both.
+
+From source, `go.mod` requires a release of the client module, which `go` fetches:
 
 ```sh
 git clone https://github.com/dromas-dev/dromas-server

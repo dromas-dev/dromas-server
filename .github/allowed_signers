@@ -1,0 +1,5 @@
+# The keys a release tag may be signed with (gpg.ssh.allowedSignersFile,
+# ssh-keygen(1) ALLOWED SIGNERS). .github/workflows/release.yml releases
+# only a tag that verifies against this file, and anyone can check one:
+# git -c gpg.ssh.allowedSignersFile=.github/allowed_signers verify-tag <tag>
+dtype@dtype.org namespaces="git" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPeHZZ9yrsK12v/QCdAn5G/9zVzmTKI7d7VbsZD4yYEb
