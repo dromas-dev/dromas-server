@@ -204,7 +204,10 @@ func listWait(r *http.Request, hasCursor bool) (time.Duration, error) {
 	if err != nil || hasCursor {
 		return 0, fail(protocol.CodeBadRequest, "send the wait as whole seconds, on a list without a cursor", "the query parameter %s is not delay-seconds on a first page", memberValue(waitParam))
 	}
-	return time.Duration(min(n, uint64(maxWait/time.Second))) * time.Second, nil
+	if n >= uint64(maxWait/time.Second) {
+		return maxWait, nil
+	}
+	return time.Duration(n) * time.Second, nil
 }
 
 // maxWait bounds a wait as read, far past any HoldMax.
