@@ -821,8 +821,7 @@ func TestTheRecordAndTheRevocationsAreMemorys(t *testing.T) {
 }
 
 // A box record this build cannot read whole is no record: one in a state it
-// never writes, as "deleted" was until the box's delete was dropped
-// (dromas-dev/dromas-client#312), or an active one whose stored ACL does
+// never writes, "deleted" among them (dromas-dev/dromas-client#312), or an active one whose stored ACL does
 // not read. Reading it is an error, so nothing is served or taken for the
 // address, and its image on the stream makes memory forget the box wherever
 // it holds it, loaded or loading, its record cached, or its address

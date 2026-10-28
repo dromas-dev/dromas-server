@@ -625,7 +625,7 @@ const drainBound = 256 << 10
 // (dromas-dev/dromas-client#413 item 3): net/http would otherwise drain
 // it with a reader of its own, whose cut is no cut here (go1.27's
 // chunkWriter.writeHeader, and body.Close once the handler returns). No byte
-// of the drain moves the read deadline, as none of net/http's did: the body
+// of the drain moves the read deadline, as none of net/http's would: the body
 // has the timeout from its head, and what the handler's reads earned, and no
 // more (#82). It drains what net/http would: to drainBound, and none of a
 // body net/http drains none of, or whose Content-Length leaves more than

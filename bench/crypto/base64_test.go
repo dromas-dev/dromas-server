@@ -8,10 +8,9 @@ import (
 	"testing"
 )
 
-// PROTOCOL.md §11.10 relied on this while a send carried its ciphertext as base64 inside JSON,
-// where it is now the body itself: a client that forgets `base64 -w0` sends 76-column-wrapped
-// base64 inside the JSON string, and the server's encoding/base64 must still decode it to the
-// exact bytes (the decoder ignores \r and \n). Kept as the record of that measurement.
+// A client that forgets `base64 -w0` sends 76-column-wrapped base64 inside a JSON string, and
+// encoding/base64 decodes it to the exact bytes (the decoder ignores \r and \n). A measurement,
+// not a test of the server: a send's body is the ciphertext itself, raw (PROTOCOL.md §11.10).
 func TestWrappedBase64DecodesExactly(t *testing.T) {
 	raw := make([]byte, 10440) // a 10 KiB plaintext's binary age file
 	rand.Read(raw)

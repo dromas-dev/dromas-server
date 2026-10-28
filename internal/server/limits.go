@@ -25,13 +25,13 @@ type Limits struct {
 	RetiredKept    int           // retired prekeys a box record keeps for the new-key rule, newest first (decided: 10), so a record stays small
 
 	RegistrationsPerHour      int // per IPv4 address or IPv6 /64 [tunable]
-	RangeRegistrationsPerHour int // per IPv6 /48, beside the /64's (decided 2026-10-19: 500, Let's Encrypt's ratio of the two, until measured)
+	RangeRegistrationsPerHour int // per IPv6 /48, beside the /64's (decided: 500, Let's Encrypt's ratio of the two, until measured)
 	SendsPerMinutePerIP       int // the pre-auth send rate per IP [tunable]
 	MissesPerMinute           int // per IP: reads of the boxes table that find no box, and checks that fail (decided: 10 for now)
 
 	// Requests is the flood budget of an IPv4 address or IPv6 /64: every call
-	// with no pass and every request no route matches (decided 2026-10-19:
-	// 100 at once, 50 a second).
+	// with no pass and every request no route matches (decided: 100 at once,
+	// 50 a second).
 	RequestBurst  int
 	RequestRefill time.Duration
 
@@ -43,7 +43,7 @@ type Limits struct {
 	CallBurst                    int           // per box: its calls with its pass that no other budget counts [tunable]; an account lifts it
 	CallRefill                   time.Duration // [tunable]
 	CertificatesPerDay           int           // per box, a number a day: renewals under a later certificate, but for one that replaces a revoked certificate (decided: 10, as renewals)
-	CertificateRevocationsPerDay int           // per box, a number a day: raises of its revocation of certificates (decided 2026-10-16 to be counted apart; 10, as the count it was split from) [tunable]
+	CertificateRevocationsPerDay int           // per box, a number a day: raises of its revocation of certificates (decided: a count of its own, apart from CertificatesPerDay; 10, as that one) [tunable]
 
 	// ACLEntries is the most entries a box's ACL holds, its two lists
 	// together [tunable]: a box's record, with its ACL, is held in the box
@@ -66,7 +66,7 @@ type Limits struct {
 	// headers, that the server reads (http.Server.MaxHeaderBytes): what the
 	// longest call needs, a pass of protocol.MaxPassAuthorization bytes
 	// with the request line and the other headers a client and a proxy in
-	// front of it send, and no more (decided 2026-10-20: 8 KiB, least need).
+	// front of it send, and no more (decided: 8 KiB, least need).
 	// A head is read before any count, since the address a call is counted
 	// by may be one of its headers (LIMITS.md, rule 1).
 	HeadBytes int
@@ -115,8 +115,8 @@ func (l Limits) ceiling() int { return max(l.MaxSize, l.AccountMaxSize) }
 
 // ReceiveCeiling is the shortest refill of any box's budget of new mail: no
 // box takes new mail faster than one each, ten a second, whatever its account
-// lifts, and dromasd serve does not start with flags that would (decided
-// 2026-10-23). A box's messages are one item collection of the messages
+// lifts, and dromasd serve does not start with flags that would (decided).
+// A box's messages are one item collection of the messages
 // table, which its LSI holds to 10 GB on one partition, and every message
 // leaves an item there until it expires (ARCHITECTURE.md § Storage).
 const ReceiveCeiling = time.Second / 10

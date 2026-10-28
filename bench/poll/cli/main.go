@@ -13,8 +13,8 @@ import (
 	"sync"
 )
 
-// With one argument, N, it polls ../srv, the model of an earlier design, N
-// times. With three, N URL AUTHORIZATION, it polls URL with that Authorization
+// With one argument, N, it polls ../srv, a model with nothing but an HMAC
+// check of a bearer token and a map lookup, N times. With three, N URL AUTHORIZATION, it polls URL with that Authorization
 // value: a real dromasd, a box's /messages, and the contents of the box's
 // pass file.
 func main() {

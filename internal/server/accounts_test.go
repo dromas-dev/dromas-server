@@ -749,9 +749,9 @@ func TestLargeReadsTakeTurns(t *testing.T) {
 // one large read back (dromas-dev/dromas-server#7): its answer, 408, comes
 // while its peer still holds the connection, and a large send after it is
 // read, with no wait for the allowance. The metrics count the cut and both
-// reads. Ordered by what each step waits for, not by a clock: the large
-// send once went before the cut gave the allowance back, and the wait it
-// is allowed, the body timeout too, ran out first on a loaded run.
+// reads. Ordered by what each step waits for, not by a clock: on a loaded
+// runner a clock lets the large send go before the cut gives the allowance
+// back, and lets the wait it is allowed, the body timeout too, run out first.
 func TestAStalledBodyGivesTheLargeReadBack(t *testing.T) {
 	t.Parallel()
 	l := relaxed()

@@ -67,8 +67,8 @@ jobs:
           go-version: stable
           check-latest: true
           # No Go cache here: setup-go saves one only when its key misses, and
-          # this job shares the key of the test job on this image, so it saved
-          # its smaller build first and the test job never saved its own (#427).
+          # this job shares the key of the test job on this image, so its smaller
+          # build would be saved first and the test job's never (#427).
           cache: false
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
@@ -86,7 +86,7 @@ jobs:
           go-version: stable
           check-latest: true
           # No Go cache here: setup-go saves one only when its key misses, and
-          # this job shares the key of the test job on this image, so it saved
-          # its smaller build first and the test job never saved its own (#427).
+          # this job shares the key of the test job on this image, so its smaller
+          # build would be saved first and the test job's never (#427).
           cache: false
       - run: scripts/check.sh vuln
