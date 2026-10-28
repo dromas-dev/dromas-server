@@ -44,6 +44,8 @@ type Metrics struct {
 	conns       prometheus.Gauge
 	streamAge   *prometheus.GaugeVec
 	collections prometheus.Histogram
+	holds       prometheus.Gauge
+	held        *prometheus.CounterVec
 }
 
 // seconds are the latency buckets: from the 34 µs of a poll answered from
@@ -93,8 +95,12 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Help: "How old the last record applied from each table's stream was when it was applied: how far behind memory follows."}, []string{"table"}),
 		collections: prometheus.NewHistogram(prometheus.HistogramOpts{Namespace: ns, Name: "item_collection_estimate_bytes",
 			Help: "After each message written, the upper bound of DynamoDB's estimate of its box's item collection, the box's items and their LSI entries, at 2^30 bytes a GB: past 10 GB, the box takes no more mail.", Buckets: gigabytes}),
+		holds: prometheus.NewGauge(prometheus.GaugeOpts{Namespace: ns, Name: "lists_held",
+			Help: "Lists held for a change now (PROTOCOL.md §11.11)."}),
+		held: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "holds_total",
+			Help: "Held lists, by how each ended: changed (the box changed), waited (its wait passed), gone (the caller left), stopped (the server stopped), or refused (past -holds)."}, []string{"outcome"}),
 	}
-	reg.MustRegister(m.requests, m.latency, m.limits, m.passes, m.fetches, m.lists, m.store, m.storeTime, m.caches, m.largeRead, m.cut, m.conns, m.streamAge, m.collections)
+	reg.MustRegister(m.requests, m.latency, m.limits, m.passes, m.fetches, m.lists, m.store, m.storeTime, m.caches, m.largeRead, m.cut, m.conns, m.streamAge, m.collections, m.holds, m.held)
 	return m
 }
 
@@ -210,6 +216,22 @@ func (m *Metrics) list(continues bool) {
 		kind = "page"
 	}
 	m.lists.WithLabelValues(kind).Inc()
+}
+
+// holding counts a list held (n 1) or no longer held (n -1).
+func (m *Metrics) holding(n float64) {
+	if m == nil {
+		return
+	}
+	m.holds.Add(n)
+}
+
+// heldEnded counts how a held list ended.
+func (m *Metrics) heldEnded(outcome string) {
+	if m == nil {
+		return
+	}
+	m.held.WithLabelValues(outcome).Inc()
 }
 
 // cacheEvent counts a hit, a miss or an eviction of the cache named name.

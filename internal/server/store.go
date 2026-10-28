@@ -579,6 +579,10 @@ type Store interface {
 	// false for a box this process has not loaded, which only its record
 	// answers for: Known, then Box (ARCHITECTURE.md § Memory).
 	Held(a protocol.Address) (st Standing, ok bool)
+	// Changed returns a channel closed at box a's next change in memory, by
+	// a write of this process or one the streams bring: what a held list
+	// waits on (PROTOCOL.md §11.11). It reads nothing.
+	Changed(a protocol.Address) <-chan struct{}
 	// Box returns what is held of an address (view): its box's record and
 	// its identity's revocations, or ErrNotFound if neither.
 	Box(ctx context.Context, a protocol.Address) (*Box, error)
