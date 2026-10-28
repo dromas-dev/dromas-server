@@ -2,8 +2,9 @@
 # every pull request and every merge group (the merge queue's test of a pull
 # request on main and those queued ahead of it, GitHub's merge_group event),
 # so each commit's result is on the public record, and
-# once a day, when govulncheck meets advisories published since. Actions are
-# pinned by commit, each with its release beside it. go.mod requires a
+# once a day, when govulncheck meets advisories published since. release.yml
+# runs it all again on a release's tag before it builds (workflow_call).
+# Actions are pinned by commit, each with its release beside it. go.mod requires a
 # release of dromas-client; dromas-client's own CI runs `check.sh full` here
 # against its commit, through a go.work.
 name: ci
@@ -16,6 +17,7 @@ on:
   schedule:
     - cron: "41 5 * * *"
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read

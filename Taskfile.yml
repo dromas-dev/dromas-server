@@ -1,0 +1,53 @@
+# The maintainer's release, made as GoReleaser makes its own (the release
+# task in goreleaser/goreleaser's Taskfile.yml): svu names the version, Task
+# shows it and asks, and the tag is signed and pushed. Everything after the
+# push is .github/workflows/release.yml's (AGENTS.md § Releases).
+#
+#   task release                  the next patch
+#   task release BUMP=minor       a new minor, the maintainer's choice
+#   task release VERSION=<tag>    a version svu cannot know: one past a
+#                                 name that is burned (released, or in Go's
+#                                 module index); a tag that left neither
+#                                 may be deleted and its name reused
+#   task release NOTES=<file>     the tag's message from a file: its first
+#                                 line the subject, the rest the release's
+#                                 summary
+#
+# Needs Task, svu and gh (brew install go-task svu gh), and git signing with
+# SSH (gpg.format ssh, user.signingkey the public key): the private key must
+# be in ssh-agent, and only the maintainer, who holds its passphrase, puts
+# it there, for one release at a time.
+version: "3"
+
+tasks:
+  release:
+    desc: Sign and push the next release tag (BUMP=minor for a new minor)
+    vars:
+      BUMP: '{{.BUMP | default "patch"}}'
+      NEXT:
+        sh: git fetch -q --tags origin && {{if .VERSION}}echo "{{.VERSION}}"{{else}}svu {{.BUMP}}{{end}}
+      COMMIT:
+        sh: git rev-parse --short HEAD
+    prompt: "This signs {{.NEXT}} on {{.COMMIT}} and pushes it, which publishes the release. Continue?"
+    preconditions:
+      - sh: '[ "{{.BUMP}}" = patch ] || [ "{{.BUMP}}" = minor ]'
+        msg: "BUMP is patch or minor: the major is the protocol's, shared with the client, and v1 is the protocol freeze's"
+      - sh: '[ -z "{{.VERSION}}" ] || { echo "{{.VERSION}}" | grep -Eq "^v0\.[0-9]+\.[0-9]+$" && [ -z "$(git tag -l "{{.VERSION}}")" ]; }'
+        msg: "VERSION is a v0.<minor>.<patch> no tag has"
+      - sh: '[ "$(git symbolic-ref --short HEAD)" = main ]'
+        msg: Not on main branch
+      - sh: '[ -z "$(git status --porcelain)" ]'
+        msg: Git is dirty
+      - sh: '[ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ]'
+        msg: "main is not origin/main: git pull --ff-only"
+      - sh: '[ -z "$(git tag --points-at HEAD "v*")" ]'
+        msg: This commit is released already
+      - sh: '[ "$(gh run list --workflow release.yml --event workflow_dispatch --commit "$(git rev-parse HEAD)" --status success --json databaseId --jq length)" -gt 0 ]'
+        msg: "no hand-run of release.yml has passed on this commit (every build and test a tag runs): gh workflow run release.yml --ref main"
+      - sh: '[ -z "{{.NOTES}}" ] || [ -s "{{.NOTES}}" ]'
+        msg: NOTES names no file with anything in it
+      - sh: ssh-add -T "$(git config user.signingkey)"
+        msg: "the signing key is locked: its holder unlocks it for the release (ssh-add -t 1h <private key>)"
+    cmds:
+      - git tag -s {{if .NOTES}}-F "{{.NOTES}}"{{else}}-m "dromasd {{.NEXT}}"{{end}} {{.NEXT}}
+      - git push origin {{.NEXT}}

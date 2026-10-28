@@ -1,0 +1,213 @@
+# dromasd's releases (AGENTS.md § Releases), on a pushed tag v*:
+# - tag: the tag must be signed by a key in .github/allowed_signers, checked
+#   with git verify-tag as Caddy checks its own;
+# - ci: the whole of ci.yml runs on the tagged commit;
+# - release: GoReleaser builds it (.goreleaser.yaml) and publishes the
+#   archives, an SBOM of each and checksums.txt, signed with cosign, as the
+#   tag's GitHub release, and every file the checksums name is attested;
+# - image: docker-publish.yml builds the image from the tag and pushes it
+#   tagged with its version, with an SBOM and an attestation;
+# - verify: the published release and image are checked as the release's
+#   notes have a user check them, as GoReleaser checks its own;
+# - rebuild: the release is built again from its tag on another image, and
+#   each archive must come out as the release job made it, which verify has
+#   checked against what was published.
+# By hand (workflow_dispatch), all of it but the tag and verify, on main as a
+# snapshot published nowhere: so a release's every build and test runs
+# before any tag is made. Actions are
+# pinned by commit, each with its release beside it, and GoReleaser by its
+# version.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  TAG: ${{ github.ref_name }}
+  REPO: ${{ github.repository }}
+
+jobs:
+  tag:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: the tag's signature
+        # Checkout can leave the tag a lightweight ref to its commit
+        # (actions/checkout#290), so it is fetched again as pushed. A tag that
+        # is lightweight, unsigned, or signed by a key the file does not name
+        # for git fails here.
+        run: |
+          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+          git -c gpg.ssh.allowedSignersFile=.github/allowed_signers verify-tag "$TAG"
+
+  ci:
+    needs: tag
+    if: ${{ !failure() && !cancelled() }}
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  release:
+    needs: [tag, ci]
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    outputs:
+      go: ${{ steps.go.outputs.go-version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: the tag as pushed
+        # For its message, which heads the release's notes (.goreleaser.yaml).
+        if: github.ref_type == 'tag'
+        run: git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        id: go
+        with:
+          go-version: stable
+          check-latest: true
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          version: v2.19.0
+          args: ${{ github.ref_type == 'tag' && 'release --clean' || 'release --snapshot --clean' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        if: github.ref_type == 'tag'
+        with:
+          subject-checksums: ./dist/checksums.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: checksums
+          path: dist/checksums.txt
+
+  image:
+    needs: release
+    if: github.ref_type == 'tag'
+    uses: ./.github/workflows/docker-publish.yml
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+      artifact-metadata: write
+
+  verify:
+    needs: [release, image]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      attestations: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: the release, as a user downloads it
+        run: |
+          gh --version
+          gh release download "$TAG" -R "$REPO" -D release
+          ls -l release
+      - name: checksums.txt, signed by this workflow at this tag
+        working-directory: release
+        run: |
+          cosign verify-blob \
+            --certificate-identity "https://github.com/$REPO/.github/workflows/release.yml@refs/tags/$TAG" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --bundle checksums.txt.sigstore.json checksums.txt
+          sha256sum --strict -c checksums.txt
+      - name: each file's attestation, built by this workflow from this tag
+        working-directory: release
+        # gh prints nothing on a pass off a terminal, so each file passed is
+        # named after it, and the log shows which were checked (#503 item 2);
+        # a failure ends the step (bash -e) before its name is printed.
+        run: |
+          while read -r _ file; do
+            gh attestation verify "$file" -R "$REPO" \
+              --signer-workflow "$REPO/.github/workflows/release.yml" \
+              --source-ref "refs/tags/$TAG" --deny-self-hosted-runners
+            echo "attested: $file"
+          done < checksums.txt
+      - name: the release's own attestation, which GitHub makes of an immutable release
+        working-directory: release
+        run: |
+          gh release verify "$TAG" -R "$REPO"
+          for file in *; do gh release verify-asset "$TAG" "$file" -R "$REPO"; done
+      - name: the image, built by docker-publish.yml from this tag
+        # The workflow that builds and attests the image is the signer, as gh
+        # attestation verify --help says of a reusable workflow.
+        run: |
+          gh attestation verify "oci://ghcr.io/$REPO_OWNER/dromasd:${TAG#v}" -R "$REPO" \
+            --signer-workflow "$REPO/.github/workflows/docker-publish.yml" \
+            --source-ref "refs/tags/$TAG" --deny-self-hosted-runners
+        env:
+          REPO_OWNER: ${{ github.repository_owner }}
+
+  rebuild:
+    needs: release
+    # A skipped job upstream (tag, on a hand-run) skips every job after it
+    # unless the job says otherwise.
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - if: github.ref_type == 'tag'
+        run: git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ needs.release.outputs.go }}
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          version: v2.19.0
+          args: ${{ github.ref_type == 'tag' && 'release --clean --skip=publish,sign,sbom' || 'release --snapshot --clean --skip=sign,sbom' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: checksums
+          path: published
+      - name: each archive, as the release job made it
+        # The SBOMs are left out: syft writes a new document name and time
+        # each run.
+        run: |
+          grep -E '\.(tar\.gz|zip)$' published/checksums.txt | sort > published.sums
+          grep -E '\.(tar\.gz|zip)$' dist/checksums.txt | sort > rebuilt.sums
+          cat rebuilt.sums
+          diff published.sums rebuilt.sums
