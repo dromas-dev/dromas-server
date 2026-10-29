@@ -543,6 +543,7 @@ func (c *countingStore) count() { c.calls.Add(1) }
 func (c *countingStore) Held(a protocol.Address) (Standing, bool) { return c.s.Held(a) }
 
 func (c *countingStore) Changed(a protocol.Address) <-chan struct{} { return c.s.Changed(a) }
+func (c *countingStore) NextExpiry(a protocol.Address) time.Time    { return c.s.NextExpiry(a) }
 
 func (c *countingStore) Known(a protocol.Address) (*Box, bool) { return c.s.Known(a) }
 
@@ -599,9 +600,9 @@ func (c *countingStore) PutMessage(ctx context.Context, box protocol.Address, h 
 	return c.s.PutMessage(ctx, box, h, body)
 }
 
-func (c *countingStore) List(ctx context.Context, box protocol.Address, after *Cursor, limit int) ([]Header, error) {
+func (c *countingStore) List(ctx context.Context, box protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error) {
 	c.count()
-	return c.s.List(ctx, box, after, limit)
+	return c.s.List(ctx, box, after, limit, consistent)
 }
 
 func (c *countingStore) Message(ctx context.Context, box protocol.Address, id [32]byte, from int64) (*Header, []byte, error) {

@@ -95,17 +95,25 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
 		s.metrics.list(true)
 	}
 	// A first page asked to wait is held while the If-None-Match names it
-	// (PROTOCOL.md §11.11): read, held until the box changes, the wait
-	// passes or the server stops, and read again; then answered as any list.
-	// The box's change is taken before each read, so none is missed between.
+	// (PROTOCOL.md §11.11): read, held until the box changes, its first
+	// message expires, the wait passes or the server stops, and read again;
+	// then answered as any list. The box's change is taken before each read,
+	// so none is missed between; and the page of a list asked to wait is read
+	// strongly consistent, so it holds every change memory applied before
+	// the read, and the next change wakes it: an eventually consistent page
+	// that missed one could be held on, and no later change would come.
+	asked := wait > 0 && !hasCursor
 	var until time.Time
-	if wait > 0 && !hasCursor {
+	if asked {
 		until = time.Now().Add(min(wait, s.limits.MaxWait))
 	}
-	holding := false
+	// A list held is counted once, by how its hold ended, however often it
+	// woke to the same page and was held again.
+	holding, ended := false, ""
 	defer func() {
 		if holding {
 			s.unhold()
+			s.metrics.heldEnded(ended)
 		}
 	}()
 again:
@@ -119,7 +127,7 @@ again:
 	}
 	resp := protocol.MessageList{Count: int64(n), Messages: []protocol.MessageInfo{}}
 	if n > 0 && (after == nil || more > 0) {
-		page, err := s.store.List(r.Context(), box, after, pageSize+1)
+		page, err := s.store.List(r.Context(), box, after, pageSize+1, asked)
 		if err != nil {
 			return err
 		}
@@ -160,19 +168,28 @@ again:
 					return p
 				}
 			}
-			t := time.NewTimer(time.Until(until))
+			// An expiry is no change memory applies: the hold's timer ends
+			// at the box's first, by the store's clock, if it comes before
+			// the wait's end.
+			d := time.Until(until)
+			if next := s.store.NextExpiry(box); !next.IsZero() {
+				d = min(d, next.Sub(s.now()))
+			}
+			t := time.NewTimer(d)
 			select {
 			case <-changed:
-				s.metrics.heldEnded("changed")
+				ended = "changed"
 			case <-t.C:
-				s.metrics.heldEnded("waited")
-				until = time.Time{}
+				if time.Now().Before(until) {
+					ended = "changed" // its first message expired
+				} else {
+					ended, until = "waited", time.Time{}
+				}
 			case <-s.stopping:
-				s.metrics.heldEnded("stopped")
-				until = time.Time{}
+				ended, until = "stopped", time.Time{}
 			case <-r.Context().Done():
 				t.Stop()
-				s.metrics.heldEnded("gone")
+				ended = "gone"
 				return r.Context().Err()
 			}
 			t.Stop()

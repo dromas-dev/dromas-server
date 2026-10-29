@@ -400,6 +400,31 @@ Query {
  "ProjectionExpression": "#l, #s",
  "TableName": "msgs"
 }
+## List, from the start, strongly consistent (a held list's)
+Query {
+ "ConsistentRead": true,
+ "ExpressionAttributeNames": {
+  "#b": "box",
+  "#l": "live",
+  "#s": "size"
+ },
+ "ExpressionAttributeValues": {
+  ":b": {
+   "B": "sAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+  },
+  ":hi": {
+   "B": "/////////////////////////////////////////////////////w=="
+  },
+  ":lo": {
+   "B": "AAABoMQPHUEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+  }
+ },
+ "IndexName": "live",
+ "KeyConditionExpression": "#b = :b AND #l BETWEEN :lo AND :hi",
+ "Limit": 50,
+ "ProjectionExpression": "#l, #s",
+ "TableName": "msgs"
+}
 ## List, after a cursor
 Query {
  "ConsistentRead": false,

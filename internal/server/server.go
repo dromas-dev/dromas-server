@@ -375,6 +375,16 @@ func HTTPServer(addr string, h http.Handler, l Limits, idle time.Duration) *http
 	}
 }
 
+// HTTPServer is the API's HTTP server for s, at addr: HTTPServer with s's
+// handler and limits, which answers every list s holds 304 at once when it
+// shuts down (StopHolds, by http.Server.RegisterOnShutdown), so its clients
+// list again at once and Shutdown waits for none of them.
+func (s *Server) HTTPServer(addr string, idle time.Duration) *http.Server {
+	srv := HTTPServer(addr, s.Handler(), s.limits, idle)
+	srv.RegisterOnShutdown(s.StopHolds)
+	return srv
+}
+
 // notStored marks every answer of the API as one no cache may keep. What a
 // box's identity, prekey or revocation is can change at any moment, and an
 // answer served again from a cache would be this server's word outliving the
@@ -488,12 +498,18 @@ func (s *Server) handle(h func(http.ResponseWriter, *http.Request) error) http.H
 		}
 		var p *problem
 		if !errors.As(err, &p) {
+			if r.Context().Err() != nil && errors.Is(err, r.Context().Err()) {
+				// The caller went away, a read on its request's context (its
+				// writes are detached): no answer reaches it, so none is
+				// written, and the request is recorded as nginx records one,
+				// 499 (statusGone). http.ErrAbortHandler ends it with
+				// nothing sent.
+				noteGone(w)
+				panic(http.ErrAbortHandler)
+			}
 			what := "internal error"
-			switch {
-			case IsThrottle(err):
+			if IsThrottle(err) {
 				what = "store throttled" // provisioned capacity, or the SDK's retry quota
-			case r.Context().Err() != nil && errors.Is(err, r.Context().Err()):
-				what = "the caller went away" // a read on its request's context; its writes are detached
 			}
 			if s.log != nil {
 				s.log.Printf("%s: %v", what, err)
@@ -1240,6 +1256,30 @@ type statusWriter struct {
 	http.ResponseWriter
 	status int
 	code   protocol.Code // the problem's, when the answer is one (noteCode)
+	gone   bool          // its caller went away, and nothing is sent (noteGone)
+}
+
+// statusGone records a request whose caller went away before its answer,
+// which is not sent: nginx's code for it, NGX_HTTP_CLIENT_CLOSED_REQUEST
+// in ngx_http_request.h, which it logs and never sends. No answer of this
+// server's is 499.
+const statusGone = 499
+
+// noteGone tells the statusWriter beneath w, if there is one, that the
+// request's caller went away and nothing is sent: it is recorded as
+// statusGone.
+func noteGone(w http.ResponseWriter) {
+	for {
+		switch x := w.(type) {
+		case *statusWriter:
+			x.status, x.code, x.gone = statusGone, "", true
+			return
+		case interface{ Unwrap() http.ResponseWriter }:
+			w = x.Unwrap()
+		default:
+			return
+		}
+	}
 }
 
 // noteCode tells the statusWriter beneath w, if there is one, that the answer
@@ -1271,6 +1311,9 @@ func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 // body) and counts it by route,
 // status and code (Metrics). The route is the pattern the routers matched,
 // which each sets on the request as it routes it: never the path as sent.
+// A request whose caller went away, which ends with nothing sent
+// (http.ErrAbortHandler), is recorded as statusGone (noteGone); a handler's
+// other panic is net/http's to log, and is not recorded here.
 func (s *Server) observed(h http.Handler) http.Handler {
 	if s.log == nil && s.metrics == nil {
 		return h
@@ -1278,12 +1321,19 @@ func (s *Server) observed(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		returned := false
+		defer func() {
+			if !returned && !sw.gone {
+				return
+			}
+			took := time.Since(start)
+			if s.log != nil {
+				s.log.Printf("%s %s %d %s", loggedMethod(r.Method), loggedPath(r), sw.status, took.Round(time.Microsecond))
+			}
+			s.metrics.answered(r.Pattern, sw.status, sw.code, took)
+		}()
 		h.ServeHTTP(sw, r)
-		took := time.Since(start)
-		if s.log != nil {
-			s.log.Printf("%s %s %d %s", loggedMethod(r.Method), loggedPath(r), sw.status, took.Round(time.Microsecond))
-		}
-		s.metrics.answered(r.Pattern, sw.status, sw.code, took)
+		returned = true
 	})
 }
 

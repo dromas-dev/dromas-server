@@ -87,7 +87,10 @@ func TestEveryCallToAWSEndsAtItsBound(t *testing.T) {
 		{name: "a load's read of the live index", dynamo: first("Query", answered(map[string]any{"Items": []any{itemJSON(boxItem(box))}, "Count": 1, "ScannedCount": 1})),
 			call: func(ctx context.Context, s *Memory) error { _, err := s.Count(ctx, box.Addr); return err }},
 		{name: "Dedupe", call: func(ctx context.Context, s *Memory) error { _, err := s.Dedupe(ctx, box.Addr, msg.ID); return err }},
-		{name: "List", call: func(ctx context.Context, s *Memory) error { _, err := s.List(ctx, box.Addr, nil, 10); return err }},
+		{name: "List", call: func(ctx context.Context, s *Memory) error {
+			_, err := s.List(ctx, box.Addr, nil, 10, false)
+			return err
+		}},
 		{name: "Message's read of the item", call: func(ctx context.Context, s *Memory) error {
 			_, _, err := s.Message(ctx, box.Addr, msg.ID, 0)
 			return err

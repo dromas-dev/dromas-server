@@ -176,6 +176,14 @@ func (s *Memory) Held(a protocol.Address) (Standing, bool) { return s.idx.standi
 // (Store.Changed).
 func (s *Memory) Changed(a protocol.Address) <-chan struct{} { return s.idx.changed(a) }
 
+// NextExpiry implements Store, from the index.
+func (s *Memory) NextExpiry(a protocol.Address) time.Time {
+	if exp := s.idx.nextExpiry(a); exp != 0 {
+		return time.UnixMilli(int64(exp)) //nolint:gosec // a unix ms of a live message
+	}
+	return time.Time{}
+}
+
 // applyBox records a box record this process wrote: b is what is held of
 // its address, the record and the revocations read with it. Those were read
 // before the write, so in the step that counts the write (recCache.write)
@@ -449,11 +457,12 @@ func (s *Memory) PutMessage(ctx context.Context, box protocol.Address, h *Header
 	return nil, err
 }
 
-// List implements Store: a page read just after a write may miss it while
-// memory's count has it; a client lists at every poll, so the next one has
-// it.
-func (s *Memory) List(ctx context.Context, box protocol.Address, after *Cursor, limit int) ([]Header, error) {
-	return s.backend.List(ctx, box, after, limit)
+// List implements Store: a page read eventually consistent just after a
+// write may miss it while memory's count has it, and a client lists at every
+// poll, so the next one has it; a held list's, which no later change may
+// wake, is read strongly consistent (Server.list).
+func (s *Memory) List(ctx context.Context, box protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error) {
+	return s.backend.List(ctx, box, after, limit, consistent)
 }
 
 // Message implements Store. A live message whose body is gone (a

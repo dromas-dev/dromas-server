@@ -583,6 +583,12 @@ type Store interface {
 	// a write of this process or one the streams bring: what a held list
 	// waits on (PROTOCOL.md §11.11). It reads nothing.
 	Changed(a protocol.Address) <-chan struct{}
+	// NextExpiry returns when the first of box a's messages in memory
+	// expires, by the store's clock, with no read: past, for one that
+	// expired since the box was last read; zero for a box with none, or one
+	// memory has not loaded. An expiry is no change memory applies, so a
+	// held list waits until it, and no longer (PROTOCOL.md §11.11).
+	NextExpiry(a protocol.Address) time.Time
 	// Box returns what is held of an address (view): its box's record and
 	// its identity's revocations, or ErrNotFound if neither.
 	Box(ctx context.Context, a protocol.Address) (*Box, error)
@@ -618,8 +624,10 @@ type Store interface {
 	// instead.
 	PutMessage(ctx context.Context, box protocol.Address, h *Header, body []byte) (*Header, error)
 	// List returns up to limit live headers, oldest first by (ReceivedAt,
-	// ID), after the given key (nil: from the start).
-	List(ctx context.Context, box protocol.Address, after *Cursor, limit int) ([]Header, error)
+	// ID), after the given key (nil: from the start). Consistent reads them
+	// strongly consistent: every write applied to memory before the read is
+	// in the page.
+	List(ctx context.Context, box protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error)
 	// Message returns a live message and its body, or ErrNotFound: the body
 	// from byte from on where from is inside it, above 0 and below its Size,
 	// and otherwise whole, as a fetch answers a range (PROTOCOL.md §11.12).
