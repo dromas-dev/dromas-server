@@ -1,11 +1,11 @@
 // Command dromas-server is the dromas.dev server.
 //
-//	dromas-server serve -boxes-table T -msgs-table T -accounts-table T -bucket B -names NAMES [-listen addr] [options] [limits]
-//	dromas-server serve --dev [-listen addr] [limits]
-//	dromas-server account create -accounts-table T [-id NAME] [-unmetered]
-//	dromas-server account key -accounts-table T -account ID -uses N -ttl D
-//	dromas-server account drop -boxes-table T -accounts-table T -account ID -box ADDR
-//	dromas-server limits clear -socket PATH -ip ADDR
+//	dromas-server serve --boxes-table T --msgs-table T --accounts-table T --bucket B --names NAMES [--listen addr] [options] [limits]
+//	dromas-server serve --dev [--listen addr] [limits]
+//	dromas-server account create --accounts-table T [--id NAME] [--unmetered]
+//	dromas-server account key --accounts-table T --account ID --uses N --ttl D
+//	dromas-server account drop --boxes-table T --accounts-table T --account ID --box ADDR
+//	dromas-server limits clear --socket PATH --ip ADDR
 //
 // The first keeps state in three DynamoDB tables, boxes, messages and
 // accounts, and an S3 Express One Zone directory bucket (ARCHITECTURE.md § Storage),
@@ -16,7 +16,7 @@
 //
 // --dev keeps everything in memory, with no AWS: the honest server every
 // client tests against. Nothing survives a restart.
-// It takes a pass made for any name, unless -names is given.
+// It takes a pass made for any name, unless --names is given.
 //
 // account is the operator's hand on accounts (PROTOCOL.md §11.16) until
 // accounts have users who log in: create one, mint an adopt key for it, or
@@ -26,8 +26,8 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
+	flag "github.com/spf13/pflag"
 	"log"
 	"net"
 	"net/http"
@@ -59,10 +59,10 @@ func main() {
 	case len(os.Args) >= 3 && os.Args[1] == "limits":
 		err = limits(os.Args[2], os.Args[3:])
 	default:
-		fmt.Fprintln(os.Stderr, "usage: dromas-server serve (-boxes-table T -msgs-table T -accounts-table T -bucket B -names NAMES | --dev) [-listen addr] [options] [limits]")
+		fmt.Fprintln(os.Stderr, "usage: dromas-server serve (--boxes-table T --msgs-table T --accounts-table T --bucket B --names NAMES | --dev) [--listen addr] [options] [limits]")
 		fmt.Fprintln(os.Stderr, "       dromas-server account (create | key | drop) [flags]")
-		fmt.Fprintln(os.Stderr, "       dromas-server limits clear -socket PATH -ip ADDR")
-		fmt.Fprintln(os.Stderr, "       dromas-server limits top -socket PATH -limit NAME [-n COUNT]")
+		fmt.Fprintln(os.Stderr, "       dromas-server limits clear --socket PATH --ip ADDR")
+		fmt.Fprintln(os.Stderr, "       dromas-server limits top --socket PATH --limit NAME [--count N]")
 		os.Exit(2)
 	}
 	if err != nil {
@@ -79,7 +79,7 @@ func sizeCaps(l server.Limits) error {
 	for _, c := range []struct {
 		flag string
 		n    int
-	}{{"-max-size", l.MaxSize}, {"-account-max-size", l.AccountMaxSize}} {
+	}{{"--max-size", l.MaxSize}, {"--account-max-size", l.AccountMaxSize}} {
 		switch {
 		case c.n < 0:
 			return fmt.Errorf("%s: %d is not a size", c.flag, c.n)
@@ -98,9 +98,9 @@ func sizeCaps(l server.Limits) error {
 func receiveRate(l server.Limits) error {
 	switch {
 	case l.ReceiveBurst <= 0:
-		return fmt.Errorf("-receive-burst: %d is no budget, and no box takes new mail faster than one each %v (server.ReceiveCeiling)", l.ReceiveBurst, server.ReceiveCeiling)
+		return fmt.Errorf("--receive-burst: %d is no budget, and no box takes new mail faster than one each %v (server.ReceiveCeiling)", l.ReceiveBurst, server.ReceiveCeiling)
 	case l.ReceiveRefill < server.ReceiveCeiling:
-		return fmt.Errorf("-receive-refill: %v is shorter than %v, the fastest any box takes new mail (server.ReceiveCeiling)", l.ReceiveRefill, server.ReceiveCeiling)
+		return fmt.Errorf("--receive-refill: %v is shorter than %v, the fastest any box takes new mail (server.ReceiveCeiling)", l.ReceiveRefill, server.ReceiveCeiling)
 	}
 	return nil
 }
@@ -110,7 +110,7 @@ func receiveRate(l server.Limits) error {
 // serve checks it before anything starts.
 func aclEntries(l server.Limits) error {
 	if l.ACLEntries <= 0 || l.ACLEntries > protocol.MaxACLEntries {
-		return fmt.Errorf("-acl-entries: %d is not from 1 to %d, the most entries the protocol lets an ACL hold (PROTOCOL.md §11.14)", l.ACLEntries, protocol.MaxACLEntries)
+		return fmt.Errorf("--acl-entries: %d is not from 1 to %d, the most entries the protocol lets an ACL hold (PROTOCOL.md §11.14)", l.ACLEntries, protocol.MaxACLEntries)
 	}
 	return nil
 }
@@ -131,10 +131,10 @@ func serve(args []string) error {
 	proxies := fs.String("trusted-proxy", "", "comma-separated CIDRs of the reverse proxy in front, if any, whose X-Forwarded-For names the client: its last address, the one the proxy wrote")
 	l := server.DefaultLimits()
 	fs.IntVar(&l.MaxSize, "max-size", l.MaxSize, "cap on a ciphertext, bytes: a send reads its body to it. A whole number of its own padding blocks, at most the protocol's largest ciphertext (PROTOCOL.md §9.3, §11.10), or serve does not start")
-	fs.IntVar(&l.AccountMaxSize, "account-max-size", l.AccountMaxSize, "the most an account can lift -max-size to, bytes (up to -max-size: nothing). Held as -max-size is")
+	fs.IntVar(&l.AccountMaxSize, "account-max-size", l.AccountMaxSize, "the most an account can lift --max-size to, bytes (up to --max-size: nothing). Held as --max-size is")
 	fs.IntVar(&l.BoxCap, "box-cap", l.BoxCap, "messages per box (0: off)")
 	fs.IntVar(&l.SendsPerDay, "sends-per-day", l.SendsPerDay, "sends per sender a day: that many at once, then one back each day divided by it (0: off)")
-	fs.IntVar(&l.RenewalsPerDay, "renewals-per-day", l.RenewalsPerDay, "prekey renewals per box a day, as -sends-per-day (0: off)")
+	fs.IntVar(&l.RenewalsPerDay, "renewals-per-day", l.RenewalsPerDay, "prekey renewals per box a day, as --sends-per-day (0: off)")
 	fs.IntVar(&l.RetiredKept, "retired-kept", l.RetiredKept, "retired prekeys a box record keeps, newest first (0: all live ones)")
 	fs.IntVar(&l.PollBurst, "poll-burst", l.PollBurst, "polls a box may make at once (0: off)")
 	fs.DurationVar(&l.PollRefill, "poll-refill", l.PollRefill, "one more poll each")
@@ -142,7 +142,7 @@ func serve(args []string) error {
 	fs.DurationVar(&l.MaxWait, "max-wait", l.MaxWait, "the longest a list is held for a change, whatever its wait asks: under the read timeout of a proxy in front (0: none held)")
 	fs.IntVar(&l.MaxHeldLists, "max-held-lists", l.MaxHeldLists, "lists this process holds at once; past it a list that asks to wait is answered 503 (0: none held)")
 	fs.IntVar(&l.RegistrationsPerHour, "registrations-per-hour", l.RegistrationsPerHour, "registrations per IPv4 address or IPv6 /64 (0: off)")
-	fs.IntVar(&l.RangeRegistrationsPerHour, "range-registrations-per-hour", l.RangeRegistrationsPerHour, "registrations per IPv6 /48, beside -registrations-per-hour (0: off)")
+	fs.IntVar(&l.RangeRegistrationsPerHour, "range-registrations-per-hour", l.RangeRegistrationsPerHour, "registrations per IPv6 /48, beside --registrations-per-hour (0: off)")
 	fs.IntVar(&l.SendsPerMinutePerIP, "sends-per-minute-per-ip", l.SendsPerMinutePerIP, "pre-auth sends per IP (0: off)")
 	fs.IntVar(&l.MissesPerMinute, "misses-per-minute", l.MissesPerMinute, "calls per IP that named no box or carried nothing that verified (0: off)")
 	fs.IntVar(&l.RequestBurst, "request-burst", l.RequestBurst, "per IP, at once: every call but a box's own with a pass this process has checked, a new pass among them, and every request no route matches, the link page and the site's pages among them; a budget for floods alone (0: off)")
@@ -153,10 +153,10 @@ func serve(args []string) error {
 	fs.DurationVar(&l.DrainRefill, "drain-refill", l.DrainRefill, "one more first fetch each")
 	fs.IntVar(&l.CallBurst, "call-burst", l.CallBurst, "a box's calls with its pass that no other budget counts, at once (0: off)")
 	fs.DurationVar(&l.CallRefill, "call-refill", l.CallRefill, "one more such call each")
-	fs.IntVar(&l.CertificatesPerDay, "certificates-per-day", l.CertificatesPerDay, "per box a day, as -sends-per-day: renewals under a later certificate, but for one that replaces a revoked certificate (0: off)")
-	fs.IntVar(&l.CertificateRevocationsPerDay, "certificate-revocations-per-day", l.CertificateRevocationsPerDay, "per box a day, as -sends-per-day: raises of its revocation of certificates (0: off)")
+	fs.IntVar(&l.CertificatesPerDay, "certificates-per-day", l.CertificatesPerDay, "per box a day, as --sends-per-day: renewals under a later certificate, but for one that replaces a revoked certificate (0: off)")
+	fs.IntVar(&l.CertificateRevocationsPerDay, "certificate-revocations-per-day", l.CertificateRevocationsPerDay, "per box a day, as --sends-per-day: raises of its revocation of certificates (0: off)")
 	fs.IntVar(&l.ACLEntries, "acl-entries", l.ACLEntries, "the most entries a box's ACL holds, its two lists together: from 1 to the protocol's "+strconv.Itoa(protocol.MaxACLEntries)+", or serve does not start")
-	fs.DurationVar(&l.BodyTimeout, "body-timeout", l.BodyTimeout, "how long a request body, or each write of a response, may take before one more second for each -body-min-rate bytes of it moved; what a handler leaves of a body is read before the answer, to the deadline the handler's reads left, and the answer has this from then; also the longest wait for the one large read (0: off)")
+	fs.DurationVar(&l.BodyTimeout, "body-timeout", l.BodyTimeout, "how long a request body, or each write of a response, may take before one more second for each --body-min-rate bytes of it moved; what a handler leaves of a body is read before the answer, to the deadline the handler's reads left, and the answer has this from then; also the longest wait for the one large read (0: off)")
 	fs.IntVar(&l.BodyMinRate, "body-min-rate", l.BodyMinRate, "bytes a second a body, or a write of a response, must keep up, as Apache's RequestReadTimeout MinRate; a write is credited in pieces of this many bytes, once each has gone (0: off)")
 	fs.IntVar(&l.HeadBytes, "max-header-bytes", l.HeadBytes, "the most of a request's head, its request line and headers, the server reads: what the longest call needs, its pass at the longest a pass can be, and no more; net/http answers a longer one 431 (0: net/http's default)")
 	fs.DurationVar(&l.HeadTimeout, "header-timeout", l.HeadTimeout, "how long a request's head, its request line and headers, may take to arrive before any handler sees it (0: off)")
@@ -192,7 +192,7 @@ func serve(args []string) error {
 			continue
 		}
 		if err := protocol.CheckServerName(n); err != nil {
-			return fmt.Errorf("-names: %q: %w", n, err)
+			return fmt.Errorf("--names: %q: %w", n, err)
 		}
 		cfg.Names = append(cfg.Names, n)
 	}
@@ -201,12 +201,12 @@ func serve(args []string) error {
 			continue
 		}
 		if !slices.Contains(protocol.IdentityTypes(), t) {
-			return fmt.Errorf("-identity-types: %q is not a key type this build verifies: %s", t, strings.Join(protocol.IdentityTypes(), ", "))
+			return fmt.Errorf("--identity-types: %q is not a key type this build verifies: %s", t, strings.Join(protocol.IdentityTypes(), ", "))
 		}
 		cfg.IdentityTypes = append(cfg.IdentityTypes, t)
 	}
 	if !slices.Contains(cfg.IdentityTypes, protocol.IdentityEd25519) {
-		return fmt.Errorf("-identity-types: %s must be one of them: it is the type every client makes and verifies", protocol.IdentityEd25519)
+		return fmt.Errorf("--identity-types: %s must be one of them: it is the type every client makes and verifies", protocol.IdentityEd25519)
 	}
 	for _, c := range strings.Split(*proxies, ",") {
 		if c = strings.TrimSpace(c); c == "" {
@@ -214,14 +214,14 @@ func serve(args []string) error {
 		}
 		p, err := netip.ParsePrefix(c)
 		if err != nil {
-			return fmt.Errorf("-trusted-proxy: %w", err)
+			return fmt.Errorf("--trusted-proxy: %w", err)
 		}
 		cfg.TrustedProxies = append(cfg.TrustedProxies, p)
 	}
 	if *siteBackend != "" {
 		u, err := server.SiteBackend(*siteBackend)
 		if err != nil {
-			return fmt.Errorf("-site-backend: %w", err)
+			return fmt.Errorf("--site-backend: %w", err)
 		}
 		cfg.SiteBackend = u
 	}
@@ -229,12 +229,12 @@ func serve(args []string) error {
 	switch {
 	case *dev:
 		if *boxes != "" || *msgs != "" || *accts != "" || *bucket != "" {
-			return errors.New("--dev takes no tables or -bucket")
+			return errors.New("--dev takes no tables or --bucket")
 		}
 		cfg.Store = server.NewMemStore(time.Now)
 		logger.Printf("dromas-server --dev on %s (in memory: nothing survives a restart)", *listen)
 	case *boxes == "" || *msgs == "" || *accts == "" || *bucket == "" || len(cfg.Names) == 0:
-		return errors.New("name -boxes-table, -msgs-table, -accounts-table, -bucket and -names, or run --dev")
+		return errors.New("name --boxes-table, --msgs-table, --accounts-table, --bucket and --names, or run --dev")
 	default:
 		awsCfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(*region), config.WithLogger(server.AWSLogger(os.Stderr)))
 		if err != nil {
@@ -289,7 +289,7 @@ func serve(args []string) error {
 		metrics := &http.Server{Addr: *metricsListen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 		l, err := net.Listen("tcp", *metricsListen)
 		if err != nil {
-			return fmt.Errorf("-metrics-listen: %w", err)
+			return fmt.Errorf("--metrics-listen: %w", err)
 		}
 		go func() { _ = metrics.Serve(l) }()
 		defer metrics.Close() //nolint:errcheck // the process is ending
@@ -297,7 +297,7 @@ func serve(args []string) error {
 	}
 	listeners, err := listenAll(*listen)
 	if err != nil {
-		return fmt.Errorf("-listen: %w", err)
+		return fmt.Errorf("--listen: %w", err)
 	}
 	srv := api.HTTPServer(*listen, *idle)
 	srv.ConnState = cfg.Metrics.ConnState
@@ -337,7 +337,7 @@ func serve(args []string) error {
 // net.Listen's default sends one every 15 s), as nginx leaves a listening
 // socket's to the operating system's default unless so_keepalive is set:
 // each phase of a connection here has a bound of its own, a flag
-// (-header-timeout, -body-timeout, -idle-timeout, -max-wait), which lets a
+// (--header-timeout, --body-timeout, --idle-timeout, --max-wait), which lets a
 // peer gone silent go, and a held list holds nothing but its goroutine and
 // its connection.
 func listenAll(spec string) ([]net.Listener, error) {

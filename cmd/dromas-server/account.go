@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
+	flag "github.com/spf13/pflag"
 	"os"
 	"time"
 
@@ -46,7 +46,7 @@ func account(cmd string, args []string) error {
 		ttl := fs.Duration("ttl", 0, "how long the key is good for")
 		run = func(ctx context.Context, s *server.Memory) error {
 			if *id == "" || *uses < 1 || *ttl <= 0 {
-				return errors.New("name -account, -uses and -ttl")
+				return errors.New("name --account, --uses and --ttl")
 			}
 			if _, err := s.Account(ctx, *id); err != nil {
 				return fmt.Errorf("account %s: %w", *id, err)
@@ -69,7 +69,7 @@ func account(cmd string, args []string) error {
 		run = func(ctx context.Context, s *server.Memory) error {
 			a, err := protocol.ParseAddress(*addr)
 			if fs.Lookup("boxes-table").Value.String() == "" || *id == "" || err != nil {
-				return errors.New("name -boxes-table, -account and -box (an address)")
+				return errors.New("name --boxes-table, --account and --box (an address)")
 			}
 			b, err := s.Box(ctx, a)
 			if err != nil {
@@ -87,7 +87,7 @@ func account(cmd string, args []string) error {
 		return err
 	}
 	if *accts == "" {
-		return errors.New("name -accounts-table")
+		return errors.New("name --accounts-table")
 	}
 	ctx := context.Background()
 	awsCfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(*region), config.WithLogger(server.AWSLogger(os.Stderr)))

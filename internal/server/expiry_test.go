@@ -208,7 +208,7 @@ func (b *readsCounted) ReadLive(ctx context.Context, box protocol.Address) ([]He
 
 // A second process in the window a revocation of an address opens there
 // (dromas-dev/dromas-client#365, #505): it holds the box, its record cache
-// has lost the record, as -box-cache's LRU does under load, and its feed
+// has lost the record, as --box-cache's LRU does under load, and its feed
 // brings the image of the revocations item before the purge's deletion of
 // the record, two items whose changes DynamoDB Streams orders each alone.
 // In the window its poll is 410 revoked from memory, with no read, and

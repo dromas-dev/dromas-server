@@ -36,14 +36,14 @@ func onDynamo(st Store) (*Memory, bool) {
 	return s, ok
 }
 
-// applyBoxRecord applies a record of the -boxes-table stream as the
+// applyBoxRecord applies a record of the --boxes-table stream as the
 // DynamoDB backend's feed hands it to memory.
 func (s *Memory) applyBoxRecord(r stypes.Record) { s.applyStream(boxStreamChange(r)) }
 
-// applyMsgRecord is applyBoxRecord for the -msgs-table stream.
+// applyMsgRecord is applyBoxRecord for the --msgs-table stream.
 func (s *Memory) applyMsgRecord(r stypes.Record) { s.applyStream(msgStreamChange(r)) }
 
-// applyAccountRecord is applyBoxRecord for the -accounts-table stream.
+// applyAccountRecord is applyBoxRecord for the --accounts-table stream.
 func (s *Memory) applyAccountRecord(r stypes.Record) { s.applyStream(accountStreamChange(r)) }
 
 func (s *Memory) applyStream(c Change, err error) {
@@ -52,7 +52,7 @@ func (s *Memory) applyStream(c Change, err error) {
 	}
 }
 
-// applyBoxImage applies an item of the -boxes-table table as it now is, as
+// applyBoxImage applies an item of the --boxes-table table as it now is, as
 // the stream's image of it.
 func (s *Memory) applyBoxImage(it item) {
 	s.applyBoxRecord(stypes.Record{EventName: stypes.OperationTypeModify, Dynamodb: &stypes.StreamRecord{NewImage: toStream(it)}})

@@ -11,7 +11,7 @@ import (
 	"github.com/dromas-dev/dromas-server/internal/server"
 )
 
-// -listen takes several addresses, and one server answers on every one: a
+// --listen takes several addresses, and one server answers on every one: a
 // reverse proxy in front spreads its connections across them, each one more
 // range of its ephemeral ports (dromas-dev/dromas-server#124 item 6). An
 // address that cannot be listened on fails the whole list, naming it, and

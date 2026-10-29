@@ -13,7 +13,7 @@
 #   8. a revocation of an address with no box here: kept and served, its registration refused, and a Go box shown it before it
 #      posts;
 #   9. the sender ACL: a Go box's block reaches this server, which refuses the recipe box's send;
-#  10. the pass's name: the server runs with -names, so every pass above was checked for the name it is called by, and one made
+#  10. the pass's name: the server runs with --names, so every pass above was checked for the name it is called by, and one made
 #      for another name is refused.
 # The recipe runs a box of its own: the two clients meet over the wire, never in one box directory.
 # Every script step runs in a FRESH shell (agents run each command in a new one). Every box is post-quantum: where the
@@ -48,12 +48,12 @@ age-keygen -pq > /dev/null 2>&1 || { echo "no age that makes post-quantum keys";
 echo "age: $(age --version)"
 port=$((20000 + RANDOM % 12768))   # below Linux's ephemeral ports (32768 up: ip_local_port_range), which an outgoing connection may hold
 if [ -n "${DROMAS_TEST_MSGS_TABLE:-}" ]; then
-  store=(-boxes-table "$DROMAS_TEST_BOXES_TABLE" -msgs-table "$DROMAS_TEST_MSGS_TABLE" -accounts-table "$DROMAS_TEST_ACCOUNTS_TABLE" -bucket "$DROMAS_TEST_BUCKET" -names "127.0.0.1:$port")
+  store=(--boxes-table "$DROMAS_TEST_BOXES_TABLE" --msgs-table "$DROMAS_TEST_MSGS_TABLE" --accounts-table "$DROMAS_TEST_ACCOUNTS_TABLE" --bucket "$DROMAS_TEST_BUCKET" --names "127.0.0.1:$port")
 else
-  store=(--dev -names "127.0.0.1:$port")   # --dev takes a pass made for any name without -names: with it, every pass's name is checked (PROTOCOL.md §8)
+  store=(--dev --names "127.0.0.1:$port")   # --dev takes a pass made for any name without --names: with it, every pass's name is checked (PROTOCOL.md §8)
 fi
 echo "server: dromas-server serve ${store[*]:0:6}"
-"$work/dromas-server" serve "${store[@]}" -listen "127.0.0.1:$port" -poll-burst 0 -registrations-per-hour 0 2> "$work/server.log" & srv=$!   # every box here registers from one address
+"$work/dromas-server" serve "${store[@]}" --listen "127.0.0.1:$port" --poll-burst 0 --registrations-per-hour 0 2> "$work/server.log" & srv=$!   # every box here registers from one address
 export DR_SERVER_URL="http://127.0.0.1:$port" DROMAS_SERVER_URL="http://127.0.0.1:$port"
 for _ in $(seq 300); do   # up once the API answers other than 503 (loading)
   code=$(curl -s -o /dev/null -w '%{http_code}' "$DR_SERVER_URL/v1/$(printf '0%.0s' $(seq 64))"); [ "$code" != 000 ] && [ "$code" != 503 ] && break; sleep 0.1

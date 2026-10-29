@@ -13,7 +13,7 @@ import (
 	"github.com/dromas-dev/dromas-client/protocol"
 )
 
-// A site: with -site-backend, every request outside /v1/ and /to/, the
+// A site: with --site-backend, every request outside /v1/ and /to/, the
 // API's and the link page's, is passed to a deployment's own web server, as
 // a reverse proxy passes it (net/http/httputil), and its answer, a 404 among
 // them, comes back as that server sent it. No site's content or logic is in

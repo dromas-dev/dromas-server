@@ -21,7 +21,7 @@ import (
 // (dromas-dev/dromas-server#59; ARCHITECTURE.md § Metrics), as
 // Prometheus counts a service: its requests, errors and latency, every
 // failure beside its attempts. They are served on a listener of their own
-// (dromas-server serve -metrics-listen), never the API's.
+// (dromas-server serve --metrics-listen), never the API's.
 //
 // No label is a value a caller chooses: no address, IP, box, message id,
 // cursor or path as sent, each of which would be a series per caller and is
@@ -88,7 +88,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		largeRead: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "large_reads_total",
 			Help: "Sends past the free size, by how their wait for the one large read ended: taken, timed_out, or gone (the caller left)."}, []string{"outcome"}),
 		cut: prometheus.NewCounter(prometheus.CounterOpts{Namespace: ns, Name: "bodies_cut_total",
-			Help: "Request bodies cut off at their deadline (-body-timeout, -body-min-rate)."}),
+			Help: "Request bodies cut off at their deadline (--body-timeout, --body-min-rate)."}),
 		conns: prometheus.NewGauge(prometheus.GaugeOpts{Namespace: ns, Name: "connections_open",
 			Help: "Connections open on the API's listener."}),
 		streamAge: prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: ns, Name: "stream_record_age_seconds",
@@ -98,7 +98,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		holds: prometheus.NewGauge(prometheus.GaugeOpts{Namespace: ns, Name: "lists_held",
 			Help: "Lists held for a change now (PROTOCOL.md §11.11)."}),
 		held: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "held_lists_total",
-			Help: "Held lists, each once by how it ended: changed (the box changed, or a message in it expired), waited (its wait passed), gone (the caller left), stopped (the server stopped), or refused (past -max-held-lists)."}, []string{"outcome"}),
+			Help: "Held lists, each once by how it ended: changed (the box changed, or a message in it expired), waited (its wait passed), gone (the caller left), stopped (the server stopped), or refused (past --max-held-lists)."}, []string{"outcome"}),
 	}
 	reg.MustRegister(m.requests, m.latency, m.limits, m.passes, m.fetches, m.lists, m.store, m.storeTime, m.caches, m.largeRead, m.cut, m.conns, m.streamAge, m.collections, m.holds, m.held)
 	return m

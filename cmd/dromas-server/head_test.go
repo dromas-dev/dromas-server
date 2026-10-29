@@ -33,7 +33,7 @@ func headOf(t *testing.T, addr, head string) int {
 	return resp.StatusCode
 }
 
-// The API's server reads a request's head to -max-header-bytes and no
+// The API's server reads a request's head to --max-header-bytes and no
 // further, before any handler sees it: what the longest call needs is read,
 // a send with both serials at their largest, a pass as long as a pass can
 // be and a server's name as long as one can be, with a client's other
@@ -91,5 +91,5 @@ func TestTheHeadIsReadToWhatTheLongestCallNeeds(t *testing.T) {
 	if got := headOf(t, addr, over); got != http.StatusNoContent || *reached != 1 {
 		t.Fatalf("with no bound, a head of %d bytes: %d, reached %d", len(over), got, *reached)
 	}
-	t.Logf("the longest call's head: %d bytes, under -max-header-bytes %d", len(longest), server.DefaultLimits().HeadBytes)
+	t.Logf("the longest call's head: %d bytes, under --max-header-bytes %d", len(longest), server.DefaultLimits().HeadBytes)
 }

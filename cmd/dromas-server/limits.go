@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
+	flag "github.com/spf13/pflag"
 	"io"
 	"io/fs"
 	"net"
@@ -23,24 +23,24 @@ import (
 func listenAdmin(path string) (net.Listener, error) {
 	if fi, err := os.Lstat(path); err == nil {
 		if fi.Mode().Type() != fs.ModeSocket {
-			return nil, fmt.Errorf("-admin-socket %s: something that is not a socket is there", path)
+			return nil, fmt.Errorf("--admin-socket %s: something that is not a socket is there", path)
 		}
 		if err := os.Remove(path); err != nil {
-			return nil, fmt.Errorf("-admin-socket: %w", err)
+			return nil, fmt.Errorf("--admin-socket: %w", err)
 		}
 	}
 	l, err := listenOwn(path)
 	if err != nil {
-		return nil, fmt.Errorf("-admin-socket: %w", err)
+		return nil, fmt.Errorf("--admin-socket: %w", err)
 	}
 	return l, nil
 }
 
 // limits runs one operator command on a running server's limits, through
-// its -admin-socket: the counts are in that process's memory.
+// its --admin-socket: the counts are in that process's memory.
 func limits(cmd string, args []string) error {
 	fs := flag.NewFlagSet("limits "+cmd, flag.ContinueOnError)
-	socket := fs.String("socket", "", "the running server's -admin-socket")
+	socket := fs.String("socket", "", "the running server's --admin-socket")
 	switch cmd {
 	case "clear":
 		ip := fs.String("ip", "", "the caller's address: an IPv4 address, or any IPv6 address of the /64 the limits count")
@@ -48,19 +48,19 @@ func limits(cmd string, args []string) error {
 			return err
 		}
 		if *socket == "" || *ip == "" || fs.NArg() != 0 {
-			return errors.New("name -socket and -ip")
+			return errors.New("name --socket and --ip")
 		}
 		return adminCall(*socket, http.MethodPost, "/limits/clear?ip="+url.QueryEscape(*ip), os.Stdout)
 	case "top":
 		limit := fs.String("limit", "", "the limit, by the name a refusal gives it: a rate_limited's quota_id, or the code of its own (mailbox_busy, fetch_paced, refetch_spent)")
-		n := fs.Int("n", 20, "how many keys, deepest in debt first")
+		count := fs.Int("count", 20, "how many keys, deepest in debt first")
 		if err := fs.Parse(args); err != nil {
 			return err
 		}
 		if *socket == "" || *limit == "" || fs.NArg() != 0 {
-			return errors.New("name -socket and -limit")
+			return errors.New("name --socket and --limit")
 		}
-		return adminCall(*socket, http.MethodGet, "/limits/top?limit="+url.QueryEscape(*limit)+"&n="+strconv.Itoa(*n), os.Stdout)
+		return adminCall(*socket, http.MethodGet, "/limits/top?limit="+url.QueryEscape(*limit)+"&n="+strconv.Itoa(*count), os.Stdout)
 	default:
 		return fmt.Errorf("limits %s: the commands are clear and top", cmd)
 	}

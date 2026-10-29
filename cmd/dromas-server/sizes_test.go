@@ -16,7 +16,7 @@ import (
 // listens or opens any store, so each call returns at once; one that has not
 // returned in a few seconds has started a server, which ends with the test.
 func TestServeRefusesASizeCapTheProtocolDoesNotAllow(t *testing.T) {
-	for _, flag := range []string{"-max-size", "-account-max-size"} {
+	for _, flag := range []string{"--max-size", "--account-max-size"} {
 		for _, c := range []struct {
 			n    int
 			says string
@@ -28,7 +28,7 @@ func TestServeRefusesASizeCapTheProtocolDoesNotAllow(t *testing.T) {
 			{-1, "not a size"},
 		} {
 			done := make(chan error, 1)
-			go func() { done <- serve([]string{"--dev", "-listen", "127.0.0.1:0", flag, fmt.Sprint(c.n)}) }()
+			go func() { done <- serve([]string{"--dev", "--listen", "127.0.0.1:0", flag, fmt.Sprint(c.n)}) }()
 			select {
 			case err := <-done:
 				if err == nil || !strings.Contains(err.Error(), flag+":") || !strings.Contains(err.Error(), c.says) {

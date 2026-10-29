@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// A connection -listen accepts sends no TCP keep-alive probes: SO_KEEPALIVE
+// A connection --listen accepts sends no TCP keep-alive probes: SO_KEEPALIVE
 // is off on it, read from the socket itself. A held list holds nothing but
 // its goroutine and its connection, and each phase of a connection has a
 // bound of its own. Control: net.Listen's own connection has it on.
@@ -28,7 +28,7 @@ func TestAnAcceptedConnectionSendsNoKeepAlive(t *testing.T) {
 		t.Fatal("control: net.Listen's accepted connection has SO_KEEPALIVE off")
 	}
 	if on := keepAlive(t, ls[0]); on {
-		t.Error("a connection -listen accepted has SO_KEEPALIVE on")
+		t.Error("a connection --listen accepted has SO_KEEPALIVE on")
 	}
 }
 
