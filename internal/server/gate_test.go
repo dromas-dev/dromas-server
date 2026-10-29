@@ -227,9 +227,9 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 			if v.auth != "" {
 				req.Header.Set("Authorization", v.auth)
 			}
-			limits, passes := counts(t, reg, "dromasd_limit_requests_total"), counts(t, reg, "dromasd_passes_total")
+			limits, passes := counts(t, reg, "dromas_server_limit_requests_total"), counts(t, reg, "dromas_server_passes_total")
 			body.counted = func() bool {
-				return moved(limits, counts(t, reg, "dromasd_limit_requests_total"))["decision=denied,limit=requests,subject=ip"] == 1
+				return moved(limits, counts(t, reg, "dromas_server_limit_requests_total"))["decision=denied,limit=requests,subject=ip"] == 1
 			}
 			w := httptest.NewRecorder()
 			if tg.direct {
@@ -243,7 +243,7 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 				if q, _ := got.quota(); q == protocol.QuotaRequests {
 					t.Errorf("%s: refused for the address's flood budget, though its box's pass was checked", what)
 				}
-				if d := moved(limits, counts(t, reg, "dromasd_limit_requests_total")); len(d) == 0 {
+				if d := moved(limits, counts(t, reg, "dromas_server_limit_requests_total")); len(d) == 0 {
 					t.Errorf("%s: answered %d with no count taken", what, got.status)
 				}
 				continue
@@ -252,10 +252,10 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 				t.Errorf("%s, past the address's flood budget: %d %s, want 429 requests", what, got.status, got.body)
 				continue
 			}
-			if d := moved(limits, counts(t, reg, "dromasd_limit_requests_total")); len(d) != 1 || d["decision=denied,limit=requests,subject=ip"] != 1 {
+			if d := moved(limits, counts(t, reg, "dromas_server_limit_requests_total")); len(d) != 1 || d["decision=denied,limit=requests,subject=ip"] != 1 {
 				t.Errorf("%s: limits taken besides the one refusal: %v", what, d)
 			}
-			if d := moved(passes, counts(t, reg, "dromasd_passes_total")); len(d) != 0 {
+			if d := moved(passes, counts(t, reg, "dromas_server_passes_total")); len(d) != 0 {
 				t.Errorf("%s: passes looked at: %v", what, d)
 			}
 			if body.early {

@@ -114,7 +114,7 @@ func TestMetricsCarryNoCallerValue(t *testing.T) {
 	w := httptest.NewRecorder()
 	promhttp.HandlerFor(reg, promhttp.HandlerOpts{}).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	text := w.Body.String()
-	if !strings.Contains(text, `dromasd_limit_requests_total{decision="denied",limit="requests",subject="ip"}`) {
+	if !strings.Contains(text, `dromas_server_limit_requests_total{decision="denied",limit="requests",subject="ip"}`) {
 		t.Fatalf("the scrape lacks the flood budget's refusals, so it shows nothing of these calls:\n%s", text)
 	}
 	for _, v := range []string{a.Address().String(), b.Address().String(), id, strings.Repeat("e", 64), "203.0.113.77", "127.0.0.1", "/made/up", a.Address().String()[:16]} {
@@ -164,10 +164,10 @@ func TestMetricsCountTheStoresCalls(t *testing.T) {
 	}
 }
 
-// collectionsWant is the exposition of dromasd_item_collection_estimate_bytes
+// collectionsWant is the exposition of dromas_server_item_collection_estimate_bytes
 // after one observation of gb, DynamoDB's GB.
 func collectionsWant(gb float64) string {
-	const name = "dromasd_item_collection_estimate_bytes"
+	const name = "dromas_server_item_collection_estimate_bytes"
 	var b strings.Builder
 	fmt.Fprintf(&b, "# HELP %s After each message written, the upper bound of DynamoDB's estimate of its box's item collection, the box's items and their LSI entries, at 2^30 bytes a GB: past 10 GB, the box takes no more mail.\n# TYPE %s histogram\n", name, name)
 	for _, le := range gigabytes {
@@ -208,7 +208,7 @@ func TestMetricsObserveTheItemCollectionAMessageWriteGrew(t *testing.T) {
 	if !asked.Load() {
 		t.Error("the message write did not ask for its item collection's size")
 	}
-	if err := testutil.CollectAndCompare(m.collections, strings.NewReader(collectionsWant(9)), "dromasd_item_collection_estimate_bytes"); err != nil {
+	if err := testutil.CollectAndCompare(m.collections, strings.NewReader(collectionsWant(9)), "dromas_server_item_collection_estimate_bytes"); err != nil {
 		t.Error(err)
 	}
 }

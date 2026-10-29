@@ -6,7 +6,7 @@ Measured 2026-10-10 unless dated otherwise: 2× Neoverse-V2, Go 1.26.6, standard
 |---|---|---|
 | `crypto/` | SSHSIG verify over 16 KiB (~71 µs; a forgery costs the same), SHA-256 / de-armor (~10–12 µs), SSH tag check (~0.08 µs), HMAC check of an owner token (~0.31 µs pooled), map lookup (~0.011 µs) | `cd bench/crypto && go test -bench . -benchtime 2s -count 3` |
 | `crypto/base64_test.go` | **A TEST, not a benchmark:** Go's `encoding/base64` decodes 76-column-wrapped base64 (LF and CRLF) to the exact bytes | `cd bench/crypto && go test -run TestWrappedBase64DecodesExactly -v .` |
-| `poll/` | **A whole empty poll over loopback HTTP, against a real `dromasd serve --dev`: 33 to 34 µs of server CPU with a pass the server remembers** (measured 2026-10-13; 40,000 polls, keep-alive, 0 errors, three runs). The same run with a 62-byte bearer token in place of the pass: 31 to 32 µs. `poll/srv`, a model with nothing but an HMAC check and a map lookup: ~19 µs (measured 2026-10-10) | below |
+| `poll/` | **A whole empty poll over loopback HTTP, against a real `dromas-server serve --dev`: 33 to 34 µs of server CPU with a pass the server remembers** (measured 2026-10-13; 40,000 polls, keep-alive, 0 errors, three runs). The same run with a 62-byte bearer token in place of the pass: 31 to 32 µs. `poll/srv`, a model with nothing but an HMAC check and a map lookup: ~19 µs (measured 2026-10-10) | below |
 
 The memory and item-size measurements, and what a pass costs to check the first time and after, are `internal/server/cost_test.go` (`DROMAS_COST=1 go test ./internal/server -run TestCost -v`).
 
@@ -14,10 +14,10 @@ The memory and item-size measurements, and what a pass costs to check the first 
 
 ```sh
 (cd bench/poll/cli && go build -o "$out/poll-cli" .)
-go build -o "$out/dromasd" ./cmd/dromasd
+go build -o "$out/dromas-server" ./cmd/dromas-server
 go build -o "$out/dromas" github.com/dromas-dev/dromas-client/cmd/dromas
-GOMAXPROCS=1 "$out/dromasd" serve --dev -listen 127.0.0.1:18777 -poll-burst 0 2> "$out/server.log" &
-SP=$(pgrep -f "$out/dromasd serve")                      # the server's OWN pid, never $!
+GOMAXPROCS=1 "$out/dromas-server" serve --dev -listen 127.0.0.1:18777 -poll-burst 0 2> "$out/server.log" &
+SP=$(pgrep -f "$out/dromas-server serve")                      # the server's OWN pid, never $!
 export DROMAS_HOME=$box DROMAS_SERVER_URL=http://127.0.0.1:18777
 A=$("$out/dromas" init --no-pq); A=${A##*/}             # a box; init leaves its pass in $box/pass
 U=$DROMAS_SERVER_URL/v1/$A/messages

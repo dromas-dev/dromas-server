@@ -160,7 +160,7 @@ func (o onlyHost) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 // fakeStore is the store on DynamoDB over f, with a record cache and the
-// SDK's default retryer, as dromasd's config.LoadDefaultConfig leaves it:
+// SDK's default retryer, as dromas-server's config.LoadDefaultConfig leaves it:
 // its attempts, quota and what it retries, with no pause between attempts, so
 // a test of a retried write waits for nothing the SDK's jitter would add.
 func fakeStore(t testing.TB, f *fakeAWS) *Memory {

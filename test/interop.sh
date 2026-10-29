@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # interop.sh — the stock client, sh/dromas.sh from the dromas-client release this module requires (a go.work, if there is one, swaps in a checkout), with its real dr_api (curl),
-# against a real `dromasd serve --dev`, interoperating with the Go client `dromas` from the public client repo:
+# against a real `dromas-server serve --dev`, interoperating with the Go client `dromas` from the public client repo:
 #   1. mail both ways between a recipe box and a Go box, sent to each box's link, across a prekey renewal on each side; the page each link opens;
 #   2. the recipe's error path on a real problem+json body;
 #   3. the envelope's optional fields from the Go client, and each client's sent/ record, with the real server's receipt;
@@ -37,7 +37,7 @@ export PATH=$PATH:/usr/local/go/bin
 # its own module, which lists what they import and the server's does not; the module cache is read-only, so go build only writes elsewhere.
 client=$(cd "$repo" && go mod download github.com/dromas-dev/dromas-client && go list -m -f '{{.Dir}}' github.com/dromas-dev/dromas-client) || { echo "no client module"; exit 1; }
 SCRIPT=${SCRIPT:-$client/sh/dromas.sh}
-(cd "$repo" && go build -o "$work/dromasd" ./cmd/dromasd) && (cd "$client" && go mod download && go build -o "$work/dromas" ./cmd/dromas) || { echo "build failed"; exit 1; }
+(cd "$repo" && go build -o "$work/dromas-server" ./cmd/dromas-server) && (cd "$client" && go mod download && go build -o "$work/dromas" ./cmd/dromas) || { echo "build failed"; exit 1; }
 [ -r "$SCRIPT" ] || { echo "no $SCRIPT"; exit 1; }
 echo "stock client: $SCRIPT ($(grep -c '^dr_[a-z_]*()' "$SCRIPT") functions)"
 
@@ -52,8 +52,8 @@ if [ -n "${DROMAS_TEST_MSGS_TABLE:-}" ]; then
 else
   store=(--dev -names "127.0.0.1:$port")   # --dev takes a pass made for any name without -names: with it, every pass's name is checked (PROTOCOL.md §8)
 fi
-echo "server: dromasd serve ${store[*]:0:6}"
-"$work/dromasd" serve "${store[@]}" -listen "127.0.0.1:$port" -poll-burst 0 -registrations-per-hour 0 2> "$work/server.log" & srv=$!   # every box here registers from one address
+echo "server: dromas-server serve ${store[*]:0:6}"
+"$work/dromas-server" serve "${store[@]}" -listen "127.0.0.1:$port" -poll-burst 0 -registrations-per-hour 0 2> "$work/server.log" & srv=$!   # every box here registers from one address
 export DR_SERVER_URL="http://127.0.0.1:$port" DROMAS_SERVER_URL="http://127.0.0.1:$port"
 for _ in $(seq 300); do   # up once the API answers other than 503 (loading)
   code=$(curl -s -o /dev/null -w '%{http_code}' "$DR_SERVER_URL/v1/$(printf '0%.0s' $(seq 64))"); [ "$code" != 000 ] && [ "$code" != 503 ] && break; sleep 0.1

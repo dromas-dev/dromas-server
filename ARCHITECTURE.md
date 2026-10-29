@@ -9,7 +9,7 @@
 ## At a glance
 
 **We write two Go binaries and one script:**
-- `dromasd`, the server;
+- `dromas-server`, the server;
 - `dromas`, the client (a local MCP server in it is planned, not built);
 - `dromas.sh`, the proof in stock tools that a box of them exchanges mail with a Go box.
 
@@ -17,18 +17,18 @@
 
 | What | How many | Notes |
 |---|---|---|
-| `dromasd` | 1 today, then one per host; a scaled shape is ~4 hosts of 4 cores | All identical; one is to hold a lease and run the background jobs (not built: there are no jobs yet). **One Go process uses every core of its host**, so it's one process per host, never one per core: the runtime spreads goroutines across all CPUs, and since Go 1.25 it reads the container's CPU limit too. CPU is never the reason for more hosts: 1M mailboxes polling once a minute is about 0.9 vCPU, 0.57 for the polls at 34 µs each and 0.32 for the check of each box's new pass every ten minutes at 190 µs (measured 2026-10-13, § Estimates and measurements) |
+| `dromas-server` | 1 today, then one per host; a scaled shape is ~4 hosts of 4 cores | All identical; one is to hold a lease and run the background jobs (not built: there are no jobs yet). **One Go process uses every core of its host**, so it's one process per host, never one per core: the runtime spreads goroutines across all CPUs, and since Go 1.25 it reads the container's CPU limit too. CPU is never the reason for more hosts: 1M mailboxes polling once a minute is about 0.9 vCPU, 0.57 for the polls at 34 µs each and 0.32 for the check of each box's new pass every ten minutes at 190 µs (measured 2026-10-13, § Estimates and measurements) |
 | Echo boxes | 2 | `dromas` clients with their own keys, one post-quantum and one X25519-only (decided), never inside the server |
 | AWS, managed | — | Three DynamoDB tables, boxes, messages and accounts, each with its stream on; the S3 Express One Zone directory bucket |
-| Edge | — | A load balancer passing TCP, then a reverse proxy that terminates TLS (for dromas.dev, an NLB and nginx on each host) and calls `dromasd` over plain HTTP on one or more `-listen` addresses; `dromasd` takes the client's address from the proxy's `X-Forwarded-For` (§ Behind a reverse proxy) |
-| The site | — | A deployment's site is not in this repo: with `-site-backend`, `dromasd` passes every request outside `/v1/` and `/to/` to the deployment's own web server, as a reverse proxy does (`net/http/httputil`), and its answer back as that server sent it, a 404 among them (`internal/server/site.go`) |
+| Edge | — | A load balancer passing TCP, then a reverse proxy that terminates TLS (for dromas.dev, an NLB and nginx on each host) and calls `dromas-server` over plain HTTP on one or more `-listen` addresses; `dromas-server` takes the client's address from the proxy's `X-Forwarded-For` (§ Behind a reverse proxy) |
+| The site | — | A deployment's site is not in this repo: with `-site-backend`, `dromas-server` passes every request outside `/v1/` and `/to/` to the deployment's own web server, as a reverse proxy does (`net/http/httputil`), and its answer back as that server sent it, a 404 among them (`internal/server/site.go`) |
 | Redis | 0 | Penciled in for later, not needed for a while (§ The in-process plan, item 7) |
 
 ```mermaid
 flowchart LR
   bots["agents and bots<br/>dromas CLI"] --> lb["load balancer<br/>TCP"]
-  lb --> p1["reverse proxy<br/>TLS"] --> d1["dromasd"]
-  lb --> p2["reverse proxy<br/>TLS"] --> d2["dromasd"]
+  lb --> p1["reverse proxy<br/>TLS"] --> d1["dromas-server"]
+  lb --> p2["reverse proxy<br/>TLS"] --> d2["dromas-server"]
   d1 & d2 --> ddb[("DynamoDB<br/>boxes · messages · accounts")]
   d1 & d2 --> s3[("S3 Express One Zone<br/>bodies")]
   ddb -->|"three streams: every committed write, about 1 to 2 s"| d1 & d2
@@ -65,7 +65,7 @@ flowchart LR
 
    It earns its place only with sub-second delivery or exact global limits. Neither is needed today. More than ~4 processes points first at our own stream bouncer (§ Following the stream).
 
-## Server: `dromasd`
+## Server: `dromas-server`
 
 ### Memory: two layers, and only the first is required
 
@@ -132,7 +132,7 @@ A pass that passes all three costs about 180 µs, two signature checks in all (`
 
 ### The store: one memory, over a backend
 
-**`Memory` (`internal/server/memory.go`) is the store, the one implementation of `Store`, over a `Backend` (`backend.go`)**, which holds the durable state and hands each change to it to memory. Everything above is `Memory`'s: the record cache and its tokens, the index and its marks, the standings, the counts, a box's load on its first use, and what each write and each change does to them. A backend is the durable operations alone, and their outcomes: `dynamoBackend` (`dynamo.go`), DynamoDB and S3 Express, the production one; `memBackend` (`memstore.go`), maps in the process, for `dromasd serve --dev` and every test without AWS, which so run the memory production runs. Another backend copies only its own mapping of its storage to these operations.
+**`Memory` (`internal/server/memory.go`) is the store, the one implementation of `Store`, over a `Backend` (`backend.go`)**, which holds the durable state and hands each change to it to memory. Everything above is `Memory`'s: the record cache and its tokens, the index and its marks, the standings, the counts, a box's load on its first use, and what each write and each change does to them. A backend is the durable operations alone, and their outcomes: `dynamoBackend` (`dynamo.go`), DynamoDB and S3 Express, the production one; `memBackend` (`memstore.go`), maps in the process, for `dromas-server serve --dev` and every test without AWS, which so run the memory production runs. Another backend copies only its own mapping of its storage to these operations.
 
 **Each write of a backend has exactly one of three outcomes, and one function reads it** (`Memory.write`, which every write the store makes goes through):
 
@@ -152,13 +152,13 @@ A pass that passes all three costs about 180 µs, two signature checks in all (`
 
 ### Behind a reverse proxy
 
-`dromasd` speaks plain HTTP; TLS ends in a reverse proxy in front (dromas-dev/dromas-server#124). That keeps TLS above the server, so a restart of `dromasd` drops no client's TLS session, and it is where routing by a box's address goes once there is more than one process (§ Extreme scale).
+`dromas-server` speaks plain HTTP; TLS ends in a reverse proxy in front (dromas-dev/dromas-server#124). That keeps TLS above the server, so a restart of `dromas-server` drops no client's TLS session, and it is where routing by a box's address goes once there is more than one process (§ Extreme scale).
 - **The client's address** is the last entry of `X-Forwarded-For` from a peer in `-trusted-proxy`, the one that proxy wrote of the connection it took (`clientIP`); every entry before it is the caller's own word and is never read, and from any other peer the header is ignored. Every per-IP limit keys on it (`LIMITS.md`), and the site is told it (`-site-backend`), with every other header a proxy or CDN names a client by dropped.
 - **`Host` is passed on unchanged** (§ The pass check), and `X-Forwarded-Proto` from a trusted proxy says the scheme (the link page's).
 - **A held list holds nothing of the server's but its goroutine and its connection:** no write deadline runs while it waits (the pacing sets one on each write, and the answer's is set as it is written), and `-idle-timeout` is for the time between requests. Every change memory applies to a box, a write of this process or one from the streams, passes through the index's `apply`, which wakes the lists held on it; a list held on one process is woken by a send stored on another through the stream (measured 2026-10-28 on DynamoDB, `TestTwoProcesses`: 0.64 s). At SIGTERM `http.Server.RegisterOnShutdown` answers every held list `304` at once (`StopHolds`), so its clients list again at once and `Shutdown` waits for none of them.
-- **Several listen addresses** (`-listen`, comma-separated) are served by one `http.Server`: each connection the proxy holds to `dromasd` is one 4-tuple, so one proxy address calling one `dromasd` address is bounded by the proxy host's range of ephemeral ports, and every address more is one range more. A held request (a long poll, the client repo's #510) holds one for its whole wait.
+- **Several listen addresses** (`-listen`, comma-separated) are served by one `http.Server`: each connection the proxy holds to `dromas-server` is one 4-tuple, so one proxy address calling one `dromas-server` address is bounded by the proxy host's range of ephemeral ports, and every address more is one range more. A held request (a long poll, the client repo's #510) holds one for its whole wait.
 - **`-idle-timeout` above the proxy's own idle timeout for its upstream connections** (`LIMITS.md`), so the proxy closes first.
-- **What a proxy does that the server also does:** a proxy that buffers a request's body before passing it (nginx's default) keeps a slow upload off `dromasd`'s large read; the server's own header and body timeouts and every count stand whatever is in front (`LIMITS.md`).
+- **What a proxy does that the server also does:** a proxy that buffers a request's body before passing it (nginx's default) keeps a slow upload off `dromas-server`'s large read; the server's own header and body timeouts and every count stand whatever is in front (`LIMITS.md`).
 
 ### Request paths
 
@@ -179,10 +179,10 @@ A pass that passes all three costs about 180 µs, two signature checks in all (`
 ```mermaid
 sequenceDiagram
   participant A as sender
-  participant P1 as dromasd (any)
+  participant P1 as dromas-server (any)
   participant S3 as S3 Express
   participant D as DynamoDB
-  participant P2 as dromasd (others)
+  participant P2 as dromas-server (others)
   participant B as recipient
   A->>P1: POST /v1/B/messages?prekey_serial&certificate_serial, the ciphertext as the body, carrying A's pass
   P1->>P1: check the pass (from memory once seen), parse, stanza check
@@ -258,22 +258,22 @@ What changes:
 
 | Metric | Labels | Counts |
 |---|---|---|
-| `dromasd_requests_total` | `route` (the router's pattern, `unmatched` for none), `status`, `code` (the problem's, empty for none) | every request answered |
-| `dromasd_request_duration_seconds` | `route` | how long each request took to answer |
-| `dromasd_limit_requests_total` | `limit` (a `rate_limited`'s quota, or the code of its own), `subject` (`box`, `ip`), `decision` (`allowed`, `denied`) | each take of each limit, as Boulder's limiter counts each spend |
-| `dromasd_limit_keys` | `limit` | the keys each limit holds now |
-| `dromasd_passes_total` | `outcome` (`remembered`, `checked`, `refused`), `code` | passes taken from memory, verified, and refused |
-| `dromasd_lists_total`, `dromasd_fetches_total` | `kind` (`poll`, `page`; `first`, `repeat`) | lists and messages served; a send stored, a duplicate, an ack and a renewal are each a route and status of the first |
-| `dromasd_lists_held`, `dromasd_holds_total` | `outcome` (`changed`, `waited`, `gone`, `stopped`, `refused`) | lists held for a change now, and how each held list ended: the box changed, its wait passed, its caller left, the server stopped, or it was refused past `-holds` |
-| `dromasd_store_calls_total`, `dromasd_store_call_duration_seconds` | `service`, `operation`, `outcome` (`ok`, `conditional`, `not_found`, `throttled`, `error`) | every call to DynamoDB, its streams and S3, with its retries |
-| `dromasd_cache_events_total` | `cache` (`boxes`, `accounts`, `missing`), `event` (`hit`, `miss`, `eviction`) | the record caches |
-| `dromasd_stream_record_age_seconds` | `table` (`boxes`, `messages`, `accounts`) | how old the last record applied from each stream was: how far behind memory follows |
-| `dromasd_item_collection_estimate_bytes` | | after each message written, the upper bound of DynamoDB's estimate of its box's item collection, at 2^30 bytes a GB: AWS advises an alert at 8 GB, before the 10 GB past which the box takes no mail (§ Storage). AWS does not say whether its GB is 10^9 or 2^30 bytes (API Reference, *ItemCollectionMetrics*: "in gigabytes"); 2^30 is the safe side, since the bytes reported are then never fewer than AWS's estimate, and the buckets are whole GB, so the one at 8 GB is AWS's 8 GB either way |
-| `dromasd_large_reads_total`, `dromasd_bodies_cut_total`, `dromasd_connections_open` | `outcome` (`taken`, `timed_out`, `gone`) | the one large read's waits, bodies cut off at their deadline, connections open |
+| `dromas_server_requests_total` | `route` (the router's pattern, `unmatched` for none), `status`, `code` (the problem's, empty for none) | every request answered |
+| `dromas_server_request_duration_seconds` | `route` | how long each request took to answer |
+| `dromas_server_limit_requests_total` | `limit` (a `rate_limited`'s quota, or the code of its own), `subject` (`box`, `ip`), `decision` (`allowed`, `denied`) | each take of each limit, as Boulder's limiter counts each spend |
+| `dromas_server_limit_keys` | `limit` | the keys each limit holds now |
+| `dromas_server_passes_total` | `outcome` (`remembered`, `checked`, `refused`), `code` | passes taken from memory, verified, and refused |
+| `dromas_server_lists_total`, `dromas_server_fetches_total` | `kind` (`poll`, `page`; `first`, `repeat`) | lists and messages served; a send stored, a duplicate, an ack and a renewal are each a route and status of the first |
+| `dromas_server_lists_held`, `dromas_server_holds_total` | `outcome` (`changed`, `waited`, `gone`, `stopped`, `refused`) | lists held for a change now, and how each held list ended: the box changed, its wait passed, its caller left, the server stopped, or it was refused past `-holds` |
+| `dromas_server_store_calls_total`, `dromas_server_store_call_duration_seconds` | `service`, `operation`, `outcome` (`ok`, `conditional`, `not_found`, `throttled`, `error`) | every call to DynamoDB, its streams and S3, with its retries |
+| `dromas_server_cache_events_total` | `cache` (`boxes`, `accounts`, `missing`), `event` (`hit`, `miss`, `eviction`) | the record caches |
+| `dromas_server_stream_record_age_seconds` | `table` (`boxes`, `messages`, `accounts`) | how old the last record applied from each stream was: how far behind memory follows |
+| `dromas_server_item_collection_estimate_bytes` | | after each message written, the upper bound of DynamoDB's estimate of its box's item collection, at 2^30 bytes a GB: AWS advises an alert at 8 GB, before the 10 GB past which the box takes no mail (§ Storage). AWS does not say whether its GB is 10^9 or 2^30 bytes (API Reference, *ItemCollectionMetrics*: "in gigabytes"); 2^30 is the safe side, since the bytes reported are then never fewer than AWS's estimate, and the buckets are whole GB, so the one at 8 GB is AWS's 8 GB either way |
+| `dromas_server_large_reads_total`, `dromas_server_bodies_cut_total`, `dromas_server_connections_open` | `outcome` (`taken`, `timed_out`, `gone`) | the one large read's waits, bodies cut off at their deadline, connections open |
 | the Go runtime's and the process's | | `client_golang`'s collectors |
 
 - 🛑 **No label is a value a caller chose:** no address, IP, box, message id, cursor or path as sent. Each would be a series per caller, and each is what the logs leave out: "Do not use labels to store dimensions with high cardinality (many different label values), such as user IDs, email addresses, or other unbounded sets of values." (`docs/practices/naming.md`, the same commit). `TestMetricsCarryNoCallerValue` holds it.
-- **Which box or address spends a limit is no metric:** `dromasd limits top` lists them, over the admin socket (`LIMITS.md`).
+- **Which box or address spends a limit is no metric:** `dromas-server limits top` lists them, over the admin socket (`LIMITS.md`).
 - **Per process,** as the limits are: with several, the scraper sums them.
 - **What they cost:** an empty poll through the handler, with no poll limit, took a median 13.3 µs with them and 11.3 µs without (five runs of 20,000 each, two AWS Graviton4 cores, measured 2026-10-19). About 2 µs a poll is 0.03 vCPU at a million boxes polling once a minute.
 - **Not built:** `net/http/pprof` on the same listener, which Boulder serves there.
@@ -325,7 +325,7 @@ Boxes: PITR on, AWS Backup on, TTL on, stream `NEW_IMAGE`. Messages: neither bac
 - **The item's `expires_at` is the authority on expiry.** The bucket's lifecycle rule is not exact (general purpose buckets round to the next midnight UTC; directory buckets' timing was not checked), so an object can outlive its item, and no body is served whose item is gone. A live item whose body is gone, by a half-finished ack or a lifecycle rule that ran early, leaves the list and is answered `no_such_message`.
 - 🔴 **Lifecycle on a directory bucket needs a bucket policy** granting `lifecycle.s3.amazonaws.com` `s3express:CreateSession` with `s3express:SessionMode` = `ReadWrite`; without it, nothing expires (AWS docs, *Working with S3 Lifecycle for directory buckets*). The server reaches objects through `s3express:CreateSession` too, not `s3:PutObject`.
 - **A message costs** one S3 Express PUT; the send's item write 2 write units (the item, 155 B measured, and its LSI entry), the ack's 2 more (the item's delete and the LSI entry's removal), and the dedupe read 1 read. The item is kept small because DynamoDB bills a Query by the full size of each item read, projection or not (AWS docs). The LSI adds about $0.63 per million messages, at the on-demand price in AWS's offer file dated 2026-09-11.
-- **A box's item collection is capped at 10 GB** (every LSI's rule: its items and their index entries), and it is one partition's. An acked message leaves nothing in it; one never acked leaves its item for `protocol.Retention`, 33 days less an hour and two minutes, and then until the TTL deletes it: expired items "might be deleted by the system at any time, typically within a few days after their expiration", and AWS states no bound past that (*Using time to live (TTL) in DynamoDB*, read 2026-10-26). A message's item is 155 B, with an entry in the live index of 120 B (`TestCostItemSizes`, measured 2026-10-27); AWS counts 100 B of overhead in an index entry's space (*Local secondary indexes*), and whether an item's 100 B of storage overhead counts toward the cap, it does not say. **What bounds a box's new mail is the ceiling, `ReceiveCeiling`, past which no account and no flag lifts it** (`LIMITS.md`). Unacked, a box holds at most `-box-cap` messages, and `-box-cap` at 0 is off: then, with nothing acked, one `protocol.Retention` of a box's messages at the ceiling comes to about 7.8 GB of items and entries by their sizes alone, and to about 13.5 GB with the overhead (computed). **So the margin rests on no bound of the TTL's lateness, since AWS states none: it rests on the alert AWS advises at 8 GB** (below). A write past the cap fails with `ItemCollectionSizeLimitExceededException`. Each message write asks DynamoDB for the estimated size of its box's item collection (`ReturnItemCollectionMetrics`), which `dromasd_item_collection_estimate_bytes` reports, for the alert AWS advises at 8 GB (§ Metrics).
+- **A box's item collection is capped at 10 GB** (every LSI's rule: its items and their index entries), and it is one partition's. An acked message leaves nothing in it; one never acked leaves its item for `protocol.Retention`, 33 days less an hour and two minutes, and then until the TTL deletes it: expired items "might be deleted by the system at any time, typically within a few days after their expiration", and AWS states no bound past that (*Using time to live (TTL) in DynamoDB*, read 2026-10-26). A message's item is 155 B, with an entry in the live index of 120 B (`TestCostItemSizes`, measured 2026-10-27); AWS counts 100 B of overhead in an index entry's space (*Local secondary indexes*), and whether an item's 100 B of storage overhead counts toward the cap, it does not say. **What bounds a box's new mail is the ceiling, `ReceiveCeiling`, past which no account and no flag lifts it** (`LIMITS.md`). Unacked, a box holds at most `-box-cap` messages, and `-box-cap` at 0 is off: then, with nothing acked, one `protocol.Retention` of a box's messages at the ceiling comes to about 7.8 GB of items and entries by their sizes alone, and to about 13.5 GB with the overhead (computed). **So the margin rests on no bound of the TTL's lateness, since AWS states none: it rests on the alert AWS advises at 8 GB** (below). A write past the cap fails with `ItemCollectionSizeLimitExceededException`. Each message write asks DynamoDB for the estimated size of its box's item collection (`ReturnItemCollectionMetrics`), which `dromas_server_item_collection_estimate_bytes` reports, for the alert AWS advises at 8 GB (§ Metrics).
 
 **Bodies are not compressed.** They are age ciphertext, which doesn't compress. Measured with age 1.3.2, best of gzip -9, zstd -19 and xz -9, on messages without padding or the signature inside (measured 2026-10-10; today's sizes differ, what compresses does not):
 
@@ -342,7 +342,7 @@ Boxes: PITR on, AWS Backup on, TTL on, stream `NEW_IMAGE`. Messages: neither bac
 
 **All of them live in the public `dromas-client` repo** (§ Repo layout): the Go library and the `dromas` command; the echo box, a deployment of it; and `sh/dromas.sh`, the proof that a box of stock tools exchanges mail with a Go box, on a box of its own. A box's files are at the top of that repo's `client/doc.go`, what each command does is its help, and the rules for changing them are its `AGENTS.md`. **Not built:** `dromas mcp`, a local stdio MCP server in the same binary, whose results are to be the CLI's lines, and an Agent Skill (`SKILL.md`).
 
-**What tests what.** The forging-operator tests are public, in `dromas-client`: the Go client against `internal/fakeserver`, an honest in-memory server a middleware turns hostile, and the script, by Go tests in `sh/`, against the same fake and the test vectors. This repo keeps the tests of what the real server enforces, and `dromasd serve --dev`, the real server's logic and its memory on the in-memory backend, with no AWS, is what `test/interop.sh` runs both clients against.
+**What tests what.** The forging-operator tests are public, in `dromas-client`: the Go client against `internal/fakeserver`, an honest in-memory server a middleware turns hostile, and the script, by Go tests in `sh/`, against the same fake and the test vectors. This repo keeps the tests of what the real server enforces, and `dromas-server serve --dev`, the real server's logic and its memory on the in-memory backend, with no AWS, is what `test/interop.sh` runs both clients against.
 
 ## Repo layout: two repos
 
@@ -359,7 +359,7 @@ dromas-client
   testdata/vectors/   conformance
 
 dromas-server (this repo)
-  cmd/dromasd/      the server; imports protocol/ and sshsig/ from dromas-client
+  cmd/dromas-server/      the server; imports protocol/ and sshsig/ from dromas-client
   internal/server/    api (net/http routing, problem+json) · index (layer 1) · feed (stream follower) ·
                       store (memory, over a backend: DynamoDB + S3 Express, or in-process maps) · limits ·
                       the pass check · adopt keys
@@ -377,9 +377,9 @@ dromas-server (this repo)
 
 | Stage | Shape |
 |---|---|
-| Dev | `dromasd serve --dev`, the in-memory backend |
-| 1: first production (**live**, with the echo boxes) | one host: a reverse proxy terminating TLS, one `dromasd` with the stream on, and the echo boxes beside it |
-| 2: availability and scale | first a second host for availability, then 2–4 hosts across AZs, one `dromasd` each using every core (e.g. 4 hosts of 4 cores), behind a load balancer |
+| Dev | `dromas-server serve --dev`, the in-memory backend |
+| 1: first production (**live**, with the echo boxes) | one host: a reverse proxy terminating TLS, one `dromas-server` with the stream on, and the echo boxes beside it |
+| 2: availability and scale | first a second host for availability, then 2–4 hosts across AZs, one `dromas-server` each using every core (e.g. 4 hosts of 4 cores), behind a load balancer |
 | Later, only if measured | our own stream bouncer for more than ~4 processes; Redis if sub-second delivery or exact global limits are ever needed |
 | Extreme | shard by the address's first hex character at the edge, with the bouncer routing by the same character (§ Extreme scale) |
 
@@ -387,7 +387,7 @@ dromas-server (this repo)
 
 1. ✅ **The decisions that change code, and this sketch: applied to the spec.**
 2. ✅ **`protocol` and `sshsig`, with test vectors made by stock tools.**
-3. ✅ **`dromasd --dev`, the `client` library and the `dromas` CLI**, end to end on one machine. The decided paths only; what is still open is unbuilt or chosen provisionally.
+3. ✅ **`dromas-server --dev`, the `client` library and the `dromas` CLI**, end to end on one machine. The decided paths only; what is still open is unbuilt or chosen provisionally.
 4. ✅ **The DynamoDB + S3 Express store, the stream follower and layer 1**, with the poll path answered from memory (lazy per box, § Startup). Every server test runs on both backends, under the one memory (the AWS ones against tables kept for tests), and the failure injected between each pair of writes is tested. Deployed as stage 1: one process, `Dockerfile` here.
 5. **`dromas.sh` in the public repo, named in `llms.txt`** — built, with its forging tests (Go tests in `sh/` on the client's fake server), held to the Go client only on the vectors that are the proof and on the five outcomes a difference could let through (the client repo's `AGENTS.md` § The shell client), and interop with the Go client, all in dromas-client.
 6. **`dromas mcp` and `SKILL.md`.** The echo boxes are built and live.

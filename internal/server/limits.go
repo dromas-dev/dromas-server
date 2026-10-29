@@ -48,7 +48,7 @@ type Limits struct {
 	// ACLEntries is the most entries a box's ACL holds, its two lists
 	// together [tunable]: a box's record, with its ACL, is held in the box
 	// cache, so this bounds what one record costs memory there. Never off,
-	// and at most protocol.MaxACLEntries: dromasd serve does not start
+	// and at most protocol.MaxACLEntries: dromas-server serve does not start
 	// otherwise.
 	ACLEntries int
 
@@ -115,7 +115,7 @@ func (l Limits) ceiling() int { return max(l.MaxSize, l.AccountMaxSize) }
 
 // ReceiveCeiling is the shortest refill of any box's budget of new mail: no
 // box takes new mail faster than one each, ten a second, whatever its account
-// lifts, and dromasd serve does not start with flags that would (decided).
+// lifts, and dromas-server serve does not start with flags that would (decided).
 // A box's messages are one item collection of the messages
 // table, which its LSI holds to 10 GB on one partition, and every message
 // leaves an item there until it expires (ARCHITECTURE.md § Storage).

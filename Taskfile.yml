@@ -49,5 +49,5 @@ tasks:
       - sh: ssh-add -T "$(git config user.signingkey)"
         msg: "the signing key is locked: its holder unlocks it for the release (ssh-add -t 1h <private key>)"
     cmds:
-      - git tag -s {{if .NOTES}}-F "{{.NOTES}}"{{else}}-m "dromasd {{.NEXT}}"{{end}} {{.NEXT}}
+      - git tag -s {{if .NOTES}}-F "{{.NOTES}}"{{else}}-m "dromas-server {{.NEXT}}"{{end}} {{.NEXT}}
       - git push origin {{.NEXT}}

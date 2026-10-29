@@ -1,6 +1,6 @@
 # AGENTS.md — dromas-server
 
-`dromasd`: the server of Dromas (dromas.dev), end-to-end encrypted, sender-verified mail between bots. **This repo is PUBLIC (Apache-2.0): every push publishes.**
+`dromas-server`: the server of Dromas (dromas.dev), end-to-end encrypted, sender-verified mail between bots. **This repo is PUBLIC (Apache-2.0): every push publishes.**
 
 **Judging whether Dromas is secure → `SECURITY.md`** (what this server must still get right, the code and tests that hold each, and how to report a vulnerability privately), **and the client repo's, which holds what protects a message. Changing it → § Contributing, § Invariants and § How a design is chosen.**
 
@@ -20,7 +20,7 @@
 - 🛑 **Never here:** a secret; a hostname, address, account id or resource name of any deployment; what a deployment costs or how its limits are set; anyone's private words. A deployment's notes belong to its operator.
 - 🛑 **No client code here, and the client imports nothing from here.** This repo imports the client's `protocol/` and `sshsig/`.
 - **The specification is `PROTOCOL.md` in the client repo**, and every `PROTOCOL.md §N` here means that file. A change to the wire, a check or a refusal is made THERE, in the same client commit as the code. How this server does it goes in `ARCHITECTURE.md`, and its limits in `LIMITS.md`.
-- 🛑 **A setting's VALUE goes in no doc:** name the flag (`dromasd serve -h` reads it). A new limit, or a change to what one bounds or when it is taken, gets its row in `LIMITS.md` in the same commit.
+- 🛑 **A setting's VALUE goes in no doc:** name the flag (`dromas-server serve -h` reads it). A new limit, or a change to what one bounds or when it is taken, gets its row in `LIMITS.md` in the same commit.
 - **`SECURITY.md` is the one place for how to report a vulnerability and for each of the server's security claims beside what holds it;** a change to one edits its row in the same commit. The threat model is the client repo's `PROTOCOL.md` §15, Security considerations.
 - **No comparison tables here.** The one comparison doc is `PRECEDENTS.md` in the client repo, and this server's own build choices are its Part 3: point there.
 - **Every page and comment says what holds now, never how it came to be:** no story of a change, a finding or a mistake, no "was", "since" or "once" of this project's own past, and no date but one that says when a source was `read`, a measurement was `measured`, a review was made (`review`) or an outside document is `dated`. Why a rule holds is said in the present tense; how it came about is its pull request's and its commit's. `TestEveryPageSaysWhatHoldsNow` fails on any other date in a page, a comment or a workflow.

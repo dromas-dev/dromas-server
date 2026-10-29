@@ -173,14 +173,14 @@ func TestLookupsArePaidByTheirCaller(t *testing.T) {
 		e.clock.Add(time.Second) // past the passes the registrations showed
 		pass := e.pass(a)
 		e.want(e.do(http.MethodGet, "/v1/"+a.Address().String()+"/acl", nil, pass), http.StatusOK, "") // a's one call, which checks its pass
-		before := counts(t, reg, "dromasd_passes_total")
+		before := counts(t, reg, "dromas_server_passes_total")
 		read := "/v1/" + b.Address().String()
 		for _, auth := range []string{pass, e.pass(b), "dromas-pass nonsense", "Bearer x", ""} {
 			for range 3 {
 				e.want(e.do(http.MethodGet, read, nil, auth), http.StatusOK, "")
 			}
 		}
-		if d := moved(before, counts(t, reg, "dromasd_passes_total")); len(d) != 0 {
+		if d := moved(before, counts(t, reg, "dromas_server_passes_total")); len(d) != 0 {
 			t.Errorf("reads of a box looked at passes: %v", d)
 		}
 		e.limited(e.do(http.MethodGet, "/v1/"+a.Address().String()+"/acl", nil, pass), protocol.QuotaCalls) // the one it spent, and none by the reads
