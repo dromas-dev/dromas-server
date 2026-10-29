@@ -267,11 +267,14 @@ func (x *index) remove(box protocol.Address, tag, exp, now uint64, echo bool) {
 // of the earliest expiry. A box holds one item of an id at a time, and the
 // stream brings an item's changes in order, so that is the message whose item
 // went; a tomb is this process's own removal of it, echoed. It reads wrong
-// where it meets the mark of a later message of the same bytes this process
-// stored before the stream brought the deletion: one applied twice, or one
-// that comes after its message expired (by the TTL, or by an ack in its last
-// seconds). That mark goes, and the stream's insert of it, which comes after
-// the deletion, brings it back.
+// where this process holds a later message of the same bytes when the
+// deletion arrives, one it stored or one its load of the box read, after an
+// ack or the expiry of the first (dromas-dev/dromas-client#548 items 9,
+// 10): a mark it takes leaves the box counted one short, and a list held on
+// it answered an empty page, until the stream's insert of that message
+// brings the mark back; a tomb it takes, of the later message this process
+// acked, lets that insert count a message that is gone, until its own
+// deletion arrives.
 func (x *index) deleted(box protocol.Address, tag, now uint64) {
 	x.apply(box, func(m *boxMem) {
 		m.prune(now)

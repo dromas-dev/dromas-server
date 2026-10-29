@@ -370,8 +370,9 @@ func (s *Server) notHeld(r *http.Request, a protocol.Address) error {
 }
 
 // fetch is GET /v1/<address>/messages/<id>: the ciphertext's bytes and
-// nothing else, read through this endpoint, never a redirect. Who sent it,
-// on this server's word, and when, are in the list. A Range of one
+// nothing else, read through this endpoint, never a redirect. When it came
+// is in the list, and who sent it is the signature's, inside the
+// ciphertext. A Range of one
 // open-ended byte range that begins inside the ciphertext is answered 206,
 // the bytes from there on, read from the store with the same range, and any
 // other with the whole body (PROTOCOL.md §11.12; protocol.RangeAsked): a fetch
