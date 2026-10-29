@@ -97,8 +97,8 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Help: "After each message written, the upper bound of DynamoDB's estimate of its box's item collection, the box's items and their LSI entries, at 2^30 bytes a GB: past 10 GB, the box takes no more mail.", Buckets: gigabytes}),
 		holds: prometheus.NewGauge(prometheus.GaugeOpts{Namespace: ns, Name: "lists_held",
 			Help: "Lists held for a change now (PROTOCOL.md §11.11)."}),
-		held: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "holds_total",
-			Help: "Held lists, by how each ended: changed (the box changed), waited (its wait passed), gone (the caller left), stopped (the server stopped), or refused (past -holds)."}, []string{"outcome"}),
+		held: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "held_lists_total",
+			Help: "Held lists, by how each ended: changed (the box changed), waited (its wait passed), gone (the caller left), stopped (the server stopped), or refused (past -max-held-lists)."}, []string{"outcome"}),
 	}
 	reg.MustRegister(m.requests, m.latency, m.limits, m.passes, m.fetches, m.lists, m.store, m.storeTime, m.caches, m.largeRead, m.cut, m.conns, m.streamAge, m.collections, m.holds, m.held)
 	return m
