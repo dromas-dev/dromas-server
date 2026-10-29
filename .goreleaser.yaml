@@ -77,10 +77,11 @@ release:
   footer: |
     ## Image
 
-    `ghcr.io/dromas-dev/dromasd:{{ .Version }}`, for `linux/amd64` and `linux/arm64`, built from the same tag by this repository's `docker-publish.yml` once this release is published, with an SBOM and an attestation of the build:
+    `ghcr.io/dromas-dev/dromasd:{{ .Version }}`, for `linux/amd64` and `linux/arm64`, built from the same tag by this repository's `docker-publish.yml` once this release is published, with an attestation of the build and an attested SPDX SBOM (the second command):
 
     ```sh
     gh attestation verify oci://ghcr.io/dromas-dev/dromasd:{{ .Version }} -R dromas-dev/dromas-server --signer-workflow dromas-dev/dromas-server/.github/workflows/docker-publish.yml --source-ref refs/tags/{{ .Tag }}
+    gh attestation verify oci://ghcr.io/dromas-dev/dromasd:{{ .Version }} -R dromas-dev/dromas-server --signer-workflow dromas-dev/dromas-server/.github/workflows/docker-publish.yml --source-ref refs/tags/{{ .Tag }} --predicate-type https://spdx.dev/Document/v2.3
     ```
 
     ## Verify

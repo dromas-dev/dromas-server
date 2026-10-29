@@ -168,6 +168,10 @@ jobs:
           gh attestation verify "oci://ghcr.io/$REPO_OWNER/dromasd:${TAG#v}" -R "$REPO" \
             --signer-workflow "$REPO/.github/workflows/docker-publish.yml" \
             --source-ref "refs/tags/$TAG" --deny-self-hosted-runners
+          gh attestation verify "oci://ghcr.io/$REPO_OWNER/dromasd:${TAG#v}" -R "$REPO" \
+            --signer-workflow "$REPO/.github/workflows/docker-publish.yml" \
+            --source-ref "refs/tags/$TAG" --deny-self-hosted-runners \
+            --predicate-type https://spdx.dev/Document/v2.3
         env:
           REPO_OWNER: ${{ github.repository_owner }}
 
