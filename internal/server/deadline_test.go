@@ -30,7 +30,7 @@ import (
 // Every answer is paced, so no connection outlives the deadline its peer
 // sets by not sending or not reading (LIMITS.md, a body's and a response's
 // time; dromas-dev/dromas-server#28, #31, #75, #77). These run through
-// HTTPServer, the server dromasd serves the API with, on a port of their
+// HTTPServer, the server dromas-server serves the API with, on a port of their
 // own, since net/http's own reading and writing is what they hold.
 
 // pacedLimits are limits with every body and answer paced at a second, and
@@ -42,7 +42,7 @@ func pacedLimits() Limits {
 	return l
 }
 
-// served serves s's handler as dromasd does, and returns its address and
+// served serves s's handler as dromas-server does, and returns its address and
 // how many of its connections have closed.
 func served(t *testing.T, s *Server, l Limits) (string, *atomic.Int64) {
 	t.Helper()
@@ -161,11 +161,11 @@ func TestABodyThatStopsIsCutBehindEveryAnswer(t *testing.T) {
 			if c.status == "408" && !strings.Contains(got, `"code":"request_timeout"`) {
 				t.Errorf("a 408 that is not request_timeout: %q", got)
 			}
-			if d := counts(t, reg, "dromasd_limit_requests_total")["decision=denied,limit=requests,subject=ip"]; c.limited && d != 1 {
+			if d := counts(t, reg, "dromas_server_limit_requests_total")["decision=denied,limit=requests,subject=ip"]; c.limited && d != 1 {
 				t.Errorf("refused for the flood budget %v times, want 1", d)
 			}
-			if cut := counts(t, reg, "dromasd_bodies_cut_total")[""]; cut != 1 {
-				t.Errorf("a body cut off at its deadline: dromasd_bodies_cut_total %v, want 1", cut)
+			if cut := counts(t, reg, "dromas_server_bodies_cut_total")[""]; cut != 1 {
+				t.Errorf("a body cut off at its deadline: dromas_server_bodies_cut_total %v, want 1", cut)
 			}
 			t.Logf("cut after %v", time.Since(start).Round(10*time.Millisecond))
 		})
@@ -202,8 +202,8 @@ func TestAChunkedBodyCutInItsTrailerIs408(t *testing.T) {
 			if _, got := closesWithin(conn, 5*time.Second); !strings.HasPrefix(got, "HTTP/1.1 408 ") || !strings.Contains(got, `"code":"request_timeout"`) {
 				t.Errorf("a body cut off at its deadline where its handler reads it: %.200q, want 408 request_timeout", got)
 			}
-			if cut := counts(t, reg, "dromasd_bodies_cut_total")[""]; cut != 1 {
-				t.Errorf("dromasd_bodies_cut_total %v, want 1", cut)
+			if cut := counts(t, reg, "dromas_server_bodies_cut_total")[""]; cut != 1 {
+				t.Errorf("dromas_server_bodies_cut_total %v, want 1", cut)
 			}
 		})
 	}
@@ -260,7 +260,7 @@ func TestAnAnswerWrittenFirstOutlivesTheDrainOfItsBody(t *testing.T) {
 			if !strings.HasPrefix(status, "HTTP/1.1 "+c.status+" ") {
 				t.Errorf("a body moving at twice -body-min-rate: answered %q, want %s", status, c.status)
 			}
-			cut := counts(t, reg, "dromasd_bodies_cut_total")[""]
+			cut := counts(t, reg, "dromas_server_bodies_cut_total")[""]
 			switch control := c.name == "read by its handler (control)"; {
 			case control && (sent != 3000 || at < last || cut != 0):
 				t.Errorf("a body its handler reads: answered at %v with %d of 3000 bytes sent, the last at %v, %v cut; want the answer after the whole body, none cut", at.Round(10*time.Millisecond), sent, last.Round(10*time.Millisecond), cut)
@@ -318,8 +318,8 @@ func TestALargeAnswerWrittenFirstGoesOutAfterTheDrainOfItsBody(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || err != nil || !bytes.Equal(body, ct.Bytes()) {
 		t.Errorf("answered %s with %d of the message's %d bytes (%v), want 200 and all of them", resp.Status, len(body), ct.Len(), err)
 	}
-	if cut := counts(t, reg, "dromasd_bodies_cut_total")[""]; cut != 1 {
-		t.Errorf("dromasd_bodies_cut_total %v, want 1", cut)
+	if cut := counts(t, reg, "dromas_server_bodies_cut_total")[""]; cut != 1 {
+		t.Errorf("dromas_server_bodies_cut_total %v, want 1", cut)
 	}
 }
 
@@ -402,8 +402,8 @@ func TestABodyTheServerWouldNotDrainIsNotRead(t *testing.T) {
 			if !ok || !strings.HasPrefix(got, "HTTP/1.1 404 ") {
 				t.Errorf("a body the server would not drain: %.60q, closed %v; want 404 at once, then the connection closed", got, ok)
 			}
-			if cut := counts(t, reg, "dromasd_bodies_cut_total")[""]; cut != 0 {
-				t.Errorf("dromasd_bodies_cut_total %v, want 0: nothing was read to cut", cut)
+			if cut := counts(t, reg, "dromas_server_bodies_cut_total")[""]; cut != 0 {
+				t.Errorf("dromas_server_bodies_cut_total %v, want 0: nothing was read to cut", cut)
 			}
 		})
 	}

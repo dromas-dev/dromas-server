@@ -1,4 +1,4 @@
-// Package server is dromasd's HTTP API (PROTOCOL.md §11, the status map
+// Package server is dromas-server's HTTP API (PROTOCOL.md §11, the status map
 // in §11.3) over a Store.
 package server
 
@@ -1161,7 +1161,7 @@ func (r redactor) Write(p []byte) (int, error) {
 }
 
 // Redacting is w, redacting each line written to it (redact): the writer
-// under every log dromasd keeps, net/http's own among them.
+// under every log dromas-server keeps, net/http's own among them.
 func Redacting(w io.Writer) io.Writer {
 	if _, ok := w.(redactor); ok {
 		return w

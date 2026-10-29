@@ -1070,7 +1070,7 @@ func TestDynamoObservesTheItemCollection(t *testing.T) {
 	s.dynamo().metrics = m
 	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
 	send(t, a, b, "sized")
-	if err := testutil.CollectAndCompare(m.collections, strings.NewReader(collectionsWant(1)), "dromasd_item_collection_estimate_bytes"); err != nil {
+	if err := testutil.CollectAndCompare(m.collections, strings.NewReader(collectionsWant(1)), "dromas_server_item_collection_estimate_bytes"); err != nil {
 		t.Error(err)
 	}
 }

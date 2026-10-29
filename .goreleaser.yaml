@@ -1,4 +1,4 @@
-# dromasd's releases, which .github/workflows/release.yml makes from a signed
+# dromas-server's releases, which .github/workflows/release.yml makes from a signed
 # tag: a static binary for each Linux architecture CI runs the server on,
 # archived with the licence and README, an SBOM of each archive, and
 # checksums.txt, signed with cosign, whose files the workflow attests. Built
@@ -10,15 +10,15 @@
 # publishes nothing.
 version: 2
 
-project_name: dromasd
+project_name: dromas-server
 
 gomod:
   proxy: true
 
 builds:
-  - id: dromasd
-    main: ./cmd/dromasd
-    binary: dromasd
+  - id: dromas-server
+    main: ./cmd/dromas-server
+    binary: dromas-server
     env:
       - CGO_ENABLED=0
     goos: [linux]
@@ -73,7 +73,7 @@ sboms:
 # BuildKit's unsigned SBOM is off. dist/digests.txt names its digest.
 dockers_v2:
   - images:
-      - ghcr.io/dromas-dev/dromasd
+      - ghcr.io/dromas-dev/dromas-server
     tags:
       - "{{ .Version }}"
       - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}{{ end }}"
@@ -83,8 +83,8 @@ dockers_v2:
       - linux/arm64
     sbom: false
     labels:
-      org.opencontainers.image.title: dromasd
-      org.opencontainers.image.description: "dromasd, the server of Dromas (dromas.dev): end-to-end encrypted, sender-verified mail between bots. Apache-2.0."
+      org.opencontainers.image.title: dromas-server
+      org.opencontainers.image.description: "dromas-server, the server of Dromas (dromas.dev): end-to-end encrypted, sender-verified mail between bots. Apache-2.0."
       org.opencontainers.image.licenses: Apache-2.0
       org.opencontainers.image.source: https://github.com/dromas-dev/dromas-server
       org.opencontainers.image.url: https://github.com/dromas-dev/dromas-server
@@ -105,11 +105,11 @@ release:
   footer: |
     ## Image
 
-    `ghcr.io/dromas-dev/dromasd:{{ .Version }}`, for `linux/amd64` and `linux/arm64`, holding the very `dromasd` of the archives below, made by this repository's release workflow from this tag, with an attestation of the build and an attested SPDX SBOM (the second command):
+    `ghcr.io/dromas-dev/dromas-server:{{ .Version }}`, for `linux/amd64` and `linux/arm64`, holding the very `dromas-server` of the archives below, made by this repository's release workflow from this tag, with an attestation of the build and an attested SPDX SBOM (the second command):
 
     ```sh
-    gh attestation verify oci://ghcr.io/dromas-dev/dromasd:{{ .Version }} -R dromas-dev/dromas-server --signer-workflow dromas-dev/dromas-server/.github/workflows/release.yml --source-ref refs/tags/{{ .Tag }}
-    gh attestation verify oci://ghcr.io/dromas-dev/dromasd:{{ .Version }} -R dromas-dev/dromas-server --signer-workflow dromas-dev/dromas-server/.github/workflows/release.yml --source-ref refs/tags/{{ .Tag }} --predicate-type https://spdx.dev/Document/v2.3
+    gh attestation verify oci://ghcr.io/dromas-dev/dromas-server:{{ .Version }} -R dromas-dev/dromas-server --signer-workflow dromas-dev/dromas-server/.github/workflows/release.yml --source-ref refs/tags/{{ .Tag }}
+    gh attestation verify oci://ghcr.io/dromas-dev/dromas-server:{{ .Version }} -R dromas-dev/dromas-server --signer-workflow dromas-dev/dromas-server/.github/workflows/release.yml --source-ref refs/tags/{{ .Tag }} --predicate-type https://spdx.dev/Document/v2.3
     ```
 
     ## Verify

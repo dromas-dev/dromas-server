@@ -10,7 +10,7 @@ import (
 	"github.com/dromas-dev/dromas-server/internal/server"
 )
 
-// dromasd serve refuses to start on a budget of new mail that would let a
+// dromas-server serve refuses to start on a budget of new mail that would let a
 // box take mail faster than server.ReceiveCeiling, one turned off or one
 // refilled faster, naming the flag. It refuses before it listens or opens any
 // store, as for a size cap.
@@ -46,7 +46,7 @@ func TestNewMailAtTheCeilingPasses(t *testing.T) {
 	}
 }
 
-// dromasd serve refuses to start on an ACL bound that is off or over the
+// dromas-server serve refuses to start on an ACL bound that is off or over the
 // protocol's (PROTOCOL.md §11.14), naming the flag, before it listens.
 func TestServeRefusesAnACLBoundOffOrOverTheProtocols(t *testing.T) {
 	for _, v := range []string{"0", "-1", strconv.Itoa(protocol.MaxACLEntries + 1)} {

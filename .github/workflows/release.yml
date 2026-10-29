@@ -1,4 +1,4 @@
-# dromasd's releases (AGENTS.md § Releases), on a pushed tag v*:
+# dromas-server's releases (AGENTS.md § Releases), on a pushed tag v*:
 # - tag: the tag must be signed by a key in .github/allowed_signers, checked
 #   with git verify-tag as Caddy checks its own;
 # - ci: the whole of ci.yml runs on the tagged commit;
@@ -121,7 +121,7 @@ jobs:
         run: |
           cat dist/digests.txt
           [ "$(cut -d' ' -f1 dist/digests.txt | sort -u | wc -l)" -eq 1 ]
-          digest=$(awk -v image="ghcr.io/$OWNER/dromasd:${TAG#v}" '$2 == image { print $1 }' dist/digests.txt)
+          digest=$(awk -v image="ghcr.io/$OWNER/dromas-server:${TAG#v}" '$2 == image { print $1 }' dist/digests.txt)
           [ -n "$digest" ]
           echo "digest=sha256:$digest" >> "$GITHUB_OUTPUT"
         env:
@@ -129,7 +129,7 @@ jobs:
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         if: github.ref_type == 'tag'
         with:
-          subject-name: ghcr.io/${{ github.repository_owner }}/dromasd
+          subject-name: ghcr.io/${{ github.repository_owner }}/dromas-server
           subject-digest: ${{ steps.image.outputs.digest }}
           push-to-registry: true
       # The image's SBOM, by syft as GoReleaser's of the archives, attested
@@ -137,17 +137,17 @@ jobs:
       - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         if: github.ref_type == 'tag'
         with:
-          image: ghcr.io/${{ github.repository_owner }}/dromasd@${{ steps.image.outputs.digest }}
+          image: ghcr.io/${{ github.repository_owner }}/dromas-server@${{ steps.image.outputs.digest }}
           format: spdx-json
-          output-file: dromasd-image.spdx.json
+          output-file: dromas-server-image.spdx.json
           upload-artifact: false
           upload-release-assets: false
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         if: github.ref_type == 'tag'
         with:
-          subject-name: ghcr.io/${{ github.repository_owner }}/dromasd
+          subject-name: ghcr.io/${{ github.repository_owner }}/dromas-server
           subject-digest: ${{ steps.image.outputs.digest }}
-          sbom-path: dromasd-image.spdx.json
+          sbom-path: dromas-server-image.spdx.json
           push-to-registry: true
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -198,10 +198,10 @@ jobs:
           for file in *; do gh release verify-asset "$TAG" "$file" -R "$REPO"; done
       - name: the image, built and attested by this workflow from this tag
         run: |
-          gh attestation verify "oci://ghcr.io/$REPO_OWNER/dromasd:${TAG#v}" -R "$REPO" \
+          gh attestation verify "oci://ghcr.io/$REPO_OWNER/dromas-server:${TAG#v}" -R "$REPO" \
             --signer-workflow "$REPO/.github/workflows/release.yml" \
             --source-ref "refs/tags/$TAG" --deny-self-hosted-runners
-          gh attestation verify "oci://ghcr.io/$REPO_OWNER/dromasd:${TAG#v}" -R "$REPO" \
+          gh attestation verify "oci://ghcr.io/$REPO_OWNER/dromas-server:${TAG#v}" -R "$REPO" \
             --signer-workflow "$REPO/.github/workflows/release.yml" \
             --source-ref "refs/tags/$TAG" --deny-self-hosted-runners \
             --predicate-type https://spdx.dev/Document/v2.3
