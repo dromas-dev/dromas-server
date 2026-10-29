@@ -378,9 +378,12 @@ func TestARegistrationsReadIsCountedAsWhatItFinds(t *testing.T) {
 	e.want(register(box), http.StatusOK, "")
 }
 
-// readsMeet holds the first read of address a's record until a second has
-// begun, so two registrations of a read it before either writes. late is
-// set if no second began within 5 s.
+// readsMeet holds the first read of address a's record, once it has read,
+// until a second has read too, so two registrations of a both read it
+// before either writes, however their goroutines are scheduled: a second
+// read that had only begun could still land after the first's write, and
+// find the box. Later reads pass. late is set if no second read ended within
+// 5 s.
 type readsMeet struct {
 	Store
 	a    protocol.Address
@@ -390,6 +393,7 @@ type readsMeet struct {
 }
 
 func (s *readsMeet) Box(ctx context.Context, a protocol.Address) (*Box, error) {
+	b, err := s.Store.Box(ctx, a)
 	if a == s.a {
 		switch s.n.Add(1) {
 		case 1:
@@ -402,7 +406,7 @@ func (s *readsMeet) Box(ctx context.Context, a protocol.Address) (*Box, error) {
 			close(s.both)
 		}
 	}
-	return s.Store.Box(ctx, a)
+	return b, err
 }
 
 // Two identical registrations of a new address at once, each reading it
