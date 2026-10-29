@@ -52,7 +52,8 @@ type dynamoBackend struct {
 	log    *log.Logger
 
 	// consistent makes every read strongly consistent; otherwise only the
-	// reads that fill memory are (DynamoConfig.ConsistentReads).
+	// reads that fill memory, and a held list's page, are
+	// (DynamoConfig.ConsistentReads).
 	consistent bool
 
 	streams                   streamsAPI
@@ -83,7 +84,8 @@ type DynamoConfig struct {
 	// read units: for tests, which read back what they wrote within
 	// milliseconds. Otherwise only the reads that fill memory are, a box's
 	// load and a read of what is held of an address, since a stale copy
-	// there would decide later answers: a strongly consistent read costs
+	// there would decide later answers, and the page of a list asked to
+	// wait, which a client may hold on: a strongly consistent read costs
 	// twice the read units, and polls are the load, which never fill. A
 	// stale read elsewhere costs a retry or one poll; the conditional writes
 	// keep the data right.
@@ -1094,12 +1096,13 @@ func (s *dynamoBackend) DeleteAll(ctx context.Context, box protocol.Address, ret
 	return nil
 }
 
-// List implements Backend: a Query of the live index over its live key range.
-// A page read just after a write may miss it while memory's count has it;
-// a client lists at every poll, so the next one has it.
-func (s *dynamoBackend) List(ctx context.Context, box protocol.Address, after *Cursor, limit int) ([]Header, error) {
+// List implements Backend: a Query of the live index over its live key
+// range, strongly consistent where consistent is set, which a local secondary
+// index allows. Eventually consistent, a page read just after a write may
+// miss it while memory's count has it.
+func (s *dynamoBackend) List(ctx context.Context, box protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error) {
 	lo := s.liveFrom()
-	in := s.liveQuery(box, lo, s.consistent)
+	in := s.liveQuery(box, lo, consistent || s.consistent)
 	if after != nil {
 		if start := liveKey(ms(after.ReceivedAt), after.ID); bytes.Compare(start, lo) >= 0 {
 			k := msgKey(box, after.ID)

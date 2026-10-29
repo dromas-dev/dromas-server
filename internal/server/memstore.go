@@ -254,8 +254,8 @@ func less(a, b Header) int {
 	return bytes.Compare(a.ID[:], b.ID[:])
 }
 
-// List implements Backend.
-func (s *memBackend) List(_ context.Context, box protocol.Address, after *Cursor, limit int) ([]Header, error) {
+// List implements Backend: every read of the maps is consistent.
+func (s *memBackend) List(_ context.Context, box protocol.Address, after *Cursor, limit int, _ bool) ([]Header, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var all []Header

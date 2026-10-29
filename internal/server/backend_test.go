@@ -207,8 +207,8 @@ func (f *faults) ReadLive(ctx context.Context, box protocol.Address) ([]Header, 
 	return hs, err
 }
 
-func (f *faults) List(ctx context.Context, box protocol.Address, after *Cursor, limit int) ([]Header, error) {
-	hs, err := f.Backend.List(ctx, box, after, limit)
+func (f *faults) List(ctx context.Context, box protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error) {
+	hs, err := f.Backend.List(ctx, box, after, limit, consistent)
 	f.answered("List")
 	return hs, err
 }
@@ -674,6 +674,95 @@ func TestEveryWriteOfTheBackendReachesMemoryByItsOutcome(t *testing.T) {
 				// What an applied write puts is TestEveryOrderOfAFillAndAWrite's.
 				if want := unknown || stale; !applied && c.on != onNothing && keptOut() != want {
 					t.Errorf("a read begun before the write puts nothing after it: %v; want %v", !want, want)
+				}
+			})
+		}
+	}
+}
+
+// Every change memory applies to a box wakes the lists held on it
+// (PROTOCOL.md §11.11): every write of the Backend that targets a box,
+// applied or of an outcome unknown, as backendWrites makes each (held to
+// the interface's methods by TestEveryWriteOfTheBackendReachesMemoryByIts
+// Outcome); and every kind of change the backend's feed hands memory, its
+// item as it now is, gone, and one that does not read. Each kind is here:
+// one added and not here fails.
+func TestEveryChangeMemoryAppliesToABoxWakesItsHeldLists(t *testing.T) {
+	t.Parallel()
+	woken := func(c <-chan struct{}) bool {
+		select {
+		case <-c:
+			return true
+		default:
+			return false
+		}
+	}
+	ctx := context.Background()
+	writes := backendWrites()
+	for _, name := range slices.Sorted(maps.Keys(writes)) {
+		c := writes[name]
+		if c.on != onBox && c.on != onNew {
+			continue // an account's, or nothing memory holds: no box's
+		}
+		for _, f := range []fault{asIs, unknownBefore, unknownAfter} {
+			t.Run(name+"/"+f.String(), func(t *testing.T) {
+				w := newHeldWorld(t, c.inAccount)
+				addr := w.a
+				if c.on == onNew {
+					addr = w.n
+				}
+				held := w.s.Changed(addr)
+				w.f.set(name, f)
+				_, _ = c.run(ctx, w)
+				if !woken(held) {
+					t.Error("a list held on the box is not woken")
+				}
+			})
+		}
+	}
+	bad := errors.New("an image that does not read")
+	feed := map[ChangeKind]func(w *heldWorld) map[string]Change{
+		RecordChange: func(w *heldWorld) map[string]Change {
+			b := cloneBox(w.rec)
+			b.Rev++
+			return map[string]Change{
+				"a newer record": {Kind: RecordChange, Addr: w.a, Box: b},
+				"gone":           {Kind: RecordChange, Addr: w.a, Gone: true},
+				"unread":         {Kind: RecordChange, Addr: w.a, Err: bad},
+			}
+		},
+		RevocationsChange: func(w *heldWorld) map[string]Change {
+			rv := &Revocations{Identity: w.rec.Identity, Address: []byte("the identity's revocation")}
+			return map[string]Change{
+				"the address revoked": {Kind: RevocationsChange, Addr: w.a, Revocations: rv},
+				"gone":                {Kind: RevocationsChange, Addr: w.a, Gone: true},
+				"unread":              {Kind: RevocationsChange, Addr: w.a, Err: bad},
+			}
+		},
+		MessageChange: func(w *heldWorld) map[string]Change {
+			fresh := &Header{ID: [32]byte{0x1d, 9}, Size: 3, ReceivedAt: w.now, ExpiresAt: w.now.Add(protocol.Retention)}
+			return map[string]Change{
+				"live":                  {Kind: MessageChange, Addr: w.a, Header: fresh, Live: true},
+				"gone":                  {Kind: MessageChange, Addr: w.a, Header: &Header{ID: w.msgs[0].ID}, Gone: true},
+				"out of the list, kept": {Kind: MessageChange, Addr: w.a, Header: w.msgs[0]},
+				"unread":                {Kind: MessageChange, Addr: w.a, Err: bad},
+			}
+		},
+		AccountChange: func(*heldWorld) map[string]Change { return nil }, // an account's: no box's
+	}
+	for k := ChangeKind(1); int(k) <= numChangeKinds; k++ {
+		changes, ok := feed[k]
+		if !ok {
+			t.Errorf("no change of kind %s here", k)
+			continue
+		}
+		for _, name := range slices.Sorted(maps.Keys(changes(newHeldWorld(t, false)))) {
+			t.Run(k.String()+"/"+name, func(t *testing.T) {
+				w := newHeldWorld(t, false)
+				held := w.s.Changed(w.a)
+				w.s.apply(changes(w)[name])
+				if !woken(held) {
+					t.Error("a list held on the box is not woken")
 				}
 			})
 		}

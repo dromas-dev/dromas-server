@@ -68,7 +68,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 	m := &Metrics{
 		reg: reg,
 		requests: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "requests_total",
-			Help: "Requests answered, by route (the router's pattern; unmatched for none), status and code (the problem's, empty for none)."}, []string{"route", "status", "code"}),
+			Help: "Requests answered, by route (the router's pattern; unmatched for none), status and code (the problem's, empty for none); 499 for one whose caller left before its answer, which is not sent."}, []string{"route", "status", "code"}),
 		latency: prometheus.NewHistogramVec(prometheus.HistogramOpts{Namespace: ns, Name: "request_duration_seconds",
 			Help: "How long a request took to answer, by route.", Buckets: seconds}, []string{"route"}),
 		limits: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "limit_requests_total",
@@ -98,7 +98,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		holds: prometheus.NewGauge(prometheus.GaugeOpts{Namespace: ns, Name: "lists_held",
 			Help: "Lists held for a change now (PROTOCOL.md §11.11)."}),
 		held: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "held_lists_total",
-			Help: "Held lists, by how each ended: changed (the box changed), waited (its wait passed), gone (the caller left), stopped (the server stopped), or refused (past -max-held-lists)."}, []string{"outcome"}),
+			Help: "Held lists, each once by how it ended: changed (the box changed, or a message in it expired), waited (its wait passed), gone (the caller left), stopped (the server stopped), or refused (past -max-held-lists)."}, []string{"outcome"}),
 	}
 	reg.MustRegister(m.requests, m.latency, m.limits, m.passes, m.fetches, m.lists, m.store, m.storeTime, m.caches, m.largeRead, m.cut, m.conns, m.streamAge, m.collections, m.holds, m.held)
 	return m

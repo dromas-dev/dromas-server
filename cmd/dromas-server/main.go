@@ -299,10 +299,7 @@ func serve(args []string) error {
 	if err != nil {
 		return fmt.Errorf("-listen: %w", err)
 	}
-	srv := server.HTTPServer(*listen, api.Handler(), l, *idle)
-	// Every held list is answered at once when the server stops, so its
-	// client lists again at once, and Shutdown waits for none of them.
-	srv.RegisterOnShutdown(api.StopHolds)
+	srv := api.HTTPServer(*listen, *idle)
 	srv.ConnState = cfg.Metrics.ConnState
 	errc := make(chan error, len(listeners))
 	for _, ln := range listeners {
@@ -335,13 +332,22 @@ func serve(args []string) error {
 // 4-tuple, so one proxy address calling one of these is bounded by the
 // proxy's range of ephemeral ports; another address here is another range
 // (dromas-dev/dromas-server#124 item 6). On an error it closes what it opened.
+//
+// The connections it accepts send no TCP keep-alive probes (KeepAlive -1;
+// net.Listen's default sends one every 15 s), as nginx leaves a listening
+// socket's to the operating system's default unless so_keepalive is set:
+// each phase of a connection here has a bound of its own, a flag
+// (-header-timeout, -body-timeout, -idle-timeout, -max-wait), which lets a
+// peer gone silent go, and a held list holds nothing but its goroutine and
+// its connection.
 func listenAll(spec string) ([]net.Listener, error) {
 	var ls []net.Listener
+	lc := net.ListenConfig{KeepAlive: -1}
 	for _, a := range strings.Split(spec, ",") {
 		if a = strings.TrimSpace(a); a == "" {
 			continue
 		}
-		l, err := net.Listen("tcp", a)
+		l, err := lc.Listen(context.Background(), "tcp", a)
 		if err != nil {
 			for _, o := range ls {
 				_ = o.Close()
