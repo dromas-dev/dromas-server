@@ -18,8 +18,8 @@ type Limits struct {
 	PollBurst      int           // polls a box may make at once (decided: 10); also the fetches of messages already fetched
 	PollRefill     time.Duration // one more poll each (decided: 50 s; once a minute is stated); also one more such fetch
 	PollAfter      int           // seconds, told to clients (decided: 60)
-	HoldMax        time.Duration // the longest a list is held, whatever its wait asks (PROTOCOL.md §11.11) [tunable]
-	Holds          int           // lists this process holds at once; past it a held list is answered 503 (0: none held) [tunable]
+	MaxWait        time.Duration // the longest a list is held, whatever its wait asks (PROTOCOL.md §11.11) [tunable]
+	MaxHeldLists   int           // lists this process holds at once; past it a held list is answered 503 (0: none held) [tunable]
 	AccountMaxSize int           // the most an account lifts MaxSize to, so what a send reads first; up to MaxSize, nothing
 	RenewalsPerDay int           // prekey renewals per box, a number a day as SendsPerDay (decided: 10), so no box can spend the boxes table's write capacity
 	RetiredKept    int           // retired prekeys a box record keeps for the new-key rule, newest first (decided: 10), so a record stays small
@@ -85,8 +85,8 @@ func DefaultLimits() Limits {
 		PollBurst:                    10,
 		PollRefill:                   50 * time.Second,
 		PollAfter:                    60,
-		HoldMax:                      5 * time.Minute,
-		Holds:                        200_000,
+		MaxWait:                      5 * time.Minute,
+		MaxHeldLists:                 200_000,
 		RenewalsPerDay:               10,
 		RetiredKept:                  10,
 		RegistrationsPerHour:         10,

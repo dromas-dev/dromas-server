@@ -100,7 +100,7 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
 	// The box's change is taken before each read, so none is missed between.
 	var until time.Time
 	if wait > 0 && !hasCursor {
-		until = time.Now().Add(min(wait, s.limits.HoldMax))
+		until = time.Now().Add(min(wait, s.limits.MaxWait))
 	}
 	holding := false
 	defer func() {
@@ -204,19 +204,19 @@ func listWait(r *http.Request, hasCursor bool) (time.Duration, error) {
 	if err != nil || hasCursor {
 		return 0, fail(protocol.CodeBadRequest, "send the wait as whole seconds, on a list without a cursor", "the query parameter %s is not delay-seconds on a first page", memberValue(waitParam))
 	}
-	if n >= uint64(maxWait/time.Second) {
-		return maxWait, nil
+	if n >= uint64(waitReadBound/time.Second) {
+		return waitReadBound, nil
 	}
 	return time.Duration(n) * time.Second, nil
 }
 
-// maxWait bounds a wait as read, far past any HoldMax.
-const maxWait = 24 * time.Hour
+// waitReadBound bounds a wait as read, far past any MaxWait.
+const waitReadBound = 24 * time.Hour
 
 // hold counts one more list held, and reports false, counting nothing, at
-// Limits.Holds.
+// Limits.MaxHeldLists.
 func (s *Server) hold() bool {
-	if s.holding.Add(1) > int64(s.limits.Holds) {
+	if s.holding.Add(1) > int64(s.limits.MaxHeldLists) {
 		s.holding.Add(-1)
 		return false
 	}

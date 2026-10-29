@@ -60,19 +60,19 @@ func TestAHeldListIsAnsweredWhenMailArrives(t *testing.T) {
 	}
 }
 
-// With nothing new, a held list is answered 304 once -hold-max passes,
+// With nothing new, a held list is answered 304 once -max-wait passes,
 // whatever longer wait it asked; it is one poll.
-func TestAHeldListWithNothingNewIs304AtHoldMax(t *testing.T) {
+func TestAHeldListWithNothingNewIs304AtMaxWait(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.HoldMax = time.Second
+	l.MaxWait = time.Second
 	l.PollBurst, l.PollRefill = 100, time.Hour
 	e := newEnv(t, l)
 	_, to, tag := emptyTag(e)
 	before := debts(e.server, e.clock.Now())
 	got := <-heldList(e, to, tag, "wait=60")
 	e.want(got.r, http.StatusNotModified, "")
-	if got.took < l.HoldMax || got.took > l.HoldMax+5*time.Second || got.r.header.Get("ETag") != tag || got.r.header.Get("Retry-After") == "" {
+	if got.took < l.MaxWait || got.took > l.MaxWait+5*time.Second || got.r.header.Get("ETag") != tag || got.r.header.Get("Retry-After") == "" {
 		t.Fatalf("the held list took %v, tag %q, Retry-After %q", got.took, got.r.header.Get("ETag"), got.r.header.Get("Retry-After"))
 	}
 	if p := debts(e.server, e.clock.Now())[string(protocol.QuotaPolls)] - before[string(protocol.QuotaPolls)]; p != 1 {
@@ -105,12 +105,12 @@ func TestAWaitOfAnotherFormIsRefused(t *testing.T) {
 	}
 }
 
-// Past -holds, a list that asks to wait is answered 503 with Retry-After,
+// Past -max-held-lists, a list that asks to wait is answered 503 with Retry-After,
 // and the lists held go on.
 func TestAHoldPastTheCapIs503(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.Holds = 1
+	l.MaxHeldLists = 1
 	e := newEnv(t, l)
 	_, to, tag := emptyTag(e)
 	c := heldList(e, to, tag, "wait=60")
