@@ -86,7 +86,7 @@ func DefaultLimits() Limits {
 		PollRefill:                   50 * time.Second,
 		PollAfter:                    60,
 		MaxWait:                      5 * time.Minute,
-		MaxHeldLists:                 200_000,
+		MaxHeldLists:                 50_000,
 		RenewalsPerDay:               10,
 		RetiredKept:                  10,
 		RegistrationsPerHour:         10,
