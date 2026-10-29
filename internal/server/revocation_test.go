@@ -589,6 +589,44 @@ func TestARevocationRetriedAfterAFailedDeleteDeletes(t *testing.T) {
 	}
 }
 
+// A revocation of the address deletes every message in its box from the
+// store, as acks do (PROTOCOL.md §13): read from the backend, strongly
+// consistent, not from memory's count, which the revocation's own retires
+// set; and on DynamoDB, every body from the bucket.
+func TestARevocationDeletesEveryMessageFromTheStore(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t, relaxed())
+	a := e.box(protocol.Classic)
+	var ids [][32]byte
+	for i := range 3 {
+		from := e.box(protocol.Classic)
+		var id [32]byte
+		copy(id[:], mustHex(t, send(t, from, a, "waiting in A's box when it is revoked, "+string(rune('a'+i))).ID))
+		ids = append(ids, id)
+	}
+	s := e.store.(*Memory)
+	if live, err := s.backend.ReadLive(ctx, a.Address()); err != nil || len(live) != len(ids) {
+		t.Fatalf("before the revocation the store holds %d messages for A (%v), want %d", len(live), err, len(ids))
+	}
+	e.want(e.do("PUT", revocationPath(a.Address()), record(t, a), ""), 201, "")
+	live, err := s.backend.ReadLive(ctx, a.Address())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(live) != 0 {
+		t.Errorf("after the revocation the store holds %d of A's %d messages, want none", len(live), len(ids))
+	}
+	for _, id := range ids {
+		if _, _, err := s.backend.Message(ctx, a.Address(), id, 0); !errors.Is(err, ErrNotFound) {
+			t.Errorf("after the revocation a message of A's reads %v, want ErrNotFound", err)
+		}
+		if onAWS() && s.bodyExists(t, a.Address(), id) {
+			t.Errorf("after the revocation a body of A's is in the bucket")
+		}
+	}
+}
+
 // A revocation sent again carries no pass, so where memory does not hold the
 // address it loads nothing and changes nothing: what a failed delete left,
 // the mail and the box's record, waits for its expiry there, served to
