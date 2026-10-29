@@ -24,7 +24,7 @@ func (s *Server) aclBodyLimit() int64 {
 // hintACL names what writes an ACL: the client does, from its own lists.
 const hintACL = "dromas peer allow and dromas peer block write this box's ACL from its own lists"
 
-// aclTooLarge is the answer to an ACL over -acl-entries, by its entries or by
+// aclTooLarge is the answer to an ACL over --acl-entries, by its entries or by
 // the body bound drawn from them.
 func (s *Server) aclTooLarge() *problem {
 	return fail(protocol.CodeTooLarge, "list fewer addresses: "+hintACL, "an ACL here holds at most %d entries, its two lists together", limitValue(s.limits.ACLEntries))

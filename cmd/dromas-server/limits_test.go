@@ -60,8 +60,8 @@ func TestTheAdminSocket(t *testing.T) {
 	if err := adminCall(path, http.MethodPost, "/limits/clear?ip=nonsense", &out); err == nil || !strings.Contains(err.Error(), "400") {
 		t.Fatalf("limits clear of no address: %v", err)
 	}
-	if err := limits("clear", []string{"-socket", path}); err == nil {
-		t.Fatal("limits clear with no -ip")
+	if err := limits("clear", []string{"--socket", path}); err == nil {
+		t.Fatal("limits clear with no --ip")
 	}
 	out.Reset()
 	if err := adminCall(path, http.MethodGet, "/limits/top?limit=mailbox_busy&n=5", &out); err != nil || strings.TrimSpace(out.String()) != `{"limit":"mailbox_busy","keys":[]}` {
@@ -70,10 +70,10 @@ func TestTheAdminSocket(t *testing.T) {
 	if err := adminCall(path, http.MethodGet, "/limits/top?limit=nonsense", &out); err == nil || !strings.Contains(err.Error(), "400") || !strings.Contains(err.Error(), "mailbox_busy") {
 		t.Fatalf("limits top of no limit: %v", err)
 	}
-	if err := limits("top", []string{"-socket", path}); err == nil {
-		t.Fatal("limits top with no -limit")
+	if err := limits("top", []string{"--socket", path}); err == nil {
+		t.Fatal("limits top with no --limit")
 	}
-	if err := limits("raise", []string{"-socket", path}); err == nil {
+	if err := limits("raise", []string{"--socket", path}); err == nil {
 		t.Fatal("a limits command that is not one")
 	}
 }

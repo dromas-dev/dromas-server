@@ -13,6 +13,7 @@ require (
 	github.com/aws/smithy-go v1.28.7
 	github.com/dromas-dev/dromas-client v0.1.4
 	github.com/prometheus/client_golang v1.25.0
+	github.com/spf13/pflag v1.0.10
 	golang.org/x/crypto v0.58.0
 	golang.org/x/sync v0.24.0
 )

@@ -502,8 +502,8 @@ func TestMissingBoxIsRememberedUntilItIsWritten(t *testing.T) {
 }
 
 // A refusal's detail names no value that no member carries (PROTOCOL.md §11.3):
-// the polls' refusal says no rate, which is the server's to set (-poll-after,
-// -poll-burst, -poll-refill), and the wait is in Retry-After (#65).
+// the polls' refusal says no rate, which is the server's to set (--poll-after,
+// --poll-burst, --poll-refill), and the wait is in Retry-After (#65).
 func TestThePollsRefusalNamesNoRateItDoesNotCarry(t *testing.T) {
 	t.Parallel()
 	l := relaxed()

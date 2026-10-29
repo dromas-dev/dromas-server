@@ -13,7 +13,7 @@ The server of [dromas.dev](https://dromas.dev): end-to-end encrypted, sender-ver
 | Path | Holds |
 |---|---|
 | `cmd/dromas-server/` | The command: `dromas-server serve`, and `dromas-server account` and `dromas-server limits` for the operator |
-| `internal/server/` | The API (every route under `/v1/`, and `/to/<address>`, the page a box's link opens), the pass-through to a deployment's own site when it gives one (`-site-backend`), what each process holds in memory, the DynamoDB stream followers, the store (one memory over two backends: DynamoDB with S3 Express One Zone, or maps in the process) and the limits |
+| `internal/server/` | The API (every route under `/v1/`, and `/to/<address>`, the page a box's link opens), the pass-through to a deployment's own site when it gives one (`--site-backend`), what each process holds in memory, the DynamoDB stream followers, the store (one memory over two backends: DynamoDB with S3 Express One Zone, or maps in the process) and the limits |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | How this server is built: processes, memory, the pass check, request paths, storage, failure modes and the stages of scale |
 | [`LIMITS.md`](LIMITS.md) | Every limit this server enforces, who pays for it, and where it is weak: there to be checked |
 | [`SECURITY.md`](SECURITY.md) | How to report a vulnerability privately, and what this server must get right beside the code and tests that hold it |
@@ -24,7 +24,7 @@ The server of [dromas.dev](https://dromas.dev): end-to-end encrypted, sender-ver
 | `Taskfile.yml`, `.github/workflows/release.yml`, `.goreleaser.yaml` | `dromas-server`'s releases: `task release` signs the tag and pushes it, and the workflow checks it against `.github/allowed_signers`, runs CI on its commit, and publishes the image (GoReleaser's `dockers_v2`, the binary of the archives in it, with an attested SPDX SBOM) and archives for Linux on `amd64` and `arm64`, with an SBOM of each, every file attested, and `checksums.txt`, signed with cosign by the workflow; then it checks the release and the image as published and builds the release again to compare. The release's notes have the commands that check each |
 | `bench/` | The measurements behind the microsecond figures |
 
-A deployment's site (dromas.dev's front page and `llms.txt`) is not in this repo. `serve -site-backend <URL>` passes every request outside `/v1/` and `/to/` to the deployment's own web server, as a reverse proxy passes it, with `X-Forwarded-For` naming the client the limits see, and its answer back as that server sent it, a 404 among them; under `/v1/` and `/to/` every answer is the server's.
+A deployment's site (dromas.dev's front page and `llms.txt`) is not in this repo. `serve --site-backend <URL>` passes every request outside `/v1/` and `/to/` to the deployment's own web server, as a reverse proxy passes it, with `X-Forwarded-For` naming the client the limits see, and its answer back as that server sent it, a 404 among them; under `/v1/` and `/to/` every answer is the server's.
 
 ## Build and run
 
@@ -43,11 +43,11 @@ go run ./cmd/dromas-server serve --dev
 
 `test/interop.sh` runs both clients, from the release `go.mod` requires, against a real `serve --dev`: mail both ways, renewal, revocation, certificates and the sender ACL. Its header says what it needs, and how to test post-quantum boxes when the packaged age is older than 1.3.
 
-The other backend is three DynamoDB tables and an S3 Express One Zone directory bucket. `dromas-server serve -h` lists every flag, and `ARCHITECTURE.md` § Storage has the layout. That mode also needs `-names`, the names clients call the server by: a box's pass is made for one server by name, and the server takes one only on a request that calls it by a name of its own (`ARCHITECTURE.md` § The pass check).
+The other backend is three DynamoDB tables and an S3 Express One Zone directory bucket. `dromas-server serve -h` lists every flag, and `ARCHITECTURE.md` § Storage has the layout. That mode also needs `--names`, the names clients call the server by: a box's pass is made for one server by name, and the server takes one only on a request that calls it by a name of its own (`ARCHITECTURE.md` § The pass check).
 
-Run behind a reverse proxy that terminates TLS: `-listen` takes one or more TCP addresses (comma-separated, served alike), and `-trusted-proxy` names the proxy's addresses, whose `X-Forwarded-For` (its last entry) names the client every per-IP limit counts (`ARCHITECTURE.md` § Behind a reverse proxy). Without `-trusted-proxy` the peer is the client.
+Run behind a reverse proxy that terminates TLS: `--listen` takes one or more TCP addresses (comma-separated, served alike), and `--trusted-proxy` names the proxy's addresses, whose `X-Forwarded-For` (its last entry) names the client every per-IP limit counts (`ARCHITECTURE.md` § Behind a reverse proxy). Without `--trusted-proxy` the peer is the client.
 
-`-metrics-listen <address>` serves the operator's metrics at `/metrics` in Prometheus' text format, on a listener of its own: what they count is `ARCHITECTURE.md` § Metrics. Keep it off the internet: it is for the operator.
+`--metrics-listen <address>` serves the operator's metrics at `/metrics` in Prometheus' text format, on a listener of its own: what they count is `ARCHITECTURE.md` § Metrics. Keep it off the internet: it is for the operator.
 
 ## Contributing
 

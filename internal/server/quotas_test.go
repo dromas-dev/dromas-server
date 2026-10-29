@@ -376,7 +376,7 @@ func TestLimitsTop(t *testing.T) {
 // (dromas-dev/dromas-server#63). With the flood budget at its defaults,
 // 100 at once and one back each 20 ms, an address that spent 100 of 100 is
 // deeper in debt than one that spent 51, though both show 2 s, and is the
-// one -n 1 lists.
+// one --count 1 lists.
 func TestLimitsTopListsTheDeepestInDebtFirst(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
@@ -402,7 +402,7 @@ func TestLimitsTopListsTheDeepestInDebtFirst(t *testing.T) {
 	two, _ := e.server.Top(string(protocol.QuotaRequests), 2)
 	one, _ := e.server.Top(string(protocol.QuotaRequests), 1)
 	if len(one) != 1 || one[0].Key != deep || len(two) != 2 || two[1].Key != shallow || two[0].FullIn != two[1].FullIn {
-		t.Fatalf("limits top -limit requests -n 1 lists %+v and -n 2 %+v, want %s (full in %s) before %s (full in %s), both shown as the same second",
+		t.Fatalf("limits top --limit requests --count 1 lists %+v and --count 2 %+v, want %s (full in %s) before %s (full in %s), both shown as the same second",
 			one, two, deep, full(deep), shallow, full(shallow))
 	}
 }

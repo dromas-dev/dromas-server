@@ -16,13 +16,13 @@ import (
 // store, as for a size cap.
 func TestServeRefusesNewMailPastTheCeiling(t *testing.T) {
 	for _, c := range []struct{ flag, value, says string }{
-		{"-receive-burst", "0", "no budget"},
-		{"-receive-burst", "-1", "no budget"},
-		{"-receive-refill", "0s", "shorter than"},
-		{"-receive-refill", (server.ReceiveCeiling - time.Millisecond).String(), "shorter than"},
+		{"--receive-burst", "0", "no budget"},
+		{"--receive-burst", "-1", "no budget"},
+		{"--receive-refill", "0s", "shorter than"},
+		{"--receive-refill", (server.ReceiveCeiling - time.Millisecond).String(), "shorter than"},
 	} {
 		done := make(chan error, 1)
-		go func() { done <- serve([]string{"--dev", "-listen", "127.0.0.1:0", c.flag, c.value}) }()
+		go func() { done <- serve([]string{"--dev", "--listen", "127.0.0.1:0", c.flag, c.value}) }()
 		select {
 		case err := <-done:
 			if err == nil || !strings.Contains(err.Error(), c.flag+":") || !strings.Contains(err.Error(), c.says) {
@@ -51,14 +51,14 @@ func TestNewMailAtTheCeilingPasses(t *testing.T) {
 func TestServeRefusesAnACLBoundOffOrOverTheProtocols(t *testing.T) {
 	for _, v := range []string{"0", "-1", strconv.Itoa(protocol.MaxACLEntries + 1)} {
 		done := make(chan error, 1)
-		go func() { done <- serve([]string{"--dev", "-listen", "127.0.0.1:0", "-acl-entries", v}) }()
+		go func() { done <- serve([]string{"--dev", "--listen", "127.0.0.1:0", "--acl-entries", v}) }()
 		select {
 		case err := <-done:
-			if err == nil || !strings.Contains(err.Error(), "-acl-entries:") {
-				t.Errorf("-acl-entries %s: %v, want a refusal naming the flag", v, err)
+			if err == nil || !strings.Contains(err.Error(), "--acl-entries:") {
+				t.Errorf("--acl-entries %s: %v, want a refusal naming the flag", v, err)
 			}
 		case <-time.After(5 * time.Second):
-			t.Fatalf("-acl-entries %s: serve started", v)
+			t.Fatalf("--acl-entries %s: serve started", v)
 		}
 	}
 }

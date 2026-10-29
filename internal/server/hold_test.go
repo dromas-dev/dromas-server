@@ -67,7 +67,7 @@ func TestAHeldListIsAnsweredWhenMailArrives(t *testing.T) {
 	}
 }
 
-// With nothing new, a held list is answered 304 once -max-wait passes,
+// With nothing new, a held list is answered 304 once --max-wait passes,
 // whatever longer wait it asked; it is one poll.
 func TestAHeldListWithNothingNewIs304AtMaxWait(t *testing.T) {
 	t.Parallel()
@@ -112,7 +112,7 @@ func TestAWaitOfAnotherFormIsRefused(t *testing.T) {
 	}
 }
 
-// Past -max-held-lists, a list that asks to wait is answered 503 with Retry-After,
+// Past --max-held-lists, a list that asks to wait is answered 503 with Retry-After,
 // and the lists held go on.
 func TestAHoldPastTheCapIs503(t *testing.T) {
 	t.Parallel()
@@ -169,7 +169,7 @@ func holdingNow(t *testing.T, s *Server, n int64) {
 
 // A message's expiry is no change memory applies, and it changes the page:
 // a list held on a page that holds the message is answered as it expires,
-// not at -max-wait (PROTOCOL.md §11.11).
+// not at --max-wait (PROTOCOL.md §11.11).
 func TestAHeldListIsAnsweredWhenAMessageExpires(t *testing.T) {
 	t.Parallel()
 	l := relaxed()

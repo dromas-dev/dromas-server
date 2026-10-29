@@ -296,7 +296,7 @@ func (f *feed) read(ctx context.Context, sh *shard) error {
 	}
 }
 
-// boxStreamChange is the change a record of the -boxes-table stream makes:
+// boxStreamChange is the change a record of the --boxes-table stream makes:
 // to a box's record (sk 0x00), or to an address's revocations (sk 0x01).
 // Other items under an address are not memory's, and make none (Kind 0). An
 // image that does not read is a change with Err; a key that does not read
@@ -330,7 +330,7 @@ func boxStreamChange(r stypes.Record) (Change, error) {
 	return c, nil
 }
 
-// msgStreamChange is the change a record of the -msgs-table stream makes to
+// msgStreamChange is the change a record of the --msgs-table stream makes to
 // a message: in the list, or gone (acked, its body found gone, its box's
 // address revoked, or expired and taken by the TTL). A deletion's record
 // carries the item's keys alone (NEW_IMAGE), so its Header is the id.
@@ -360,7 +360,7 @@ func msgStreamChange(r stypes.Record) (Change, error) {
 	return c, nil
 }
 
-// accountStreamChange is the change a record of the -accounts-table stream
+// accountStreamChange is the change a record of the --accounts-table stream
 // makes to an account's record (sk 0x00). Its other items, adopt keys, are
 // not memory's.
 func accountStreamChange(r stypes.Record) (Change, error) {

@@ -209,11 +209,11 @@ func TestAChunkedBodyCutInItsTrailerIs408(t *testing.T) {
 	}
 }
 
-// A body that keeps coming above -body-min-rate, behind an answer written
+// A body that keeps coming above --body-min-rate, behind an answer written
 // before it is read, gets that answer (#82): the server drains the body
 // through the paced body, before the answer's first byte goes out, and no
 // byte of the drain moves the read deadline, so the drain is cut at
-// -body-timeout from the head, counted as every cut is
+// --body-timeout from the head, counted as every cut is
 // (dromas-dev/dromas-client#413 item 3), and the answer goes out after
 // it. Each body is 3,000 bytes at 2,000 a second, where a handler's reads
 // would give it a second and three more; the control is a body its handler
@@ -258,14 +258,14 @@ func TestAnAnswerWrittenFirstOutlivesTheDrainOfItsBody(t *testing.T) {
 			status, at, sent, last := trickle(t, addr, c.line+" HTTP/1.1\r\nHost: "+addr+"\r\nContent-Type: application/json\r\n", 3000, 2000)
 			t.Logf("%q at %v, with %d of 3000 bytes sent, the last at %v", status, at.Round(10*time.Millisecond), sent, last.Round(10*time.Millisecond))
 			if !strings.HasPrefix(status, "HTTP/1.1 "+c.status+" ") {
-				t.Errorf("a body moving at twice -body-min-rate: answered %q, want %s", status, c.status)
+				t.Errorf("a body moving at twice --body-min-rate: answered %q, want %s", status, c.status)
 			}
 			cut := counts(t, reg, "dromas_server_bodies_cut_total")[""]
 			switch control := c.name == "read by its handler (control)"; {
 			case control && (sent != 3000 || at < last || cut != 0):
 				t.Errorf("a body its handler reads: answered at %v with %d of 3000 bytes sent, the last at %v, %v cut; want the answer after the whole body, none cut", at.Round(10*time.Millisecond), sent, last.Round(10*time.Millisecond), cut)
 			case !control && (at > last || cut != 1):
-				t.Errorf("behind an answer written first: answered at %v, the body's last bytes at %v, %v cut; want the drain cut at -body-timeout, before the body's end, and counted once", at.Round(10*time.Millisecond), last.Round(10*time.Millisecond), cut)
+				t.Errorf("behind an answer written first: answered at %v, the body's last bytes at %v, %v cut; want the drain cut at --body-timeout, before the body's end, and counted once", at.Round(10*time.Millisecond), last.Round(10*time.Millisecond), cut)
 			}
 		})
 	}
@@ -518,7 +518,7 @@ func TestAnAnswerNeverReadIsCut(t *testing.T) {
 // deadline on, so a peer that keeps reading gets the whole page however
 // long it takes, as a body that keeps coming does. Each write has a clock of
 // its own, from when it began (pacedWriter): this reader takes the page at a
-// third of -body-min-rate, and the page waits on it, so a clock for the
+// third of --body-min-rate, and the page waits on it, so a clock for the
 // whole answer would cut it.
 func TestASlowReaderIsNotCut(t *testing.T) {
 	t.Parallel()
@@ -666,10 +666,10 @@ func TestOptionsStarIsCounted(t *testing.T) {
 }
 
 // A write is credited only for the bytes it has already written, in pieces
-// of at most -body-min-rate, as a read is (dromas-dev/dromas-client#413
+// of at most --body-min-rate, as a read is (dromas-dev/dromas-client#413
 // item 2): each piece goes out under the deadline the pieces before it
-// earned, from -body-timeout after the write began, so a peer that takes
-// none of an answer is cut at -body-timeout and what the buffers between
+// earned, from --body-timeout after the write began, so a peer that takes
+// none of an answer is cut at --body-timeout and what the buffers between
 // took, whatever the answer's size would earn.
 func TestAWriteIsCreditedOnlyForTheBytesItHasWritten(t *testing.T) {
 	t.Parallel()
@@ -687,11 +687,11 @@ func TestAWriteIsCreditedOnlyForTheBytesItHasWritten(t *testing.T) {
 	}
 	first, written := w.writes[0].deadline, 0
 	if first.Before(before.Add(l.BodyTimeout)) || first.After(after.Add(l.BodyTimeout)) {
-		t.Errorf("the first piece's deadline is %v past the write, want -body-timeout, %v", first.Sub(before).Round(time.Millisecond), l.BodyTimeout)
+		t.Errorf("the first piece's deadline is %v past the write, want --body-timeout, %v", first.Sub(before).Round(time.Millisecond), l.BodyTimeout)
 	}
 	for i, p := range w.writes {
 		if p.n > l.BodyMinRate {
-			t.Errorf("piece %d is %d bytes, more than -body-min-rate, %d", i, p.n, l.BodyMinRate)
+			t.Errorf("piece %d is %d bytes, more than --body-min-rate, %d", i, p.n, l.BodyMinRate)
 		}
 		if want := first.Add(time.Duration(written/l.BodyMinRate) * time.Second); !p.deadline.Equal(want) {
 			t.Errorf("piece %d, after %d bytes: its deadline is %v past the first's, want %v", i, written, p.deadline.Sub(first), want.Sub(first))
@@ -726,11 +726,11 @@ func (d *deadlines) Write(b []byte) (int, error) {
 func (d *deadlines) SetWriteDeadline(t time.Time) error { d.deadline = t; return nil }
 func (d *deadlines) SetReadDeadline(time.Time) error    { return nil }
 
-// A peer that takes none of a fetch holds the connection -body-timeout and
+// A peer that takes none of a fetch holds the connection --body-timeout and
 // what the buffers between took, never what the ciphertext's size would
 // earn (dromas-dev/dromas-client#413 item 2): the fetch writes the whole
 // ciphertext in one write, which was credited for all of it before any of
-// it moved. At this -body-min-rate the ciphertext would earn a minute.
+// it moved. At this --body-min-rate the ciphertext would earn a minute.
 func TestAFetchNeverReadIsCutWhateverItsSize(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -767,6 +767,6 @@ func TestAFetchNeverReadIsCutWhateverItsSize(t *testing.T) {
 	}
 	t.Logf("a message of %d bytes: closed by the server %v, after %v", len(body), closed.Load() != 0, time.Since(start).Round(10*time.Millisecond))
 	if closed.Load() == 0 {
-		t.Errorf("a fetch never read, of more than %d bytes at -body-min-rate %d: the connection is held past 8 s", len(body), l.BodyMinRate)
+		t.Errorf("a fetch never read, of more than %d bytes at --body-min-rate %d: the connection is held past 8 s", len(body), l.BodyMinRate)
 	}
 }

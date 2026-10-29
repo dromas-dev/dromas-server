@@ -12,7 +12,7 @@ import (
 
 // The operator's interface: commands for whoever runs this server, never
 // part of the API. It is served on a Unix socket that only the server's own
-// user can open (dromas-server serve -admin-socket), and never on the API's
+// user can open (dromas-server serve --admin-socket), and never on the API's
 // listener, so nothing that reaches the API reaches it.
 
 // ClearAddress forgets what the limits keyed by a caller's address hold of

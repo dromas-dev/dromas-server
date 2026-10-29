@@ -211,7 +211,7 @@ func TestCostMemoryPerBox(t *testing.T) {
 		t.Logf("a pass %s, refused: %.0f µs", what, float64(time.Since(start).Microseconds())/first)
 	}
 
-	// The box record cache: bounded (-box-cache, default 10,000).
+	// The box record cache: bounded (--box-cache, default 10,000).
 	for _, c := range []struct {
 		pq      bool
 		retired int

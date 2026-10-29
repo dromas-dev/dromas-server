@@ -16,7 +16,7 @@ The memory and item-size measurements, and what a pass costs to check the first 
 (cd bench/poll/cli && go build -o "$out/poll-cli" .)
 go build -o "$out/dromas-server" ./cmd/dromas-server
 go build -o "$out/dromas" github.com/dromas-dev/dromas-client/cmd/dromas
-GOMAXPROCS=1 "$out/dromas-server" serve --dev -listen 127.0.0.1:18777 -poll-burst 0 2> "$out/server.log" &
+GOMAXPROCS=1 "$out/dromas-server" serve --dev --listen 127.0.0.1:18777 --poll-burst 0 2> "$out/server.log" &
 SP=$(pgrep -f "$out/dromas-server serve")                      # the server's OWN pid, never $!
 export DROMAS_HOME=$box DROMAS_SERVER_URL=http://127.0.0.1:18777
 A=$("$out/dromas" init --no-pq); A=${A##*/}             # a box; init leaves its pass in $box/pass

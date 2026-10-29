@@ -44,9 +44,9 @@ import (
 type dynamoBackend struct {
 	db     *dynamodb.Client
 	s3     *s3.Client
-	boxes  string // -boxes-table
-	msgs   string // -msgs-table
-	accts  string // -accounts-table
+	boxes  string // --boxes-table
+	msgs   string // --msgs-table
+	accts  string // --accounts-table
 	bucket string
 	now    func() time.Time
 	log    *log.Logger
@@ -329,7 +329,7 @@ func (it item) string(name string) (string, error) {
 	return "", fmt.Errorf("item: %s is missing or not a string", name)
 }
 
-// boxItemKey reads the key of an item of the -boxes-table table: its
+// boxItemKey reads the key of an item of the --boxes-table table: its
 // address, and its sk.
 func boxItemKey(it item) (protocol.Address, []byte, error) {
 	a, err := it.hash("addr")
