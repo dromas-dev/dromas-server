@@ -4,7 +4,8 @@
 # checksums.txt, signed with cosign, whose files the workflow attests. Built
 # from the tagged module as Go's module proxy serves it (gomod.proxy), so a
 # release is what go install …@<tag> builds, and with GoReleaser's settings
-# for a reproducible build. The release's image is docker-publish.yml's.
+# for a reproducible build; and the image, from those same binaries
+# (dockers_v2).
 # goreleaser release --snapshot --clean builds it all into dist/ and
 # publishes nothing.
 version: 2
@@ -64,6 +65,33 @@ sboms:
     documents:
       - "${artifact}.spdx.json"
 
+# The release's image, for linux/amd64 and linux/arm64: Dockerfile copies
+# the binary built above into distroless static, as GoReleaser's dockers_v2
+# documents it, and the multi-platform image is pushed under the version,
+# <major>.<minor> and latest (the tags and OCI labels docker/metadata-action
+# gives a tag). Its SBOM and its attestation are release.yml's, signed, so
+# BuildKit's unsigned SBOM is off. dist/digests.txt names its digest.
+dockers_v2:
+  - images:
+      - ghcr.io/dromas-dev/dromasd
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}{{ end }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    sbom: false
+    labels:
+      org.opencontainers.image.title: dromasd
+      org.opencontainers.image.description: "dromasd, the server of Dromas (dromas.dev): end-to-end encrypted, sender-verified mail between bots. Apache-2.0."
+      org.opencontainers.image.licenses: Apache-2.0
+      org.opencontainers.image.source: https://github.com/dromas-dev/dromas-server
+      org.opencontainers.image.url: https://github.com/dromas-dev/dromas-server
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .CommitDate }}"
+
 # Each commit since the last tag, with its link, as GoReleaser lists its own.
 changelog:
   use: github
@@ -77,11 +105,11 @@ release:
   footer: |
     ## Image
 
-    `ghcr.io/dromas-dev/dromasd:{{ .Version }}`, for `linux/amd64` and `linux/arm64`, built from the same tag by this repository's `docker-publish.yml` once this release is published, with an attestation of the build and an attested SPDX SBOM (the second command):
+    `ghcr.io/dromas-dev/dromasd:{{ .Version }}`, for `linux/amd64` and `linux/arm64`, holding the very `dromasd` of the archives below, made by this repository's release workflow from this tag, with an attestation of the build and an attested SPDX SBOM (the second command):
 
     ```sh
-    gh attestation verify oci://ghcr.io/dromas-dev/dromasd:{{ .Version }} -R dromas-dev/dromas-server --signer-workflow dromas-dev/dromas-server/.github/workflows/docker-publish.yml --source-ref refs/tags/{{ .Tag }}
-    gh attestation verify oci://ghcr.io/dromas-dev/dromasd:{{ .Version }} -R dromas-dev/dromas-server --signer-workflow dromas-dev/dromas-server/.github/workflows/docker-publish.yml --source-ref refs/tags/{{ .Tag }} --predicate-type https://spdx.dev/Document/v2.3
+    gh attestation verify oci://ghcr.io/dromas-dev/dromasd:{{ .Version }} -R dromas-dev/dromas-server --signer-workflow dromas-dev/dromas-server/.github/workflows/release.yml --source-ref refs/tags/{{ .Tag }}
+    gh attestation verify oci://ghcr.io/dromas-dev/dromasd:{{ .Version }} -R dromas-dev/dromas-server --signer-workflow dromas-dev/dromas-server/.github/workflows/release.yml --source-ref refs/tags/{{ .Tag }} --predicate-type https://spdx.dev/Document/v2.3
     ```
 
     ## Verify

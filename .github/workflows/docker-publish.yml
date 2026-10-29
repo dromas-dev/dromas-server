@@ -1,30 +1,35 @@
-# The server's image, for linux/amd64 and linux/arm64, pushed to the GitHub
-# Container Registry with an attestation of how and where each was built and
-# an attested SPDX SBOM (by syft, as GoReleaser makes the archives'): GitHub's "Publishing Docker images" workflow, with Buildx for
-# the two platforms. On every push to main, tagged main and with the commit;
-# and from a release's tag, called by release.yml once the release is
-# published, tagged with its version (docker/metadata-action's semver tags,
-# latest among them). The client is the release go.mod requires.
-# Actions are pinned by commit, each with its release beside it.
+# The server's image from main, for linux/amd64 and linux/arm64, on every push
+# to main and by hand, tagged main and with the commit. A release's image is
+# release.yml's (GoReleaser's dockers_v2); this one is made as trivy makes its
+# own from main: GoReleaser builds the binaries as a snapshot (the same
+# .goreleaser.yaml builds a release does), and docker/build-push-action builds
+# the release's Dockerfile from them, laid out as GoReleaser lays out an
+# image's context, so every push tests the image a release makes. Pushed to
+# the GitHub Container Registry with an attestation of the build and an
+# attested SPDX SBOM (by syft, as GoReleaser makes the archives'), as GitHub's
+# "Publishing Docker images" workflow does. The client is the release go.mod
+# requires. Actions are pinned by commit, each with its release beside it,
+# and GoReleaser by its version.
 name: docker-publish
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
-  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  # Named here: called by release.yml, github.workflow is the caller's,
-  # whose own run holds that group until this one ends.
-  group: docker-publish-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
+defaults:
+  run:
+    shell: bash
+
 env:
-  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/dromas-dev/dromasd
 
 jobs:
   build-and-push-image:
@@ -39,49 +44,71 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          check-latest: true
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          version: v2.19.0
+          args: build --snapshot --clean
+      - name: the image's context, as GoReleaser lays one out
+        # <os>/<arch>/dromasd beside the Dockerfile, each binary named by
+        # GoReleaser's dist/artifacts.json.
+        run: |
+          mkdir context
+          cp Dockerfile context/
+          jq -r '.[] | select(.type == "Binary") | "\(.goos)/\(.goarch) \(.path)"' dist/artifacts.json |
+            while read -r platform binary; do
+              mkdir -p "context/$platform"
+              cp "$binary" "context/$platform/dromasd"
+            done
+          find context -type f | sort
+          test -x context/linux/amd64/dromasd && test -x context/linux/arm64/dromasd
       - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/dromasd
+          images: ${{ env.IMAGE }}
           tags: |
             type=ref,event=branch
             type=sha,format=long
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
           labels: |
             org.opencontainers.image.title=dromasd
             org.opencontainers.image.description=dromasd, the server of Dromas (dromas.dev): end-to-end encrypted, sender-verified mail between bots. Apache-2.0.
       - id: push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
+          context: context
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-name: ${{ env.REGISTRY }}/${{ github.repository_owner }}/dromasd
+          subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
       # The image's SBOM, attested as GitHub documents it (actions/attest's
       # sbom-path), so gh attestation verify checks it as it checks the build.
       - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
-          image: ${{ env.REGISTRY }}/${{ github.repository_owner }}/dromasd@${{ steps.push.outputs.digest }}
+          image: ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
           format: spdx-json
           output-file: dromasd.spdx.json
           upload-artifact: false
           upload-release-assets: false
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-name: ${{ env.REGISTRY }}/${{ github.repository_owner }}/dromasd
+          subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.push.outputs.digest }}
           sbom-path: dromasd.spdx.json
           push-to-registry: true
