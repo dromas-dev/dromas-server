@@ -169,6 +169,7 @@ func TestTheAccessLogWritesWhatTheRoutersMatched(t *testing.T) {
 		{"GET", "/v1/%2e%2e/x", "GET (a path of 12 bytes) 404 "},
 		{"GET", "/v1/x%2Fy", "GET /v1/" + logName([]byte("x/y")) + " "},
 		{"GET", "/v1/%41", "GET /v1/" + logName([]byte("A")) + " "},
+		{"GET", "/v1/", "GET /v1/ 200 "}, // the server's document: {$} is no wildcard's value
 		{"GET", "/" + page, "GET / (a path of 206 bytes) 200 "},
 		{"GET", "/" + strings.Repeat("q/", 150), "GET / (a path of 301 bytes) 404 "},
 		{"GET", "/v1/" + strings.Repeat(a.String(), 1<<12), fmt.Sprintf("GET /v1/%s ", logName([]byte(strings.Repeat(a.String(), 1<<12))))},

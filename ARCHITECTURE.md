@@ -174,6 +174,8 @@ A pass that passes all three costs about 180 µs, two signature checks in all (`
 | ACL `PUT …/acl` | The pass, the record (the LRU, or one GetItem), one conditional UpdateItem. It deletes no messages (`PROTOCOL.md` §11.14) | Replaced whole, with an `If-Match` held to the ACL held when one is sent (`PROTOCOL.md` §11.14) |
 | ACL `GET …/acl` | The pass, the record (the LRU, or one GetItem) | The record's ACL, or the open one of a mailbox with none, with its `ETag`; `304` to an `If-None-Match` that names it |
 
+**The version policy comes first under `/v1/`** (`versioned`, `internal/server/version.go`; `PROTOCOL.md` §11.17, §11.4 rule 0). It wraps the API's router, inside `notStored` and in front of `unrouted` and every route's gate, and reads only `Dromas-Version` (`protocol.RequestVersion`: none, or another form, is `0.0.0`). It sets `Deprecation` and `Sunset` on the answer, whatever its status, where the policy covers the version, and counts the request by its state (§ Metrics). A version below the policy's floor, or covered by a sunset whose time has passed at the server's clock, spends its address's flood budget (`spendRequest`) and is answered `410 version_retired`, with `min_version` where there is a floor, before any route is matched; the server's document, `GET /v1/`, takes every version and answers the policy, the same to every caller, with no pass. The policy is `--version-policy`'s file, of the runtime-config directory (§ Runtime config), held to `protocol.ServerDocument.Check`; a request reads the policy in force once, as it arrives (`atomic.Pointer`), so a reload swaps it whole between requests and drops no connection.
+
 **`HEAD` on a `GET` route is net/http's:** `http.ServeMux` matches a `HEAD` to a `GET` pattern, and the server sends none of what the handler writes, so each route answers its `HEAD` as its `GET`, its counts and all, but a message's and a list's, whose handlers read the method (`PROTOCOL.md` §11.2 has what each does).
 
 ```mermaid
@@ -206,6 +208,13 @@ sequenceDiagram
 | Errors, an owner's reads, the link page | Never | A few hundred bytes, or seldom asked for |
 | A site's answer | Never by this server | Its web server's, passed on as that server sent it, compressed or not |
 
+
+### Runtime config
+
+**The files of the runtime-config directory are read at start and kept in force while the server runs** (`Reloader`, `internal/server/runtimeconfig.go`); `--version-policy` names the one there is. The directory, `/config/` in the container, is bind-mounted as a directory, read-only: a single-file bind mount follows the file's inode, so a save by rename is never seen there (`README.md`).
+- **Read again at once on SIGHUP,** as Prometheus reloads `--config.file`, whatever its bytes, **and every minute** (`ReloadEvery`), whatever the file's metadata says, since a Kubernetes ConfigMap changes its directory mount by a symlink swap and sends no signal, and a modification time's resolution and a rewrite of the same size defeat a check of metadata. The minute's read changes nothing where the bytes are those read last.
+- **Each read is bounded** (`MaxVersionPolicy`: a few KiB past the largest policy of the document's form, written with indents); a larger file is a failed reload.
+- **A reload that fails keeps what is in force,** logs one line naming the path and why, never the file's contents, and counts `failed`; one that succeeds swaps the value in whole (`atomic.Pointer`), logs that it loaded, and counts `ok`. A file that fails at start stops `serve`, naming its flag.
 
 ### Following the stream
 - **Nothing is kept across restarts.** A restart starts with empty memory, loads each mailbox on its first use (§ Startup), and follows the streams from then on. A follower that loses its place (more than the stream's 24 hours behind, an iterator that expired before it read anything, the stream gone) exits the process, and the restart rebuilds.
@@ -269,6 +278,8 @@ What changes:
 | `dromas_server_cache_events_total` | `cache` (`mailboxes`, `accounts`, `missing`), `event` (`hit`, `miss`, `eviction`) | the record caches |
 | `dromas_server_stream_record_age_seconds` | `table` (`mailboxes`, `messages`, `accounts`) | how old the last record applied from each stream was: how far behind memory follows |
 | `dromas_server_item_collection_estimate_bytes` | | after each message written, the upper bound of DynamoDB's estimate of its mailbox's item collection, at 2^30 bytes a GB: AWS advises an alert at 8 GB, before the 10 GB past which the mailbox takes no messages (§ Storage). AWS does not say whether its GB is 10^9 or 2^30 bytes (API Reference, *ItemCollectionMetrics*: "in gigabytes"); 2^30 is the safe side, since the bytes reported are then never fewer than AWS's estimate, and the buckets are whole GB, so the one at 8 GB is AWS's 8 GB either way |
+| `dromas_server_runtime_config_reloads_total` | `file` (`version-policy`), `result` (`ok`, `failed`) | each reload of a file of the runtime-config directory (§ Runtime config); the minute's read of bytes unchanged is none. When the file last loaded is its log line's |
+| `dromas_server_version_requests_total` | `state` (`current`, `deprecated`, `sunset`, `retired`) | each request under `/v1/` by what the version policy says of its version: retired (below the floor or past a sunset; answered `410` but on `GET /v1/`), else sunset (a sunset covers it, not yet passed), else deprecated (a deprecation covers it), else current. The version itself is no label: the client writes it. Kubernetes counts requests to deprecated APIs by what its own code defines (`apiserver_requested_deprecated_apis`, from memory) |
 | `dromas_server_large_reads_total`, `dromas_server_bodies_cut_total`, `dromas_server_connections_open` | `outcome` (`taken`, `timed_out`, `gone`) | the one large read's waits, bodies cut off at their deadline, connections open |
 | the Go runtime's and the process's | | `client_golang`'s collectors |
 

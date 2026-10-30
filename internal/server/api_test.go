@@ -21,7 +21,9 @@ func TestTheRoutesAreTheDescriptions(t *testing.T) {
 	}
 	got := []string{linkRoute}
 	for _, r := range (&Server{}).routes() {
-		got = append(got, r.pattern)
+		// {$} anchors a pattern to its path (http.ServeMux): the
+		// description's path is the pattern's without it.
+		got = append(got, strings.TrimSuffix(r.pattern, "{$}"))
 	}
 	// A pattern of GET matches HEAD too (http.ServeMux), so each is a route
 	// of both.

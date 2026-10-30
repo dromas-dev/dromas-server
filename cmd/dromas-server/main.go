@@ -164,8 +164,17 @@ func serve(args []string) error {
 	idle := fs.Duration("idle-timeout", 75*time.Second, "how long an idle keep-alive connection stays open (nginx's default as a server): above the idle timeout of a proxy in front, which may otherwise reuse a connection this one has just closed")
 	metricsListen := fs.String("metrics-listen", "", "address to serve the operator's metrics on, at /metrics in Prometheus' text format: a listener of its own, never the API's (empty: none)")
 	siteBackend := fs.String("site-backend", "", "the URL of a deployment's own web server, http or https and a host alone, which every request outside /v1/ and /to/ is passed to, as a reverse proxy passes it (empty: none; those paths are 404)")
+	versionPolicy := fs.String("version-policy", "", "a file of the runtime-config directory (bind-mounted read-only as a directory, conventionally /config/), e.g. /config/version-policy.json: the version policy, a JSON object of GET /v1/'s form with no capabilities. Read at start, or serve does not start; read again on SIGHUP and once a minute, and put in force when it differs and holds its form (empty: no policy)")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	var policy protocol.ServerDocument
+	var policyRead []byte
+	if *versionPolicy != "" {
+		var err error
+		if policy, policyRead, err = server.ReadVersionPolicy(*versionPolicy); err != nil {
+			return fmt.Errorf("--version-policy: %s: %w", *versionPolicy, err)
+		}
 	}
 	if err := sizeCaps(l); err != nil {
 		return err
@@ -180,7 +189,7 @@ func serve(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	cfg := server.Config{Limits: l, Log: logger}
+	cfg := server.Config{Limits: l, Log: logger, Policy: policy}
 	var reg *prometheus.Registry
 	if *metricsListen != "" {
 		reg = prometheus.NewRegistry()
@@ -273,6 +282,16 @@ func serve(args []string) error {
 	}
 
 	api := server.New(cfg)
+	if *versionPolicy != "" {
+		// Reloaded on SIGHUP, as Prometheus reloads --config.file, and once
+		// a minute, for a mount that changes with no signal (a Kubernetes
+		// ConfigMap's symlink swap).
+		hup := make(chan os.Signal, 1)
+		signal.Notify(hup, syscall.SIGHUP)
+		defer signal.Stop(hup)
+		go api.VersionPolicy(*versionPolicy, policyRead).Run(ctx, hup, server.ReloadEvery)
+		logger.Printf("version policy from %s: reloaded on SIGHUP and each %v", *versionPolicy, server.ReloadEvery)
+	}
 	if *adminSocket != "" {
 		l, err := listenAdmin(*adminSocket)
 		if err != nil {

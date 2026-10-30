@@ -108,6 +108,8 @@ func TestEveryCallAboutAMailboxAnswersItsStateBeforeItsPass(t *testing.T) {
 		sender  bool // the state's mailbox is the sender, by its pass, and the path names a live mailbox
 	}
 	routes := map[string]route{
+		"GET /v1/{$}": {answers: map[string]stateAnswer{ // the server's document names no mailbox
+			"never registered": goesOn, "forgotten": goesOn, "revoked": goesOn, "its current certificate revoked": goesOn}},
 		"GET /v1/{addr}": {answers: map[string]stateAnswer{"never registered": noMailbox, "forgotten": noMailbox, "revoked": gone,
 			"its current certificate revoked": {http.StatusOK, "", false}}}, // the read serves a mailbox whose certificate is revoked, with what revoked it
 		"PUT /v1/{addr}": {answers: map[string]stateAnswer{
@@ -191,7 +193,7 @@ func TestEveryCallAboutAMailboxAnswersItsStateBeforeItsPass(t *testing.T) {
 			if want.sender {
 				at = live.id.Address().String()
 			}
-			path := strings.NewReplacer("{addr}", at, "{id}", strings.Repeat("0", 64)).Replace(pattern)
+			path := strings.NewReplacer("{addr}", at, "{id}", strings.Repeat("0", 64), "{$}", "").Replace(pattern)
 			var body any
 			if want.body != nil {
 				body = want.body(st.r)

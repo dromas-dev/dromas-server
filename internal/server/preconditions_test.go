@@ -167,6 +167,7 @@ func TestAHeadIsItsGetWithoutContent(t *testing.T) {
 	e.want(e.do("PUT", revoking.path("/revocations"), revoking.certs(1), ""), http.StatusOK, "")
 	pass := to.pass(1)
 	paths := map[string]string{
+		"GET /v1/{$}":                  protocol.DocumentPath,
 		"GET /v1/{addr}":               to.path(""),
 		"GET /v1/{addr}/revocations":   revoking.path("/revocations"),
 		"GET /v1/{addr}/acl":           to.path("/acl"),
@@ -401,6 +402,9 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 	none := map[string]int{}
 	live := func(e *env) *raw { return e.raw().register(protocol.MaxPrekeyLifetime) }
 	states := map[string][]reach{
+		// The server's document answers the same to every caller, and the
+		// client repo's api/openapi.yaml gives it no 304 and no 412.
+		"GET /v1/{$}": nil,
 		"GET /v1/{addr}": {{"a live mailbox", true, none, func(e *env) (call, string) {
 			return call{"GET", live(e).path(""), nil, ""}, ""
 		}}},

@@ -100,14 +100,16 @@ func TestMetricsCountWhatTheServerDoes(t *testing.T) {
 func TestMetricsCarryNoCallerValue(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.MissesPerMinute, l.RequestBurst, l.RequestRefill = 1, 2, time.Minute
+	// Enough calls with no checked pass for two mailboxes' registrations and
+	// their first reads of the server's document, from the test's address.
+	l.MissesPerMinute, l.RequestBurst, l.RequestRefill = 1, 6, time.Minute
 	e, _, reg := metered(t, l)
 	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	to := "/v1/" + b.Address().String()
 	id := e.sent(e.do("POST", to+"/messages", e.sealTo(b), e.pass(a)))
 	e.want(e.do("GET", to+"/messages/"+id, nil, e.pass(b)), http.StatusOK, "")
 	call := e.caller()
-	for range 3 {
+	for range 4 { // past the address's flood budget
 		call("203.0.113.77", "GET", "/v1/"+strings.Repeat("e", 64), nil, "")
 		call("203.0.113.77", "GET", "/made/up/path", nil, "")
 	}

@@ -11,7 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/dynamodbstreams v1.46.2
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.5
 	github.com/aws/smithy-go v1.28.7
-	github.com/dromas-dev/dromas-client v0.1.8
+	github.com/dromas-dev/dromas-client v0.1.9-0.20261030034630-dcc84a3e8f7f
 	github.com/prometheus/client_golang v1.25.0
 	github.com/spf13/pflag v1.0.10
 	golang.org/x/crypto v0.58.0

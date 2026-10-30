@@ -182,7 +182,7 @@ func TestEveryOtherRequestIsTheSites(t *testing.T) {
 		{"GET", "/v1", http.StatusTemporaryRedirect, ""},
 		{"PUT", "/to", http.StatusTemporaryRedirect, ""},
 		{"GET", "/v1/nope", http.StatusBadRequest, protocol.CodeBadAddress},
-		{"POST", "/v1/", http.StatusNotFound, ""},
+		{"POST", "/v1/", http.StatusMethodNotAllowed, ""}, // the server's document is GET
 		{"GET", protocol.LinkPath + addr, http.StatusOK, ""},
 		{"POST", protocol.LinkPath + addr, http.StatusMethodNotAllowed, ""},
 		{"GET", protocol.LinkPath, http.StatusNotFound, ""},
