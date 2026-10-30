@@ -62,6 +62,13 @@ type Config struct {
 	// Metrics, when set, count what the server does and refuses
 	// (NewMetrics). None: nothing is counted.
 	Metrics *Metrics
+	// Policy is the server's version policy at start (PROTOCOL.md §11.17),
+	// which GET /v1/ answers and every request under /v1/ is held to
+	// (versioned), and which its file's Reloader replaces
+	// (Server.VersionPolicy); its caller holds it to
+	// protocol.ServerDocument.Check (ReadVersionPolicy). None: no floor, no
+	// deprecation, no sunset and no latest version.
+	Policy protocol.ServerDocument
 }
 
 // Server is the API.
@@ -77,6 +84,7 @@ type Server struct {
 	identityTypes []string
 	site          http.Handler
 	metrics       *Metrics
+	policy        atomic.Pointer[protocol.ServerDocument] // swapped whole by its Reloader
 
 	polls     *buckets // per mailbox
 	pages     *buckets // per mailbox: list pages after the first
@@ -160,6 +168,8 @@ func New(c Config) *Server {
 	if s.now == nil {
 		s.now = time.Now
 	}
+	policy := policyOf(c.Policy)
+	s.policy.Store(&policy)
 	if len(s.identityTypes) == 0 {
 		s.identityTypes = protocol.IdentityTypes()
 	}
@@ -202,9 +212,10 @@ const (
 // (TestTheRoutesAreTheDescriptions).
 func (s *Server) routes() []route {
 	return []route{
-		{"GET /v1/{addr}", s.getMailbox, passNone},    // it takes no pass
-		{"PUT /v1/{addr}", s.register, passNone},      // its pass is read after its body
-		{"PUT /v1/{addr}/prekey", s.prekey, passNone}, // its pass is read after its body
+		{"GET " + protocol.DocumentPath + "{$}", s.document, passNone}, // it takes no pass
+		{"GET /v1/{addr}", s.getMailbox, passNone},                     // it takes no pass
+		{"PUT /v1/{addr}", s.register, passNone},                       // its pass is read after its body
+		{"PUT /v1/{addr}/prekey", s.prekey, passNone},                  // its pass is read after its body
 		{"PUT /v1/{addr}/revocations", s.revoke, passNone},
 		{"GET /v1/{addr}/revocations", s.getRevocations, passNone},
 		{"PUT /v1/{addr}/acl", s.putACL, passPathMailbox},
@@ -228,7 +239,9 @@ const linkRoute = "GET " + protocol.LinkPath + "{addr}"
 // before anything is done for it (LIMITS.md, rule 1): each handler is put on
 // its router by mount, through the gate, and a request no route answers is
 // counted instead by unrouted. Both pages are answered before the API is
-// ready, since neither reads a store.
+// ready, since neither reads a store. Every request under /v1/ is held to
+// the version policy first (versioned): one of a retired version is counted
+// and answered there, before any route is matched.
 func (s *Server) Handler() http.Handler {
 	api := http.NewServeMux()
 	for _, r := range s.routes() {
@@ -238,7 +251,7 @@ func (s *Server) Handler() http.Handler {
 	s.mount(link, linkRoute, passNone, s.linkPage())
 	mux := http.NewServeMux()
 	s.subtree(mux, protocol.LinkPath, link, func(h http.Handler) http.Handler { return h })
-	s.subtree(mux, "/v1/", api, notStored)
+	s.subtree(mux, "/v1/", api, func(h http.Handler) http.Handler { return notStored(s.versioned(h)) })
 	if s.site != nil {
 		s.mount(mux, "/", passNone, s.site)
 	}
@@ -1248,6 +1261,9 @@ func loggedPath(r *http.Request) string {
 		return fmt.Sprintf("%s (a path of %d bytes)", pattern, len(sent))
 	}
 	return wildcard.ReplaceAllStringFunc(pattern, func(w string) string {
+		if w == "{$}" { // the end of the path, no wildcard's value
+			return ""
+		}
 		return logName([]byte(r.PathValue(strings.TrimSuffix(strings.Trim(w, "{}"), "..."))))
 	})
 }

@@ -187,7 +187,7 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 	for _, r := range e.server.routes() {
 		method, path, _ := strings.Cut(r.pattern, " ")
 		for _, st := range states {
-			p := strings.NewReplacer("{addr}", st.addr, "{id}", strings.Repeat("0", 64)).Replace(path)
+			p := strings.NewReplacer("{addr}", st.addr, "{id}", strings.Repeat("0", 64), "{$}", "").Replace(path)
 			targets = append(targets, target{method, p, r.pass, st.addr, st.pass, false})
 			if method == http.MethodGet { // a pattern of GET matches HEAD too (http.ServeMux)
 				targets = append(targets, target{http.MethodHead, p, r.pass, st.addr, st.pass, false})
@@ -277,7 +277,7 @@ func TestAServerNotReadyCountsFirst(t *testing.T) {
 	nobody := strings.Repeat("ab", 32)
 	for i, r := range e.server.routes() {
 		method, path, _ := strings.Cut(r.pattern, " ")
-		path = strings.NewReplacer("{addr}", nobody, "{id}", strings.Repeat("0", 64)).Replace(path)
+		path = strings.NewReplacer("{addr}", nobody, "{id}", strings.Repeat("0", 64), "{$}", "").Replace(path)
 		ip := fmt.Sprintf("10.1.0.%d", i+1)
 		e.want(call(ip, method, path, nil, ""), http.StatusServiceUnavailable, protocol.CodeUnavailable)
 		if got := call(ip, method, path, nil, ""); got.status != http.StatusTooManyRequests {

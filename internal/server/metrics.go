@@ -46,6 +46,8 @@ type Metrics struct {
 	collections prometheus.Histogram
 	holds       prometheus.Gauge
 	held        *prometheus.CounterVec
+	versions    *prometheus.CounterVec
+	reloads     *prometheus.CounterVec
 }
 
 // seconds are the latency buckets: from the 34 µs of a poll answered from
@@ -99,8 +101,19 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Help: "Lists held for a change now (PROTOCOL.md §11.11)."}),
 		held: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "held_lists_total",
 			Help: "Held lists, each once by how it ended: changed (the mailbox changed, or a message in it expired), waited (its wait passed), gone (the caller left), stopped (the server stopped), or refused (past --max-held-lists)."}, []string{"outcome"}),
+		// By the policy's verdict on the request's version, never the version
+		// itself, which the caller writes: Kubernetes counts requests to
+		// deprecated APIs the same way, apiserver_requested_deprecated_apis
+		// (from memory), labelled by what its own code defines.
+		versions: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "version_requests_total",
+			Help: "Requests under /v1/, by what the version policy says of the version each names (PROTOCOL.md §11.17): retired (answered 410 version_retired, but on GET /v1/), sunset (a sunset covers it, not yet passed), deprecated (a deprecation covers it, no sunset does), or current."}, []string{"state"}),
+		reloads: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "runtime_config_reloads_total",
+			Help: "Reloads of each file of the runtime-config directory, by file (version-policy) and result: ok (read, checked and in force) or failed (not read, too large or refused: what was in force stays)."}, []string{"file", "result"}),
 	}
-	reg.MustRegister(m.requests, m.latency, m.limits, m.passes, m.fetches, m.lists, m.store, m.storeTime, m.caches, m.largeRead, m.cut, m.conns, m.streamAge, m.collections, m.holds, m.held)
+	for _, r := range []string{"ok", "failed"} {
+		m.reloads.WithLabelValues(versionPolicyFile, r) // each series from the start, at 0
+	}
+	reg.MustRegister(m.requests, m.latency, m.limits, m.passes, m.fetches, m.lists, m.store, m.storeTime, m.caches, m.largeRead, m.cut, m.conns, m.streamAge, m.collections, m.holds, m.held, m.versions, m.reloads)
 	return m
 }
 
@@ -152,6 +165,26 @@ func (m *Metrics) answered(route string, status int, code protocol.Code, took ti
 	}
 	m.requests.WithLabelValues(route, strconv.Itoa(status), string(code)).Inc()
 	m.latency.WithLabelValues(route).Observe(took.Seconds())
+}
+
+// version counts a request under /v1/ by its version's state (versionState).
+func (m *Metrics) version(state string) {
+	if m == nil {
+		return
+	}
+	m.versions.WithLabelValues(state).Inc()
+}
+
+// reload counts a reload of the runtime file named file, ok or failed.
+func (m *Metrics) reload(file string, ok bool) {
+	if m == nil {
+		return
+	}
+	result := "ok"
+	if !ok {
+		result = "failed"
+	}
+	m.reloads.WithLabelValues(file, result).Inc()
 }
 
 // limit counts one take of the limit named name, allowed or not.
