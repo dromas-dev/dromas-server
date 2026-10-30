@@ -159,7 +159,7 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 	listed, listedPass := checked()
 	e.want(call(fresh(), "PUT", listed.path("/revocations"), listed.certs(1), ""), http.StatusOK, "")
 	e.clock.Add(time.Second)
-	nobody := strings.Repeat("ab", 32) // an address the server holds nothing of
+	nobody := strings.Repeat("ab", 38) + "a" // an address the server holds nothing of
 
 	type state struct {
 		name string
@@ -274,7 +274,7 @@ func TestAServerNotReadyCountsFirst(t *testing.T) {
 	l.RequestBurst, l.RequestRefill = 1, time.Hour
 	e := newEnv(t, l, func(c *Config) { c.Ready = func() bool { return false } })
 	call := e.caller()
-	nobody := strings.Repeat("ab", 32)
+	nobody := strings.Repeat("ab", 38) + "a"
 	for i, r := range e.server.routes() {
 		method, path, _ := strings.Cut(r.pattern, " ")
 		path = strings.NewReplacer("{addr}", nobody, "{id}", strings.Repeat("0", 64), "{$}", "").Replace(path)

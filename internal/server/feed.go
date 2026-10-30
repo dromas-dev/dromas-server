@@ -343,7 +343,7 @@ func msgStreamChange(r stypes.Record) (Change, error) {
 	if gone {
 		it = fromStream(r.Dynamodb.Keys)
 	}
-	mailbox, err := it.hash("box")
+	mailbox, err := it.address("box")
 	if err != nil {
 		return Change{}, err
 	}

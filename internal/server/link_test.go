@@ -28,7 +28,7 @@ func TestNoPagesButTheLinkPage(t *testing.T) {
 			t.Errorf("GET %s: %d", p, resp.StatusCode)
 		}
 	}
-	resp, err := http.Get(srv.URL + "/v1/" + strings.Repeat("0", 64))
+	resp, err := http.Get(srv.URL + "/v1/" + strings.Repeat("a", 77))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestLinkPage(t *testing.T) {
 		b, _ := io.ReadAll(resp.Body)
 		return resp, string(b)
 	}
-	a := strings.Repeat("0a", 32)
+	a := strings.Repeat("ab", 38) + "a"
 	resp, body := get(http.MethodGet, "/to/"+a)
 	h := resp.Header
 	if resp.StatusCode != http.StatusOK || h.Get("Content-Type") != "text/html; charset=utf-8" || h.Get("Cache-Control") != pageMaxAge ||
@@ -117,7 +117,7 @@ func TestTheLinkPageNamesItsOwnServer(t *testing.T) {
 			srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: NewMemStore(time.Now), Limits: relaxed(),
 				Names: []string{"mail.example", "mail.example:8443"}, TrustedProxies: c.proxies}).Handler()))
 			defer srv.Close()
-			a := strings.Repeat("0a", 32)
+			a := strings.Repeat("ab", 38) + "a"
 			req, _ := http.NewRequest(http.MethodGet, srv.URL+"/to/"+a, nil)
 			req.Host = c.host
 			req.Header.Set("X-Forwarded-Proto", c.proto)

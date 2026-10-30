@@ -39,8 +39,8 @@ var linkCSP = func() string {
 
 // linkPage serves the page a mailbox's link opens, <server>/to/<address>: what
 // dromas is, for whoever was handed the link. It is fixed text, the
-// address and the link itself, never text a mailbox supplied, for any 64
-// lowercase hex characters, the form clients take; it reads no store, so it
+// address and the link itself, never text a mailbox supplied, for any 77
+// characters of lowercase base32, the form clients take; it reads no store, so it
 // answers before the API is ready. The link is a send capability: the page
 // keeps it out of Referer headers and search engines.
 func (s *Server) linkPage() http.Handler {

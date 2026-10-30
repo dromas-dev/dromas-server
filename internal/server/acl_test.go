@@ -69,7 +69,7 @@ func TestACLRoute(t *testing.T) {
 	b, other := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	path := "/v1/" + b.Address().String() + "/acl"
 	pass := e.pass(b)
-	x, y := other.Address().String(), strings.Repeat("ab", 32)
+	x, y := other.Address().String(), strings.Repeat("ab", 38)+"a"
 	const open = `{"allow":["*"],"deny":[]}`
 
 	// The mailbox's own pass, and only that.
@@ -120,7 +120,12 @@ func TestACLRoute(t *testing.T) {
 	// no tag; a GET then answers the tag of that form.
 	put := e.do("PUT", path, aclOf([]string{y, x, y}, []string{}), pass)
 	e.want(put, 200, "")
-	lo, hi := min(x, y), max(x, y)
+	xa, _ := protocol.ParseAddress(x)
+	ya, _ := protocol.ParseAddress(y)
+	lo, hi := x, y // in the order of their 48 bytes, which their text's is not
+	if bytes.Compare(xa[:], ya[:]) > 0 {
+		lo, hi = y, x
+	}
 	want := `{"allow":["` + lo + `","` + hi + `"],"deny":[]}`
 	if string(bytes.TrimSpace(put.body)) != want || put.header.Values("ETag") != nil {
 		t.Fatalf("PUT answered %s with ETag %q, want %s and none", put.body, put.header.Values("ETag"), want)

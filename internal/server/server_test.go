@@ -6,7 +6,6 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -422,13 +421,13 @@ func TestRegistration(t *testing.T) {
 
 	// A document that hashes to its address but breaks the grammar.
 	commented := append(bytes.TrimSuffix(r.id.Document(), []byte("\n")), []byte(" comment\n")...)
-	h := sha256.Sum256(commented)
-	e.want(e.do("PUT", "/v1/"+hex.EncodeToString(h[:]), protocol.RegisterRequest{Identity: commented, Prekey: reg.Prekey, PrekeySignature: reg.PrekeySignature}, pass), 400, protocol.CodeIdentityMismatch)
+	h := protocol.AddressOf(commented)
+	e.want(e.do("PUT", "/v1/"+h.String(), protocol.RegisterRequest{Identity: commented, Prekey: reg.Prekey, PrekeySignature: reg.PrekeySignature}, pass), 400, protocol.CodeIdentityMismatch)
 
 	// A small-order key: the grammar holds, the key check fails.
 	small := clientFile(t, "testdata/vectors/identity/small-order-1.doc")
-	h = sha256.Sum256(small)
-	e.want(e.do("PUT", "/v1/"+hex.EncodeToString(h[:]), protocol.RegisterRequest{Identity: small, Prekey: reg.Prekey, PrekeySignature: reg.PrekeySignature}, pass), 400, protocol.CodeBadKey)
+	h = protocol.AddressOf(small)
+	e.want(e.do("PUT", "/v1/"+h.String(), protocol.RegisterRequest{Identity: small, Prekey: reg.Prekey, PrekeySignature: reg.PrekeySignature}, pass), 400, protocol.CodeBadKey)
 
 	// A prekey statement under another identity's certificate; one the
 	// identity signed itself; one a working key signed with no certificate;
@@ -700,7 +699,7 @@ func TestOwnerCalls(t *testing.T) {
 	e.want(e.do("GET", r.path("/messages"), nil, ahead), 200, "")
 }
 
-// An address in a path is 64 lowercase hex characters, so a mailbox has one URL:
+// An address in a path is 77 characters of lowercase base32, so a mailbox has one URL:
 // the same address in uppercase is no address, on every route that names
 // one, whoever calls (PROTOCOL.md §2.2).
 func TestAnAddressInAPathIsLowercase(t *testing.T) {

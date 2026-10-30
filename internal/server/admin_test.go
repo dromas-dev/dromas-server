@@ -1,8 +1,8 @@
 package server
 
 import (
+	"encoding/binary"
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -31,7 +31,7 @@ func TestTheOperatorClearsAnAddress(t *testing.T) {
 	t.Cleanup(srv.Close)
 	api := &env{t: t, clock: e.clock, srv: srv}
 	n := 0
-	missing := func() string { n++; return "/v1/" + fmt.Sprintf("%064x", n) } // a mailbox nobody registered, a new one each time
+	missing := func() string { n++; return "/v1/" + nth(n).String() } // a mailbox nobody registered, a new one each time
 	clear := func(ip string) (int, string, []string) {
 		t.Helper()
 		w := httptest.NewRecorder()
@@ -102,7 +102,7 @@ func TestAZonedCallerIsKeyedByItsSlash64(t *testing.T) {
 	n := 0
 	miss := func(remote string) int {
 		n++
-		r := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/%064x", n), nil)
+		r := httptest.NewRequest(http.MethodGet, "/v1/"+nth(n).String(), nil)
 		r.RemoteAddr = remote
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
@@ -133,4 +133,11 @@ func TestAZonedCallerIsKeyedByItsSlash64(t *testing.T) {
 	if got := s.clientIP(r); got != "192.0.2.7" {
 		t.Fatalf("a trusted proxy at %s: the client is %q", peer, got)
 	}
+}
+
+// nth is the address whose last bytes are n: one nobody registered.
+func nth(n int) protocol.Address {
+	var a protocol.Address
+	binary.BigEndian.PutUint64(a[len(a)-8:], uint64(n)) //nolint:gosec // a test's count
+	return a
 }

@@ -61,7 +61,7 @@ func TestTheHeadIsReadToWhatTheLongestCallNeeds(t *testing.T) {
 	}
 	pass := "dromas-pass " + strings.Repeat("a", protocol.MaxPassAuthorization-len("dromas-pass "))
 	serial := fmt.Sprint(protocol.MaxSerial)
-	longest := "POST /v1/" + strings.Repeat("0", 64) + "/messages?prekey_serial=" + serial + "&certificate_serial=" + serial + " HTTP/1.1\r\n" +
+	longest := "POST /v1/" + strings.Repeat("a", protocol.AddressLen) + "/messages?prekey_serial=" + serial + "&certificate_serial=" + serial + " HTTP/1.1\r\n" +
 		"Host: " + host + "\r\n" +
 		"Authorization: " + pass + "\r\n" +
 		"User-Agent: Go-http-client/1.1\r\n" +
