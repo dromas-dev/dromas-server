@@ -29,15 +29,15 @@ import (
 )
 
 // The suite runs against the in-memory store, or, with
-// DROMAS_TEST_MSGS_TABLE set, against DynamoDB + S3 Express: every test,
+// DROMAS_TEST_MESSAGES_TABLE set, against DynamoDB + S3 Express: every test,
 // plus the ones here that need AWS, on the tables and the bucket that
 // variable and the three of awsTestNames name, each of which must then be
 // set. Name tables and a directory bucket kept for tests, never the ones a
 // running server uses.
 
-var awsTestNames = []string{"DROMAS_TEST_BOXES_TABLE", "DROMAS_TEST_MSGS_TABLE", "DROMAS_TEST_ACCOUNTS_TABLE", "DROMAS_TEST_BUCKET"}
+var awsTestNames = []string{"DROMAS_TEST_MAILBOXES_TABLE", "DROMAS_TEST_MESSAGES_TABLE", "DROMAS_TEST_ACCOUNTS_TABLE", "DROMAS_TEST_BUCKET"}
 
-func onAWS() bool { return os.Getenv("DROMAS_TEST_MSGS_TABLE") != "" }
+func onAWS() bool { return os.Getenv("DROMAS_TEST_MESSAGES_TABLE") != "" }
 
 func newTestStore(t *testing.T, now func() time.Time) (Store, func() bool) {
 	t.Helper()
@@ -52,7 +52,7 @@ func startDynamo(t *testing.T, now func() time.Time) *Memory {
 	t.Helper()
 	for _, name := range awsTestNames {
 		if os.Getenv(name) == "" {
-			t.Fatalf("DROMAS_TEST_MSGS_TABLE is set, and %s is not: the tests on AWS need all four of %s", name, strings.Join(awsTestNames, ", "))
+			t.Fatalf("DROMAS_TEST_MESSAGES_TABLE is set, and %s is not: the tests on AWS need all four of %s", name, strings.Join(awsTestNames, ", "))
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -63,12 +63,12 @@ func startDynamo(t *testing.T, now func() time.Time) *Memory {
 	}
 	s := NewDynamoStore(DynamoConfig{
 		AWS:            cfg,
-		BoxesTable:     os.Getenv("DROMAS_TEST_BOXES_TABLE"),
-		MsgsTable:      os.Getenv("DROMAS_TEST_MSGS_TABLE"),
+		MailboxesTable: os.Getenv("DROMAS_TEST_MAILBOXES_TABLE"),
+		MessagesTable:  os.Getenv("DROMAS_TEST_MESSAGES_TABLE"),
 		AccountsTable:  os.Getenv("DROMAS_TEST_ACCOUNTS_TABLE"),
 		Bucket:         os.Getenv("DROMAS_TEST_BUCKET"),
 		Now:            now,
-		BoxCache:       100,
+		MailboxCache:   100,
 		StreamInterval: 200 * time.Millisecond,
 		// The tests read back what they wrote within milliseconds.
 		ConsistentReads: true,
@@ -84,7 +84,7 @@ func startDynamo(t *testing.T, now func() time.Time) *Memory {
 func dynamoEnv(t *testing.T) (*env, *Memory) {
 	t.Helper()
 	if !onAWS() {
-		t.Skip("needs the AWS tables: DROMAS_TEST_MSGS_TABLE and the three beside it (awsTestNames)")
+		t.Skip("needs the AWS tables: DROMAS_TEST_MESSAGES_TABLE and the three beside it (awsTestNames)")
 	}
 	e := newEnv(t, relaxed())
 	return e, e.store.(*Memory)
@@ -113,14 +113,14 @@ func idOf(t *testing.T, r *protocol.Receipt) [32]byte {
 	return id
 }
 
-// lists holds the boxes table's index of each account's boxes to whether it
-// lists box a under account: the index is read eventually consistent, as
+// lists holds the mailboxes table's index of each account's mailboxes to whether it
+// lists mailbox a under account: the index is read eventually consistent, as
 // every global secondary index is, so it is asked for up to ten seconds.
 func (s *Memory) lists(t *testing.T, account string, a protocol.Address, want bool) {
 	t.Helper()
 	for range 100 {
 		out, err := s.dynamo().db.Query(context.Background(), &dynamodb.QueryInput{
-			TableName:                 &s.dynamo().boxes,
+			TableName:                 &s.dynamo().mailboxes,
 			IndexName:                 aws.String(accountIndex),
 			KeyConditionExpression:    aws.String("#c = :c AND #a = :a"),
 			ExpressionAttributeNames:  map[string]string{"#c": "account", "#a": "addr"},
@@ -138,18 +138,18 @@ func (s *Memory) lists(t *testing.T, account string, a protocol.Address, want bo
 }
 
 // stored reads a message's item from the table as it is, or nil.
-func (s *Memory) stored(t *testing.T, box protocol.Address, id [32]byte) item {
+func (s *Memory) stored(t *testing.T, mailbox protocol.Address, id [32]byte) item {
 	t.Helper()
-	out, err := s.dynamo().db.GetItem(context.Background(), &dynamodb.GetItemInput{TableName: &s.dynamo().msgs, Key: msgKey(box, id), ConsistentRead: aws.Bool(true)})
+	out, err := s.dynamo().db.GetItem(context.Background(), &dynamodb.GetItemInput{TableName: &s.dynamo().msgs, Key: msgKey(mailbox, id), ConsistentRead: aws.Bool(true)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return out.Item
 }
 
-func (s *Memory) bodyExists(t *testing.T, box protocol.Address, id [32]byte) bool {
+func (s *Memory) bodyExists(t *testing.T, mailbox protocol.Address, id [32]byte) bool {
 	t.Helper()
-	_, err := s.dynamo().s3.HeadObject(context.Background(), &s3.HeadObjectInput{Bucket: &s.dynamo().bucket, Key: aws.String(bodyKey(box, id))})
+	_, err := s.dynamo().s3.HeadObject(context.Background(), &s3.HeadObjectInput{Bucket: &s.dynamo().bucket, Key: aws.String(bodyKey(mailbox, id))})
 	if err != nil && !isNoSuchKey(err) {
 		t.Fatal(err)
 	}
@@ -158,9 +158,9 @@ func (s *Memory) bodyExists(t *testing.T, box protocol.Address, id [32]byte) boo
 
 // listed reports whether the table lists the message: its item is in the
 // live index.
-func (s *Memory) listed(t *testing.T, box protocol.Address, id [32]byte) bool {
+func (s *Memory) listed(t *testing.T, mailbox protocol.Address, id [32]byte) bool {
 	t.Helper()
-	_, ok := s.stored(t, box, id)["live"]
+	_, ok := s.stored(t, mailbox, id)["live"]
 	return ok
 }
 
@@ -169,7 +169,7 @@ func (s *Memory) listed(t *testing.T, box protocol.Address, id [32]byte) bool {
 func TestCrashAfterTheBody(t *testing.T) {
 	t.Parallel()
 	e, s := dynamoEnv(t)
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	failOnce(s, "put: after the body")
 	if _, err := a.Send(context.Background(), b.Address(), "an orphan body first"); err == nil {
 		t.Fatal("the crash was not reported")
@@ -183,14 +183,14 @@ func TestCrashAfterTheBody(t *testing.T) {
 }
 
 // An ack deletes the message's item and its body, and nothing of it is
-// kept (PROTOCOL.md §13): the same bytes posted after it are new mail,
+// kept (PROTOCOL.md §13): the same bytes posted after it are a new message,
 // stored and listed again, which the reader skips, and acks (§11.10 step
 // 6, §12.3 check 8). No item names a sender or holds a signature.
-func TestTheSameBytesAfterAnAckAreNewMail(t *testing.T) {
+func TestTheSameBytesAfterAnAckAreANewMessage(t *testing.T) {
 	t.Parallel()
 	e, s := dynamoEnv(t)
 	ctx := context.Background()
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	sent := capture(e, "/v1/"+b.Address().String())
 	send(t, a, b, "once")
 	e.setMiddle(nil)
@@ -232,7 +232,7 @@ func TestTheSameBytesAfterAnAckAreNewMail(t *testing.T) {
 func TestCrashBetweenAnAcksDeletes(t *testing.T) {
 	t.Parallel()
 	e, s := dynamoEnv(t)
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	ctx := context.Background()
 	send(t, a, b, "acked halfway")
 	failOnce(s, "ack: after the body")
@@ -256,7 +256,7 @@ func TestCrashBetweenAnAcksDeletes(t *testing.T) {
 func TestHeaderWithoutBodyIsGone(t *testing.T) {
 	t.Parallel()
 	e, s := dynamoEnv(t)
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	ctx := context.Background()
 	id := idOf(t, send(t, a, b, "its body expires early"))
 	if _, _, err := s.Message(ctx, b.Address(), id, 0); err != nil {
@@ -281,7 +281,7 @@ func TestHeaderWithoutBodyIsGone(t *testing.T) {
 func TestAckedMessageWithABodyAgainIsGone(t *testing.T) {
 	t.Parallel()
 	e, s := dynamoEnv(t)
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	ctx := context.Background()
 	id := idOf(t, send(t, a, b, "acked, then its body rewritten"))
 	if res := receive(t, b); len(res.Delivered) != 1 {
@@ -307,7 +307,7 @@ func TestTwoProcesses(t *testing.T) {
 	t.Cleanup(srv2.Close)
 	e2 := &env{t: t, clock: e.clock, store: other, srv: srv2}
 
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	tok := func() string { return e2.pass(b) }
 	waitFor := func(what string, ok func() bool) time.Duration {
 		t.Helper()
@@ -371,7 +371,7 @@ func TestTwoProcesses(t *testing.T) {
 	if _, err := b.Rekey(ctx, ""); err != nil {
 		t.Fatal(err)
 	}
-	rec, err := e.store.Box(ctx, b.Address())
+	rec, err := e.store.Mailbox(ctx, b.Address())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,20 +387,20 @@ func TestTwoProcesses(t *testing.T) {
 	}
 }
 
-// A restart starts with empty memory and is ready at once; each box is read
+// A restart starts with empty memory and is ready at once; each mailbox is read
 // on its first use, once, and answered from memory after that.
 func TestRestartLoadsLazily(t *testing.T) {
 	t.Parallel()
 	e, _ := dynamoEnv(t)
 	ctx := context.Background()
-	a, b, c, f := e.box(protocol.Classic), e.box(protocol.Classic), e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b, c, f := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic), e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	one := send(t, a, b, "one")
 	send(t, a, b, "two")
 	send(t, a, f, "three")
 	if _, err := c.Rekey(ctx, ""); err != nil {
 		t.Fatal(err)
 	}
-	renewed, err := e.store.Box(ctx, c.Address())
+	renewed, err := e.store.Mailbox(ctx, c.Address())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,7 +409,7 @@ func TestRestartLoadsLazily(t *testing.T) {
 	if !fresh.Ready() || fresh.loads.Load() != 0 {
 		t.Fatalf("ready %v after %d loads: want ready with none", fresh.Ready(), fresh.loads.Load())
 	}
-	// Each of these is its box's first use, then b's second.
+	// Each of these is its mailbox's first use, then b's second.
 	if held, _ := fresh.Holds(ctx, b.Address(), idOf(t, one)); !held {
 		t.Fatal("the message held is not in memory")
 	}
@@ -420,25 +420,25 @@ func TestRestartLoadsLazily(t *testing.T) {
 		t.Fatalf("count %d, want 2", n)
 	}
 	if n := fresh.loads.Load(); n != 2 {
-		t.Fatalf("%d loads for two boxes", n)
+		t.Fatalf("%d loads for two mailboxes", n)
 	}
-	// A box memory has not loaded has no standing there; its first use
+	// A mailbox memory has not loaded has no standing there; its first use
 	// loads it, as its record is now.
 	if _, ok := fresh.Held(c.Address()); ok {
-		t.Fatal("a box nothing has used is in memory")
+		t.Fatal("a mailbox nothing has used is in memory")
 	}
 	if n, err := fresh.Count(ctx, c.Address()); n != 0 || err != nil {
-		t.Fatalf("rekeyed box: %d %v", n, err)
+		t.Fatalf("rekeyed mailbox: %d %v", n, err)
 	}
 	if st, ok := fresh.Held(c.Address()); !ok || st.State != Active || st.Cert != renewed.Cert {
-		t.Fatalf("rekeyed box: %v %v", st, ok)
+		t.Fatalf("rekeyed mailbox: %v %v", st, ok)
 	}
 	var nobody protocol.Address
 	if n, err := fresh.Count(ctx, nobody); n != 0 || err != nil {
-		t.Fatalf("no box: %d %v", n, err)
+		t.Fatalf("no mailbox: %d %v", n, err)
 	}
 	if _, ok := fresh.Held(nobody); ok {
-		t.Fatal("no box, and memory holds a standing for it")
+		t.Fatal("no mailbox, and memory holds a standing for it")
 	}
 }
 
@@ -448,7 +448,7 @@ func TestRestartLoadsLazily(t *testing.T) {
 func TestAResentRevocationLoadsNothingElsewhere(t *testing.T) {
 	t.Parallel()
 	e, _ := dynamoEnv(t)
-	a := e.box(protocol.Classic)
+	a := e.mailbox(protocol.Classic)
 	rec := record(t, a)
 	e.want(e.do("PUT", revocationPath(a.Address()), rec, ""), 201, "")
 
@@ -465,12 +465,12 @@ func TestAResentRevocationLoadsNothingElsewhere(t *testing.T) {
 	}
 }
 
-// Polls read a box once per process, on its first use: every later poll,
+// Polls read a mailbox once per process, on its first use: every later poll,
 // empty or not, is answered from memory, kept current by the stream.
 func TestPollsReadOncePerProcess(t *testing.T) {
 	t.Parallel()
 	e, s := dynamoEnv(t)
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	poll := func() reply {
 		e.clock.Add(time.Minute) // past the poll limit
 		return e.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages", nil, e.pass(b))
@@ -503,7 +503,7 @@ func (throttled) Count(context.Context, protocol.Address) (int, error) {
 func TestThrottleIs503(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	b := e.box(protocol.Classic)
+	b := e.mailbox(protocol.Classic)
 	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: throttled{e.store}, Limits: relaxed(), Now: e.clock.Now}).Handler()))
 	defer srv.Close()
 	e2 := &env{t: t, clock: e.clock, srv: srv}
@@ -531,7 +531,7 @@ func TestNotReadyIs503(t *testing.T) {
 // countingStore counts every call of a Store that reaches storage. It does
 // not embed the Store, so each method is written here, and a new one is
 // counted or not by a choice made where it is added: those Memory
-// answers from memory (the index and the record cache, after a box's one
+// answers from memory (the index and the record cache, after a mailbox's one
 // load on its first use) are not counted.
 type countingStore struct {
 	s     Store
@@ -545,44 +545,44 @@ func (c *countingStore) Held(a protocol.Address) (Standing, bool) { return c.s.H
 func (c *countingStore) Changed(a protocol.Address) <-chan struct{} { return c.s.Changed(a) }
 func (c *countingStore) NextExpiry(a protocol.Address) time.Time    { return c.s.NextExpiry(a) }
 
-func (c *countingStore) Known(a protocol.Address) (*Box, bool) { return c.s.Known(a) }
+func (c *countingStore) Known(a protocol.Address) (*Mailbox, bool) { return c.s.Known(a) }
 
 func (c *countingStore) Begin(a protocol.Address) uint64 { return c.s.Begin(a) }
 
-func (c *countingStore) Count(ctx context.Context, box protocol.Address) (int, error) {
-	return c.s.Count(ctx, box)
+func (c *countingStore) Count(ctx context.Context, mailbox protocol.Address) (int, error) {
+	return c.s.Count(ctx, mailbox)
 }
 
-func (c *countingStore) After(ctx context.Context, box protocol.Address, cur *Cursor) (int, error) {
-	return c.s.After(ctx, box, cur)
+func (c *countingStore) After(ctx context.Context, mailbox protocol.Address, cur *Cursor) (int, error) {
+	return c.s.After(ctx, mailbox, cur)
 }
 
-func (c *countingStore) Holds(ctx context.Context, box protocol.Address, id [32]byte) (bool, error) {
-	return c.s.Holds(ctx, box, id)
+func (c *countingStore) Holds(ctx context.Context, mailbox protocol.Address, id [32]byte) (bool, error) {
+	return c.s.Holds(ctx, mailbox, id)
 }
 
-func (c *countingStore) Fetched(ctx context.Context, box protocol.Address, id [32]byte) (bool, bool, error) {
-	return c.s.Fetched(ctx, box, id)
+func (c *countingStore) Fetched(ctx context.Context, mailbox protocol.Address, id [32]byte) (bool, bool, error) {
+	return c.s.Fetched(ctx, mailbox, id)
 }
 
-func (c *countingStore) Box(ctx context.Context, a protocol.Address) (*Box, error) {
+func (c *countingStore) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error) {
 	c.count()
-	return c.s.Box(ctx, a)
+	return c.s.Mailbox(ctx, a)
 }
 
-func (c *countingStore) CreateBox(ctx context.Context, b *Box) error {
+func (c *countingStore) CreateMailbox(ctx context.Context, b *Mailbox) error {
 	c.count()
-	return c.s.CreateBox(ctx, b)
+	return c.s.CreateMailbox(ctx, b)
 }
 
-func (c *countingStore) UpdateBox(ctx context.Context, b *Box) error {
+func (c *countingStore) UpdateMailbox(ctx context.Context, b *Mailbox) error {
 	c.count()
-	return c.s.UpdateBox(ctx, b)
+	return c.s.UpdateMailbox(ctx, b)
 }
 
-func (c *countingStore) DeleteBox(ctx context.Context, a protocol.Address) error {
+func (c *countingStore) DeleteMailbox(ctx context.Context, a protocol.Address) error {
 	c.count()
-	return c.s.DeleteBox(ctx, a)
+	return c.s.DeleteMailbox(ctx, a)
 }
 
 func (c *countingStore) Revoke(ctx context.Context, a protocol.Address, rv *Revocations, want Expect) error {
@@ -590,34 +590,34 @@ func (c *countingStore) Revoke(ctx context.Context, a protocol.Address, rv *Revo
 	return c.s.Revoke(ctx, a, rv, want)
 }
 
-func (c *countingStore) Dedupe(ctx context.Context, box protocol.Address, id [32]byte) (*Header, error) {
+func (c *countingStore) Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
 	c.count()
-	return c.s.Dedupe(ctx, box, id)
+	return c.s.Dedupe(ctx, mailbox, id)
 }
 
-func (c *countingStore) PutMessage(ctx context.Context, box protocol.Address, h *Header, body []byte) (*Header, error) {
+func (c *countingStore) PutMessage(ctx context.Context, mailbox protocol.Address, h *Header, body []byte) (*Header, error) {
 	c.count()
-	return c.s.PutMessage(ctx, box, h, body)
+	return c.s.PutMessage(ctx, mailbox, h, body)
 }
 
-func (c *countingStore) List(ctx context.Context, box protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error) {
+func (c *countingStore) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error) {
 	c.count()
-	return c.s.List(ctx, box, after, limit, consistent)
+	return c.s.List(ctx, mailbox, after, limit, consistent)
 }
 
-func (c *countingStore) Message(ctx context.Context, box protocol.Address, id [32]byte, from int64) (*Header, []byte, error) {
+func (c *countingStore) Message(ctx context.Context, mailbox protocol.Address, id [32]byte, from int64) (*Header, []byte, error) {
 	c.count()
-	return c.s.Message(ctx, box, id, from)
+	return c.s.Message(ctx, mailbox, id, from)
 }
 
-func (c *countingStore) DeleteMessage(ctx context.Context, box protocol.Address, id [32]byte) error {
+func (c *countingStore) DeleteMessage(ctx context.Context, mailbox protocol.Address, id [32]byte) error {
 	c.count()
-	return c.s.DeleteMessage(ctx, box, id)
+	return c.s.DeleteMessage(ctx, mailbox, id)
 }
 
-func (c *countingStore) DeleteMessages(ctx context.Context, box protocol.Address) error {
+func (c *countingStore) DeleteMessages(ctx context.Context, mailbox protocol.Address) error {
 	c.count()
-	return c.s.DeleteMessages(ctx, box)
+	return c.s.DeleteMessages(ctx, mailbox)
 }
 
 func (c *countingStore) Account(ctx context.Context, id string) (*Account, error) {
@@ -640,45 +640,45 @@ func (c *countingStore) AdoptKey(ctx context.Context, account string, hash [32]b
 	return c.s.AdoptKey(ctx, account, hash)
 }
 
-func (c *countingStore) Adopt(ctx context.Context, b *Box, account string, key [32]byte) error {
+func (c *countingStore) Adopt(ctx context.Context, b *Mailbox, account string, key [32]byte) error {
 	c.count()
 	return c.s.Adopt(ctx, b, account, key)
 }
 
-func (c *countingStore) Leave(ctx context.Context, b *Box) error {
+func (c *countingStore) Leave(ctx context.Context, b *Mailbox) error {
 	c.count()
 	return c.s.Leave(ctx, b)
 }
 
-// An empty poll never leaves the process (ARCHITECTURE.md § Memory): a box
+// An empty poll never leaves the process (ARCHITECTURE.md § Memory): a mailbox
 // showing a new pass, one showing a pass the server has taken, a renewed
-// one, a pass from before the renewal and a revoked box are all answered
+// one, a pass from before the renewal and a revoked mailbox are all answered
 // from memory.
 func TestPollStaysInMemory(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
-	b, c := e.box(protocol.Classic), e.box(protocol.Classic)
+	b, c := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	cs := &countingStore{s: e.store}
 	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: cs, Limits: relaxed(), Now: e.clock.Now}).Handler()))
 	defer srv.Close()
 	e2 := &env{t: t, clock: e.clock, srv: srv}
-	poll := func(x *client.Box, pass string) reply {
+	poll := func(x *client.Mailbox, pass string) reply {
 		return e2.do(http.MethodGet, "/v1/"+x.Address().String()+"/messages", nil, pass)
 	}
 
 	pass := e2.pass(b)
 	for range 3 {
 		if r := poll(b, pass); r.status != http.StatusOK {
-			t.Fatalf("active box: %d %s", r.status, r.body)
+			t.Fatalf("active mailbox: %d %s", r.status, r.body)
 		}
 	}
-	e.clock.Add(protocol.PassLifetime) // the box signs another
+	e.clock.Add(protocol.PassLifetime) // the mailbox signs another
 	if r := poll(b, pass); r.code() != protocol.CodePassExpired {
 		t.Fatalf("a pass that ran out: %d %s", r.status, r.body)
 	}
 	if r := poll(b, e2.pass(b)); r.status != http.StatusOK {
-		t.Fatalf("the box's next pass: %d %s", r.status, r.body)
+		t.Fatalf("the mailbox's next pass: %d %s", r.status, r.body)
 	}
 	old := e2.pass(c)
 	if r := poll(c, old); r.status != http.StatusOK {
@@ -688,7 +688,7 @@ func TestPollStaysInMemory(t *testing.T) {
 		t.Fatal(err)
 	}
 	if r := poll(c, e2.pass(c)); r.status != http.StatusOK {
-		t.Fatalf("rekeyed box: %d %s", r.status, r.body)
+		t.Fatalf("rekeyed mailbox: %d %s", r.status, r.body)
 	}
 	if r := poll(c, old); r.code() != protocol.CodeCertificateNotCurrent {
 		t.Fatalf("the pass from before the renewal: %d %s", r.status, r.body)
@@ -702,7 +702,7 @@ func TestPollStaysInMemory(t *testing.T) {
 		t.Fatal("the test's own calls were counted")
 	}
 	if r := poll(b, e2.pass(b)); r.code() != protocol.CodeRevoked {
-		t.Fatalf("revoked box: %d %s", r.status, r.body)
+		t.Fatalf("revoked mailbox: %d %s", r.status, r.body)
 	}
 	if n := cs.calls.Load(); n != 0 {
 		t.Fatalf("%d storage calls for polls", n)
@@ -714,7 +714,7 @@ func TestPollStaysInMemory(t *testing.T) {
 func TestExpiredHeadersAreNotListed(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	send(t, a, b, "expires first")
 	e.clock.Add(protocol.TTL / 2)
 	live := send(t, a, b, "still live")
@@ -737,14 +737,14 @@ func TestExpiredHeadersAreNotListed(t *testing.T) {
 // The dedupe spans an unacked message's life, the TTL less the hour
 // (protocol.Retention): the same bytes sent again inside it get the receipt
 // held. Past it, while the prekey they name lasts, nothing of the message is
-// kept, and they are new mail, which any sender's pass can post and its
+// kept, and they are a new message, which any sender's pass can post and its
 // reader drops by its hash (PROTOCOL.md §12.3 check 8), and that copy answers
 // in its turn. No client of this protocol posts the same bytes twice: a retry
 // is sealed afresh (§12.2).
 func TestTheDedupeSpansAnUnackedMessagesLife(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	sent := capture(e, "/v1/"+b.Address().String())
 	first := send(t, a, b, "once, then again")
 	e.setMiddle(nil)
@@ -763,17 +763,17 @@ func TestTheDedupeSpansAnUnackedMessagesLife(t *testing.T) {
 	}
 }
 
-// A box's record (sk 0x00) and its address's revocations (sk 0x01) are
+// A mailbox's record (sk 0x00) and its address's revocations (sk 0x01) are
 // memory's, and nothing else under the address is: another item, whatever it
 // holds, changes nothing on the stream. A revocation adds to what memory
-// holds; the record's removal drops the box, whose next use reads it again.
+// holds; the record's removal drops the mailbox, whose next use reads it again.
 func TestTheRecordAndTheRevocationsAreMemorys(t *testing.T) {
 	t.Parallel()
-	s := NewDynamoStore(DynamoConfig{BoxCache: 10})
+	s := NewDynamoStore(DynamoConfig{MailboxCache: 10})
 	var a protocol.Address
 	a[0] = 7
-	if err := s.idx.ensure(context.Background(), a, func() (boxRead, error) {
-		return boxRead{exists: true, st: Standing{State: Active, CertSerial: 5}, rev: 1}, nil
+	if err := s.idx.ensure(context.Background(), a, func() (mailboxRead, error) {
+		return mailboxRead{exists: true, st: Standing{State: Active, CertSerial: 5}, rev: 1}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -790,41 +790,41 @@ func TestTheRecordAndTheRevocationsAreMemorys(t *testing.T) {
 		return stypes.Record{EventName: op, Dynamodb: &stypes.StreamRecord{Keys: k, NewImage: img}}
 	}
 	standing := func() (Standing, bool) { return s.idx.standing(a) }
-	s.applyBoxRecord(record(stypes.OperationTypeInsert, other, img))
+	s.applyMailboxRecord(record(stypes.OperationTypeInsert, other, img))
 	if st, _ := standing(); st.State != Active {
 		t.Fatalf("another item set the standing: %v", st)
 	}
-	s.applyBoxRecord(record(stypes.OperationTypeRemove, other, nil))
+	s.applyMailboxRecord(record(stypes.OperationTypeRemove, other, nil))
 	if _, ok := standing(); !ok {
-		t.Fatal("another item's removal dropped the box")
+		t.Fatal("another item's removal dropped the mailbox")
 	}
 	revs := keys([]byte{skRevocations})
 	certs := map[string]stypes.AttributeValue{"addr": revs["addr"], "sk": revs["sk"], "identity": b([]byte("x")),
 		"revoked_certs": b([]byte("x")), "revoked_certs_sig": b([]byte("x")), "through": &stypes.AttributeValueMemberN{Value: "5"}}
-	s.applyBoxRecord(record(stypes.OperationTypeInsert, revs, certs))
+	s.applyMailboxRecord(record(stypes.OperationTypeInsert, revs, certs))
 	if st, _ := standing(); st.State != Active || !st.Listed {
-		t.Fatalf("a revocation of the box's certificate: %+v", st)
+		t.Fatalf("a revocation of the mailbox's certificate: %+v", st)
 	}
 	certs["through"] = &stypes.AttributeValueMemberN{Value: "3"} // lower: changes nothing
-	s.applyBoxRecord(record(stypes.OperationTypeModify, revs, certs))
+	s.applyMailboxRecord(record(stypes.OperationTypeModify, revs, certs))
 	if st, _ := standing(); !st.Listed {
-		t.Fatal("a lower revocation of certificates took the box's back")
+		t.Fatal("a lower revocation of certificates took the mailbox's back")
 	}
 	certs["revocation"] = b([]byte("x"))
-	s.applyBoxRecord(record(stypes.OperationTypeModify, revs, certs))
+	s.applyMailboxRecord(record(stypes.OperationTypeModify, revs, certs))
 	if st, _ := standing(); st.State != Revoked {
 		t.Fatalf("a revocation of the address: %+v", st)
 	}
-	s.applyBoxRecord(record(stypes.OperationTypeRemove, keys([]byte{skBox}), nil))
+	s.applyMailboxRecord(record(stypes.OperationTypeRemove, keys([]byte{skMailbox}), nil))
 	if _, ok := standing(); ok {
-		t.Fatal("the record's removal left the box in memory")
+		t.Fatal("the record's removal left the mailbox in memory")
 	}
 }
 
-// A box record this build cannot read whole is no record: one in a state it
+// A mailbox record this build cannot read whole is no record: one in a state it
 // never writes, "deleted" among them (dromas-dev/dromas-client#312), or an active one whose stored ACL does
 // not read. Reading it is an error, so nothing is served or taken for the
-// address, and its image on the stream makes memory forget the box wherever
+// address, and its image on the stream makes memory forget the mailbox wherever
 // it holds it, loaded or loading, its record cached, or its address
 // remembered missing, rather than keep answering for it as it was
 // (dromas-dev/dromas-server#87). Control: an active image keeps it.
@@ -834,16 +834,16 @@ func TestARecordInAStateNotWrittenIsRefused(t *testing.T) {
 	ctx := context.Background()
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	a := r.id.Address()
-	rec, err := e.store.Box(ctx, a)
+	rec, err := e.store.Mailbox(ctx, a)
 	if err != nil {
 		t.Fatal(err)
 	}
-	it := item(boxItem(rec))
-	if _, err := decodeBox(it); err != nil {
+	it := item(mailboxItem(rec))
+	if _, err := decodeMailbox(it); err != nil {
 		t.Fatalf("an active record: %v", err)
 	}
 	at := func(rev uint64, set func(item)) item {
-		x := item(boxItem(rec))
+		x := item(mailboxItem(rec))
 		x["rev"] = num(rev)
 		set(x)
 		return x
@@ -853,83 +853,83 @@ func TestARecordInAStateNotWrittenIsRefused(t *testing.T) {
 	if _, _, err := decodeStanding(badACL); err != nil {
 		t.Fatalf("control: the standing of a record whose ACL does not read: %v", err)
 	}
-	read := func(rev uint64) func() (boxRead, error) {
-		return func() (boxRead, error) {
-			return boxRead{exists: true, st: Standing{State: Active, CertSerial: rec.CertSerial}, rev: rev}, nil
+	read := func(rev uint64) func() (mailboxRead, error) {
+		return func() (mailboxRead, error) {
+			return mailboxRead{exists: true, st: Standing{State: Active, CertSerial: rec.CertSerial}, rev: rev}, nil
 		}
 	}
 	for _, im := range []struct {
 		name string
 		it   item
 	}{{"a record in the state \"deleted\"", deleted}, {"an active record whose ACL does not read", badACL}} {
-		if b, err := decodeBox(im.it); err == nil {
+		if b, err := decodeMailbox(im.it); err == nil {
 			t.Fatalf("%s read as %s", im.name, b.State)
 		}
 		t.Run(im.name+", loaded and cached", func(t *testing.T) {
-			s := NewDynamoStore(DynamoConfig{BoxCache: 10})
+			s := NewDynamoStore(DynamoConfig{MailboxCache: 10})
 			if err := s.idx.ensure(ctx, a, read(rec.Rev)); err != nil {
 				t.Fatal(err)
 			}
 			s.cache.put(rec)
-			s.applyBoxImage(im.it)
+			s.applyMailboxImage(im.it)
 			if st, ok := s.Held(a); ok {
-				t.Errorf("the index kept the box as %s", st.State)
+				t.Errorf("the index kept the mailbox as %s", st.State)
 			}
 			if b, ok := s.Known(a); ok {
-				t.Errorf("the record cache kept the box (%v), which Box serves with no read", b != nil)
+				t.Errorf("the record cache kept the mailbox (%v), which Mailbox serves with no read", b != nil)
 			}
 		})
 		t.Run(im.name+", remembered missing", func(t *testing.T) {
-			s := NewDynamoStore(DynamoConfig{BoxCache: 10})
+			s := NewDynamoStore(DynamoConfig{MailboxCache: 10})
 			s.cache.missed(a, s.cache.begin(a), s.now())
 			if _, ok := s.Known(a); !ok {
 				t.Fatal("control: the miss is not remembered")
 			}
-			s.applyBoxImage(im.it)
+			s.applyMailboxImage(im.it)
 			if _, ok := s.Known(a); ok {
 				t.Error("an image of a record left the address remembered as missing")
 			}
 		})
 		t.Run(im.name+", loading", func(t *testing.T) {
-			s := NewDynamoStore(DynamoConfig{BoxCache: 10})
+			s := NewDynamoStore(DynamoConfig{MailboxCache: 10})
 			reading, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
 			go func() {
-				done <- s.idx.ensure(ctx, a, func() (boxRead, error) {
+				done <- s.idx.ensure(ctx, a, func() (mailboxRead, error) {
 					close(reading)
 					<-release
 					return read(rec.Rev)()
 				})
 			}()
 			<-reading
-			s.applyBoxImage(im.it)
+			s.applyMailboxImage(im.it)
 			close(release)
 			if err := <-done; err != nil {
 				t.Fatal(err)
 			}
 			if st, ok := s.Held(a); ok {
-				t.Errorf("a load in flight when the image came kept the box as %s", st.State)
+				t.Errorf("a load in flight when the image came kept the mailbox as %s", st.State)
 			}
 		})
 	}
 	t.Run("control: an active image keeps it", func(t *testing.T) {
-		s := NewDynamoStore(DynamoConfig{BoxCache: 10})
+		s := NewDynamoStore(DynamoConfig{MailboxCache: 10})
 		if err := s.idx.ensure(ctx, a, read(rec.Rev)); err != nil {
 			t.Fatal(err)
 		}
 		s.cache.put(rec)
-		s.applyBoxImage(at(rec.Rev+1, func(item) {}))
+		s.applyMailboxImage(at(rec.Rev+1, func(item) {}))
 		if st, ok := s.Held(a); !ok || st.State != Active {
-			t.Errorf("an active image: the index holds the box %s, %v", st.State, ok)
+			t.Errorf("an active image: the index holds the mailbox %s, %v", st.State, ok)
 		}
 		if b, ok := s.Known(a); !ok || b == nil || b.Rev != rec.Rev+1 {
-			t.Errorf("an active image: the record cache holds the box %v (%v); want it at rev %d", b != nil, ok, rec.Rev+1)
+			t.Errorf("an active image: the record cache holds the mailbox %v (%v); want it at rev %d", b != nil, ok, rec.Rev+1)
 		}
 	})
 }
 
-// A process that served a box from its record cache, and then takes the
+// A process that served a mailbox from its record cache, and then takes the
 // stream's image of the record in a state this build never writes, does not
-// serve it from the cache again: the read of the box after the image reads
+// serve it from the cache again: the read of the mailbox after the image reads
 // the record, which fails (dromas-dev/dromas-server#87). In process
 // over canned tables.
 func TestADeletedImageIsNotServedFromTheCache(t *testing.T) {
@@ -937,11 +937,11 @@ func TestADeletedImageIsNotServedFromTheCache(t *testing.T) {
 	e0 := newEnv(t, relaxed())
 	r := e0.raw().register(protocol.MaxPrekeyLifetime)
 	a := r.id.Address()
-	rec, err := e0.store.Box(t.Context(), a)
+	rec, err := e0.store.Mailbox(t.Context(), a)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tables := &cannedTables{address: []map[string]types.AttributeValue{boxItem(rec)}}
+	tables := &cannedTables{address: []map[string]types.AttributeValue{mailboxItem(rec)}}
 	s := tables.store()
 	e := newEnv(t, relaxed(), func(c *Config) { c.Store = s })
 	r.e = e
@@ -949,64 +949,64 @@ func TestADeletedImageIsNotServedFromTheCache(t *testing.T) {
 	if _, ok := s.Known(a); !ok {
 		t.Fatal("control: the read did not fill the record cache")
 	}
-	deleted := item(boxItem(rec))
+	deleted := item(mailboxItem(rec))
 	deleted["state"] = str("deleted")
 	deleted["rev"] = num(rec.Rev + 1)
 	tables.set(deleted)
-	s.applyBoxImage(deleted)
+	s.applyMailboxImage(deleted)
 	got := e.do("GET", r.path(""), nil, "")
-	t.Logf("the read of the box after the image: %d %s", got.status, got.code())
+	t.Logf("the read of the mailbox after the image: %d %s", got.status, got.code())
 	if got.status == http.StatusOK {
-		t.Errorf("a box whose record is in a state this build never writes is served from the record cache: %d", got.status)
+		t.Errorf("a mailbox whose record is in a state this build never writes is served from the record cache: %d", got.status)
 	}
 }
 
-// A box's record is only written over the revision it was read at.
-func TestUpdateBoxIsConditional(t *testing.T) {
+// A mailbox's record is only written over the revision it was read at.
+func TestUpdateMailboxIsConditional(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
-	b := e.box(protocol.Classic)
-	first, _ := e.store.Box(ctx, b.Address())
-	second, _ := e.store.Box(ctx, b.Address())
+	b := e.mailbox(protocol.Classic)
+	first, _ := e.store.Mailbox(ctx, b.Address())
+	second, _ := e.store.Mailbox(ctx, b.Address())
 	first.CertSerial++
-	if err := e.store.UpdateBox(ctx, first); err != nil {
+	if err := e.store.UpdateMailbox(ctx, first); err != nil {
 		t.Fatal(err)
 	}
 	second.CertSerial += 2
-	if err := e.store.UpdateBox(ctx, second); !errors.Is(err, ErrStale) {
+	if err := e.store.UpdateMailbox(ctx, second); !errors.Is(err, ErrStale) {
 		t.Fatalf("an update over a stale read: %v", err)
 	}
-	if got, _ := e.store.Box(ctx, b.Address()); got.State != Active || got.CertSerial != first.CertSerial {
+	if got, _ := e.store.Mailbox(ctx, b.Address()); got.State != Active || got.CertSerial != first.CertSerial {
 		t.Fatalf("stored %v at certificate serial %d", got.State, got.CertSerial)
 	}
 }
 
-func TestBoxCache(t *testing.T) {
+func TestMailboxCache(t *testing.T) {
 	t.Parallel()
 	var a1, a2, a3 protocol.Address
 	a1[0], a2[0], a3[0] = 1, 2, 3
-	c := newBoxCache(2)
-	c.put(&Box{Addr: a1, Rev: 3})
-	c.put(&Box{Addr: a1, Rev: 2})
+	c := newMailboxCache(2)
+	c.put(&Mailbox{Addr: a1, Rev: 3})
+	c.put(&Mailbox{Addr: a1, Rev: 2})
 	if b, _ := c.get(a1); b.Rev != 3 {
 		t.Fatalf("rev %d: an older record replaced a newer one", b.Rev)
 	}
-	c.write(a1, c.image(&Box{Addr: a1, Rev: 3, CertSerial: 9}))
+	c.write(a1, c.image(&Mailbox{Addr: a1, Rev: 3, CertSerial: 9}))
 	if b, _ := c.get(a1); b.CertSerial == 9 {
 		t.Fatal("refreshed at the same rev")
 	}
-	c.write(a1, c.image(&Box{Addr: a1, Rev: 4}))
+	c.write(a1, c.image(&Mailbox{Addr: a1, Rev: 4}))
 	if b, _ := c.get(a1); b.Rev != 4 {
 		t.Fatal("not refreshed to a newer rev")
 	}
-	c.write(a2, c.image(&Box{Addr: a2, Rev: 1}))
+	c.write(a2, c.image(&Mailbox{Addr: a2, Rev: 1}))
 	if _, ok := c.get(a2); ok {
 		t.Fatal("an image cached a record the cache did not hold")
 	}
-	c.put(&Box{Addr: a2, Rev: 1})
+	c.put(&Mailbox{Addr: a2, Rev: 1})
 	c.get(a1)
-	c.put(&Box{Addr: a3, Rev: 1}) // evicts a2, the least recently used
+	c.put(&Mailbox{Addr: a3, Rev: 1}) // evicts a2, the least recently used
 	if _, ok := c.get(a2); ok {
 		t.Fatal("over its size")
 	}
@@ -1019,34 +1019,34 @@ func TestBoxCache(t *testing.T) {
 	}
 }
 
-// A box's state answers before its pass is looked at: a call naming no box,
+// A mailbox's state answers before its pass is looked at: a call naming no mailbox,
 // one the server forgot or a revoked one is told so whatever it carries, and
-// only a call on a box in use is asked for that box's pass.
-func TestTheBoxsStateAnswersBeforeItsPass(t *testing.T) {
+// only a call on a mailbox in use is asked for that mailbox's pass.
+func TestTheMailboxsStateAnswersBeforeItsPass(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
 	poll := func(a protocol.Address, pass string) reply {
 		return e.do(http.MethodGet, "/v1/"+a.String()+"/messages", nil, pass)
 	}
-	b, c, d := e.box(protocol.Classic), e.box(protocol.Classic), e.box(protocol.Classic)
+	b, c, d := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	if r := poll(b.Address(), "dromas-pass not-a-pass"); r.code() != protocol.CodeUnauthorized {
 		t.Fatalf("not a pass: %d %s", r.status, r.body)
 	}
 	if r := poll(b.Address(), e.pass(c)); r.code() != protocol.CodeUnauthorized {
-		t.Fatalf("another box's pass: %d %s", r.status, r.body)
+		t.Fatalf("another mailbox's pass: %d %s", r.status, r.body)
 	}
 	var nobody protocol.Address
 	if r := poll(nobody, e.pass(c)); r.code() != protocol.CodeNoSuchMailbox {
-		t.Fatalf("unknown box: %d %s", r.status, r.body)
+		t.Fatalf("unknown mailbox: %d %s", r.status, r.body)
 	}
 	pass := e.pass(c)
-	if err := e.store.DeleteBox(ctx, c.Address()); err != nil { // as the TTL deletes it
+	if err := e.store.DeleteMailbox(ctx, c.Address()); err != nil { // as the TTL deletes it
 		t.Fatal(err)
 	}
 	for _, p := range []string{"", pass} {
 		if r := poll(c.Address(), p); r.code() != protocol.CodeNoSuchMailbox {
-			t.Fatalf("a box the server forgot: %d %s", r.status, r.body)
+			t.Fatalf("a mailbox the server forgot: %d %s", r.status, r.body)
 		}
 	}
 	pass = e.pass(d)
@@ -1056,20 +1056,20 @@ func TestTheBoxsStateAnswersBeforeItsPass(t *testing.T) {
 	}
 	for _, p := range []string{"", pass} {
 		if r := poll(d.Address(), p); r.code() != protocol.CodeRevoked {
-			t.Fatalf("revoked box: %d %s", r.status, r.body)
+			t.Fatalf("revoked mailbox: %d %s", r.status, r.body)
 		}
 	}
 }
 
-// On DynamoDB the answer to a message write carries its box's item
+// On DynamoDB the answer to a message write carries its mailbox's item
 // collection's size, which the metric observes: the messages table has its
-// LSI, so the metric is not blind, and a new box's estimate tops out at 1 GB.
+// LSI, so the metric is not blind, and a new mailbox's estimate tops out at 1 GB.
 func TestDynamoObservesTheItemCollection(t *testing.T) {
 	t.Parallel()
 	e, s := dynamoEnv(t)
 	m := NewMetrics(prometheus.NewRegistry())
 	s.dynamo().metrics = m
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	send(t, a, b, "sized")
 	if err := testutil.CollectAndCompare(m.collections, strings.NewReader(collectionsWant(1)), "dromas_server_item_collection_estimate_bytes"); err != nil {
 		t.Error(err)

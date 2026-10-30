@@ -31,7 +31,7 @@ func TestTheOperatorClearsAnAddress(t *testing.T) {
 	t.Cleanup(srv.Close)
 	api := &env{t: t, clock: e.clock, srv: srv}
 	n := 0
-	missing := func() string { n++; return "/v1/" + fmt.Sprintf("%064x", n) } // a box nobody registered, a new one each time
+	missing := func() string { n++; return "/v1/" + fmt.Sprintf("%064x", n) } // a mailbox nobody registered, a new one each time
 	clear := func(ip string) (int, string, []string) {
 		t.Helper()
 		w := httptest.NewRecorder()

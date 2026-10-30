@@ -10,11 +10,11 @@ import (
 	"github.com/dromas-dev/dromas-server/internal/server"
 )
 
-// dromas-server serve refuses to start on a budget of new mail that would let a
-// box take mail faster than server.ReceiveCeiling, one turned off or one
+// dromas-server serve refuses to start on a budget of new messages that would let a
+// mailbox take messages faster than server.ReceiveCeiling, one turned off or one
 // refilled faster, naming the flag. It refuses before it listens or opens any
 // store, as for a size cap.
-func TestServeRefusesNewMailPastTheCeiling(t *testing.T) {
+func TestServeRefusesNewMessagesPastTheCeiling(t *testing.T) {
 	for _, c := range []struct{ flag, value, says string }{
 		{"--receive-burst", "0", "no budget"},
 		{"--receive-burst", "-1", "no budget"},
@@ -35,7 +35,7 @@ func TestServeRefusesNewMailPastTheCeiling(t *testing.T) {
 }
 
 // Control: a budget of one at the ceiling passes, and so do the defaults.
-func TestNewMailAtTheCeilingPasses(t *testing.T) {
+func TestNewMessagesAtTheCeilingPass(t *testing.T) {
 	l := server.DefaultLimits()
 	l.ReceiveBurst, l.ReceiveRefill = 1, server.ReceiveCeiling
 	if err := receiveRate(l); err != nil {

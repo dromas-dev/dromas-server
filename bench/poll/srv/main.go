@@ -16,7 +16,7 @@ import (
 
 var kServer = make([]byte, 32)
 var pool = sync.Pool{New: func() any { return hmac.New(sha256.New, kServer) }}
-var counts = map[[32]byte]uint32{} // only boxes WITH mail; empty boxes cost no memory
+var counts = map[[32]byte]uint32{} // only mailboxes WITH messages; empty mailboxes cost no memory
 
 func main() {
 	http.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) {

@@ -38,13 +38,13 @@ const streamOp = "DynamoDBStreams_20120810."
 // client (bound, boundedStreams), not at each call
 // (dromas-dev/dromas-client#411 item 4). Where a call comes after
 // another, the fake answers the first and holds the one named: a delete of
-// a box's mail reaches its delete of the bodies so.
+// a mailbox's messages reaches its delete of the bodies so.
 func TestEveryCallToAWSEndsAtItsBound(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("long: -short skips it; scripts/check.sh full and CI run it")
 	}
-	_, _, box := heldRecord(t)
+	_, _, mailbox := heldRecord(t)
 	hang := answer{hang: true}
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	msg := &Header{ID: [32]byte{7}, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
@@ -82,28 +82,28 @@ func TestEveryCallToAWSEndsAtItsBound(t *testing.T) {
 		s3     func(string, int) answer         // nil: every call is held
 		call   func(context.Context, *Memory) error
 	}{
-		{name: "Box", call: func(ctx context.Context, s *Memory) error { _, err := s.Box(ctx, protocol.Address{5}); return err }},
-		{name: "a load's read of the record", call: func(ctx context.Context, s *Memory) error { _, err := s.Count(ctx, box.Addr); return err }},
-		{name: "a load's read of the live index", dynamo: first("Query", answered(map[string]any{"Items": []any{itemJSON(boxItem(box))}, "Count": 1, "ScannedCount": 1})),
-			call: func(ctx context.Context, s *Memory) error { _, err := s.Count(ctx, box.Addr); return err }},
-		{name: "Dedupe", call: func(ctx context.Context, s *Memory) error { _, err := s.Dedupe(ctx, box.Addr, msg.ID); return err }},
+		{name: "Mailbox", call: func(ctx context.Context, s *Memory) error { _, err := s.Mailbox(ctx, protocol.Address{5}); return err }},
+		{name: "a load's read of the record", call: func(ctx context.Context, s *Memory) error { _, err := s.Count(ctx, mailbox.Addr); return err }},
+		{name: "a load's read of the live index", dynamo: first("Query", answered(map[string]any{"Items": []any{itemJSON(mailboxItem(mailbox))}, "Count": 1, "ScannedCount": 1})),
+			call: func(ctx context.Context, s *Memory) error { _, err := s.Count(ctx, mailbox.Addr); return err }},
+		{name: "Dedupe", call: func(ctx context.Context, s *Memory) error { _, err := s.Dedupe(ctx, mailbox.Addr, msg.ID); return err }},
 		{name: "List", call: func(ctx context.Context, s *Memory) error {
-			_, err := s.List(ctx, box.Addr, nil, 10, false)
+			_, err := s.List(ctx, mailbox.Addr, nil, 10, false)
 			return err
 		}},
 		{name: "Message's read of the item", call: func(ctx context.Context, s *Memory) error {
-			_, _, err := s.Message(ctx, box.Addr, msg.ID, 0)
+			_, _, err := s.Message(ctx, mailbox.Addr, msg.ID, 0)
 			return err
 		}},
-		{name: "Message's read of the body", dynamo: first("GetItem", answered(map[string]any{"Item": itemJSON(msgItem(box.Addr, msg))})),
+		{name: "Message's read of the body", dynamo: first("GetItem", answered(map[string]any{"Item": itemJSON(msgItem(mailbox.Addr, msg))})),
 			call: func(ctx context.Context, s *Memory) error {
-				_, _, err := s.Message(ctx, box.Addr, msg.ID, 0)
+				_, _, err := s.Message(ctx, mailbox.Addr, msg.ID, 0)
 				return err
 			}},
-		{name: "Message's read of the body's bytes", dynamo: first("GetItem", answered(map[string]any{"Item": itemJSON(msgItem(box.Addr, msg))})),
+		{name: "Message's read of the body's bytes", dynamo: first("GetItem", answered(map[string]any{"Item": itemJSON(msgItem(mailbox.Addr, msg))})),
 			s3: func(string, int) answer { return answer{status: http.StatusOK, body: "ab", stall: true} },
 			call: func(ctx context.Context, s *Memory) error {
-				_, _, err := s.Message(ctx, box.Addr, msg.ID, 0)
+				_, _, err := s.Message(ctx, mailbox.Addr, msg.ID, 0)
 				return err
 			}},
 		{name: "Account", call: func(ctx context.Context, s *Memory) error { _, err := s.Account(ctx, "acct"); return err }},
@@ -115,29 +115,29 @@ func TestEveryCallToAWSEndsAtItsBound(t *testing.T) {
 		{name: "PutAdoptKey", call: func(ctx context.Context, s *Memory) error {
 			return s.PutAdoptKey(ctx, &AdoptKey{Account: "acct", Hash: [32]byte{1}, Uses: 1, Expires: now.Add(time.Hour)})
 		}},
-		{name: "CreateBox", call: func(ctx context.Context, s *Memory) error { return s.CreateBox(ctx, cloneBox(box)) }},
-		{name: "UpdateBox", call: func(ctx context.Context, s *Memory) error { return s.UpdateBox(ctx, cloneBox(box)) }},
-		{name: "DeleteBox", call: func(ctx context.Context, s *Memory) error { return s.DeleteBox(ctx, box.Addr) }},
+		{name: "CreateMailbox", call: func(ctx context.Context, s *Memory) error { return s.CreateMailbox(ctx, cloneMailbox(mailbox)) }},
+		{name: "UpdateMailbox", call: func(ctx context.Context, s *Memory) error { return s.UpdateMailbox(ctx, cloneMailbox(mailbox)) }},
+		{name: "DeleteMailbox", call: func(ctx context.Context, s *Memory) error { return s.DeleteMailbox(ctx, mailbox.Addr) }},
 		{name: "Revoke", call: func(ctx context.Context, s *Memory) error {
-			return s.Revoke(ctx, box.Addr, &Revocations{Identity: box.Identity, Address: []byte("r")}, ExpectAnything)
+			return s.Revoke(ctx, mailbox.Addr, &Revocations{Identity: mailbox.Identity, Address: []byte("r")}, ExpectAnything)
 		}},
 		{name: "PutMessage's body", call: func(ctx context.Context, s *Memory) error {
-			_, err := s.PutMessage(ctx, box.Addr, msg, []byte("abc"))
+			_, err := s.PutMessage(ctx, mailbox.Addr, msg, []byte("abc"))
 			return err
 		}},
 		{name: "PutMessage's item", s3: s3ok, call: func(ctx context.Context, s *Memory) error {
-			_, err := s.PutMessage(ctx, box.Addr, msg, []byte("abc"))
+			_, err := s.PutMessage(ctx, mailbox.Addr, msg, []byte("abc"))
 			return err
 		}},
-		{name: "DeleteMessage's body", call: func(ctx context.Context, s *Memory) error { return s.DeleteMessage(ctx, box.Addr, msg.ID) }},
-		{name: "DeleteMessage's item", s3: s3ok, call: func(ctx context.Context, s *Memory) error { return s.DeleteMessage(ctx, box.Addr, msg.ID) }},
-		{name: "DeleteMessages", call: func(ctx context.Context, s *Memory) error { return s.DeleteMessages(ctx, box.Addr) }},
-		{name: "DeleteMessages' delete of the bodies", dynamo: first("Query", answered(map[string]any{"Items": []any{itemJSON(msgItem(box.Addr, msg))}, "Count": 1, "ScannedCount": 1})),
-			call: func(ctx context.Context, s *Memory) error { return s.DeleteMessages(ctx, box.Addr) }},
+		{name: "DeleteMessage's body", call: func(ctx context.Context, s *Memory) error { return s.DeleteMessage(ctx, mailbox.Addr, msg.ID) }},
+		{name: "DeleteMessage's item", s3: s3ok, call: func(ctx context.Context, s *Memory) error { return s.DeleteMessage(ctx, mailbox.Addr, msg.ID) }},
+		{name: "DeleteMessages", call: func(ctx context.Context, s *Memory) error { return s.DeleteMessages(ctx, mailbox.Addr) }},
+		{name: "DeleteMessages' delete of the bodies", dynamo: first("Query", answered(map[string]any{"Items": []any{itemJSON(msgItem(mailbox.Addr, msg))}, "Count": 1, "ScannedCount": 1})),
+			call: func(ctx context.Context, s *Memory) error { return s.DeleteMessages(ctx, mailbox.Addr) }},
 		{name: "Adopt", call: func(ctx context.Context, s *Memory) error {
-			return s.Adopt(ctx, cloneBox(box), "acct", [32]byte{1})
+			return s.Adopt(ctx, cloneMailbox(mailbox), "acct", [32]byte{1})
 		}},
-		{name: "Leave", call: func(ctx context.Context, s *Memory) error { return s.Leave(ctx, cloneBox(box)) }},
+		{name: "Leave", call: func(ctx context.Context, s *Memory) error { return s.Leave(ctx, cloneMailbox(mailbox)) }},
 		{name: "Start's DescribeTable", call: func(ctx context.Context, s *Memory) error { return s.Start(ctx) }},
 		{name: "a stream's DescribeStream", dynamo: first("DescribeTable", described),
 			call: func(ctx context.Context, s *Memory) error { return s.Start(ctx) }},
@@ -148,12 +148,12 @@ func TestEveryCallToAWSEndsAtItsBound(t *testing.T) {
 			return first("DescribeTable", described)(op, n, b)
 		}, call: func(ctx context.Context, s *Memory) error { return s.Start(ctx) }},
 		{name: "a stream's GetShardIterator in a read", call: func(ctx context.Context, s *Memory) error {
-			s.dynamo().boxFeed.arn = "fake-stream"
-			return s.dynamo().boxFeed.read(ctx, &shard{id: "s", seq: "1"})
+			s.dynamo().mailboxFeed.arn = "fake-stream"
+			return s.dynamo().mailboxFeed.read(ctx, &shard{id: "s", seq: "1"})
 		}},
 		{name: "a stream's GetRecords", call: func(ctx context.Context, s *Memory) error {
-			s.dynamo().boxFeed.arn = "fake-stream"
-			return s.dynamo().boxFeed.read(ctx, &shard{id: "s", iter: aws.String("i")})
+			s.dynamo().mailboxFeed.arn = "fake-stream"
+			return s.dynamo().mailboxFeed.read(ctx, &shard{id: "s", iter: aws.String("i")})
 		}},
 	}
 	// Every call at once, each on a fake of its own, then each judged.
@@ -257,7 +257,7 @@ func deadlineOf(ctx context.Context) time.Duration {
 	return -1
 }
 
-func (s *hangingDedupe) Dedupe(ctx context.Context, box protocol.Address, id [32]byte) (*Header, error) {
+func (s *hangingDedupe) Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
 	if id == s.id {
 		s.reads.Add(1)
 		s.dedupeDeadline.Store(deadlineOf(ctx))
@@ -269,21 +269,21 @@ func (s *hangingDedupe) Dedupe(ctx context.Context, box protocol.Address, id [32
 		case <-s.let:
 		}
 	}
-	return s.Store.Dedupe(ctx, box, id)
+	return s.Store.Dedupe(ctx, mailbox, id)
 }
 
-func (s *hangingDedupe) Known(a protocol.Address) (*Box, bool) {
+func (s *hangingDedupe) Known(a protocol.Address) (*Mailbox, bool) {
 	if a == s.probe {
 		return nil, false
 	}
 	return s.Store.Known(a)
 }
 
-func (s *hangingDedupe) Box(ctx context.Context, a protocol.Address) (*Box, error) {
+func (s *hangingDedupe) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error) {
 	if a == s.probe {
 		s.lookupDeadline.Store(deadlineOf(ctx))
 	}
-	return s.Store.Box(ctx, a)
+	return s.Store.Mailbox(ctx, a)
 }
 
 // postBytes posts ciphertext ct to url, prekey 1 under certificate 1, with pass,
@@ -362,7 +362,7 @@ type holdDedupe struct {
 	ended   atomic.Bool
 }
 
-func (s *holdDedupe) Dedupe(ctx context.Context, box protocol.Address, id [32]byte) (*Header, error) {
+func (s *holdDedupe) Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
 	if s.hold.CompareAndSwap(true, false) {
 		close(s.entered)
 		select {
@@ -372,7 +372,7 @@ func (s *holdDedupe) Dedupe(ctx context.Context, box protocol.Address, id [32]by
 		case <-s.let:
 		}
 	}
-	return s.Store.Dedupe(ctx, box, id)
+	return s.Store.Dedupe(ctx, mailbox, id)
 }
 
 // A sender whose account lifts its cap posts a body past the free cap, and
@@ -392,7 +392,7 @@ func TestAHeldReadGivesBackTheLargeRead(t *testing.T) {
 	e := newEnv(t, l, func(c *Config) { h.Store, c.Store = c.Store, h })
 	t.Cleanup(sync.OnceFunc(func() { close(h.let) })) // or the server's Close waits on the handler for ever
 	_, key := accountEnv(t, e, true, 1)
-	lifted, to := e.box(protocol.Classic), e.box(protocol.Classic)
+	lifted, to := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	adopt(t, lifted, key)
 	id, err := age.GenerateX25519Identity()
 	if err != nil {
@@ -453,18 +453,18 @@ func (s *readDeadlines) note(read string, ctx context.Context) {
 	s.seen[read] = deadlineOf(ctx)
 }
 
-func (s *readDeadlines) Dedupe(ctx context.Context, box protocol.Address, id [32]byte) (*Header, error) {
-	if box == s.to {
+func (s *readDeadlines) Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
+	if mailbox == s.to {
 		s.note("Dedupe", ctx)
 	}
-	return s.Store.Dedupe(ctx, box, id)
+	return s.Store.Dedupe(ctx, mailbox, id)
 }
 
-func (s *readDeadlines) Count(ctx context.Context, box protocol.Address) (int, error) {
-	if box == s.to {
+func (s *readDeadlines) Count(ctx context.Context, mailbox protocol.Address) (int, error) {
+	if mailbox == s.to {
 		s.note("Count", ctx)
 	}
-	return s.Store.Count(ctx, box)
+	return s.Store.Count(ctx, mailbox)
 }
 
 func (s *readDeadlines) Account(ctx context.Context, id string) (*Account, error) {
@@ -474,16 +474,16 @@ func (s *readDeadlines) Account(ctx context.Context, id string) (*Account, error
 	return s.Store.Account(ctx, id)
 }
 
-func (s *readDeadlines) Box(ctx context.Context, a protocol.Address) (*Box, error) {
+func (s *readDeadlines) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error) {
 	if a == s.to {
-		s.note("Box", ctx)
+		s.note("Mailbox", ctx)
 	}
-	return s.Store.Box(ctx, a)
+	return s.Store.Mailbox(ctx, a)
 }
 
 // Each read a send's shared call makes runs apart from the request that
 // leads it, and is handed a context bounded by storeTimeout, so the bound
-// holds on any store: the dedupe, the box cap's reads, the
+// holds on any store: the dedupe, the mailbox cap's reads, the
 // recipient's account and its record read again after the write
 // (dromas-dev/dromas-server#91).
 func TestEveryReadOfASendsSharedCallIsBounded(t *testing.T) {
@@ -494,7 +494,7 @@ func TestEveryReadOfASendsSharedCallIsBounded(t *testing.T) {
 	to, from := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 	acc, key := accountEnv(t, e, false, 1)
 	_, hash, _ := parseAdopt(key)
-	rec, err := e.store.Box(ctx, to.id.Address())
+	rec, err := e.store.Mailbox(ctx, to.id.Address())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -505,7 +505,7 @@ func TestEveryReadOfASendsSharedCallIsBounded(t *testing.T) {
 	e.want(e.sendTo(to, 1, 1, from, 1), http.StatusCreated, "")
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, read := range []string{"Dedupe", "Count", "Account", "Box"} {
+	for _, read := range []string{"Dedupe", "Count", "Account", "Mailbox"} {
 		d, ok := s.seen[read]
 		t.Logf("%s: deadline %v (-1: none)", read, d)
 		if !ok || d <= 0 || d > storeTimeout {
@@ -541,7 +541,7 @@ func (b *boundedFirstRead) GetRecords(ctx context.Context, in *dynamodbstreams.G
 // its next pass, as after any failed read (dromas-dev/dromas-server#91).
 func TestAFollowersReadEndedAtItsBoundIsReadAgain(t *testing.T) {
 	t.Parallel()
-	fs, f, s, box, now := feedFixture(t)
+	fs, f, s, mailbox, now := feedFixture(t)
 	b := &boundedFirstRead{fakeStream: fs}
 	var mu sync.Mutex
 	var logged []string
@@ -555,7 +555,7 @@ func TestAFollowersReadEndedAtItsBoundIsReadAgain(t *testing.T) {
 	if err := f.position(t.Context(), "arn"); err != nil {
 		t.Fatal(err)
 	}
-	fs.write("a", msgEvent(stypes.OperationTypeInsert, box, 1, now))
+	fs.write("a", msgEvent(stypes.OperationTypeInsert, mailbox, 1, now))
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	var lost atomic.Value
@@ -564,7 +564,7 @@ func TestAFollowersReadEndedAtItsBoundIsReadAgain(t *testing.T) {
 		defer close(done)
 		f.run(ctx, func(err error) { lost.Store(err) })
 	}()
-	for until := time.Now().Add(2 * time.Second); s.countOf(box) == 0 && time.Now().Before(until); {
+	for until := time.Now().Add(2 * time.Second); s.countOf(mailbox) == 0 && time.Now().Before(until); {
 		time.Sleep(10 * time.Millisecond)
 	}
 	cancel()
@@ -574,11 +574,11 @@ func TestAFollowersReadEndedAtItsBoundIsReadAgain(t *testing.T) {
 	b.mu.Unlock()
 	mu.Lock()
 	defer mu.Unlock()
-	t.Logf("the first read's deadline %v (-1: none); logged %q; the record applied %v; lost %v", d, logged, s.countOf(box) == 1, lost.Load())
+	t.Logf("the first read's deadline %v (-1: none); logged %q; the record applied %v; lost %v", d, logged, s.countOf(mailbox) == 1, lost.Load())
 	if d <= 0 || d > storeTimeout {
 		t.Errorf("the follower's read is handed deadline %v; want at most %v", d, storeTimeout)
 	}
-	if lost.Load() != nil || s.countOf(box) != 1 || len(logged) == 0 {
-		t.Errorf("after a read that ended at its bound the follower lost its place %v, applied the record %v, logged %d lines; want it read again", lost.Load(), s.countOf(box) == 1, len(logged))
+	if lost.Load() != nil || s.countOf(mailbox) != 1 || len(logged) == 0 {
+		t.Errorf("after a read that ended at its bound the follower lost its place %v, applied the record %v, logged %d lines; want it read again", lost.Load(), s.countOf(mailbox) == 1, len(logged))
 	}
 }

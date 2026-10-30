@@ -33,12 +33,12 @@ func aclReply(t *testing.T, r reply) protocol.ACLDocument {
 	return d
 }
 
-// sealTo is a send to box to, as the server sees one: an age file to its
+// sealTo is a send to mailbox to, as the server sees one: an age file to its
 // current prekey under both its serials. What is inside is the recipient's
 // to judge, so a test needs nothing more.
-func (e *env) sealTo(to *client.Box) sealed {
+func (e *env) sealTo(to *client.Mailbox) sealed {
 	e.t.Helper()
-	b, err := e.store.Box(context.Background(), to.Address())
+	b, err := e.store.Mailbox(context.Background(), to.Address())
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func (e *env) sealTo(to *client.Box) sealed {
 	return sealedTo(serial, under, ct.Bytes())
 }
 
-// A box's ACL is the box's own to read and replace, whole; one that is not
+// A mailbox's ACL is the mailbox's own to read and replace, whole; one that is not
 // an ACL, or holds more entries than the server takes, is refused before
 // anything is stored. A GET carries the ETag of the ACL held, and a PUT,
 // whose ACL may not be what was sent, carries none (RFC 9110 §9.3.4).
@@ -66,19 +66,19 @@ func TestACLRoute(t *testing.T) {
 	l := relaxed()
 	l.ACLEntries = 3
 	e := newEnv(t, l)
-	b, other := e.box(protocol.Classic), e.box(protocol.Classic)
+	b, other := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	path := "/v1/" + b.Address().String() + "/acl"
 	pass := e.pass(b)
 	x, y := other.Address().String(), strings.Repeat("ab", 32)
 	const open = `{"allow":["*"],"deny":[]}`
 
-	// The box's own pass, and only that.
+	// The mailbox's own pass, and only that.
 	e.want(e.do("GET", path, nil, ""), 401, protocol.CodeUnauthorized)
 	e.want(e.do("PUT", path, aclOf([]string{"*"}, nil), ""), 401, protocol.CodeUnauthorized)
 	e.want(e.do("GET", path, nil, e.pass(other)), 401, protocol.CodeUnauthorized)
 	e.want(e.do("PUT", path, aclOf([]string{"*"}, nil), e.pass(other)), 401, protocol.CodeUnauthorized)
 
-	// A box that has put none lets everyone in, and has a tag for that.
+	// A mailbox that has put none lets everyone in, and has a tag for that.
 	got := e.do("GET", path, nil, pass)
 	e.want(got, 200, "")
 	if string(bytes.TrimSpace(got.body)) != open || got.header.Get("ETag") != entityTag(got.body) {
@@ -137,31 +137,31 @@ func TestACLRoute(t *testing.T) {
 	}
 
 	// The record carries it, as the store writes it and reads it back.
-	stored, err := e.store.Box(context.Background(), b.Address())
+	stored, err := e.store.Mailbox(context.Background(), b.Address())
 	if err != nil || stored.ACL == nil || stored.ACL.Allow.Any || stored.ACL.Allow.Len() != 2 {
 		t.Fatalf("the stored ACL: %+v, %v", stored.ACL, err)
 	}
-	back, err := decodeBox(item(boxItem(stored)))
+	back, err := decodeMailbox(item(mailboxItem(stored)))
 	if err != nil || back.ACL == nil || !back.ACL.SameLists(stored.ACL) {
 		t.Fatalf("the ACL does not come back from the record as it went in: %+v, %v", back.ACL, err)
 	}
-	if doc, err := item(boxItem(stored)).bytes("acl"); err != nil || string(doc) != want {
+	if doc, err := item(mailboxItem(stored)).bytes("acl"); err != nil || string(doc) != want {
 		t.Fatalf("the record holds the ACL as %s, %v; want %s", doc, err, want)
 	}
-	none, err := e.store.Box(context.Background(), other.Address())
+	none, err := e.store.Mailbox(context.Background(), other.Address())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := boxItem(none)["acl"]; ok {
-		t.Fatal("a box with no ACL has one in its record")
+	if _, ok := mailboxItem(none)["acl"]; ok {
+		t.Fatal("a mailbox with no ACL has one in its record")
 	}
-	if back, err := decodeBox(item(boxItem(none))); err != nil || back.ACL != nil {
+	if back, err := decodeMailbox(item(mailboxItem(none))); err != nil || back.ACL != nil {
 		t.Fatalf("a record with no ACL reads back with one: %+v, %v", back.ACL, err)
 	}
 }
 
 // A PUT with If-Match replaces only the ACL it names, compared strongly, as
-// RFC 9110 §13.1.1 has an origin server evaluate one, a box with no ACL
+// RFC 9110 §13.1.1 has an origin server evaluate one, a mailbox with no ACL
 // included; a false one is 412, changes nothing, and is answered before the
 // body is read (RFC 9110 §13.2.1). One without If-Match replaces whatever is
 // held, so no ACL is the last the server takes (dromas-dev/dromas-client#360).
@@ -170,7 +170,7 @@ func TestAnACLsIfMatch(t *testing.T) {
 	l := relaxed()
 	l.ACLEntries = 3
 	e := newEnv(t, l)
-	b, c := e.box(protocol.Classic), e.box(protocol.Classic)
+	b, c := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	path := "/v1/" + b.Address().String() + "/acl"
 	pass := e.pass(b)
 	pause, open := aclOf([]string{}, []string{"*"}), aclOf([]string{"*"}, nil)
@@ -181,7 +181,7 @@ func TestAnACLsIfMatch(t *testing.T) {
 		return r.header.Get("ETag"), string(r.body)
 	}
 
-	// A box with none: its tag is that of the ACL it answers.
+	// A mailbox with none: its tag is that of the ACL it answers.
 	none, _ := tagOf()
 	e.want(e.doWith("PUT", path, open, pass, "If-Match", `"other"`), 412, protocol.CodePreconditionFailed)
 	e.want(e.doWith("PUT", path, pause, pass, "If-Match", none), 200, "")
@@ -224,7 +224,7 @@ func TestAnACLsIfMatch(t *testing.T) {
 		e.want(e.doWith("PUT", path, body, pass, "If-Match", none), 412, protocol.CodePreconditionFailed)
 	}
 
-	// Mail waits refused while the pause holds, and a PUT with no If-Match,
+	// Messages wait refused while the pause holds, and a PUT with no If-Match,
 	// or with the pause's tag, lets senders in again: nothing a writer once
 	// wrote stops the next.
 	e.want(e.do("POST", "/v1/"+b.Address().String()+"/messages", e.sealTo(b), e.pass(c)), 403, protocol.CodeSenderNotAllowed)
@@ -255,14 +255,14 @@ func (o *onRead) Read(p []byte) (int, error) {
 
 // A PUT's If-Match is held to the ACL its write replaces (PROTOCOL.md
 // §11.2): another writer's ACL that lands while the PUT reads its body, after
-// its If-Match was evaluated, makes the PUT 409 box_changed, and the other
+// its If-Match was evaluated, makes the PUT 409 mailbox_changed, and the other
 // writer's ACL stays; the same PUT sent again meets an If-Match that is
 // false (412), and one with the tag now held is taken
 // (dromas-dev/dromas-server#88).
 func TestAnACLsIfMatchIsHeldToTheACLItsWriteReplaces(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	b, x := e.box(protocol.Classic), e.box(protocol.Classic)
+	b, x := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	path := "/v1/" + b.Address().String() + "/acl"
 	pass := e.pass(b)
 	tag := e.do("GET", path, nil, pass).header.Get("ETag")
@@ -271,13 +271,13 @@ func TestAnACLsIfMatchIsHeldToTheACLItsWriteReplaces(t *testing.T) {
 	e.setMiddle(func(w http.ResponseWriter, r *http.Request, next http.Handler) {
 		if r.Method == http.MethodPut && raced.Load() == 0 {
 			r.Body = &onRead{ReadCloser: r.Body, f: func() {
-				cur, err := e.store.Box(context.Background(), b.Address())
+				cur, err := e.store.Mailbox(context.Background(), b.Address())
 				if err != nil {
 					t.Error(err)
 					return
 				}
 				cur.ACL = other
-				if err := e.store.UpdateBox(context.Background(), cur); err != nil {
+				if err := e.store.UpdateMailbox(context.Background(), cur); err != nil {
 					t.Error(err)
 					return
 				}
@@ -290,7 +290,7 @@ func TestAnACLsIfMatchIsHeldToTheACLItsWriteReplaces(t *testing.T) {
 	r := e.doWith("PUT", path, pause, pass, "If-Match", tag)
 	e.setMiddle(nil)
 	now := e.do("GET", path, nil, pass)
-	if raced.Load() != 1 || r.status != http.StatusConflict || r.code() != protocol.CodeBoxChanged {
+	if raced.Load() != 1 || r.status != http.StatusConflict || r.code() != protocol.CodeMailboxChanged {
 		t.Errorf("a PUT whose record changed while it read its body: %d %s (raced %d); the ACL held after: %s", r.status, r.body, raced.Load(), now.body)
 	}
 	if !strings.Contains(string(now.body), x.Address().String()) || now.header.Get("ETag") == tag {
@@ -307,7 +307,7 @@ func TestAnACLsIfMatchIsHeldToTheACLItsWriteReplaces(t *testing.T) {
 func TestAnACLsGETReadsItsPreconditions(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	b, other := e.box(protocol.Classic), e.box(protocol.Classic)
+	b, other := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	path := "/v1/" + b.Address().String() + "/acl"
 	pass := e.pass(b)
 	e.want(e.do("PUT", path, aclOf([]string{"*"}, []string{other.Address().String()}), pass), 200, "")
@@ -344,7 +344,7 @@ func TestAnACLsGETReadsItsPreconditions(t *testing.T) {
 			t.Errorf("%s: 200 with ETag %q: %s", c.name, r.header.Get("ETag"), r.body)
 		}
 	}
-	// Only where the answer would be 200: no pass, or no box, is answered as
+	// Only where the answer would be 200: no pass, or no mailbox, is answered as
 	// it is without them.
 	e.want(e.doWith("GET", path, nil, "", "If-Match", `"other"`), 401, protocol.CodeUnauthorized)
 	e.want(e.doWith("GET", path, nil, e.pass(other), "If-None-Match", tag), 401, protocol.CodeUnauthorized)
@@ -358,7 +358,7 @@ func TestACLRefusesSends(t *testing.T) {
 	l := relaxed()
 	l.SendsPerDay = 1
 	e := newEnv(t, l)
-	a, b, c := e.box(protocol.Classic), e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b, c := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	to := "/v1/" + b.Address().String()
 	acl := func(allow, deny []string) {
 		t.Helper()
@@ -386,16 +386,16 @@ func TestACLRefusesSends(t *testing.T) {
 	e.limited(e.do("POST", to+"/messages", e.sealTo(b), e.pass(c)), protocol.QuotaSends)
 }
 
-// An ACL deletes no mail: a deny refuses the sender's later sends, and what
-// the box holds stays until it is acked or expires (PROTOCOL.md §11.14). A
-// post of a message the box holds unacked is still answered with its
+// An ACL deletes no messages: a deny refuses the sender's later sends, and what
+// the mailbox holds stays until it is acked or expires (PROTOCOL.md §11.14). A
+// post of a message the mailbox holds unacked is still answered with its
 // receipt, since step 6 comes before the ACL (§11.10). One that denies
-// everyone is how a box pauses, and a later ACL undoes it.
-func TestACLDeletesNoMail(t *testing.T) {
+// everyone is how a mailbox pauses, and a later ACL undoes it.
+func TestACLDeletesNoMessages(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
-	a, b, c := e.box(protocol.Classic), e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b, c := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	to := "/v1/" + b.Address().String()
 	first := e.sealTo(b)
 	stored := e.do("POST", to+"/messages", first, e.pass(a))
@@ -405,10 +405,10 @@ func TestACLDeletesNoMail(t *testing.T) {
 	held := func(when string) {
 		t.Helper()
 		if n, err := e.store.Count(ctx, b.Address()); err != nil || n != 3 {
-			t.Fatalf("%s the box holds %d, %v; want the 3 sent", when, n, err)
+			t.Fatalf("%s the mailbox holds %d, %v; want the 3 sent", when, n, err)
 		}
 		if l := listOf(t, e.do("GET", to+"/messages", nil, e.pass(b))); l.Count != 3 || len(l.Messages) != 3 {
-			t.Fatalf("%s the box lists %d of %d; want 3", when, len(l.Messages), l.Count)
+			t.Fatalf("%s the mailbox lists %d of %d; want 3", when, len(l.Messages), l.Count)
 		}
 	}
 
@@ -429,7 +429,7 @@ func TestACLDeletesNoMail(t *testing.T) {
 	e.want(e.do("PUT", to+"/acl", aclOf([]string{"*"}, nil), e.pass(b)), 200, "")
 	e.want(e.do("POST", to+"/messages", e.sealTo(b), e.pass(c)), 201, "")
 	if n, err := e.store.Count(ctx, b.Address()); err != nil || n != 4 {
-		t.Fatalf("after the pause is undone the box holds %d, %v; want the 3 held and the one sent since", n, err)
+		t.Fatalf("after the pause is undone the mailbox holds %d, %v; want the 3 held and the one sent since", n, err)
 	}
 }
 
@@ -442,7 +442,7 @@ func TestACLReachesAnotherProcess(t *testing.T) {
 	srv2 := httptest.NewServer(apitest.Handler(t, New(Config{Store: other, Limits: relaxed(), Now: e.clock.Now, Ready: other.Ready}).Handler()))
 	t.Cleanup(srv2.Close)
 	e2 := &env{t: t, clock: e.clock, store: other, srv: srv2}
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	to := "/v1/" + b.Address().String()
 
 	// The other process holds b's record, with no ACL in it.

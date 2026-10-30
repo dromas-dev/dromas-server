@@ -33,7 +33,7 @@ var update = flag.Bool("update", false, "write testdata/aws-requests.golden agai
 func TestEveryStoreCallSendsAWSWhatItSentBefore(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
-	box, other := protocol.Address{0xb0, 1}, protocol.Address{0xb1, 2}
+	mailbox, other := protocol.Address{0xb0, 1}, protocol.Address{0xb1, 2}
 	id := [32]byte{0x1d, 4}
 	received := now.Add(-time.Hour)
 	b64 := base64.StdEncoding.EncodeToString
@@ -63,15 +63,15 @@ func TestEveryStoreCallSendsAWSWhatItSentBefore(t *testing.T) {
 		out, _ := json.MarshalIndent(v, "", " ")
 		fmt.Fprintf(&got, "%s %s\n", op, out)
 	}
-	// A message of the box's, live, as the live index and the messages table
+	// A message of the mailbox's, live, as the live index and the messages table
 	// hold it; every other DynamoDB call is answered {}.
 	live := fmt.Sprintf(`"box":{"B":%q},"id":{"B":%q},"live":{"B":%q},"size":{"N":"100"}`,
-		b64(box[:]), b64(id[:]), b64(liveKey(ms(received), id)))
-	// And a box record, a registered box's under the address other, to every
-	// Query of the boxes table, so that a box's load reads its live entries.
+		b64(mailbox[:]), b64(id[:]), b64(liveKey(ms(received), id)))
+	// And a mailbox record, a registered mailbox's under the address other, to every
+	// Query of the mailboxes table, so that a mailbox's load reads its live entries.
 	_, _, held := heldRecord(t)
 	held.Addr = other
-	record, err := json.Marshal(map[string]any{"Count": 1, "Items": []any{avJSON(&types.AttributeValueMemberM{Value: boxItem(held)})["M"]}})
+	record, err := json.Marshal(map[string]any{"Count": 1, "Items": []any{avJSON(&types.AttributeValueMemberM{Value: mailboxItem(held)})["M"]}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestEveryStoreCallSendsAWSWhatItSentBefore(t *testing.T) {
 		var in struct{ TableName, IndexName string }
 		_ = json.Unmarshal(body, &in)
 		switch {
-		case op == "Query" && in.TableName == "boxes":
+		case op == "Query" && in.TableName == "mailboxes":
 			return answer{status: http.StatusOK, body: string(record)}
 		case op == "Query" && in.IndexName == liveIndex:
 			return answer{status: http.StatusOK, body: `{"Count":1,"Items":[{` + live + `}]}`}
@@ -91,8 +91,8 @@ func TestEveryStoreCallSendsAWSWhatItSentBefore(t *testing.T) {
 	s := fakeStore(t, f)
 	s.now = func() time.Time { return now }
 
-	rec := &Box{
-		Addr: box, Identity: []byte("an identity document"), State: Active,
+	rec := &Mailbox{
+		Addr: mailbox, Identity: []byte("an identity document"), State: Active,
 		Statement: []byte("a prekey statement"), Signature: []byte("its signature"),
 		CertSerial: 7, Cert: [32]byte{0xce, 5}, SenderKeyTypes: []string{"ssh-ed25519"},
 		Retired: []Retired{{Type: protocol.Classic, NotAfter: now.Add(24 * time.Hour), KeyHash: [32]byte{0x4b, 6}}},
@@ -105,40 +105,40 @@ func TestEveryStoreCallSendsAWSWhatItSentBefore(t *testing.T) {
 		name string
 		call func()
 	}{
-		{"CreateBox", func() { c := cloneBox(rec); _ = s.CreateBox(ctx, c) }},
-		{"UpdateBox", func() { c := cloneBox(rec); _ = s.UpdateBox(ctx, c) }},
+		{"CreateMailbox", func() { c := cloneMailbox(rec); _ = s.CreateMailbox(ctx, c) }},
+		{"UpdateMailbox", func() { c := cloneMailbox(rec); _ = s.UpdateMailbox(ctx, c) }},
 		{"Revoke, the address and certificates through 9", func() {
-			_ = s.Revoke(ctx, box, &Revocations{Identity: rec.Identity, Address: []byte("a revocation"), Certs: []byte("certificates"), CertsSig: []byte("their signature"), Through: 9}, ExpectAnything)
+			_ = s.Revoke(ctx, mailbox, &Revocations{Identity: rec.Identity, Address: []byte("a revocation"), Certs: []byte("certificates"), CertsSig: []byte("their signature"), Through: 9}, ExpectAnything)
 		}},
 		{"Revoke, the address alone", func() {
-			_ = s.Revoke(ctx, box, &Revocations{Identity: rec.Identity, Address: []byte("a revocation")}, ExpectAnything)
+			_ = s.Revoke(ctx, mailbox, &Revocations{Identity: rec.Identity, Address: []byte("a revocation")}, ExpectAnything)
 		}},
 		{"Revoke, certificates through 9, where none is held (If-None-Match: *)", func() {
-			_ = s.Revoke(ctx, box, &Revocations{Identity: rec.Identity, Certs: []byte("certificates"), CertsSig: []byte("their signature"), Through: 9}, ExpectNone)
+			_ = s.Revoke(ctx, mailbox, &Revocations{Identity: rec.Identity, Certs: []byte("certificates"), CertsSig: []byte("their signature"), Through: 9}, ExpectNone)
 		}},
 		{"Revoke, the address, where some are held (If-Match: *)", func() {
-			_ = s.Revoke(ctx, box, &Revocations{Identity: rec.Identity, Address: []byte("a revocation")}, ExpectHeld)
+			_ = s.Revoke(ctx, mailbox, &Revocations{Identity: rec.Identity, Address: []byte("a revocation")}, ExpectHeld)
 		}},
-		{"Box", func() { _, _ = s.Box(ctx, other) }},
-		{"Count, the box's load", func() { _, _ = s.Count(ctx, other) }},
-		{"Dedupe", func() { _, _ = s.Dedupe(ctx, box, id) }},
-		{"PutMessage", func() { _, _ = s.PutMessage(ctx, box, h, []byte("a ciphertext")) }},
-		{"List, from the start", func() { _, _ = s.List(ctx, box, nil, 50, false) }},
-		{"List, from the start, strongly consistent (a held list's)", func() { _, _ = s.List(ctx, box, nil, 50, true) }},
-		{"List, after a cursor", func() { _, _ = s.List(ctx, box, &Cursor{ReceivedAt: received, ID: id}, 50, false) }},
-		{"Message, whole", func() { _, _, _ = s.Message(ctx, box, id, 0) }},
-		{"Message, from byte 40", func() { _, _, _ = s.Message(ctx, box, id, 40) }},
-		{"DeleteMessage", func() { _ = s.DeleteMessage(ctx, box, id) }},
-		{"DeleteMessages", func() { _ = s.DeleteMessages(ctx, box) }},
-		{"DeleteBox", func() { _ = s.DeleteBox(ctx, box) }},
+		{"Mailbox", func() { _, _ = s.Mailbox(ctx, other) }},
+		{"Count, the mailbox's load", func() { _, _ = s.Count(ctx, other) }},
+		{"Dedupe", func() { _, _ = s.Dedupe(ctx, mailbox, id) }},
+		{"PutMessage", func() { _, _ = s.PutMessage(ctx, mailbox, h, []byte("a ciphertext")) }},
+		{"List, from the start", func() { _, _ = s.List(ctx, mailbox, nil, 50, false) }},
+		{"List, from the start, strongly consistent (a held list's)", func() { _, _ = s.List(ctx, mailbox, nil, 50, true) }},
+		{"List, after a cursor", func() { _, _ = s.List(ctx, mailbox, &Cursor{ReceivedAt: received, ID: id}, 50, false) }},
+		{"Message, whole", func() { _, _, _ = s.Message(ctx, mailbox, id, 0) }},
+		{"Message, from byte 40", func() { _, _, _ = s.Message(ctx, mailbox, id, 40) }},
+		{"DeleteMessage", func() { _ = s.DeleteMessage(ctx, mailbox, id) }},
+		{"DeleteMessages", func() { _ = s.DeleteMessages(ctx, mailbox) }},
+		{"DeleteMailbox", func() { _ = s.DeleteMailbox(ctx, mailbox) }},
 		{"Account", func() { _, _ = s.Account(ctx, "an account") }},
 		{"CreateAccount", func() { _ = s.CreateAccount(ctx, &Account{ID: "an account", Unmetered: true}) }},
 		{"PutAdoptKey", func() {
 			_ = s.PutAdoptKey(ctx, &AdoptKey{Account: "an account", Hash: [32]byte{0xad, 7}, Uses: 2, Expires: now.Add(time.Hour)})
 		}},
 		{"AdoptKey", func() { _, _ = s.AdoptKey(ctx, "an account", [32]byte{0xad, 7}) }},
-		{"Adopt", func() { c := cloneBox(rec); _ = s.Adopt(ctx, c, "an account", [32]byte{0xad, 7}) }},
-		{"Leave", func() { c := cloneBox(rec); c.Account = "an account"; _ = s.Leave(ctx, c) }},
+		{"Adopt", func() { c := cloneMailbox(rec); _ = s.Adopt(ctx, c, "an account", [32]byte{0xad, 7}) }},
+		{"Leave", func() { c := cloneMailbox(rec); c.Account = "an account"; _ = s.Leave(ctx, c) }},
 	}
 	for _, c := range calls {
 		mu.Lock()

@@ -38,7 +38,7 @@ func TestNoPagesButTheLinkPage(t *testing.T) {
 	}
 }
 
-// A box's link opens a page for any 64 lowercase hex characters, the form
+// A mailbox's link opens a page for any 64 lowercase hex characters, the form
 // clients take, while the API is still 503: fixed text, the address and the
 // link, kept out of Referer headers and search engines. Anything else is
 // 404. A server with no names of its own (the dev server's) names itself as
@@ -138,7 +138,7 @@ func TestTheLinkPageNamesItsOwnServer(t *testing.T) {
 
 var loopback = []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}
 
-// The page's command is the client README's: the echo box's link renders to
+// The page's command is the client README's: the echo mailbox's link renders to
 // a line of the README, at the address the client code carries, on a server
 // called dromas.dev through TLS in front of it.
 func TestLinkPageCommandIsInTheClientREADME(t *testing.T) {

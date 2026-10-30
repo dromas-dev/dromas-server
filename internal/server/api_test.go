@@ -36,14 +36,14 @@ func TestTheRoutesAreTheDescriptions(t *testing.T) {
 	}
 }
 
-// The read of a box is GET /v1/<address>, and the read of its identity it
+// The read of a mailbox is GET /v1/<address>, and the read of its identity it
 // replaced is no route of this server: GET …/identity gets the router's plain
 // 404. GET …/revocations is a route, the read of what the server keeps of an
 // address (TestTheRevocationsOfAnyAddressAreServed).
-func TestTheReadTheBoxReplacedIsGone(t *testing.T) {
+func TestTheReadTheMailboxReplacedIsGone(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	b := e.box(protocol.Classic)
+	b := e.mailbox(protocol.Classic)
 	resp, err := http.Get(e.srv.URL + "/v1/" + b.Address().String() + "/identity")
 	if err != nil {
 		t.Fatal(err)

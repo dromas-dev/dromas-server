@@ -31,7 +31,7 @@ import (
 // would change nothing is answered before what costs.
 
 // A retry is answered as the first send was, from the message held, though
-// the box renewed its prekey since (PROTOCOL.md §11.10 step 6): stored once,
+// the mailbox renewed its prekey since (PROTOCOL.md §11.10 step 6): stored once,
 // counted once. A new ciphertext to the retired prekey is still stale.
 func TestARetryAfterARenewalGetsItsReceipt(t *testing.T) {
 	t.Parallel()
@@ -39,7 +39,7 @@ func TestARetryAfterARenewalGetsItsReceipt(t *testing.T) {
 	l := relaxed()
 	l.SendsPerDay = 1
 	e := newEnv(t, l)
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	sent := capture(e, "/v1/"+b.Address().String())
 	first := send(t, a, b, "sent before the renewal")
 	e.setMiddle(nil)
@@ -52,7 +52,7 @@ func TestARetryAfterARenewalGetsItsReceipt(t *testing.T) {
 		t.Fatalf("a retry after the renewal: %d %s, want 200 and %+v", r.status, r.body, *first)
 	}
 	if n, err := e.store.Count(ctx, b.Address()); err != nil || n != 1 {
-		t.Fatalf("the box holds %d messages (%v), want the one", n, err)
+		t.Fatalf("the mailbox holds %d messages (%v), want the one", n, err)
 	}
 	other := *sent
 	other.ciphertext = append([]byte{}, sent.ciphertext...)
@@ -67,7 +67,7 @@ func TestASendersCallsBoundTheDedupeRead(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	e := newEnv(t, l)
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	sent := capture(e, "/v1/"+b.Address().String())
 	send(t, a, b, "once")
 	e.setMiddle(nil)
@@ -88,7 +88,7 @@ func TestASendersCallsBoundTheDedupeRead(t *testing.T) {
 	}
 }
 
-// A box takes new mail at a rate of its own, from every sender together
+// A mailbox takes new messages at a rate of its own, from every sender together
 // (Limits.ReceiveBurst): past it a send is mailbox_busy and waits in its
 // sender's outbox. A retry spends none of it, and an account lifts it to
 // ReceiveCeiling, never past it.
@@ -98,8 +98,8 @@ func TestTheReceiveBudget(t *testing.T) {
 	l := relaxed()
 	l.ReceiveBurst, l.ReceiveRefill = 2, time.Minute
 	e := newEnv(t, l)
-	b := e.box(protocol.Classic)
-	s1, s2, s3 := e.box(protocol.Classic), e.box(protocol.Classic), e.box(protocol.Classic)
+	b := e.mailbox(protocol.Classic)
+	s1, s2, s3 := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	sent := capture(e, "/v1/"+b.Address().String())
 	send(t, s1, b, "one")
 	e.setMiddle(nil)
@@ -115,25 +115,25 @@ func TestTheReceiveBudget(t *testing.T) {
 		t.Fatalf("the waiting message after a refill: %v, %v", rs, err)
 	}
 	if n, err := e.store.Count(ctx, b.Address()); err != nil || n != 3 {
-		t.Fatalf("the box holds %d messages (%v), want 3", n, err)
+		t.Fatalf("the mailbox holds %d messages (%v), want 3", n, err)
 	}
 
-	// An unmetered account's box takes mail at the ceiling: the same burst,
+	// An unmetered account's mailbox takes messages at the ceiling: the same burst,
 	// then one each ReceiveCeiling, and never with no budget.
 	_, key := accountEnv(t, e, true, 1)
-	echo := e.box(protocol.Classic)
+	echo := e.mailbox(protocol.Classic)
 	adopt(t, echo, key)
-	for i, s := range []*client.Box{s1, s2} {
-		if _, err := s.Send(ctx, echo.Address(), "to the unmetered box"); err != nil {
-			t.Fatalf("send %d to an unmetered box: %v", i+1, err)
+	for i, s := range []*client.Mailbox{s1, s2} {
+		if _, err := s.Send(ctx, echo.Address(), "to the unmetered mailbox"); err != nil {
+			t.Fatalf("send %d to an unmetered mailbox: %v", i+1, err)
 		}
 	}
 	_, err = s3.Send(ctx, echo.Address(), "past its burst")
 	if codeOf(err) != protocol.CodeMailboxBusy || !errorsAs(err, &ae) || ae.RetryAfter != time.Second {
-		t.Fatalf("a third new message to the unmetered box at once: %v, want mailbox_busy after a second", err)
+		t.Fatalf("a third new message to the unmetered mailbox at once: %v, want mailbox_busy after a second", err)
 	}
 	if top, ok := e.server.Top(string(protocol.CodeMailboxBusy), 10); !ok || !slices.ContainsFunc(top, func(d Indebted) bool { return d.Key == echo.Address().String() }) {
-		t.Errorf("the operator's top of mailbox_busy, %v, does not list the unmetered box", top)
+		t.Errorf("the operator's top of mailbox_busy, %v, does not list the unmetered mailbox", top)
 	}
 	e.clock.Add(ReceiveCeiling)
 	if rs, err := s3.Flush(ctx); err != nil || len(rs) != 1 {
@@ -156,20 +156,20 @@ func errorsAs(err error, ae **client.APIError) bool {
 	return false
 }
 
-// A lookup, the read of a box, is its caller's address's to pay for: it
+// A lookup, the read of a mailbox, is its caller's address's to pay for: it
 // takes no pass (PROTOCOL.md §11.8; dromas-dev/dromas-client#352). Past
 // the gate, where it spends its address's flood budget whatever it carries,
 // a pass this process has checked among them, it spends nothing, as the
 // page a link opens spends nothing: memory answers both, and only a read
-// that finds no box counts, as a miss. Whatever Authorization it carries,
-// no pass is parsed or checked, and none of a box's calls is spent.
+// that finds no mailbox counts, as a miss. Whatever Authorization it carries,
+// no pass is parsed or checked, and none of a mailbox's calls is spent.
 func TestLookupsArePaidByTheirCaller(t *testing.T) {
 	t.Parallel()
 	t.Run("whatever it carries", func(t *testing.T) {
 		l := relaxed()
 		l.CallBurst, l.CallRefill = 1, time.Hour
 		e, _, reg := metered(t, l)
-		a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+		a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 		e.clock.Add(time.Second) // past the passes the registrations showed
 		pass := e.pass(a)
 		e.want(e.do(http.MethodGet, "/v1/"+a.Address().String()+"/acl", nil, pass), http.StatusOK, "") // a's one call, which checks its pass
@@ -181,7 +181,7 @@ func TestLookupsArePaidByTheirCaller(t *testing.T) {
 			}
 		}
 		if d := moved(before, counts(t, reg, "dromas_server_passes_total")); len(d) != 0 {
-			t.Errorf("reads of a box looked at passes: %v", d)
+			t.Errorf("reads of a mailbox looked at passes: %v", d)
 		}
 		e.limited(e.do(http.MethodGet, "/v1/"+a.Address().String()+"/acl", nil, pass), protocol.QuotaCalls) // the one it spent, and none by the reads
 	})
@@ -194,17 +194,17 @@ func TestLookupsArePaidByTheirCaller(t *testing.T) {
 		r.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 		e.want(call("10.0.0.1", "PUT", r.path(""), r.registration(1), r.pass(1)), http.StatusCreated, "")
 		pass := r.pass(1)
-		e.want(call("10.0.0.2", "GET", r.path("/messages"), nil, pass), http.StatusOK, "") // checked, of a box live in memory
+		e.want(call("10.0.0.2", "GET", r.path("/messages"), nil, pass), http.StatusOK, "") // checked, of a mailbox live in memory
 		for range l.RequestBurst {
 			e.want(call("10.0.0.3", "GET", r.path(""), nil, pass), http.StatusOK, "")
 		}
 		e.limited(call("10.0.0.3", "GET", r.path(""), nil, pass), protocol.QuotaRequests)
-		e.want(call("10.0.0.3", "GET", r.path("/messages"), nil, pass), http.StatusOK, "") // a call that takes the pass is its box's
+		e.want(call("10.0.0.3", "GET", r.path("/messages"), nil, pass), http.StatusOK, "") // a call that takes the pass is its mailbox's
 	})
 	t.Run("with none", func(t *testing.T) {
 		l := relaxed()
 		e := newEnv(t, l)
-		b := e.box(protocol.Classic)
+		b := e.mailbox(protocol.Classic)
 		l.MissesPerMinute = 2
 		e2, cs := counted(t, e, l)
 		read := "/v1/" + b.Address().String()
@@ -217,19 +217,19 @@ func TestLookupsArePaidByTheirCaller(t *testing.T) {
 			}
 		}
 		if got := cs.calls.Load(); got != before {
-			t.Errorf("50 more lookups of a box held in memory made %d storage calls, want none", got-before)
+			t.Errorf("50 more lookups of a mailbox held in memory made %d storage calls, want none", got-before)
 		}
 	})
 }
 
-// A fetch or an ack of an id the box does not hold is answered from memory,
-// and is a call like any other: it spends the box's calls. A held message's
+// A fetch or an ack of an id the mailbox does not hold is answered from memory,
+// and is a call like any other: it spends the mailbox's calls. A held message's
 // fetch and ack were paid for by its receive.
-func TestUnknownIDsSpendTheBoxsCalls(t *testing.T) {
+func TestUnknownIDsSpendTheMailboxsCalls(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	e := newEnv(t, l)
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	send(t, a, b, "held")
 	l.CallBurst, l.CallRefill = 2, time.Minute
 	e2, _ := counted(t, e, l)
@@ -270,17 +270,17 @@ func TestAStatementOutOfOrderIsRefusedBeforeItsSignature(t *testing.T) {
 	e.want(e.do(http.MethodGet, "/v1/"+nobody.String(), nil, ""), http.StatusNotFound, protocol.CodeNoSuchMailbox) // the address's one miss is still there
 }
 
-// Registration never changes a box, so a registered box is answered from its
+// Registration never changes a mailbox, so a registered mailbox is answered from its
 // record whether this process holds it or reads it, and spends nothing of its
 // address's registrations (PROTOCOL.md §11.4, the order of refusals;
 // dromas-dev/dromas-client#410): with the address's one registration
-// spent, the box's identical retry is 200, and another statement is 409 with
+// spent, the mailbox's identical retry is 200, and another statement is 409 with
 // no check, signed or not, with a pass or none.
-func TestARegisteredBoxIsAnsweredWhateverItsAddressSpentOfRegistrations(t *testing.T) {
+func TestARegisteredMailboxIsAnsweredWhateverItsAddressSpentOfRegistrations(t *testing.T) {
 	t.Parallel()
 	for name, with := range map[string][]func(*Config){
-		"a box this process holds":         nil,
-		"a box this process does not hold": {func(c *Config) { c.Store = unknownStore{c.Store} }},
+		"a mailbox this process holds":         nil,
+		"a mailbox this process does not hold": {func(c *Config) { c.Store = unknownStore{c.Store} }},
 	} {
 		t.Run(name, func(t *testing.T) {
 			l := relaxed()
@@ -307,20 +307,20 @@ type failedReads struct {
 	fail atomic.Bool
 }
 
-func (s *failedReads) Box(ctx context.Context, a protocol.Address) (*Box, error) {
+func (s *failedReads) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error) {
 	if s.fail.Load() {
 		return nil, errors.New("the store cannot be reached")
 	}
-	return s.Store.Box(ctx, a)
+	return s.Store.Mailbox(ctx, a)
 }
 
 // A registration's read of an address its process's memory cannot answer is
 // counted once, as what it turns out to be (LIMITS.md rule 4; register;
 // dromas-dev/dromas-client#410). The registrations it would spend, of
 // the address and of its /48, are reserved before the read and given back
-// when it finds a box or a revocation, or fails, and kept when it finds
+// when it finds a mailbox or a revocation, or fails, and kept when it finds
 // nothing; it reserves no miss. Where they are spent, the read is a
-// lookup's, under a miss: given back when it finds a box or a revocation,
+// lookup's, under a miss: given back when it finds a mailbox or a revocation,
 // and kept when it finds nothing, which is refused for the registrations.
 // With the misses spent too, the read is refused for them.
 func TestARegistrationsReadIsCountedAsWhatItFinds(t *testing.T) {
@@ -337,25 +337,25 @@ func TestARegistrationsReadIsCountedAsWhatItFinds(t *testing.T) {
 		return r
 	}
 	register := func(r *raw) reply { return call(ip, "PUT", r.path(""), r.registration(1), r.pass(1)) }
-	box, gone := fresh(), fresh()
-	e.want(register(box), http.StatusCreated, "") // the first of the two
+	mailbox, gone := fresh(), fresh()
+	e.want(register(mailbox), http.StatusCreated, "") // the first of the two
 	e.want(call("192.0.2.70", "PUT", gone.path(""), gone.registration(1), gone.pass(1)), http.StatusCreated, "")
 	rev, err := protocol.SignRevocation(gone.signer, gone.id.Address())
 	if err != nil {
 		t.Fatal(err)
 	}
 	e.want(call("192.0.2.70", "PUT", gone.path("/revocations"), protocol.Revocations{Identity: gone.id.Document(), Revocation: rev}, ""), http.StatusCreated, "")
-	box.prekey(2, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
-	// answered is the box's identical retry, another statement, and a
+	mailbox.prekey(2, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+	// answered is the mailbox's identical retry, another statement, and a
 	// registration of the revoked address, each answered from what is kept.
 	answered := func() {
 		t.Helper()
-		e.want(register(box), http.StatusOK, "")
-		e.want(call(ip, "PUT", box.path(""), box.registration(2), box.pass(2)), http.StatusConflict, protocol.CodeConflict)
+		e.want(register(mailbox), http.StatusOK, "")
+		e.want(call(ip, "PUT", mailbox.path(""), mailbox.registration(2), mailbox.pass(2)), http.StatusConflict, protocol.CodeConflict)
 		e.want(register(gone), http.StatusGone, protocol.CodeRevoked)
 	}
 
-	// One registration left: what finds a box or a revocation gives it back,
+	// One registration left: what finds a mailbox or a revocation gives it back,
 	// and so does a read that fails.
 	for range 3 {
 		answered()
@@ -366,23 +366,23 @@ func TestARegistrationsReadIsCountedAsWhatItFinds(t *testing.T) {
 	reads.fail.Store(false)
 	e.want(register(failing), http.StatusCreated, "") // the second of the two
 
-	// None left: the read is a lookup's, under the one miss, which a box or
+	// None left: the read is a lookup's, under the one miss, which a mailbox or
 	// a revocation found gives back.
 	for range 3 {
 		answered()
 	}
 	e.limited(register(fresh()), protocol.QuotaRegistrations) // nothing found: the miss kept
 	e.limited(register(fresh()), protocol.QuotaMisses)
-	e.limited(register(box), protocol.QuotaMisses) // the retry is deferred by the misses, never refused for the registrations
-	e.clock.Add(time.Minute)                       // the miss back, no registration
-	e.want(register(box), http.StatusOK, "")
+	e.limited(register(mailbox), protocol.QuotaMisses) // the retry is deferred by the misses, never refused for the registrations
+	e.clock.Add(time.Minute)                           // the miss back, no registration
+	e.want(register(mailbox), http.StatusOK, "")
 }
 
 // readsMeet holds the first read of address a's record, once it has read,
 // until a second has read too, so two registrations of a both read it
 // before either writes, however their goroutines are scheduled: a second
 // read that had only begun could still land after the first's write, and
-// find the box. Later reads pass. late is set if no second read ended within
+// find the mailbox. Later reads pass. late is set if no second read ended within
 // 5 s.
 type readsMeet struct {
 	Store
@@ -392,8 +392,8 @@ type readsMeet struct {
 	late atomic.Bool
 }
 
-func (s *readsMeet) Box(ctx context.Context, a protocol.Address) (*Box, error) {
-	b, err := s.Store.Box(ctx, a)
+func (s *readsMeet) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error) {
+	b, err := s.Store.Mailbox(ctx, a)
 	if a == s.a {
 		switch s.n.Add(1) {
 		case 1:
@@ -410,8 +410,8 @@ func (s *readsMeet) Box(ctx context.Context, a protocol.Address) (*Box, error) {
 }
 
 // Two identical registrations of a new address at once, each reading it
-// before either writes, make one box: one is 201, and the other meets the
-// box at its write and is answered 200 from its record (registered,
+// before either writes, make one mailbox: one is 201, and the other meets the
+// mailbox at its write and is answered 200 from its record (registered,
 // bounded). Each kept its registration before its signatures (register,
 // g.keep), so the two have spent two: this pins that spend, and whether the
 // second's is given back is open (dromas-dev/dromas-client#443 item 1).
@@ -462,13 +462,13 @@ func TestAFloorNoHigherIsAnsweredWithoutACheck(t *testing.T) {
 	e.want(e.do("PUT", r.path("/revocations"), higher, ""), http.StatusTooManyRequests, protocol.CodeRateLimited)
 }
 
-// The identity's acts are counted per box, each kind on its own, so neither
+// The identity's acts are counted per mailbox, each kind on its own, so neither
 // holds back the other: its new certificates (Limits.CertificatesPerDay) and
 // its raises of the revocation of certificates
-// (Limits.CertificateRevocationsPerDay). A renewal while the box's current
+// (Limits.CertificateRevocationsPerDay). A renewal while the mailbox's current
 // certificate is revoked is not counted: it replaces what a counted raise
-// revoked. The revocation of the address is counted against no box, so
-// nothing keeps an owner from ending a box.
+// revoked. The revocation of the address is counted against no mailbox, so
+// nothing keeps an owner from ending a mailbox.
 func TestTheIdentitysActsAreCountedApart(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
@@ -492,13 +492,13 @@ func TestTheIdentitysActsAreCountedApart(t *testing.T) {
 	e.want(e.do("PUT", r.path("/revocations"), protocol.Revocations{Identity: r.id.Document(), Revocation: rev}, ""), http.StatusCreated, "")
 }
 
-// A taker who holds a box's working key can spend the box's calls with its
+// A taker who holds a mailbox's working key can spend the mailbox's calls with its
 // pass, and so hold back a renewal (this repo's #35). It cannot hold back the
 // identity's raise of the revocation of certificates, which carries no pass
 // and spends a count no renewal spends. Once that is taken, the taken pass is
 // refused, and the renewal that replaces the revoked certificate is taken at
-// once, with the box's calls and the identity's certificates for the day
-// spent: it spends none of the box's counts (#84). The calls are still
+// once, with the mailbox's calls and the identity's certificates for the day
+// spent: it spends none of the mailbox's counts (#84). The calls are still
 // spent after it.
 func TestATakerCannotHoldTheRemedyBack(t *testing.T) {
 	t.Parallel()
@@ -531,7 +531,7 @@ func TestFailedPassesAreCountedPerCaller(t *testing.T) {
 	l := relaxed()
 	l.MissesPerMinute = 2
 	e := newEnv(t, l)
-	b := e.box(protocol.Classic)
+	b := e.mailbox(protocol.Classic)
 	list := "/v1/" + b.Address().String() + "/messages"
 	good := e.pass(b)
 	e.want(e.do(http.MethodGet, list, nil, good), http.StatusOK, "")
@@ -545,13 +545,13 @@ func TestFailedPassesAreCountedPerCaller(t *testing.T) {
 	e.want(e.do(http.MethodGet, list, nil, e.pass(b)), http.StatusOK, "")
 }
 
-// forgedFromPublic is a pass for box a made from what GET /v1/<a> serves
-// anyone: the box's prekey signature, which carries its current
+// forgedFromPublic is a pass for mailbox a made from what GET /v1/<a> serves
+// anyone: the mailbox's prekey signature, which carries its current
 // certificate, where the pass's signature goes. It passes every check but
 // the working key's signature.
 func forgedFromPublic(t *testing.T, e *env, a protocol.Address) (protocol.RegisterRequest, string) {
 	t.Helper()
-	var br protocol.BoxResponse
+	var br protocol.MailboxResponse
 	if err := json.Unmarshal(e.do("GET", "/v1/"+a.String(), nil, "").body, &br); err != nil {
 		t.Fatal(err)
 	}
@@ -561,25 +561,25 @@ func forgedFromPublic(t *testing.T, e *env, a protocol.Address) (protocol.Regist
 	return protocol.RegisterRequest{Identity: br.Identity, Prekey: br.Prekey, PrekeySignature: br.PrekeySignature}, pass
 }
 
-// retryFinds is each way a registration's identical retry finds its box:
+// retryFinds is each way a registration's identical retry finds its mailbox:
 // in its process's memory; read, with its address's registrations left; and
-// read by a lookup, with them spent by the box's own registration
+// read by a lookup, with them spent by the mailbox's own registration
 // (register).
 var retryFinds = map[string]struct {
 	spent bool
 	with  []func(*Config)
 }{
-	"a box this process holds":                                            {},
-	"a box this process does not hold":                                    {false, []func(*Config){func(c *Config) { c.Store = unknownStore{c.Store} }}},
-	"a box this process does not hold, its address's registrations spent": {true, []func(*Config){func(c *Config) { c.Store = unknownStore{c.Store} }}},
+	"a mailbox this process holds":                                            {},
+	"a mailbox this process does not hold":                                    {false, []func(*Config){func(c *Config) { c.Store = unknownStore{c.Store} }}},
+	"a mailbox this process does not hold, its address's registrations spent": {true, []func(*Config){func(c *Config) { c.Store = unknownStore{c.Store} }}},
 }
 
-// A registration of a registered box is answered from its record, before the
-// registrations count, whether this process holds the box or reads it, so its
+// A registration of a registered mailbox is answered from its record, before the
+// registrations count, whether this process holds the mailbox or reads it, so its
 // pass is checked as any call's is: one the process has not seen reserves a
 // miss of its caller's address, kept when it fails
 // (dromas-dev/dromas-server#40). Past the misses it is refused before it
-// is checked, as on any other route. A box read where its address's
+// is checked, as on any other route. A mailbox read where its address's
 // registrations are spent is read by a lookup, and its pass checked the
 // same (dromas-dev/dromas-client#450 item 2).
 func TestAnIdenticalRetrysPassIsCounted(t *testing.T) {
@@ -604,13 +604,13 @@ func TestAnIdenticalRetrysPassIsCounted(t *testing.T) {
 }
 
 // An identical retry of a registration, once its pass is checked, spends one
-// of the box's calls, as a renewal's identical retry does: so passes in turn,
-// each checked in full, are bounded by the box's budget
+// of the mailbox's calls, as a renewal's identical retry does: so passes in turn,
+// each checked in full, are bounded by the mailbox's budget
 // (dromas-dev/dromas-server#40). An honest retry, with the same pass or a
-// new one, is taken. So it is whether this process holds the box or reads
+// new one, is taken. So it is whether this process holds the mailbox or reads
 // it, with its address's registrations left or spent
 // (dromas-dev/dromas-client#450 item 2).
-func TestAnIdenticalRetrySpendsTheBoxsCalls(t *testing.T) {
+func TestAnIdenticalRetrySpendsTheMailboxsCalls(t *testing.T) {
 	t.Parallel()
 	for name, c := range retryFinds {
 		t.Run(name, func(t *testing.T) {
@@ -670,9 +670,9 @@ type slowPut struct {
 	d time.Duration
 }
 
-func (s slowPut) PutMessage(ctx context.Context, box protocol.Address, h *Header, body []byte) (*Header, error) {
+func (s slowPut) PutMessage(ctx context.Context, mailbox protocol.Address, h *Header, body []byte) (*Header, error) {
 	time.Sleep(s.d)
-	return s.Store.PutMessage(ctx, box, h, body)
+	return s.Store.PutMessage(ctx, mailbox, h, body)
 }
 
 // concurrently posts n sends at once from each of froms to to, through a
@@ -728,7 +728,7 @@ func concurrently(t *testing.T, e *env, l Limits, to *raw, froms []*raw, n int) 
 func TestDailySendsAreTakenBeforeTheWrite(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.SendsPerDay, l.BoxCap = 5, 0
+	l.SendsPerDay, l.MailboxCap = 5, 0
 	e := newEnv(t, l)
 	from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 	if stored := concurrently(t, e, l, to, []*raw{from}, 20); stored != 5 {
@@ -736,42 +736,42 @@ func TestDailySendsAreTakenBeforeTheWrite(t *testing.T) {
 	}
 }
 
-// The box cap counts the sends in flight too, so sends made at once cannot
+// The mailbox cap counts the sends in flight too, so sends made at once cannot
 // all pass on the same count (dromas-dev/dromas-server#4): from one sender,
 // and from several.
-func TestTheBoxCapCountsSendsInFlight(t *testing.T) {
+func TestTheMailboxCapCountsSendsInFlight(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.BoxCap = 3
+	l.MailboxCap = 3
 	e := newEnv(t, l)
 	from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 	if stored := concurrently(t, e, l, to, []*raw{from}, 20); stored != 3 {
-		t.Fatalf("%d of 20 concurrent sends from one sender stored, with a box cap of 3", stored)
+		t.Fatalf("%d of 20 concurrent sends from one sender stored, with a mailbox cap of 3", stored)
 	}
-	l.BoxCap = 7
+	l.MailboxCap = 7
 	e = newEnv(t, l)
 	to = e.raw().register(protocol.MaxPrekeyLifetime)
 	froms := []*raw{e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)}
 	if stored := concurrently(t, e, l, to, froms, 5); stored != 7 {
-		t.Fatalf("%d of 15 concurrent sends stored, with a box cap of 7", stored)
+		t.Fatalf("%d of 15 concurrent sends stored, with a mailbox cap of 7", stored)
 	}
 }
 
-// slowBox counts reads of box records, and holds each a while, as a read of
+// slowMailbox counts reads of mailbox records, and holds each a while, as a read of
 // the table does.
-type slowBox struct {
+type slowMailbox struct {
 	Store
 	reads *atomic.Int64
 }
 
-func (s slowBox) Box(ctx context.Context, a protocol.Address) (*Box, error) {
+func (s slowMailbox) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error) {
 	s.reads.Add(1)
 	time.Sleep(50 * time.Millisecond)
-	return s.Store.Box(ctx, a)
+	return s.Store.Mailbox(ctx, a)
 }
 
 // Lookups of one cold address at once share one read, and only its caller
-// is counted for it (dromas-dev/dromas-server#6): twenty lookups of a box
+// is counted for it (dromas-dev/dromas-server#6): twenty lookups of a mailbox
 // that does not exist, from an address with one miss to spend, are each
 // answered 404, from one read.
 func TestLookupsOfOneAddressShareARead(t *testing.T) {
@@ -780,7 +780,7 @@ func TestLookupsOfOneAddressShareARead(t *testing.T) {
 	l.MissesPerMinute = 1
 	e := newEnv(t, l)
 	var n atomic.Int64
-	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: slowBox{e.store, &n}, Limits: l, Now: e.clock.Now}).Handler()))
+	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: slowMailbox{e.store, &n}, Limits: l, Now: e.clock.Now}).Handler()))
 	t.Cleanup(srv.Close)
 	var nobody protocol.Address
 	nobody[0] = 9
@@ -809,26 +809,26 @@ func TestLookupsOfOneAddressShareARead(t *testing.T) {
 	}
 }
 
-// ctxBox is the test store, but its record cache always misses, so that
-// every lookup reads, and each read of a box's record waits d or until its
+// ctxMailbox is the test store, but its record cache always misses, so that
+// every lookup reads, and each read of a mailbox's record waits d or until its
 // context ends, as DynamoStore's GetItem does.
-type ctxBox struct {
+type ctxMailbox struct {
 	Store
 	reads atomic.Int64
 	d     time.Duration
 }
 
-func (s *ctxBox) Box(ctx context.Context, a protocol.Address) (*Box, error) {
+func (s *ctxMailbox) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error) {
 	s.reads.Add(1)
 	select {
 	case <-time.After(s.d):
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	return s.Store.Box(ctx, a)
+	return s.Store.Mailbox(ctx, a)
 }
 
-func (s *ctxBox) Known(protocol.Address) (*Box, bool) { return nil, false }
+func (s *ctxMailbox) Known(protocol.Address) (*Mailbox, bool) { return nil, false }
 
 // A lookup's shared read runs apart from the request that leads it
 // (dromas-dev/dromas-server#32): a leader whose caller hangs up during
@@ -839,7 +839,7 @@ func TestALeaderWhoHangsUpFailsNoLookup(t *testing.T) {
 	l := relaxed()
 	e := newEnv(t, l)
 	b := e.raw().register(protocol.MaxPrekeyLifetime)
-	st := &ctxBox{Store: e.store, d: 300 * time.Millisecond}
+	st := &ctxMailbox{Store: e.store, d: 300 * time.Millisecond}
 	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: st, Limits: l, Now: e.clock.Now}).Handler()))
 	t.Cleanup(srv.Close)
 	u := srv.URL + b.path("")
@@ -867,26 +867,26 @@ func TestALeaderWhoHangsUpFailsNoLookup(t *testing.T) {
 	}
 }
 
-// panicStore is the test store, but a read of box's record, a first fetch's
+// panicStore is the test store, but a read of mailbox's record, a first fetch's
 // count and a revocation panic, as a bug in decoding a record would. Memory
-// holds nothing of box, so a lookup and a registration of it read.
+// holds nothing of mailbox, so a lookup and a registration of it read.
 type panicStore struct {
 	Store
-	box protocol.Address
+	mailbox protocol.Address
 }
 
-func (s panicStore) Known(a protocol.Address) (*Box, bool) {
-	if a == s.box {
+func (s panicStore) Known(a protocol.Address) (*Mailbox, bool) {
+	if a == s.mailbox {
 		return nil, false
 	}
 	return s.Store.Known(a)
 }
 
-func (s panicStore) Box(ctx context.Context, a protocol.Address) (*Box, error) {
-	if a == s.box {
-		panic("a panic in the read of a box's record")
+func (s panicStore) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error) {
+	if a == s.mailbox {
+		panic("a panic in the read of a mailbox's record")
 	}
-	return s.Store.Box(ctx, a)
+	return s.Store.Mailbox(ctx, a)
 }
 
 func (s panicStore) Fetched(context.Context, protocol.Address, [32]byte) (bool, bool, error) {
@@ -994,7 +994,7 @@ func (l *lockedBuffer) String() string {
 	return l.b.String()
 }
 
-// A box takes mail out at a rate of its own (Limits.DrainBurst): its first
+// A mailbox takes messages out at a rate of its own (Limits.DrainBurst): its first
 // fetch of each held message spends the budget, which only its own calls
 // spend. Past it a fetch is rate_limited and the rest waits on the server;
 // a fetch that is not a first one gives its token back; an account can lift
@@ -1003,7 +1003,7 @@ func TestTheDrainBudget(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	e := newEnv(t, l)
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	for _, body := range []string{"1", "2", "3"} {
 		send(t, a, b, body)
 	}
@@ -1018,7 +1018,7 @@ func TestTheDrainBudget(t *testing.T) {
 		return e2.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages/"+id, nil, pass)
 	}
 	unknown := strings.Repeat("cd", 32)
-	e2.want(fetch(unknown), http.StatusNotFound, protocol.CodeNoSuchMessage) // given back: not new mail
+	e2.want(fetch(unknown), http.StatusNotFound, protocol.CodeNoSuchMessage) // given back: not a new message
 	e2.want(fetch(ids[0].ID), http.StatusOK, "")
 	e2.want(fetch(ids[0].ID), http.StatusOK, "") // a repeat: given back, and its own allowance spent
 	e2.want(fetch(ids[1].ID), http.StatusOK, "")
@@ -1030,12 +1030,12 @@ func TestTheDrainBudget(t *testing.T) {
 	e.clock.Add(l.DrainRefill)
 	e2.want(fetch(ids[2].ID), http.StatusOK, "")
 
-	// An unmetered account's box drains with no budget.
+	// An unmetered account's mailbox drains with no budget.
 	_, key := accountEnv(t, e, true, 1)
-	echo := e.box(protocol.Classic)
+	echo := e.mailbox(protocol.Classic)
 	adopt(t, echo, key)
 	for range 3 {
-		send(t, a, echo, "to the unmetered box")
+		send(t, a, echo, "to the unmetered mailbox")
 	}
 	epass := e2.pass(echo)
 	for _, m := range listOf(t, e2.do(http.MethodGet, "/v1/"+echo.Address().String()+"/messages", nil, epass)).Messages {

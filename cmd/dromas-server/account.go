@@ -22,7 +22,7 @@ func account(cmd string, args []string) error {
 	switch cmd {
 	case "create":
 		id := fs.String("id", "", "the account's id: a name of ours (echo), or none to mint one")
-		unmetered := fs.Bool("unmetered", false, "its boxes have no daily limit, the largest cap and new mail at the fastest any box takes it, never charged (the echo account)")
+		unmetered := fs.Bool("unmetered", false, "its mailboxes have no daily limit, the largest cap and new messages at the fastest any mailbox takes them, never charged (the echo account)")
 		run = func(ctx context.Context, s *server.Memory) error {
 			if *id == "" {
 				var err error
@@ -41,8 +41,8 @@ func account(cmd string, args []string) error {
 			return nil
 		}
 	case "key":
-		id := fs.String("account", "", "the account the key adopts boxes into")
-		uses := fs.Int("uses", 0, "how many boxes the key may adopt")
+		id := fs.String("account", "", "the account the key adopts mailboxes into")
+		uses := fs.Int("uses", 0, "how many mailboxes the key may adopt")
 		ttl := fs.Duration("ttl", 0, "how long the key is good for")
 		run = func(ctx context.Context, s *server.Memory) error {
 			if *id == "" || *uses < 1 || *ttl <= 0 {
@@ -63,20 +63,20 @@ func account(cmd string, args []string) error {
 			return nil
 		}
 	case "drop":
-		fs.String("boxes-table", "", "the DynamoDB table of boxes")
-		id := fs.String("account", "", "the account to drop the box from")
-		addr := fs.String("box", "", "the box's address")
+		fs.String("mailboxes-table", "", "the DynamoDB table of mailboxes")
+		id := fs.String("account", "", "the account to drop the mailbox from")
+		addr := fs.String("mailbox", "", "the mailbox's address")
 		run = func(ctx context.Context, s *server.Memory) error {
 			a, err := protocol.ParseAddress(*addr)
-			if fs.Lookup("boxes-table").Value.String() == "" || *id == "" || err != nil {
-				return errors.New("name --boxes-table, --account and --box (an address)")
+			if fs.Lookup("mailboxes-table").Value.String() == "" || *id == "" || err != nil {
+				return errors.New("name --mailboxes-table, --account and --mailbox (an address)")
 			}
-			b, err := s.Box(ctx, a)
+			b, err := s.Mailbox(ctx, a)
 			if err != nil {
-				return fmt.Errorf("box: %w", err)
+				return fmt.Errorf("mailbox: %w", err)
 			}
 			if b.Account != *id {
-				return fmt.Errorf("the box is not in account %s", *id)
+				return fmt.Errorf("the mailbox is not in account %s", *id)
 			}
 			return s.Leave(ctx, b)
 		}
@@ -94,9 +94,9 @@ func account(cmd string, args []string) error {
 	if err != nil {
 		return err
 	}
-	boxesTable := ""
-	if f := fs.Lookup("boxes-table"); f != nil {
-		boxesTable = f.Value.String()
+	mailboxesTable := ""
+	if f := fs.Lookup("mailboxes-table"); f != nil {
+		mailboxesTable = f.Value.String()
 	}
-	return run(ctx, server.NewDynamoStore(server.DynamoConfig{AWS: awsCfg, BoxesTable: boxesTable, AccountsTable: *accts, ConsistentReads: true}))
+	return run(ctx, server.NewDynamoStore(server.DynamoConfig{AWS: awsCfg, MailboxesTable: mailboxesTable, AccountsTable: *accts, ConsistentReads: true}))
 }

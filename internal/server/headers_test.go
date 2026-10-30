@@ -18,7 +18,7 @@ func TestEveryAPIAnswerTellsABrowserItIsNoPage(t *testing.T) {
 	to := e.raw().register(protocol.MaxPrekeyLifetime)
 	list := e.do("GET", to.path("/messages"), nil, to.pass(1))
 	answers := map[string]reply{
-		"a box's read":        e.do("GET", to.path(""), nil, ""),
+		"a mailbox's read":    e.do("GET", to.path(""), nil, ""),
 		"a list":              list,
 		"a list's 304":        e.doWith("GET", to.path("/messages"), nil, to.pass(1), "If-None-Match", list.header.Get("ETag")),
 		"a list with no pass": e.do("GET", to.path("/messages"), nil, ""),

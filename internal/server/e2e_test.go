@@ -96,27 +96,27 @@ func (e *env) opts() client.Options {
 	return client.Options{Base: e.srv.URL, Now: e.clock.Now}
 }
 
-// box makes and registers a box.
-func (e *env) box(kt protocol.KeyType) *client.Box {
+// mailbox makes and registers a mailbox.
+func (e *env) mailbox(kt protocol.KeyType) *client.Mailbox {
 	e.t.Helper()
-	b := e.heldBox(kt)
+	b := e.heldMailbox(kt)
 	landAll(e.t, b)
 	return b
 }
 
-// landAll gives a box the policy that lands every sender's mail in inbox/:
+// landAll gives a mailbox the policy that lands every sender's messages in inbox/:
 // the tests that use it are of the server, not of where the client lands
-// mail.
-func landAll(t *testing.T, b *client.Box) {
+// messages.
+func landAll(t *testing.T, b *client.Mailbox) {
 	t.Helper()
 	if err := b.SetPolicy(t.Context(), client.Policy{Unknown: client.LandInbox, Server: client.AdmitAll}); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// heldBox makes a box with the client's default policy, which holds mail
+// heldMailbox makes a mailbox with the client's default policy, which holds messages
 // from a sender it has not allowed.
-func (e *env) heldBox(kt protocol.KeyType) *client.Box {
+func (e *env) heldMailbox(kt protocol.KeyType) *client.Mailbox {
 	e.t.Helper()
 	b, err := client.Init(context.Background(), e.t.TempDir(), e.opts(), kt)
 	if err != nil {
@@ -125,7 +125,7 @@ func (e *env) heldBox(kt protocol.KeyType) *client.Box {
 	return b
 }
 
-func send(t *testing.T, from, to *client.Box, body string) *protocol.Receipt {
+func send(t *testing.T, from, to *client.Mailbox, body string) *protocol.Receipt {
 	t.Helper()
 	r, err := from.Send(context.Background(), to.Address(), body)
 	if err != nil {
@@ -134,7 +134,7 @@ func send(t *testing.T, from, to *client.Box, body string) *protocol.Receipt {
 	return &r.Receipt
 }
 
-func receive(t *testing.T, b *client.Box) *client.Result {
+func receive(t *testing.T, b *client.Mailbox) *client.Result {
 	t.Helper()
 	res, err := b.Receive(context.Background())
 	if err != nil {
@@ -152,9 +152,9 @@ func bodyOf(t *testing.T, d client.Delivery) string {
 	return s
 }
 
-// signer loads a box's identity key from its state directory, as an operator
+// signer loads a mailbox's identity key from its state directory, as an operator
 // who stole it, or a test, would.
-func signer(t *testing.T, b *client.Box) ssh.Signer {
+func signer(t *testing.T, b *client.Mailbox) ssh.Signer {
 	t.Helper()
 	k, err := os.ReadFile(filepath.Join(b.Dir(), "identity"))
 	if err != nil {
@@ -170,9 +170,9 @@ func signer(t *testing.T, b *client.Box) ssh.Signer {
 func TestEndToEnd(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b := e.box(protocol.PostQuantum), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.PostQuantum), e.mailbox(protocol.Classic)
 
-	body := "hello <b>&é☃ — mail is data"
+	body := "hello <b>&é☃ — a message is data"
 	r := send(t, a, b, body)
 	if len(r.ID) != 64 {
 		t.Fatalf("receipt id %q", r.ID)
@@ -195,7 +195,7 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatal("the envelope is HTML-escaped")
 	}
 
-	// Acked: the box is empty, and the client keeps the empty page's ETag;
+	// Acked: the mailbox is empty, and the client keeps the empty page's ETag;
 	// its next poll sends it back and is 304, the interval in Retry-After.
 	if res := receive(t, b); len(res.Delivered) != 0 {
 		t.Fatal("delivered twice")
@@ -224,11 +224,11 @@ func TestEndToEnd(t *testing.T) {
 	// A message arriving after an empty poll is in the next.
 	send(t, a, b, "second")
 	if res := receive(t, b); len(res.Delivered) != 1 || bodyOf(t, res.Delivered[0]) != "second" {
-		t.Fatal("the poll after an empty one missed new mail")
+		t.Fatal("the poll after an empty one missed a new message")
 	}
 }
 
-// capture records the next send to box path to, "/v1/<address>", as the
+// capture records the next send to mailbox path to, "/v1/<address>", as the
 // client made it: its serials and its ciphertext.
 func capture(e *env, to string) *sealed {
 	got := &sealed{}
@@ -252,7 +252,7 @@ func capture(e *env, to string) *sealed {
 func TestASendNamesTheMessageItMade(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	req := e.sealTo(b)
 	made := e.do(http.MethodPost, "/v1/"+b.Address().String()+"/messages", req, e.pass(a))
 	var r protocol.Receipt
@@ -274,17 +274,17 @@ func TestASendNamesTheMessageItMade(t *testing.T) {
 
 // While the message is unacked, a post of its bytes gets the receipt held,
 // from any sender; once it is acked nothing of it is kept, and the same bytes
-// are new mail, which the reader skips, and acks (PROTOCOL.md §11.10 step 6,
+// are a new message, which the reader skips, and acks (PROTOCOL.md §11.10 step 6,
 // §12.3 check 8).
 func TestRetryGetsOriginalReceipt(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b, c := e.box(protocol.Classic), e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b, c := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	sent := capture(e, "/v1/"+b.Address().String())
 	r := send(t, a, b, "once")
 	e.setMiddle(nil)
 
-	for _, from := range []*client.Box{a, c} {
+	for _, from := range []*client.Mailbox{a, c} {
 		retry := e.do(http.MethodPost, "/v1/"+b.Address().String()+"/messages", *sent, e.pass(from))
 		var again protocol.Receipt
 		if err := json.Unmarshal(retry.body, &again); err != nil || retry.status != http.StatusOK || again != *r {
@@ -300,18 +300,18 @@ func TestRetryGetsOriginalReceipt(t *testing.T) {
 		t.Fatalf("the same bytes after the ack were delivered again: %d", len(res.Delivered))
 	}
 	if n, err := e.store.Count(t.Context(), b.Address()); err != nil || n != 0 {
-		t.Fatalf("after the reader's drain the box holds %d, %v; want none", n, err)
+		t.Fatalf("after the reader's drain the mailbox holds %d, %v; want none", n, err)
 	}
 }
 
-// A new prekey comes under a new certificate: the pass the box held before
+// A new prekey comes under a new certificate: the pass the mailbox held before
 // it, which the server had taken, is refused.
 func TestPassRefusedAfterRekey(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	b := e.box(protocol.Classic)
+	b := e.mailbox(protocol.Classic)
 	receive(t, b)
-	// A pass under the certificate in use, as the box signs one.
+	// A pass under the certificate in use, as the mailbox signs one.
 	pass := func() string { return e.pass(b) }
 	old := pass()
 	messages := "/v1/" + b.Address().String() + "/messages"
@@ -349,16 +349,16 @@ func mustHex(t *testing.T, s string) []byte {
 	return b
 }
 
-// A box whose prekey expired still works for its owner, and renews. (Senders
+// A mailbox whose prekey expired still works for its owner, and renews. (Senders
 // refusing the expired prekey is tested in dromas-client.)
 func TestRenewalAfterExpiry(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	e.clock.Add(protocol.MaxPrekeyLifetime)
-	// Both renew: b for a prekey mail can be sent to, a for a certificate
-	// with long enough left to sign mail under.
-	for _, x := range []*client.Box{a, b} {
+	// Both renew: b for a prekey messages can be sent to, a for a certificate
+	// with long enough left to sign messages under.
+	for _, x := range []*client.Mailbox{a, b} {
 		if _, err := x.Rekey(context.Background(), ""); err != nil {
 			t.Fatal(err)
 		}
@@ -372,7 +372,7 @@ func TestRenewalAfterExpiry(t *testing.T) {
 func TestRecoveryWithIdentityAlone(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b := e.box(protocol.PostQuantum), e.box(protocol.PostQuantum)
+	a, b := e.mailbox(protocol.PostQuantum), e.mailbox(protocol.PostQuantum)
 	// A restored machine: the identity, nothing else.
 	for _, g := range []string{"prekeys/*", "work/*", "state"} {
 		names, _ := filepath.Glob(filepath.Join(b.Dir(), g))
@@ -396,7 +396,7 @@ func TestPagination(t *testing.T) {
 	l := relaxed()
 	l.PollBurst = 1 // a drain of two pages is one poll, and a continuation
 	e := newEnv(t, l)
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	const n = pageSize + 5
 	for i := range n {
 		send(t, a, b, strings.Repeat("x", i))
@@ -419,16 +419,16 @@ func TestLimits(t *testing.T) {
 	ctx := context.Background()
 	t.Run("mailbox_full", func(t *testing.T) {
 		l := relaxed()
-		l.BoxCap = 2
+		l.MailboxCap = 2
 		e := newEnv(t, l)
-		a, b, c := e.box(protocol.Classic), e.box(protocol.Classic), e.box(protocol.Classic)
+		a, b, c := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 		send(t, a, b, "1")
 		send(t, c, b, "2")
 		_, err := c.Send(ctx, b.Address(), "3")
 		var ae *client.APIError
 		if !errors.As(err, &ae) || ae.Problem.Code != protocol.CodeMailboxFull || ae.Status != 429 || ae.RetryAfter == 0 ||
 			ae.Problem.Count == nil || *ae.Problem.Count != 2 {
-			t.Fatalf("send to a full box: %v %+v", err, ae)
+			t.Fatalf("send to a full mailbox: %v %+v", err, ae)
 		}
 		// Nothing is dropped to make room; the message waits in the outbox.
 		receive(t, b)
@@ -440,7 +440,7 @@ func TestLimits(t *testing.T) {
 		l := relaxed()
 		l.SendsPerDay = 2
 		e := newEnv(t, l)
-		a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+		a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 		send(t, a, b, "1")
 		send(t, a, b, "2")
 		if _, err := a.Send(ctx, b.Address(), "3"); !limitedBy(err, protocol.QuotaSends) {
@@ -448,13 +448,13 @@ func TestLimits(t *testing.T) {
 		}
 	})
 	t.Run("polls", func(t *testing.T) {
-		// A burst of 10 (a new box, or after a restart), then one more
+		// A burst of 10 (a new mailbox, or after a restart), then one more
 		// every 50 s: a poll a minute never runs dry, one every 30 s does.
 		l := relaxed()
 		d := DefaultLimits()
 		l.PollBurst, l.PollRefill = d.PollBurst, d.PollRefill
 		e := newEnv(t, l)
-		b := e.box(protocol.Classic)
+		b := e.mailbox(protocol.Classic)
 		for range 10 {
 			receive(t, b)
 		}
@@ -491,13 +491,13 @@ func TestTheGoClientsACL(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
-	a, b, c, stranger := e.heldBox(protocol.Classic), e.heldBox(protocol.Classic), e.heldBox(protocol.Classic), e.heldBox(protocol.Classic)
+	a, b, c, stranger := e.heldMailbox(protocol.Classic), e.heldMailbox(protocol.Classic), e.heldMailbox(protocol.Classic), e.heldMailbox(protocol.Classic)
 	send(t, a, b, "waits on the server")
 	if _, err := b.Block(ctx, a.Address()); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := e.store.Count(ctx, b.Address()); err != nil || n != 1 {
-		t.Fatalf("after the block the box holds %d messages, %v; want the one sent", n, err)
+		t.Fatalf("after the block the mailbox holds %d messages, %v; want the one sent", n, err)
 	}
 	_, err := a.Send(ctx, b.Address(), "refused")
 	if codeOf(err) != protocol.CodeSenderNotAllowed {
@@ -514,7 +514,7 @@ func TestTheGoClientsACL(t *testing.T) {
 	if res := receive(t, b); len(res.Delivered) != 1 || len(res.Held) != 0 || len(res.Blocked) != 1 {
 		t.Fatalf("b received %+v", res)
 	}
-	rec, err := e.store.Box(ctx, b.Address())
+	rec, err := e.store.Mailbox(ctx, b.Address())
 	if err != nil || rec.ACL == nil || rec.ACL.Allow.Any || !rec.ACL.Allow.Has(c.Address()) || !rec.ACL.Deny.Has(a.Address()) || rec.ACL.Allow.Len() != 1 {
 		t.Fatalf("the record holds %+v, %v", rec.ACL, err)
 	}

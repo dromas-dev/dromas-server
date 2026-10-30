@@ -563,7 +563,7 @@ func TestASlowReaderIsNotCut(t *testing.T) {
 }
 
 // slowStore is a store whose DeleteMessages takes hold, and whose reads of
-// a box read their context first, as the DynamoDB backend's calls do.
+// a mailbox read their context first, as the DynamoDB backend's calls do.
 type slowStore struct {
 	Store
 	hold time.Duration
@@ -578,11 +578,11 @@ func (s slowStore) DeleteMessages(ctx context.Context, a protocol.Address) error
 	}
 }
 
-func (s slowStore) Box(ctx context.Context, a protocol.Address) (*Box, error) {
+func (s slowStore) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return s.Store.Box(ctx, a)
+	return s.Store.Mailbox(ctx, a)
 }
 
 // A body's read deadline ends with the body: a handler that runs past it
@@ -742,7 +742,7 @@ func TestAFetchNeverReadIsCutWhateverItsSize(t *testing.T) {
 	l := relaxed()
 	l.BodyTimeout, l.BodyMinRate, l.MaxSize = time.Second, 8<<10, 1<<20
 	e := newEnv(t, l)
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	body := strings.Repeat("a message that is never read. ", 17000) // its ciphertext is larger
 	if len(body) < 60*l.BodyMinRate {
 		t.Fatalf("a message of %d bytes earns less than a minute", len(body))

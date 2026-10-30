@@ -51,7 +51,7 @@ func TestMetricsCountWhatTheServerDoes(t *testing.T) {
 	l.PollBurst, l.PollRefill = 1, time.Minute
 	l.ReceiveBurst, l.ReceiveRefill = 10, time.Minute
 	e, m, _ := metered(t, l)
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	to := "/v1/" + b.Address().String()
 	id := e.sent(e.do("POST", to+"/messages", e.sealTo(b), e.pass(a)))
 	e.want(e.do("GET", to+"/messages", nil, e.pass(b)), http.StatusOK, "")
@@ -70,9 +70,9 @@ func TestMetricsCountWhatTheServerDoes(t *testing.T) {
 		{"sends stored", m.requests.WithLabelValues("POST /v1/{addr}/messages", "201", ""), 1},
 		{"a poll refused", m.requests.WithLabelValues("GET /v1/{addr}/messages", "429", "rate_limited"), 1},
 		{"a route no route matches", m.requests.WithLabelValues("unmatched", "404", ""), 1},
-		{"polls allowed", m.limits.WithLabelValues("polls", "box", "allowed"), 1},
-		{"polls denied", m.limits.WithLabelValues("polls", "box", "denied"), 1},
-		{"new mail taken", m.limits.WithLabelValues("mailbox_busy", "box", "allowed"), 1},
+		{"polls allowed", m.limits.WithLabelValues("polls", "mailbox", "allowed"), 1},
+		{"polls denied", m.limits.WithLabelValues("polls", "mailbox", "denied"), 1},
+		{"new messages taken", m.limits.WithLabelValues("mailbox_busy", "mailbox", "allowed"), 1},
 		{"polls", m.lists.WithLabelValues("poll"), 1},
 		{"first fetches", m.fetches.WithLabelValues("first"), 1},
 		{"repeat fetches", m.fetches.WithLabelValues("repeat"), 1},
@@ -83,7 +83,7 @@ func TestMetricsCountWhatTheServerDoes(t *testing.T) {
 		}
 	}
 	if got := testutil.ToFloat64(m.passes.WithLabelValues("checked", "")); got < 2 {
-		t.Errorf("passes checked: %v, want at least the two boxes'", got)
+		t.Errorf("passes checked: %v, want at least the two mailboxes'", got)
 	}
 	if got := testutil.ToFloat64(m.passes.WithLabelValues("remembered", "")); got < 1 {
 		t.Errorf("passes remembered: %v", got)
@@ -93,16 +93,16 @@ func TestMetricsCountWhatTheServerDoes(t *testing.T) {
 	}
 }
 
-// No label of the metrics is a value a caller chose: a scrape after mail
-// between two boxes, a refusal and a request that matches no route carries
-// none of the boxes' addresses, the message's id, the caller's IP or a path
+// No label of the metrics is a value a caller chose: a scrape after messages
+// between two mailboxes, a refusal and a request that matches no route carries
+// none of the mailboxes' addresses, the message's id, the caller's IP or a path
 // as it was sent.
 func TestMetricsCarryNoCallerValue(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	l.MissesPerMinute, l.RequestBurst, l.RequestRefill = 1, 2, time.Minute
 	e, _, reg := metered(t, l)
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	to := "/v1/" + b.Address().String()
 	id := e.sent(e.do("POST", to+"/messages", e.sealTo(b), e.pass(a)))
 	e.want(e.do("GET", to+"/messages/"+id, nil, e.pass(b)), http.StatusOK, "")
@@ -169,7 +169,7 @@ func TestMetricsCountTheStoresCalls(t *testing.T) {
 func collectionsWant(gb float64) string {
 	const name = "dromas_server_item_collection_estimate_bytes"
 	var b strings.Builder
-	fmt.Fprintf(&b, "# HELP %s After each message written, the upper bound of DynamoDB's estimate of its box's item collection, the box's items and their LSI entries, at 2^30 bytes a GB: past 10 GB, the box takes no more mail.\n# TYPE %s histogram\n", name, name)
+	fmt.Fprintf(&b, "# HELP %s After each message written, the upper bound of DynamoDB's estimate of its mailbox's item collection, the mailbox's items and their LSI entries, at 2^30 bytes a GB: past 10 GB, the mailbox takes no more messages.\n# TYPE %s histogram\n", name, name)
 	for _, le := range gigabytes {
 		n := 0
 		if gb*(1<<30) <= le {
@@ -181,7 +181,7 @@ func collectionsWant(gb float64) string {
 	return b.String()
 }
 
-// A message write asks DynamoDB for the size of its box's item collection,
+// A message write asks DynamoDB for the size of its mailbox's item collection,
 // and the upper bound of the estimate is observed, in GB: AWS's advice for a
 // table with an LSI, whose item collections are capped at 10 GB. The fake's
 // answer is made up, so the test holds the conversion at 2^30 bytes a GB,

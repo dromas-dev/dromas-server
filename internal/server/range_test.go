@@ -22,8 +22,8 @@ type rangeStore struct {
 	reads [][2]int64
 }
 
-func (s *rangeStore) Message(ctx context.Context, box protocol.Address, id [32]byte, from int64) (*Header, []byte, error) {
-	h, body, err := s.Store.Message(ctx, box, id, from)
+func (s *rangeStore) Message(ctx context.Context, mailbox protocol.Address, id [32]byte, from int64) (*Header, []byte, error) {
+	h, body, err := s.Store.Message(ctx, mailbox, id, from)
 	s.mu.Lock()
 	s.reads = append(s.reads, [2]int64{from, int64(len(body))})
 	s.mu.Unlock()
@@ -55,7 +55,7 @@ func ranged(t *testing.T, e *env, l Limits) (*env, *rangeStore) {
 func TestAFetchResumesByRange(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	e2, rs := ranged(t, e, relaxed())
 	tok := e2.pass(b)
 	path := "/v1/" + b.Address().String() + "/messages/" + send(t, a, b, "read in two parts").ID
@@ -110,12 +110,12 @@ func TestAFetchResumesByRange(t *testing.T) {
 }
 
 // A ranged fetch is counted as any fetch is (PROTOCOL.md §11.12): a fetch of a
-// message fetched before, ranged or not, takes from the box's allowance of
+// message fetched before, ranged or not, takes from the mailbox's allowance of
 // repeats, and past it is 429 refetch_spent.
 func TestARangedFetchIsCountedAsAnyFetch(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	l := relaxed()
 	l.PollBurst, l.PollRefill = 1, time.Minute
 	e2, _ := ranged(t, e, l)

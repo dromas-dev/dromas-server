@@ -25,7 +25,7 @@ func (s *beforePut) set(f func()) {
 	s.put = f
 }
 
-func (s *beforePut) PutMessage(ctx context.Context, box protocol.Address, h *Header, body []byte) (*Header, error) {
+func (s *beforePut) PutMessage(ctx context.Context, mailbox protocol.Address, h *Header, body []byte) (*Header, error) {
 	s.mu.Lock()
 	f := s.put
 	s.put = nil
@@ -33,18 +33,18 @@ func (s *beforePut) PutMessage(ctx context.Context, box protocol.Address, h *Hea
 	if f != nil {
 		f()
 	}
-	return s.Store.PutMessage(ctx, box, h, body)
+	return s.Store.PutMessage(ctx, mailbox, h, body)
 }
 
 // Every 410 revoked this server answers carries the record it holds of the
 // address, its identity's revocation of it beside its revocation of
-// certificates, as the read of a box does and as GET …/revocations serves it
+// certificates, as the read of a mailbox does and as GET …/revocations serves it
 // (PROTOCOL.md §11.3; dromas-dev/dromas-client#353), so a client checks
 // it with no second call: a send held between its check of the recipient
 // and its write while the address is revoked, the read, a registration, a
 // prekey upload, the revocation sent again, a send, and each call about the
-// box with its own pass, for a box revoked and for an address revoked with
-// no box here.
+// mailbox with its own pass, for a mailbox revoked and for an address revoked with
+// no mailbox here.
 func TestEvery410CarriesTheRecord(t *testing.T) {
 	t.Parallel()
 	hook := &beforePut{}
@@ -78,36 +78,36 @@ func TestEvery410CarriesTheRecord(t *testing.T) {
 
 	id := strings.Repeat("0", 64)
 	for _, c := range []struct {
-		name  string
-		box   *raw
-		under uint64 // the certificate its pass is under
-		first []reply
+		name    string
+		mailbox *raw
+		under   uint64 // the certificate its pass is under
+		first   []reply
 	}{
-		{"a box revoked", r, 2, []reply{across}},
-		{"an address revoked with no box", q, 1, nil},
+		{"a mailbox revoked", r, 2, []reply{across}},
+		{"an address revoked with no mailbox", q, 1, nil},
 	} {
-		served := e.do("GET", c.box.path("/revocations"), nil, "")
+		served := e.do("GET", c.mailbox.path("/revocations"), nil, "")
 		e.want(served, http.StatusOK, "")
 		var want protocol.Revocations
-		if err := protocol.Unmarshal(served.body, &want); err != nil || len(want.Revocation) == 0 || c.box == r && len(want.RevokedCertificates) == 0 {
+		if err := protocol.Unmarshal(served.body, &want); err != nil || len(want.Revocation) == 0 || c.mailbox == r && len(want.RevokedCertificates) == 0 {
 			t.Fatalf("%s: the record held: %s, %v", c.name, served.body, err)
 		}
-		pass := c.box.pass(c.under)
+		pass := c.mailbox.pass(c.under)
 		next := c.under + 1
-		c.box.prekey(next, until, nil)
+		c.mailbox.prekey(next, until, nil)
 		got := map[string]reply{
-			"the read":             e.do("GET", c.box.path(""), nil, ""),
-			"a registration":       e.do("PUT", c.box.path(""), c.box.registration(next), c.box.pass(next)),
-			"a prekey upload":      e.do("PUT", c.box.path("/prekey"), c.box.upload(next), c.box.pass(next)),
-			"the revocation again": e.do("PUT", c.box.path("/revocations"), want, ""),
-			"a send":               e.sendTo(c.box, c.under, c.under, from, 1),
-			"a poll":               e.do("GET", c.box.path("/messages"), nil, pass),
-			"a fetch":              e.do("GET", c.box.path("/messages/"+id), nil, pass),
-			"an ack":               e.do("DELETE", c.box.path("/messages/"+id), nil, pass),
-			"a read of its ACL":    e.do("GET", c.box.path("/acl"), nil, pass),
-			"an ACL":               e.do("PUT", c.box.path("/acl"), []byte(`{"allow":["*"]}`), pass),
-			"an adopt":             e.do("PUT", c.box.path("/account"), protocol.AdoptRequest{Key: "dra1_AAAA"}, pass),
-			"a leave":              e.do("DELETE", c.box.path("/account"), nil, pass),
+			"the read":             e.do("GET", c.mailbox.path(""), nil, ""),
+			"a registration":       e.do("PUT", c.mailbox.path(""), c.mailbox.registration(next), c.mailbox.pass(next)),
+			"a prekey upload":      e.do("PUT", c.mailbox.path("/prekey"), c.mailbox.upload(next), c.mailbox.pass(next)),
+			"the revocation again": e.do("PUT", c.mailbox.path("/revocations"), want, ""),
+			"a send":               e.sendTo(c.mailbox, c.under, c.under, from, 1),
+			"a poll":               e.do("GET", c.mailbox.path("/messages"), nil, pass),
+			"a fetch":              e.do("GET", c.mailbox.path("/messages/"+id), nil, pass),
+			"an ack":               e.do("DELETE", c.mailbox.path("/messages/"+id), nil, pass),
+			"a read of its ACL":    e.do("GET", c.mailbox.path("/acl"), nil, pass),
+			"an ACL":               e.do("PUT", c.mailbox.path("/acl"), []byte(`{"allow":["*"]}`), pass),
+			"an adopt":             e.do("PUT", c.mailbox.path("/account"), protocol.AdoptRequest{Key: "dra1_AAAA"}, pass),
+			"a leave":              e.do("DELETE", c.mailbox.path("/account"), nil, pass),
 		}
 		for _, f := range c.first {
 			got["a send held across the revocation"] = f

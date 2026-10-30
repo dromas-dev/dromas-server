@@ -13,29 +13,29 @@ import (
 	"github.com/dromas-dev/dromas-client/protocol"
 )
 
-// State is what a server holds of an address (PROTOCOL.md §11.6). A box's
+// State is what a server holds of an address (PROTOCOL.md §11.6). A mailbox's
 // record is Active, the one state a record is written in or read back as;
-// Revoked and NoBox are what the store answers from the address's
+// Revoked and NoMailbox are what the store answers from the address's
 // revocations alone.
 type State string
 
 // The states.
 const (
-	// Active is a registered box.
+	// Active is a registered mailbox.
 	Active State = "active"
 	// Revoked is an address its identity revoked. Its record is deleted,
 	// and the revocation is kept for good.
 	Revoked State = "revoked"
-	// NoBox is an address with no box whose identity revoked certificates:
+	// NoMailbox is an address with no mailbox whose identity revoked certificates:
 	// a later registration is held above them.
-	NoBox State = "none"
+	NoMailbox State = "none"
 )
 
-// Box is what a server holds of an address: its box's record, if it has
+// Mailbox is what a server holds of an address: its mailbox's record, if it has
 // one, and what its identity revoked, if anything, which is kept in an item
-// of its own (Revocations) with or without a box. A revocation of the
+// of its own (Revocations) with or without a mailbox. A revocation of the
 // address is the State whatever the record says.
-type Box struct {
+type Mailbox struct {
 	Addr     protocol.Address
 	Identity []byte // the identity document, exactly as registered or as the revocations carried it
 	State    State
@@ -44,17 +44,17 @@ type Box struct {
 	Statement []byte
 	Signature []byte
 	Prekey    *protocol.Prekey
-	// The certificate Signature carries, which is the box's current one: its
+	// The certificate Signature carries, which is the mailbox's current one: its
 	// serial, and the SHA-256 of its bytes. A pass is taken only under it,
-	// and a prekey only under it or a later one (PROTOCOL.md §5). A box's
+	// and a prekey only under it or a later one (PROTOCOL.md §5). A mailbox's
 	// statements are ordered by this serial first, and by the prekey's own
 	// second.
 	CertSerial uint64
 	Cert       [32]byte
-	// SenderKeyTypes is what the box declared with its current prekey: the
-	// identity key types of the senders it takes mail from, or
+	// SenderKeyTypes is what the mailbox declared with its current prekey: the
+	// identity key types of the senders it takes messages from, or
 	// protocol.AnySender (PROTOCOL.md §7). Only names this build verifies
-	// are kept (declared): a box of any other type cannot send here.
+	// are kept (declared): a mailbox of any other type cannot send here.
 	SenderKeyTypes []string
 	// Retired holds the newest retired prekeys (Limits.RetiredKept), each
 	// until its not_after: its key may not come back.
@@ -63,9 +63,9 @@ type Box struct {
 	Created time.Time
 	// Expires is when the record may go: DynamoDB's TTL deletes it some time
 	// after (PROTOCOL.md §13). Every registration and renewal moves it to
-	// when nothing of the box is valid any more. Zero: never.
+	// when nothing of the mailbox is valid any more. Zero: never.
 	Expires time.Time
-	// Account is the account the box belongs to, or "" (PROTOCOL.md §11.16).
+	// Account is the account the mailbox belongs to, or "" (PROTOCOL.md §11.16).
 	// Only Adopt and Leave change it.
 	Account string
 	// What the identity revoked, from the address's revocations item
@@ -73,7 +73,7 @@ type Box struct {
 	//
 	// Revocation is the identity's signature that revoked the address
 	// (PROTOCOL.md §10.1): nil unless State is Revoked. With Identity it
-	// proves itself, so nobody takes this server's word that the box is
+	// proves itself, so nobody takes this server's word that the mailbox is
 	// revoked.
 	Revocation []byte
 	// RevokedCerts is the identity's highest revocation of its certificates,
@@ -84,41 +84,41 @@ type Box struct {
 	// serial replaces it.
 	RevokedCerts    []byte
 	RevokedCertsSig []byte
-	// ACL is the box's sender ACL (PROTOCOL.md §11.14): who may send to it,
-	// deny read first and then allow. nil until the box puts one, and a box
-	// with none takes mail from everyone. It is replaced whole, and never
+	// ACL is the mailbox's sender ACL (PROTOCOL.md §11.14): who may send to it,
+	// deny read first and then allow. nil until the mailbox puts one, and a mailbox
+	// with none takes messages from everyone. It is replaced whole, and never
 	// removed.
 	ACL *protocol.ACL
 }
 
-// open reports whether b is a box that takes calls: one registered and not
-// revoked. Every other state is answered as no box, but Revoked, which is
+// open reports whether b is a mailbox that takes calls: one registered and not
+// revoked. Every other state is answered as no mailbox, but Revoked, which is
 // 410.
-func (b *Box) open() bool { return b != nil && b.State == Active }
+func (b *Mailbox) open() bool { return b != nil && b.State == Active }
 
 // writable returns an error unless b's state is the one a record holds:
 // what the store answers from revocations alone is never written as a
 // record.
-func (b *Box) writable() error {
+func (b *Mailbox) writable() error {
 	if b.State != Active {
-		return fmt.Errorf("a box record is %s, never %s", Active, b.State)
+		return fmt.Errorf("a mailbox record is %s, never %s", Active, b.State)
 	}
 	return nil
 }
 
-// hasRecord reports whether b's box has a record, whatever its state.
-func (b *Box) hasRecord() bool { return b != nil && b.Rev > 0 }
+// hasRecord reports whether b's mailbox has a record, whatever its state.
+func (b *Mailbox) hasRecord() bool { return b != nil && b.Rev > 0 }
 
 // holdsRevocations reports whether what is held of an address carries a
 // revocation of it or of its certificates: what GET …/revocations answers,
 // and the target a PUT there changes (precondition).
-func (b *Box) holdsRevocations() bool {
+func (b *Mailbox) holdsRevocations() bool {
 	return b != nil && (len(b.Revocation) > 0 || len(b.RevokedCerts) > 0)
 }
 
-// listed reports whether the box's identity has revoked the certificate of
-// this serial, by the revocation on record. A box with none has revoked none.
-func (b *Box) listed(serial uint64) (bool, error) {
+// listed reports whether the mailbox's identity has revoked the certificate of
+// this serial, by the revocation on record. A mailbox with none has revoked none.
+func (b *Mailbox) listed(serial uint64) (bool, error) {
 	if len(b.RevokedCerts) == 0 {
 		return false, nil
 	}
@@ -128,7 +128,7 @@ func (b *Box) listed(serial uint64) (bool, error) {
 // Expect is what a conditional write asks of its target as it writes: what a
 // request's If-Match or If-None-Match held of the target at its read
 // (expected; PROTOCOL.md §11.2), so that a change between the two refuses the
-// write, ErrStale, and the request is answered 409 box_changed. It is the
+// write, ErrStale, and the request is answered 409 mailbox_changed. It is the
 // write's own condition, beside any other it has, and asks nothing of a
 // request that carried neither.
 type Expect int
@@ -143,7 +143,7 @@ const (
 )
 
 // Revocations is what an address's identity has revoked, as kept in an item
-// of its own beside the box's record, box or none (PROTOCOL.md §10.1, §10.2):
+// of its own beside the mailbox's record, mailbox or none (PROTOCOL.md §10.1, §10.2):
 // the revocation of the address once, and the highest revocation of its
 // certificates. Nothing in it is ever taken away, so two copies merge to the
 // larger of each.
@@ -177,12 +177,12 @@ func (r *Revocations) merge(o *Revocations) {
 // record is the revocation record of what b holds of its identity's
 // revocations, as a client reads one (PROTOCOL.md §10.3): served by
 // GET …/revocations, and carried by a 410 revoked (revokedWith).
-func (b *Box) record() *protocol.Revocations {
+func (b *Mailbox) record() *protocol.Revocations {
 	return &protocol.Revocations{Identity: b.Identity, Revocation: b.Revocation, RevokedCertificates: b.RevokedCerts, RevokedCertificatesSignature: b.RevokedCertsSig}
 }
 
 // revocations returns what b holds of its identity's revocations, or nil.
-func (b *Box) revocations() (*Revocations, error) {
+func (b *Mailbox) revocations() (*Revocations, error) {
 	if len(b.Revocation) == 0 && len(b.RevokedCerts) == 0 {
 		return nil, nil
 	}
@@ -197,18 +197,18 @@ func (b *Box) revocations() (*Revocations, error) {
 	return r, nil
 }
 
-// view is what a server holds of address a: its box's record rec, or nil,
+// view is what a server holds of address a: its mailbox's record rec, or nil,
 // with its identity's revocations rv, or nil. It is nil if neither is held.
 // A revocation of the address makes the state Revoked, whatever the record
 // says: a registration that raced the revocation leaves a record that is
 // never served, and its TTL takes it.
-func view(a protocol.Address, rec *Box, rv *Revocations) *Box {
+func view(a protocol.Address, rec *Mailbox, rv *Revocations) *Mailbox {
 	if rec == nil && rv == nil {
 		return nil
 	}
-	b := &Box{Addr: a, State: NoBox}
+	b := &Mailbox{Addr: a, State: NoMailbox}
 	if rec != nil {
-		b = cloneBox(rec)
+		b = cloneMailbox(rec)
 	}
 	if rv != nil {
 		if len(b.Identity) == 0 {
@@ -224,7 +224,7 @@ func view(a protocol.Address, rec *Box, rv *Revocations) *Box {
 
 // withRevocations is b with rv merged into what it holds of its identity's
 // revocations.
-func (b *Box) withRevocations(rv *Revocations) (*Box, error) {
+func (b *Mailbox) withRevocations(rv *Revocations) (*Mailbox, error) {
 	held, err := b.revocations()
 	if err != nil {
 		return nil, err
@@ -233,7 +233,7 @@ func (b *Box) withRevocations(rv *Revocations) (*Box, error) {
 		held = &Revocations{}
 	}
 	held.merge(rv)
-	c := cloneBox(b)
+	c := cloneMailbox(b)
 	if len(c.Identity) == 0 {
 		c.Identity = held.Identity
 	}
@@ -249,12 +249,12 @@ func (b *Box) withRevocations(rv *Revocations) (*Box, error) {
 // taken away: the revocation of the address if either holds it, and the
 // higher revocation of its certificates (higherCerts). Nothing is dropped
 // for a list that does not parse (dromas-dev/dromas-server#64).
-func mergeViews(old, cur *Box) *Box {
+func mergeViews(old, cur *Mailbox) *Mailbox {
 	base, other := cur, old
 	if versionOf(old).after(versionOf(cur)) {
 		base, other = old, cur
 	}
-	m := cloneBox(base)
+	m := cloneMailbox(base)
 	if len(m.Identity) == 0 {
 		m.Identity = other.Identity
 	}
@@ -274,7 +274,7 @@ func mergeViews(old, cur *Box) *Box {
 // place of b's: o holds one and b none, or o's reaches higher. One that does
 // not parse stands in place of one that does, so that its next use fails as
 // listNames does, closed.
-func higherCerts(o, b *Box) bool {
+func higherCerts(o, b *Mailbox) bool {
 	switch {
 	case len(o.RevokedCerts) == 0:
 		return false
@@ -304,11 +304,11 @@ func listNames(statement []byte, serial uint64) (bool, error) {
 }
 
 // Account is an account's record (PROTOCOL.md §11.16). An account pays,
-// from prepaid credit, for its boxes' sends past the free limits and for
+// from prepaid credit, for its mailboxes' sends past the free limits and for
 // size over the cap; with no credit they have the free limits. An unmetered
-// account's boxes have no daily limit, the largest cap and new mail at
+// account's mailboxes have no daily limit, the largest cap and new messages at
 // ReceiveCeiling, and are never charged: the echo account. Credit is not built yet, so a metered account's
-// boxes have the free limits.
+// mailboxes have the free limits.
 type Account struct {
 	ID        string
 	Unmetered bool
@@ -342,28 +342,28 @@ type Header struct {
 	ExpiresAt  time.Time
 }
 
-// Standing is what checking a box's pass needs of it (PROTOCOL.md §8):
+// Standing is what checking a mailbox's pass needs of it (PROTOCOL.md §8):
 // its state, its identity's public key, which certificate is its current
 // one, and whether its identity has revoked that certificate.
 type Standing struct {
 	State State
 	Key   string   // the identity's key in SSH wire form, of whatever type: what line 2 of its document holds
-	Cert  [32]byte // Box.Cert
-	// CertSerial is Box.CertSerial, which Listed is judged by.
+	Cert  [32]byte // Mailbox.Cert
+	// CertSerial is Mailbox.CertSerial, which Listed is judged by.
 	CertSerial uint64
-	// Listed is true while the box's current certificate is one its identity
-	// has revoked (PROTOCOL.md §10.2): no pass of the box is taken until it
+	// Listed is true while the mailbox's current certificate is one its identity
+	// has revoked (PROTOCOL.md §10.2): no pass of the mailbox is taken until it
 	// publishes a prekey under a new certificate.
 	Listed bool
-	// InAccount is true for a box in an account, whose limits are read from
-	// it; a box in none has the server's, with nothing to read.
+	// InAccount is true for a mailbox in an account, whose limits are read from
+	// it; a mailbox in none has the server's, with nothing to read.
 	InAccount bool
 }
 
-// standing is b's standing. ok is false for an address with no box: one
+// standing is b's standing. ok is false for an address with no mailbox: one
 // whose identity revoked certificates and registered nothing.
-func (b *Box) standing() (st Standing, ok bool, err error) {
-	if b.State == NoBox {
+func (b *Mailbox) standing() (st Standing, ok bool, err error) {
+	if b.State == NoMailbox {
 		return Standing{}, false, nil
 	}
 	key, err := identityWire(b.Identity)
@@ -381,7 +381,7 @@ func (b *Box) standing() (st Standing, ok bool, err error) {
 
 // identityWire is the key of a stored identity document, in SSH wire form:
 // the base64 of its second line, decoded. The document was parsed when its
-// box registered, so this reads it and checks nothing.
+// mailbox registered, so this reads it and checks nothing.
 func identityWire(doc []byte) (string, error) {
 	_, line, _ := bytes.Cut(doc, []byte("\n"))
 	_, b64, _ := bytes.Cut(bytes.TrimSuffix(line, []byte("\n")), []byte(" "))
@@ -392,7 +392,7 @@ func identityWire(doc []byte) (string, error) {
 	return string(wire), nil
 }
 
-// declared is what the server keeps of a box's declaration of sender key
+// declared is what the server keeps of a mailbox's declaration of sender key
 // types: the names this build verifies, or protocol.AnySender alone if that
 // was among them. A name it does not know is dropped, not refused: a client
 // may verify more types than this server registers.
@@ -410,7 +410,7 @@ func declared(types []string) []string {
 }
 
 // identityType is the key type of a stored identity document: the first word
-// of its second line. The document was parsed when its box registered.
+// of its second line. The document was parsed when its mailbox registered.
 func identityType(doc []byte) string {
 	_, line, _ := bytes.Cut(doc, []byte("\n"))
 	name, _, _ := bytes.Cut(line, []byte(" "))
@@ -420,9 +420,9 @@ func identityType(doc []byte) string {
 // certHash names a certificate by the SHA-256 of its bytes.
 func certHash(c *protocol.Certificate) [32]byte { return sha256.Sum256(c.Marshal()) }
 
-// expiry is when the record of a box whose current statement is p, under
+// expiry is when the record of a mailbox whose current statement is p, under
 // cert, may go (PROTOCOL.md §13): once the certificate has ended, so that no
-// working key of it is left to register with, and the last mail sealed to p
+// working key of it is left to register with, and the last message sealed to p
 // has expired.
 func expiry(p *protocol.Prekey, cert *protocol.Certificate) time.Time {
 	if end := p.NotAfter.Add(protocol.TTL); end.After(cert.NotAfter()) {
@@ -452,7 +452,7 @@ var (
 // did not make: AWS's throttle or its answer of 4xx to the call itself, or
 // a step of a multi-step write that failed before its item's write, and
 // changed nothing memory holds (an ack's body not deleted, a delete of a
-// box's mail that deleted no body).
+// mailbox's messages that deleted no body).
 var errRefused = errors.New("refused")
 
 // refused is err, marked as a refusal stated (errRefused).
@@ -485,8 +485,8 @@ func isRefusal(err error) bool {
 // (dromas-dev/dromas-server#90).
 var errNotStored = errors.New("not stored")
 
-// version is a record's place in its address's history: the time its box
-// registered, to the millisecond as the store keeps it, then its rev. A box
+// version is a record's place in its address's history: the time its mailbox
+// registered, to the millisecond as the store keeps it, then its rev. A mailbox
 // registered again once the TTL took its record starts at rev 1 again, and
 // later (dromas-dev/dromas-client#407 item 2). It is the one comparison
 // of two records of an address: the record cache's (putLocked, image,
@@ -500,7 +500,7 @@ func (v version) after(o version) bool {
 }
 
 // versionOf is b's record's version: 0 for a view with no record.
-func versionOf(b *Box) version {
+func versionOf(b *Mailbox) version {
 	if b.Created.IsZero() {
 		return version{rev: b.Rev}
 	}
@@ -510,7 +510,7 @@ func versionOf(b *Box) version {
 // storeTimeout bounds each call to AWS the store makes, a read as a write,
 // whatever context its caller hands it (bound, boundedStreams), and each
 // read that a call shared by several callers makes apart from the request
-// that started it: a lookup's read of a box's record (Server.lead) and the
+// that started it: a lookup's read of a mailbox's record (Server.lead) and the
 // reads of a send's steps 6 to 9 (Server.deliver).
 const storeTimeout = 10 * time.Second
 
@@ -533,7 +533,7 @@ func fromMs(v uint64) time.Time { return time.UnixMilli(int64(v)).UTC() } //noli
 // time (protocol.Retention).
 var ttlMs = uint64(protocol.Retention / time.Millisecond)
 
-func cloneBox(b *Box) *Box {
+func cloneMailbox(b *Mailbox) *Mailbox {
 	c := *b
 	c.Retired = slices.Clone(b.Retired)
 	c.SenderKeyTypes = slices.Clone(b.SenderKeyTypes)
@@ -546,7 +546,7 @@ func cloneBox(b *Box) *Box {
 	return &c
 }
 
-// cloneACL copies an ACL, which a box record holds and nothing changes in
+// cloneACL copies an ACL, which a mailbox record holds and nothing changes in
 // place: it is replaced whole.
 func cloneACL(a *protocol.ACL) *protocol.ACL {
 	if a == nil {
@@ -559,8 +559,8 @@ func cloneACL(a *protocol.ACL) *protocol.ACL {
 
 // storedRecord is what a store keeps of b as its record: none of what its
 // identity revoked, which is kept apart, and the state the record says.
-func storedRecord(b *Box) *Box {
-	c := cloneBox(b)
+func storedRecord(b *Mailbox) *Mailbox {
+	c := cloneMailbox(b)
 	c.Revocation, c.RevokedCerts, c.RevokedCertsSig = nil, nil, nil
 	return c
 }
@@ -570,45 +570,45 @@ func cloneAccount(a *Account) *Account {
 	return &c
 }
 
-// Store is the server's state: box records, message headers and bodies,
+// Store is the server's state: mailbox records, message headers and bodies,
 // and what a poll needs of them in memory. Its
 // one implementation is Memory, over a Backend: DynamoDB and S3 Express
 // (NewDynamoStore), or maps in this process (NewMemStore, the dev server).
 type Store interface {
-	// Held returns the standing of a box memory holds, with no read. ok is
-	// false for a box this process has not loaded, which only its record
-	// answers for: Known, then Box (ARCHITECTURE.md § Memory).
+	// Held returns the standing of a mailbox memory holds, with no read. ok is
+	// false for a mailbox this process has not loaded, which only its record
+	// answers for: Known, then Mailbox (ARCHITECTURE.md § Memory).
 	Held(a protocol.Address) (st Standing, ok bool)
-	// Changed returns a channel closed at box a's next change in memory, by
+	// Changed returns a channel closed at mailbox a's next change in memory, by
 	// a write of this process or one the streams bring: what a held list
 	// waits on (PROTOCOL.md §11.11). It reads nothing.
 	Changed(a protocol.Address) <-chan struct{}
-	// NextExpiry returns when the first of box a's messages in memory
+	// NextExpiry returns when the first of mailbox a's messages in memory
 	// expires, by the store's clock, with no read: past, for one that
-	// expired since the box was last read; zero for a box with none, or one
+	// expired since the mailbox was last read; zero for a mailbox with none, or one
 	// memory has not loaded. An expiry is no change memory applies, so a
 	// held list waits until it, and no longer (PROTOCOL.md §11.11).
 	NextExpiry(a protocol.Address) time.Time
-	// Box returns what is held of an address (view): its box's record and
+	// Mailbox returns what is held of an address (view): its mailbox's record and
 	// its identity's revocations, or ErrNotFound if neither.
-	Box(ctx context.Context, a protocol.Address) (*Box, error)
-	// Known returns what memory holds of an address, with no read: what Box
+	Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error)
+	// Known returns what memory holds of an address, with no read: what Mailbox
 	// returns, or nil for an address it holds as missing. ok is false when
-	// only a read can tell, which is what Box then does.
-	Known(a protocol.Address) (b *Box, ok bool)
-	// Begin returns a token of address a, which only grows: what Box
+	// only a read can tell, which is what Mailbox then does.
+	Known(a protocol.Address) (b *Mailbox, ok bool)
+	// Begin returns a token of address a, which only grows: what Mailbox
 	// answers once it is taken holds every write this process applied to a
 	// before it.
 	Begin(a protocol.Address) uint64
-	// CreateBox stores a new box's record at Rev 1, or returns ErrExists if
+	// CreateMailbox stores a new mailbox's record at Rev 1, or returns ErrExists if
 	// the address has one.
-	CreateBox(ctx context.Context, b *Box) error
-	// UpdateBox stores b's record if the stored one is still at b.Rev, and
+	CreateMailbox(ctx context.Context, b *Mailbox) error
+	// UpdateMailbox stores b's record if the stored one is still at b.Rev, and
 	// bumps b.Rev; otherwise ErrStale. It writes nothing of the revocations.
-	UpdateBox(ctx context.Context, b *Box) error
-	// DeleteBox deletes a's record, and keeps its revocations.
-	DeleteBox(ctx context.Context, a protocol.Address) error
-	// Revoke keeps what the identity of address a revoked, box or none, in
+	UpdateMailbox(ctx context.Context, b *Mailbox) error
+	// DeleteMailbox deletes a's record, and keeps its revocations.
+	DeleteMailbox(ctx context.Context, a protocol.Address) error
+	// Revoke keeps what the identity of address a revoked, mailbox or none, in
 	// the address's revocations item: rv's revocation of the address, kept
 	// once, and its revocation of certificates, which only one through a
 	// higher serial replaces: ErrStale if one through as high a serial was
@@ -616,30 +616,30 @@ type Store interface {
 	// of them, some held or none.
 	Revoke(ctx context.Context, a protocol.Address, rv *Revocations, want Expect) error
 
-	// Dedupe returns the header of the live message box holds with this
+	// Dedupe returns the header of the live message mailbox holds with this
 	// id, or ErrNotFound: nothing is kept of one acked or expired.
-	Dedupe(ctx context.Context, box protocol.Address, id [32]byte) (*Header, error)
+	Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error)
 	// PutMessage stores a message: its body, then its header. If a live
 	// message of the id appeared first, it returns that one's header
 	// instead.
-	PutMessage(ctx context.Context, box protocol.Address, h *Header, body []byte) (*Header, error)
+	PutMessage(ctx context.Context, mailbox protocol.Address, h *Header, body []byte) (*Header, error)
 	// List returns up to limit live headers, oldest first by (ReceivedAt,
 	// ID), after the given key (nil: from the start). Consistent reads them
 	// strongly consistent: every write applied to memory before the read is
 	// in the page.
-	List(ctx context.Context, box protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error)
+	List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error)
 	// Message returns a live message and its body, or ErrNotFound: the body
 	// from byte from on where from is inside it, above 0 and below its Size,
 	// and otherwise whole, as a fetch answers a range (PROTOCOL.md §11.12).
 	// So a fetch that resumes reads only the rest from where a body is kept.
-	Message(ctx context.Context, box protocol.Address, id [32]byte, from int64) (*Header, []byte, error)
+	Message(ctx context.Context, mailbox protocol.Address, id [32]byte, from int64) (*Header, []byte, error)
 	// DeleteMessage acks a message: its body goes, then its item, and
 	// nothing of it is kept (PROTOCOL.md §13). ErrNotFound if it is not
 	// live.
-	DeleteMessage(ctx context.Context, box protocol.Address, id [32]byte) error
-	// DeleteMessages deletes every live message in a box, as acks do (a
+	DeleteMessage(ctx context.Context, mailbox protocol.Address, id [32]byte) error
+	// DeleteMessages deletes every live message in a mailbox, as acks do (a
 	// revocation of its address). A message already gone is no error.
-	DeleteMessages(ctx context.Context, box protocol.Address) error
+	DeleteMessages(ctx context.Context, mailbox protocol.Address) error
 
 	// Account returns an account's record, or ErrNotFound: read on its
 	// first use, then answered from memory.
@@ -652,32 +652,32 @@ type Store interface {
 	// or ErrNotFound. It reads it strongly consistent, so a key just made is
 	// found.
 	AdoptKey(ctx context.Context, account string, hash [32]byte) (*AdoptKey, error)
-	// Adopt moves box b, as read, into account, spending a use of account's
+	// Adopt moves mailbox b, as read, into account, spending a use of account's
 	// adopt key whose hash is given, in one write: ErrStale if the record
 	// changed, ErrKeyRefused if the key is spent, expired or gone. It sets
 	// b.Account and bumps b.Rev.
-	Adopt(ctx context.Context, b *Box, account string, key [32]byte) error
-	// Leave takes box b, as read, out of its account, or returns ErrStale.
+	Adopt(ctx context.Context, b *Mailbox, account string, key [32]byte) error
+	// Leave takes mailbox b, as read, out of its account, or returns ErrStale.
 	// It clears b.Account and bumps b.Rev.
-	Leave(ctx context.Context, b *Box) error
+	Leave(ctx context.Context, b *Mailbox) error
 
-	// Count returns the number of live messages in a box, from memory: the
-	// box is loaded on its first use, and answered from memory after that.
-	Count(ctx context.Context, box protocol.Address) (n int, err error)
-	// After returns how many live messages a box holds past a list position,
+	// Count returns the number of live messages in a mailbox, from memory: the
+	// mailbox is loaded on its first use, and answered from memory after that.
+	Count(ctx context.Context, mailbox protocol.Address) (n int, err error)
+	// After returns how many live messages a mailbox holds past a list position,
 	// from memory as Count does: what a list from that cursor would return.
-	After(ctx context.Context, box protocol.Address, c *Cursor) (int, error)
-	// Holds reports whether a box holds a live message with this id, from
+	After(ctx context.Context, mailbox protocol.Address, c *Cursor) (int, error)
+	// Holds reports whether a mailbox holds a live message with this id, from
 	// memory as Count does. False is certain; true may be another message
 	// whose id starts alike, so the caller still reads it.
-	Holds(ctx context.Context, box protocol.Address, id [32]byte) (bool, error)
+	Holds(ctx context.Context, mailbox protocol.Address, id [32]byte) (bool, error)
 	// Fetched is Holds for a fetch: it also reports whether this process has
 	// served the message before, and counts this serving. The count lives
 	// with the message in memory, so a restart forgets it.
-	Fetched(ctx context.Context, box protocol.Address, id [32]byte) (held, again bool, err error)
+	Fetched(ctx context.Context, mailbox protocol.Address, id [32]byte) (held, again bool, err error)
 }
 
-// Cursor is a position in a box's list: the last key returned.
+// Cursor is a position in a mailbox's list: the last key returned.
 type Cursor struct {
 	ReceivedAt time.Time
 	ID         [32]byte

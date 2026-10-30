@@ -26,8 +26,8 @@ import (
 // Posts of the same ciphertext in flight at once are one call, from any
 // sender (dromas-dev/dromas-server#76): the second waits for the first and
 // is answered 200 with its receipt, never refused by a quota the first one
-// spent (PROTOCOL.md §11.5), for the sends a day, the box cap and the box's
-// new mail alike. A post handed the refusal of another sender's is made
+// spent (PROTOCOL.md §11.5), for the sends a day, the mailbox cap and the mailbox's
+// new messages alike. A post handed the refusal of another sender's is made
 // again, as its own.
 func TestPostsOfTheSameBytesInFlightAreOneCall(t *testing.T) {
 	t.Parallel()
@@ -36,11 +36,11 @@ func TestPostsOfTheSameBytesInFlightAreOneCall(t *testing.T) {
 		set  func(*Limits)
 	}{
 		{"sends a day", func(l *Limits) { l.SendsPerDay = 2 }},
-		{"the box cap", func(l *Limits) { l.BoxCap = 2 }},
-		{"the box's new mail", func(l *Limits) { l.ReceiveBurst, l.ReceiveRefill = 2, time.Hour }},
+		{"the mailbox cap", func(l *Limits) { l.MailboxCap = 2 }},
+		{"the mailbox's new messages", func(l *Limits) { l.ReceiveBurst, l.ReceiveRefill = 2, time.Hour }},
 	} {
 		l := relaxed()
-		l.BoxCap = 0
+		l.MailboxCap = 0
 		c.set(&l)
 		e := newEnv(t, l, func(cfg *Config) { cfg.Store = slowPut{cfg.Store, 40 * time.Millisecond} })
 		for i := range 5 {
@@ -107,7 +107,7 @@ func TestPostsOfTheSameBytesInFlightAreOneCall(t *testing.T) {
 	}
 }
 
-// revokedBetween revokes box a, once, just before the first read of its
+// revokedBetween revokes mailbox a, once, just before the first read of its
 // record once set: in a send, the read after its pass's check.
 type revokedBetween struct {
 	Store
@@ -116,18 +116,18 @@ type revokedBetween struct {
 	done atomic.Bool
 }
 
-func (s *revokedBetween) Box(ctx context.Context, a protocol.Address) (*Box, error) {
+func (s *revokedBetween) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error) {
 	if a == s.a && s.done.CompareAndSwap(false, true) {
 		if err := s.Store.Revoke(ctx, a, s.rv, ExpectAnything); err != nil {
 			return nil, err
 		}
 	}
-	return s.Store.Box(ctx, a)
+	return s.Store.Mailbox(ctx, a)
 }
 
 // A sender revoked between its pass's check and the send's read of its
 // record is refused there, as its pass's check would have refused it
-// (sender), and its mail is not taken.
+// (sender), and its message is not taken.
 func TestASenderRevokedDuringItsSendIsRefused(t *testing.T) {
 	t.Parallel()
 	s := &revokedBetween{}
@@ -140,11 +140,11 @@ func TestASenderRevokedDuringItsSendIsRefused(t *testing.T) {
 	s.a, s.rv = from.id.Address(), &Revocations{Identity: from.id.Document(), Address: sig}
 	e.want(e.sendTo(to, 1, 1, from, 1), http.StatusForbidden, protocol.CodeSenderRevoked)
 	if n, _ := e.store.Count(context.Background(), to.id.Address()); n != 0 {
-		t.Errorf("the box took %d messages from a sender revoked during its send", n)
+		t.Errorf("the mailbox took %d messages from a sender revoked during its send", n)
 	}
 }
 
-// heldDeletes holds every delete of a box's mail until released, counting
+// heldDeletes holds every delete of a mailbox's messages until released, counting
 // them.
 type heldDeletes struct {
 	Store
@@ -160,7 +160,7 @@ func (s *heldDeletes) DeleteMessages(ctx context.Context, a protocol.Address) er
 	return s.Store.DeleteMessages(ctx, a)
 }
 
-// Revocations sent for a revoked box while its delete is in flight start no
+// Revocations sent for a revoked mailbox while its delete is in flight start no
 // delete of their own (dromas-dev/dromas-server#29): they wait for the
 // one in flight and are answered 410, and the revoking PUT is answered with
 // its delete's result.
@@ -168,15 +168,15 @@ func TestPUTsDuringARevocationsDeleteStartNoOther(t *testing.T) {
 	t.Parallel()
 	hs := &heldDeletes{started: make(chan struct{}), release: make(chan struct{})}
 	e := newEnv(t, relaxed(), func(c *Config) { hs.Store, c.Store = c.Store, hs })
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
-	send(t, b, a, "waiting in A's box when it is revoked")
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	send(t, b, a, "waiting in A's mailbox when it is revoked")
 	rec := record(t, a)
 	path := revocationPath(a.Address())
 	junk := protocol.Revocations{Identity: rec.Identity, Revocation: []byte("not a signature")}
 
 	owner := make(chan reply, 1)
 	go func() { owner <- e.do("PUT", path, rec, "") }()
-	<-hs.started // the owner's delete is under way, and memory still shows the mail
+	<-hs.started // the owner's delete is under way, and memory still shows the messages
 	const k = 8
 	codes := make(chan string, k)
 	for range k {
@@ -194,18 +194,18 @@ func TestPUTsDuringARevocationsDeleteStartNoOther(t *testing.T) {
 	}
 	e.want(<-owner, http.StatusCreated, "")
 	if n := hs.n.Load(); n != 1 {
-		t.Errorf("%d PUTs during one delete drew %d deletes of the box's mail; want 1", k, n)
+		t.Errorf("%d PUTs during one delete drew %d deletes of the mailbox's messages; want 1", k, n)
 	}
 }
 
-// On DynamoDB: a write of an id whose message was acked is new mail, whatever
+// On DynamoDB: a write of an id whose message was acked is a new message, whatever
 // a dedupe read before it found: the ack deleted the item, so the write's
 // condition passes, and its item and its body are stored and served.
 func TestAPutAfterAnAckIsStored(t *testing.T) {
 	t.Parallel()
 	e, s := dynamoEnv(t)
 	ctx := context.Background()
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	body := []byte("acked, then posted again")
 	id := idOf(t, send(t, a, b, string(body)))
 	if res := receive(t, b); len(res.Delivered) != 1 {
@@ -232,11 +232,11 @@ type slowRead struct {
 	x protocol.Address
 }
 
-func (s slowRead) Box(ctx context.Context, a protocol.Address) (*Box, error) {
+func (s slowRead) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error) {
 	if a == s.x {
 		time.Sleep(300 * time.Millisecond)
 	}
-	return s.Store.Box(ctx, a)
+	return s.Store.Mailbox(ctx, a)
 }
 
 // A lookup that waits on another's read of the same address, whose caller
@@ -287,12 +287,12 @@ type alwaysRead struct {
 	begun chan struct{}
 }
 
-func (s alwaysRead) Known(protocol.Address) (*Box, bool) { return nil, false }
+func (s alwaysRead) Known(protocol.Address) (*Mailbox, bool) { return nil, false }
 
-func (s alwaysRead) Box(ctx context.Context, a protocol.Address) (*Box, error) {
+func (s alwaysRead) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error) {
 	s.begun <- struct{}{}
 	time.Sleep(100 * time.Millisecond)
-	return s.Store.Box(ctx, a)
+	return s.Store.Mailbox(ctx, a)
 }
 
 // Lookups that share a read each get a copy of their own of the record, since
@@ -303,7 +303,7 @@ func TestLookupsThatShareAReadGetCopiesOfTheirOwn(t *testing.T) {
 	b := e.raw().register(protocol.MaxPrekeyLifetime)
 	s := New(Config{Store: alwaysRead{e.store, make(chan struct{}, 2)}, Limits: relaxed(), Now: e.clock.Now})
 	req := httptest.NewRequest(http.MethodGet, b.path(""), nil)
-	var got [2]*Box
+	var got [2]*Mailbox
 	var wg sync.WaitGroup
 	for i := range got {
 		wg.Add(1)
@@ -360,7 +360,7 @@ func plainCall(method, url string, body []byte, ctype, pass string) rawAnswer {
 	return rawAnswer{status: resp.StatusCode, code: p.Code}
 }
 
-// rawPost is a post of ct to box to, naming the serials given, with pass.
+// rawPost is a post of ct to mailbox to, naming the serials given, with pass.
 func rawPost(e *env, to *raw, ct []byte, serial, under uint64, pass string) func() rawAnswer {
 	q := protocol.SendQuery{PrekeySerial: serial, CertificateSerial: under}
 	url := e.srv.URL + to.path("/messages") + "?" + q.Encode()
@@ -411,7 +411,7 @@ type leadDedupe struct {
 	entered, second, read chan struct{}
 }
 
-func (s *leadDedupe) Dedupe(ctx context.Context, box protocol.Address, id [32]byte) (*Header, error) {
+func (s *leadDedupe) Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
 	switch s.n.Add(1) {
 	case 1:
 		close(s.entered)
@@ -424,7 +424,7 @@ func (s *leadDedupe) Dedupe(ctx context.Context, box protocol.Address, id [32]by
 		close(s.second)
 		<-s.read
 	}
-	return s.Store.Dedupe(ctx, box, id)
+	return s.Store.Dedupe(ctx, mailbox, id)
 }
 
 // armedDedupe is leadDedupe once on: every dedupe read before is the
@@ -434,11 +434,11 @@ type armedDedupe struct {
 	on atomic.Bool
 }
 
-func (s *armedDedupe) Dedupe(ctx context.Context, box protocol.Address, id [32]byte) (*Header, error) {
+func (s *armedDedupe) Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
 	if !s.on.Load() {
-		return s.Store.Dedupe(ctx, box, id)
+		return s.Store.Dedupe(ctx, mailbox, id)
 	}
-	return s.leadDedupe.Dedupe(ctx, box, id)
+	return s.leadDedupe.Dedupe(ctx, mailbox, id)
 }
 
 // Posts of the same bytes from one sender naming other serials are posts of
@@ -477,13 +477,13 @@ type panicOnce struct {
 	entered        chan string
 }
 
-func (s *panicOnce) PutMessage(ctx context.Context, box protocol.Address, h *Header, body []byte) (*Header, error) {
+func (s *panicOnce) PutMessage(ctx context.Context, mailbox protocol.Address, h *Header, body []byte) (*Header, error) {
 	if s.put.CompareAndSwap(true, false) {
 		s.entered <- "put"
 		<-s.let
 		panic("panicOnce: a panic in a post's write")
 	}
-	return s.Store.PutMessage(ctx, box, h, body)
+	return s.Store.PutMessage(ctx, mailbox, h, body)
 }
 
 func (s *panicOnce) DeleteMessages(ctx context.Context, a protocol.Address) error {
@@ -495,20 +495,20 @@ func (s *panicOnce) DeleteMessages(ctx context.Context, a protocol.Address) erro
 	return s.Store.DeleteMessages(ctx, a)
 }
 
-func (s *panicOnce) Known(a protocol.Address) (*Box, bool) {
+func (s *panicOnce) Known(a protocol.Address) (*Mailbox, bool) {
 	if a == s.x {
 		return nil, false
 	}
 	return s.Store.Known(a)
 }
 
-func (s *panicOnce) Box(ctx context.Context, a protocol.Address) (*Box, error) {
+func (s *panicOnce) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error) {
 	if a == s.x && s.read.CompareAndSwap(true, false) {
 		s.entered <- "read"
 		<-s.let
 		panic("panicOnce: a panic in a lookup's read")
 	}
-	return s.Store.Box(ctx, a)
+	return s.Store.Mailbox(ctx, a)
 }
 
 // A panic in the shared function of each single flight, the posts', the
@@ -558,20 +558,20 @@ func TestAPanicInEachSingleFlightEndsOnlyItsCalls(t *testing.T) {
 	run("posts", &p.put, post)
 	run("lookups", &p.read, func() rawAnswer { return plainCall(http.MethodGet, srv.URL+victim.path(""), nil, "", "") })
 
-	box := api.raw().register(protocol.MaxPrekeyLifetime)
-	api.want(api.sendTo(box, 1, 1, from, 1), http.StatusCreated, "")
-	sig, err := protocol.SignRevocation(box.signer, box.id.Address())
+	mailbox := api.raw().register(protocol.MaxPrekeyLifetime)
+	api.want(api.sendTo(mailbox, 1, 1, from, 1), http.StatusCreated, "")
+	sig, err := protocol.SignRevocation(mailbox.signer, mailbox.id.Address())
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec, _ := json.Marshal(protocol.Revocations{Identity: box.id.Document(), Revocation: sig})
-	if err := p.Store.Revoke(context.Background(), box.id.Address(), &Revocations{Identity: box.id.Document(), Address: sig}, ExpectAnything); err != nil {
+	rec, _ := json.Marshal(protocol.Revocations{Identity: mailbox.id.Document(), Revocation: sig})
+	if err := p.Store.Revoke(context.Background(), mailbox.id.Address(), &Revocations{Identity: mailbox.id.Document(), Address: sig}, ExpectAnything); err != nil {
 		t.Fatal(err)
 	}
 	run("purges", &p.del, func() rawAnswer {
-		return plainCall(http.MethodPut, srv.URL+box.path("/revocations"), rec, "application/json", "")
+		return plainCall(http.MethodPut, srv.URL+mailbox.path("/revocations"), rec, "application/json", "")
 	})
-	if n, _ := p.Store.Count(context.Background(), box.id.Address()); n != 0 {
+	if n, _ := p.Store.Count(context.Background(), mailbox.id.Address()); n != 0 {
 		t.Errorf("after the purge's panic and the next PUT: %d messages left", n)
 	}
 }
@@ -585,13 +585,13 @@ type changedBetween struct {
 	done   atomic.Bool
 }
 
-func (s *changedBetween) Box(ctx context.Context, a protocol.Address) (*Box, error) {
+func (s *changedBetween) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error) {
 	if a == s.a && s.change != nil && s.done.CompareAndSwap(false, true) {
 		if err := s.change(ctx); err != nil {
 			return nil, err
 		}
 	}
-	return s.Store.Box(ctx, a)
+	return s.Store.Mailbox(ctx, a)
 }
 
 // A sender revoked, its current certificate revoked, or forgotten between its
@@ -621,7 +621,7 @@ func TestASenderChangedBetweenItsPassAndItsRecordIsRefused(t *testing.T) {
 			}
 		}},
 		{"forgotten", http.StatusForbidden, protocol.CodeUnknownSender, func(s *changedBetween, from *raw) func(context.Context) error {
-			return func(ctx context.Context) error { return s.Store.DeleteBox(ctx, from.id.Address()) }
+			return func(ctx context.Context) error { return s.Store.DeleteMailbox(ctx, from.id.Address()) }
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -677,21 +677,21 @@ func (c *cannedAWS) Do(r *http.Request) (*http.Response, error) {
 // (dromas-dev/dromas-server#16, #92).
 func TestADuplicatesWriteDeletesNoBody(t *testing.T) {
 	t.Parallel()
-	var box protocol.Address
-	box[0] = 1
+	var mailbox protocol.Address
+	mailbox[0] = 1
 	body := []byte("the same bytes")
 	id := [32]byte{3}
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	recv := ms(now) - 1000
 	b64 := base64.StdEncoding.EncodeToString
 	it := fmt.Sprintf(`{"box":{"B":%q},"id":{"B":%q},"size":{"N":"%d"},"received_at":{"N":"%d"},"expires_at":{"N":"%d"},"live":{"B":%q}}`,
-		b64(box[:]), b64(id[:]), len(body), recv, ttlSeconds(recv+ttlMs), b64(liveKey(recv, id)))
+		b64(mailbox[:]), b64(id[:]), len(body), recv, ttlSeconds(recv+ttlMs), b64(liveKey(recv, id)))
 	fake := &cannedAWS{item: it}
 	var logged bytes.Buffer
 	s := NewDynamoStore(DynamoConfig{AWS: aws.Config{Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "x", ""),
-		HTTPClient: fake, BaseEndpoint: aws.String("http://127.0.0.1:1")}, BoxesTable: "b", MsgsTable: "m", AccountsTable: "a", Bucket: "s", Log: log.New(&logged, "", 0)})
+		HTTPClient: fake, BaseEndpoint: aws.String("http://127.0.0.1:1")}, MailboxesTable: "b", MessagesTable: "m", AccountsTable: "a", Bucket: "s", Log: log.New(&logged, "", 0)})
 	h := &Header{ID: id, Size: len(body), ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
-	orig, err := s.PutMessage(context.Background(), box, h, body)
+	orig, err := s.PutMessage(context.Background(), mailbox, h, body)
 	fake.mu.Lock()
 	calls := append([]string(nil), fake.calls...)
 	fake.mu.Unlock()

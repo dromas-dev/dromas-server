@@ -296,12 +296,12 @@ func (f *feed) read(ctx context.Context, sh *shard) error {
 	}
 }
 
-// boxStreamChange is the change a record of the --boxes-table stream makes:
-// to a box's record (sk 0x00), or to an address's revocations (sk 0x01).
+// mailboxStreamChange is the change a record of the --mailboxes-table stream makes:
+// to a mailbox's record (sk 0x00), or to an address's revocations (sk 0x01).
 // Other items under an address are not memory's, and make none (Kind 0). An
 // image that does not read is a change with Err; a key that does not read
 // is an error, and the record is skipped.
-func boxStreamChange(r stypes.Record) (Change, error) {
+func mailboxStreamChange(r stypes.Record) (Change, error) {
 	if r.Dynamodb == nil {
 		return Change{}, nil
 	}
@@ -310,16 +310,16 @@ func boxStreamChange(r stypes.Record) (Change, error) {
 	if gone {
 		it = fromStream(r.Dynamodb.Keys)
 	}
-	a, sk, err := boxItemKey(it)
+	a, sk, err := mailboxItemKey(it)
 	if err != nil {
 		return Change{}, err
 	}
 	c := Change{Addr: a, Gone: gone}
 	switch {
-	case bytes.Equal(sk, []byte{skBox}):
+	case bytes.Equal(sk, []byte{skMailbox}):
 		c.Kind = RecordChange
 		if !gone {
-			c.Box, c.Err = decodeBox(it)
+			c.Mailbox, c.Err = decodeMailbox(it)
 		}
 	case bytes.Equal(sk, []byte{skRevocations}):
 		c.Kind = RevocationsChange
@@ -330,8 +330,8 @@ func boxStreamChange(r stypes.Record) (Change, error) {
 	return c, nil
 }
 
-// msgStreamChange is the change a record of the --msgs-table stream makes to
-// a message: in the list, or gone (acked, its body found gone, its box's
+// msgStreamChange is the change a record of the --messages-table stream makes to
+// a message: in the list, or gone (acked, its body found gone, its mailbox's
 // address revoked, or expired and taken by the TTL). A deletion's record
 // carries the item's keys alone (NEW_IMAGE), so its Header is the id.
 func msgStreamChange(r stypes.Record) (Change, error) {
@@ -343,11 +343,11 @@ func msgStreamChange(r stypes.Record) (Change, error) {
 	if gone {
 		it = fromStream(r.Dynamodb.Keys)
 	}
-	box, err := it.hash("box")
+	mailbox, err := it.hash("box")
 	if err != nil {
 		return Change{}, err
 	}
-	c := Change{Kind: MessageChange, Addr: box, Gone: gone}
+	c := Change{Kind: MessageChange, Addr: mailbox, Gone: gone}
 	if !gone {
 		c.Header, c.Live, c.Err = decodeMsg(it)
 		return c, nil

@@ -48,19 +48,19 @@ func TestBucketsDropKeysFullAgain(t *testing.T) {
 	}
 }
 
-// The allowance for list pages after the first follows the box cap and the
-// poll rate: two full boxes' worth at once, a full box's worth each poll
+// The allowance for list pages after the first follows the mailbox cap and the
+// poll rate: two full mailboxes' worth at once, a full mailbox's worth each poll
 // interval.
 func TestContinuationAllowance(t *testing.T) {
 	t.Parallel()
 	l := DefaultLimits()
-	pages := (l.BoxCap + pageSize - 1) / pageSize
+	pages := (l.MailboxCap + pageSize - 1) / pageSize
 	if bs := l.continuations(); bs.n != 2*pages || bs.every != l.PollRefill/time.Duration(pages) {
 		t.Fatalf("%d pages, one each %s", bs.n, bs.every)
 	}
-	l.BoxCap = 0
+	l.MailboxCap = 0
 	if bs := l.continuations(); bs.n != 2*uncappedPages {
-		t.Fatalf("no box cap: %d pages", bs.n)
+		t.Fatalf("no mailbox cap: %d pages", bs.n)
 	}
 	l.PollBurst = 0
 	if bs := l.continuations(); bs.n != 0 {
@@ -93,10 +93,10 @@ func listOf(t *testing.T, r reply) protocol.MessageList {
 func TestCursorIsNoWayAroundThePollRate(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.BoxCap = pageSize // a box of one page: two continuations at once, one back each poll interval
+	l.MailboxCap = pageSize // a mailbox of one page: two continuations at once, one back each poll interval
 	l.PollBurst, l.PollRefill = 3, 50*time.Second
 	e := newEnv(t, l)
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	e2, cs := counted(t, e, l)
 	tok := e2.pass(b)
 	list := func(c Cursor) reply {
@@ -105,7 +105,7 @@ func TestCursorIsNoWayAroundThePollRate(t *testing.T) {
 	start := Cursor{ReceivedAt: time.UnixMilli(0)}
 	end := Cursor{ReceivedAt: e.clock.Now().Add(time.Hour)}
 
-	// An empty box: every list with a cursor is a poll.
+	// An empty mailbox: every list with a cursor is a poll.
 	for i := range 3 {
 		if r := list(start); r.status != http.StatusOK || listOf(t, r).Count != 0 {
 			t.Fatalf("poll %d with a cursor: %d %s", i, r.status, r.body)
@@ -113,10 +113,10 @@ func TestCursorIsNoWayAroundThePollRate(t *testing.T) {
 	}
 	e2.want(list(start), http.StatusTooManyRequests, protocol.CodeRateLimited)
 	if n := cs.calls.Load(); n != 0 {
-		t.Fatalf("%d storage calls for lists of an empty box", n)
+		t.Fatalf("%d storage calls for lists of an empty mailbox", n)
 	}
 
-	// Mail after the cursor, and a cursor this process never handed out: a
+	// Messages after the cursor, and a cursor this process never handed out: a
 	// poll, answered with the page all the same.
 	for _, body := range []string{"1", "2", "3"} {
 		send(t, a, b, body)
@@ -148,12 +148,12 @@ func TestCursorIsNoWayAroundThePollRate(t *testing.T) {
 }
 
 // A page after the first is a continuation only with the cursor this process
-// handed the box last (dromas-dev/dromas-server#5): a drain's pages come
+// handed the mailbox last (dromas-dev/dromas-server#5): a drain's pages come
 // from the page allowance, and the same cursor again is a poll.
 func TestAContinuationIsTheCursorHandedOutLast(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.BoxCap = 0
+	l.MailboxCap = 0
 	l.PollBurst, l.PollRefill = 2, 50*time.Second
 	e := newEnv(t, l)
 	from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
@@ -176,7 +176,7 @@ func TestAContinuationIsTheCursorHandedOutLast(t *testing.T) {
 	if second := listOf(t, page(c)); len(second.Messages) != 1 || second.NextCursor != nil {
 		t.Fatalf("the continuation: %d messages, next %v", len(second.Messages), second.NextCursor)
 	}
-	e.want(page(c), http.StatusOK, "") // the same cursor again: the box's second poll
+	e.want(page(c), http.StatusOK, "") // the same cursor again: the mailbox's second poll
 	r := page(c)
 	e.want(r, http.StatusTooManyRequests, protocol.CodeRateLimited)
 	if q, _ := r.quota(); q != protocol.QuotaPolls {
@@ -184,11 +184,11 @@ func TestAContinuationIsTheCursorHandedOutLast(t *testing.T) {
 	}
 }
 
-// A fetch or an ack of an id the box does not hold is answered from memory.
+// A fetch or an ack of an id the mailbox does not hold is answered from memory.
 func TestUnknownIDsStayInMemory(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	e2, cs := counted(t, e, relaxed())
 	tok := e2.pass(b)
 	msg := func(method, id string) reply {
@@ -198,7 +198,7 @@ func TestUnknownIDsStayInMemory(t *testing.T) {
 	e2.want(msg(http.MethodGet, unknown), http.StatusNotFound, protocol.CodeNoSuchMessage)
 	e2.want(msg(http.MethodDelete, unknown), http.StatusNotFound, protocol.CodeNoSuchMessage)
 	if n := cs.calls.Load(); n != 0 {
-		t.Fatalf("%d storage calls for an id the box does not hold", n)
+		t.Fatalf("%d storage calls for an id the mailbox does not hold", n)
 	}
 	id := send(t, a, b, "x").ID
 	e2.want(msg(http.MethodGet, id), http.StatusOK, "")
@@ -213,14 +213,14 @@ func TestUnknownIDsStayInMemory(t *testing.T) {
 	}
 }
 
-// A read of the boxes table that finds no box is counted against the address
+// A read of the mailboxes table that finds no mailbox is counted against the address
 // that asked, and past its count that address is refused before another such
-// read. A box memory holds is no miss: it is answered whatever the count.
+// read. A mailbox memory holds is no miss: it is answered whatever the count.
 func TestMissesPerIP(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	e := newEnv(t, l)
-	b := e.box(protocol.Classic)
+	b := e.mailbox(protocol.Classic)
 	l.MissesPerMinute = 2
 	e2, cs := counted(t, e, l)
 	nobody := func(i byte) protocol.Address {
@@ -239,18 +239,18 @@ func TestMissesPerIP(t *testing.T) {
 		t.Fatalf("the owner's poll: %d %s", r.status, r.body)
 	}
 	e2.want(read(nobody(1)), http.StatusNotFound, protocol.CodeNoSuchMailbox)
-	e2.want(e2.do(http.MethodGet, "/v1/"+nobody(2).String()+"/messages", nil, e2.pass(b)), http.StatusNotFound, protocol.CodeNoSuchMailbox) // a call with a pass, naming no box
+	e2.want(e2.do(http.MethodGet, "/v1/"+nobody(2).String()+"/messages", nil, e2.pass(b)), http.StatusNotFound, protocol.CodeNoSuchMailbox) // a call with a pass, naming no mailbox
 	before := cs.calls.Load()
 	r := read(nobody(3))
 	e2.want(r, http.StatusTooManyRequests, protocol.CodeRateLimited)
-	if !strings.Contains(string(r.body), "named no box") || r.header.Get("Retry-After") != "30" {
+	if !strings.Contains(string(r.body), "named no mailbox") || r.header.Get("Retry-After") != "30" {
 		t.Fatalf("a third miss in a minute: Retry-After %q, %s", r.header.Get("Retry-After"), r.body)
 	}
 	if n := cs.calls.Load(); n != before {
 		t.Fatalf("%d storage calls from an address past its misses", n-before)
 	}
 	for range 3 {
-		e2.want(read(b.Address()), http.StatusOK, "") // a live box, held in memory: not a miss
+		e2.want(read(b.Address()), http.StatusOK, "") // a live mailbox, held in memory: not a miss
 	}
 	// A pass the process remembers is answered from memory, whatever its
 	// address has spent; a new one costs signature checks, and an address
@@ -278,10 +278,10 @@ func TestMissesPerIP(t *testing.T) {
 	e2.want(read(nobody(5)), http.StatusTooManyRequests, protocol.CodeRateLimited)
 }
 
-// An address at its count of misses still makes a box and uses it: a
-// registration reads no record, and the new box's record is in memory from
+// An address at its count of misses still makes a mailbox and uses it: a
+// registration reads no record, and the new mailbox's record is in memory from
 // then on, so its first poll is no read that could miss.
-func TestANewBoxIsUsedWhateverItsAddressMissed(t *testing.T) {
+func TestANewMailboxIsUsedWhateverItsAddressMissed(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	l.MissesPerMinute = 1
@@ -291,13 +291,13 @@ func TestANewBoxIsUsedWhateverItsAddressMissed(t *testing.T) {
 	e.want(e.do(http.MethodGet, "/v1/"+nobody.String(), nil, ""), http.StatusNotFound, protocol.CodeNoSuchMailbox)
 	nobody[1] = 1
 	e.want(e.do(http.MethodGet, "/v1/"+nobody.String(), nil, ""), http.StatusTooManyRequests, protocol.CodeRateLimited)
-	b := e.box(protocol.Classic)
+	b := e.mailbox(protocol.Classic)
 	if r := e.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages", nil, e.pass(b)); r.status != http.StatusOK {
-		t.Fatalf("the new box's poll: %d %s", r.status, r.body)
+		t.Fatalf("the new mailbox's poll: %d %s", r.status, r.body)
 	}
 }
 
-// A missing box that memory remembers is answered from memory: never refused,
+// A missing mailbox that memory remembers is answered from memory: never refused,
 // never counted, and no call to storage. Only the store on AWS remembers one.
 func TestARememberedMissIsFree(t *testing.T) {
 	t.Parallel()
@@ -315,18 +315,18 @@ func TestARememberedMissIsFree(t *testing.T) {
 		e2.want(read(nobody), http.StatusNotFound, protocol.CodeNoSuchMailbox)
 	}
 	if n := cs.calls.Load(); n != before {
-		t.Fatalf("%d storage calls for a box remembered as missing", n-before)
+		t.Fatalf("%d storage calls for a mailbox remembered as missing", n-before)
 	}
 	e2.want(read(e.raw().id.Address()), http.StatusTooManyRequests, protocol.CodeRateLimited) // another address needs a read
 }
 
 // A message is fetched once and kept. Its first fetch is never limited; a
-// fetch of one already fetched takes from the box's allowance for catching up
+// fetch of one already fetched takes from the mailbox's allowance for catching up
 // after a failure, which polls and first fetches never touch.
 func TestAFetchedMessageIsFetchedAgainFromAnAllowance(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	l := relaxed()
 	l.PollBurst, l.PollRefill = 2, time.Minute
 	e2, cs := counted(t, e, l)
@@ -345,7 +345,7 @@ func TestAFetchedMessageIsFetchedAgainFromAnAllowance(t *testing.T) {
 	if !strings.Contains(string(r.body), "fetched before") || r.header.Get("Retry-After") != "60" {
 		t.Fatalf("a fetch past the allowance: Retry-After %q, %s", r.header.Get("Retry-After"), r.body)
 	}
-	e2.want(msg(http.MethodGet, id2), http.StatusTooManyRequests, protocol.CodeRefetchSpent) // the allowance is the box's
+	e2.want(msg(http.MethodGet, id2), http.StatusTooManyRequests, protocol.CodeRefetchSpent) // the allowance is the mailbox's
 	if n := cs.calls.Load(); n != before {
 		t.Fatalf("%d storage calls for fetches past the allowance", n-before)
 	}
@@ -368,36 +368,36 @@ func TestAFetchedMessageIsFetchedAgainFromAnAllowance(t *testing.T) {
 func TestIndexCountsFetches(t *testing.T) {
 	t.Parallel()
 	x := newIndex()
-	var box protocol.Address
-	box[0] = 3
+	var mailbox protocol.Address
+	mailbox[0] = 3
 	now := uint64(1000)
-	if err := x.ensure(context.Background(), box, func() (boxRead, error) {
-		return boxRead{exists: true, marks: []mark{{tag: 7, id: 7, exp: now + 1}, {tag: 8, id: 8, exp: now + 1}}}, nil
+	if err := x.ensure(context.Background(), mailbox, func() (mailboxRead, error) {
+		return mailboxRead{exists: true, marks: []mark{{tag: 7, id: 7, exp: now + 1}, {tag: 8, id: 8, exp: now + 1}}}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if held, again := x.fetched(box, 7, now); !held || again {
+	if held, again := x.fetched(mailbox, 7, now); !held || again {
 		t.Fatalf("a first fetch: held %v, again %v", held, again)
 	}
 	for range 300 {
-		if held, again := x.fetched(box, 7, now); !held || !again {
+		if held, again := x.fetched(mailbox, 7, now); !held || !again {
 			t.Fatalf("a later fetch: held %v, again %v", held, again)
 		}
 	}
-	if held, again := x.fetched(box, 8, now); !held || again {
+	if held, again := x.fetched(mailbox, 8, now); !held || again {
 		t.Fatalf("another message's first fetch: held %v, again %v", held, again)
 	}
-	if held, _ := x.fetched(box, 9, now); held {
-		t.Fatal("a message the box does not hold")
+	if held, _ := x.fetched(mailbox, 9, now); held {
+		t.Fatal("a message the mailbox does not hold")
 	}
-	if held, _ := x.fetched(box, 7, now+1); held {
+	if held, _ := x.fetched(mailbox, 7, now+1); held {
 		t.Fatal("an expired message")
 	}
 }
 
-// The server remembers the pass each box showed last, and nothing else of
+// The server remembers the pass each mailbox showed last, and nothing else of
 // it: the same pass is taken again until it runs out, only as checked under
-// the certificate that is still the box's, and an entry goes once its pass
+// the certificate that is still the mailbox's, and an entry goes once its pass
 // has run out.
 func TestPassesAreRememberedUntilTheyRunOut(t *testing.T) {
 	t.Parallel()
@@ -417,13 +417,13 @@ func TestPassesAreRememberedUntilTheyRunOut(t *testing.T) {
 		"run out":             ps.has(a1, sum, cert, now.Add(protocol.PassLifetime)),
 		"another pass":        ps.has(a1, [32]byte{9}, cert, now),
 		"another certificate": ps.has(a1, sum, [32]byte{9}, now),
-		"another box":         ps.has(a2, sum, cert, now),
+		"another mailbox":     ps.has(a2, sum, cert, now),
 	} {
 		if got {
 			t.Errorf("%s: taken as the pass remembered", name)
 		}
 	}
-	// A box's next pass replaces its last.
+	// A mailbox's next pass replaces its last.
 	next := [32]byte{3}
 	ps.keep(a1, seenPass{sum: next, cert: cert, until: now.Add(2 * protocol.PassLifetime)}, now)
 	if ps.has(a1, sum, cert, now) || !ps.has(a1, next, cert, now) || len(ps.seen) != 1 {
@@ -442,7 +442,7 @@ func TestMissCache(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	var a1, a2, a3 protocol.Address
 	a1[1], a2[1], a3[1] = 1, 2, 3 // one shard
-	c := newBoxCache(2)
+	c := newMailboxCache(2)
 	miss := func(a protocol.Address) { c.missed(a, c.begin(a), now) }
 	has := func(a protocol.Address, at time.Time) bool { return c.missingAt(a, at) }
 	if has(a1, now) {
@@ -456,13 +456,13 @@ func TestMissCache(t *testing.T) {
 		t.Fatal("remembered past its time")
 	}
 	miss(a1)
-	c.write(a1, evicted[*Box])
+	c.write(a1, evicted[*Mailbox])
 	if has(a1, now) {
 		t.Fatal("still missing after a write")
 	}
 	// A read that began before a write must not record its miss after it.
 	tok := c.begin(a1)
-	c.write(a2, evicted[*Box])
+	c.write(a2, evicted[*Mailbox])
 	c.missed(a1, tok, now)
 	if has(a1, now) {
 		t.Fatal("a miss read before a write was recorded after it")
@@ -473,31 +473,31 @@ func TestMissCache(t *testing.T) {
 	if n := len(c.missing.until); n > 2 || !has(a3, now) {
 		t.Fatalf("holds %d, over its size of 2, or not the newest", n)
 	}
-	off := newBoxCache(0)
+	off := newMailboxCache(0)
 	off.missed(a1, off.begin(a1), now)
 	if off.missingAt(a1, now) {
 		t.Fatal("size 0 remembered a miss")
 	}
 }
 
-// On DynamoDB, a box a read did not find is remembered as missing until it
+// On DynamoDB, a mailbox a read did not find is remembered as missing until it
 // is written.
-func TestMissingBoxIsRememberedUntilItIsWritten(t *testing.T) {
+func TestMissingMailboxIsRememberedUntilItIsWritten(t *testing.T) {
 	t.Parallel()
 	e, s := dynamoEnv(t)
 	ctx := context.Background()
 	r := e.raw()
 	a := r.id.Address()
-	if _, err := s.Box(ctx, a); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("an unregistered box: %v", err)
+	if _, err := s.Mailbox(ctx, a); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an unregistered mailbox: %v", err)
 	}
 	if !s.cache.missingAt(a, e.clock.Now()) {
 		t.Fatal("the miss was not remembered")
 	}
 	r.prekey(1, e.clock.Now().Add(24*time.Hour), nil)
 	e.want(e.do(http.MethodPut, r.path(""), r.registration(1), r.pass(1)), http.StatusCreated, "")
-	if b, err := s.Box(ctx, a); err != nil || b.Addr != a {
-		t.Fatalf("the box, once registered: %v", err)
+	if b, err := s.Mailbox(ctx, a); err != nil || b.Addr != a {
+		t.Fatalf("the mailbox, once registered: %v", err)
 	}
 }
 
@@ -509,7 +509,7 @@ func TestThePollsRefusalNamesNoRateItDoesNotCarry(t *testing.T) {
 	l := relaxed()
 	l.PollBurst, l.PollRefill, l.PollAfter = 1, 10*time.Second, 10 // a server that asks for a poll every 10 seconds
 	e := newEnv(t, l)
-	b := e.box(protocol.Classic)
+	b := e.mailbox(protocol.Classic)
 	path := "/v1/" + b.Address().String() + "/messages"
 	e.want(e.do("GET", path, nil, e.pass(b)), http.StatusOK, "")
 	got := e.do("GET", path, nil, e.pass(b))

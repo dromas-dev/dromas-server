@@ -29,7 +29,7 @@ import (
 	"github.com/dromas-dev/dromas-client/protocol"
 )
 
-// dynamoBackend is the production backend (ARCHITECTURE.md § Storage): box
+// dynamoBackend is the production backend (ARCHITECTURE.md § Storage): mailbox
 // records in one DynamoDB table, messages in another (each item a live
 // message's header), accounts in a third, bodies in an S3 Express One
 // Zone directory bucket, and each table's stream for the feed (feed). It is
@@ -42,27 +42,27 @@ import (
 // then the item. Neither pair is atomic, and neither
 // needs to be: each step is safe to repeat.
 type dynamoBackend struct {
-	db     *dynamodb.Client
-	s3     *s3.Client
-	boxes  string // --boxes-table
-	msgs   string // --msgs-table
-	accts  string // --accounts-table
-	bucket string
-	now    func() time.Time
-	log    *log.Logger
+	db        *dynamodb.Client
+	s3        *s3.Client
+	mailboxes string // --mailboxes-table
+	msgs      string // --messages-table
+	accts     string // --accounts-table
+	bucket    string
+	now       func() time.Time
+	log       *log.Logger
 
 	// consistent makes every read strongly consistent; otherwise only the
 	// reads that fill memory, and a held list's page, are
 	// (DynamoConfig.ConsistentReads).
 	consistent bool
 
-	streams                   streamsAPI
-	interval                  time.Duration
-	boxFeed, msgFeed, accFeed *feed
-	apply                     func(Change) // what Start was given
-	metrics                   *Metrics
-	fatal                     func(error)
-	ready                     atomic.Bool
+	streams                       streamsAPI
+	interval                      time.Duration
+	mailboxFeed, msgFeed, accFeed *feed
+	apply                         func(Change) // what Start was given
+	metrics                       *Metrics
+	fatal                         func(error)
+	ready                         atomic.Bool
 
 	// crash, in tests, fails a write of two steps between them, as a
 	// crash there would leave it: "put: after the body", "ack: after the
@@ -72,17 +72,17 @@ type dynamoBackend struct {
 
 // DynamoConfig configures a store over DynamoDB and S3 Express.
 type DynamoConfig struct {
-	AWS                                          aws.Config
-	BoxesTable, MsgsTable, AccountsTable, Bucket string
-	Now                                          func() time.Time // time.Now if nil
-	// BoxCache is how many box records memory holds, as many account
-	// records, and as many boxes remembered as missing; 0: none.
-	BoxCache       int
+	AWS                                                  aws.Config
+	MailboxesTable, MessagesTable, AccountsTable, Bucket string
+	Now                                                  func() time.Time // time.Now if nil
+	// MailboxCache is how many mailbox records memory holds, as many account
+	// records, and as many mailboxes remembered as missing; 0: none.
+	MailboxCache   int
 	StreamInterval time.Duration // how often each stream shard is read
 	Log            *log.Logger   // nil: no log
 	// ConsistentReads makes every read strongly consistent, at twice the
 	// read units: for tests, which read back what they wrote within
-	// milliseconds. Otherwise only the reads that fill memory are, a box's
+	// milliseconds. Otherwise only the reads that fill memory are, a mailbox's
 	// load and a read of what is held of an address, since a stale copy
 	// there would decide later answers, and the page of a list asked to
 	// wait, which a client may hold on: a strongly consistent read costs
@@ -95,7 +95,7 @@ type DynamoConfig struct {
 	// rebuilds it from the tables.
 	Fatal func(error)
 	// Metrics, if set, count the caches' hits, misses and evictions, how far
-	// behind each stream memory follows, and how large each box's item
+	// behind each stream memory follows, and how large each mailbox's item
 	// collection a message write grows is. Calls to AWS are counted by
 	// Metrics.InstrumentAWS on the AWS config.
 	Metrics *Metrics
@@ -104,7 +104,7 @@ type DynamoConfig struct {
 // NewDynamoStore returns the store over DynamoDB and S3 Express: Memory
 // over the DynamoDB backend, not ready until Start returns.
 func NewDynamoStore(c DynamoConfig) *Memory {
-	s := newMemory(c.Now, c.BoxCache, c.Log, c.Metrics)
+	s := newMemory(c.Now, c.MailboxCache, c.Log, c.Metrics)
 	if c.StreamInterval <= 0 {
 		c.StreamInterval = time.Second
 	}
@@ -112,8 +112,8 @@ func NewDynamoStore(c DynamoConfig) *Memory {
 		db:         dynamodb.NewFromConfig(c.AWS, func(o *dynamodb.Options) { o.APIOptions = append(o.APIOptions, bound) }),
 		s3:         newS3(c.AWS),
 		streams:    dynamodbstreams.NewFromConfig(c.AWS),
-		boxes:      c.BoxesTable,
-		msgs:       c.MsgsTable,
+		mailboxes:  c.MailboxesTable,
+		msgs:       c.MessagesTable,
 		accts:      c.AccountsTable,
 		bucket:     c.Bucket,
 		now:        s.clock,
@@ -123,7 +123,7 @@ func NewDynamoStore(c DynamoConfig) *Memory {
 		metrics:    c.Metrics,
 		fatal:      c.Fatal,
 	}
-	d.boxFeed, d.msgFeed, d.accFeed = d.newFeed("boxes", boxStreamChange), d.newFeed("messages", msgStreamChange), d.newFeed("accounts", accountStreamChange)
+	d.mailboxFeed, d.msgFeed, d.accFeed = d.newFeed("mailboxes", mailboxStreamChange), d.newFeed("messages", msgStreamChange), d.newFeed("accounts", accountStreamChange)
 	s.backend = d
 	return s
 }
@@ -197,7 +197,7 @@ func (s *dynamoBackend) Start(ctx context.Context, apply func(Change)) error {
 	feeds := []struct {
 		f     *feed
 		table string
-	}{{s.boxFeed, s.boxes}, {s.msgFeed, s.msgs}, {s.accFeed, s.accts}}
+	}{{s.mailboxFeed, s.mailboxes}, {s.msgFeed, s.msgs}, {s.accFeed, s.accts}}
 	for _, x := range feeds {
 		arn, err := streamARN(ctx, s.db, x.table)
 		if err != nil {
@@ -223,15 +223,15 @@ func (s *dynamoBackend) Start(ctx context.Context, apply func(Change)) error {
 // Ready implements Backend: the three streams are followed.
 func (s *dynamoBackend) Ready() bool { return s.ready.Load() }
 
-// Keys. Every key is binary. Boxes: addr is the address, sk 0x00 its box's
+// Keys. Every key is binary. Mailboxes: addr is the address, sk 0x00 its mailbox's
 // record and 0x01 its revocations, the identity's, kept with or without a
-// box; one Query of the address reads both. A record in an account carries
-// account, the key of the sparse index of each account's boxes. Messages: box
+// mailbox; one Query of the address reads both. A record in an account carries
+// account, the key of the sparse index of each account's mailboxes. Messages: mailbox
 // and id, and while the message is unacked, live = received_at (ms, u64
-// big-endian) ‖ id, the sort key of the sparse index that lists a box's
-// unacked mail oldest first.
+// big-endian) ‖ id, the sort key of the sparse index that lists a mailbox's
+// unacked messages oldest first.
 const (
-	skBox         byte = 0x00
+	skMailbox     byte = 0x00
 	skRevocations byte = 0x01
 	liveIndex          = "live"
 	accountIndex       = "account"
@@ -243,16 +243,16 @@ func (s *dynamoBackend) nowMs() uint64 { return ms(s.now()) }
 // it, so reads judge expiry from received_at.
 func ttlSeconds(expMs uint64) uint64 { return (expMs + 999) / 1000 }
 
-func boxKey(a protocol.Address) map[string]types.AttributeValue {
-	return map[string]types.AttributeValue{"addr": bin(a[:]), "sk": bin([]byte{skBox})}
+func mailboxKey(a protocol.Address) map[string]types.AttributeValue {
+	return map[string]types.AttributeValue{"addr": bin(a[:]), "sk": bin([]byte{skMailbox})}
 }
 
 func revocationsKey(a protocol.Address) map[string]types.AttributeValue {
 	return map[string]types.AttributeValue{"addr": bin(a[:]), "sk": bin([]byte{skRevocations})}
 }
 
-func msgKey(box protocol.Address, id [32]byte) map[string]types.AttributeValue {
-	return map[string]types.AttributeValue{"box": bin(box[:]), "id": bin(id[:])}
+func msgKey(mailbox protocol.Address, id [32]byte) map[string]types.AttributeValue {
+	return map[string]types.AttributeValue{"box": bin(mailbox[:]), "id": bin(id[:])}
 }
 
 func liveKey(receivedMs uint64, id [32]byte) []byte {
@@ -270,7 +270,7 @@ func fromLiveKey(k []byte) (uint64, [32]byte, error) {
 	return binary.BigEndian.Uint64(k[:8]), id, nil
 }
 
-func bodyKey(box protocol.Address, id [32]byte) string { return box.String() + "/" + hexID(id) }
+func bodyKey(mailbox protocol.Address, id [32]byte) string { return mailbox.String() + "/" + hexID(id) }
 
 func bin(b []byte) types.AttributeValue { return &types.AttributeValueMemberB{Value: b} }
 func num(v uint64) types.AttributeValue {
@@ -329,9 +329,9 @@ func (it item) string(name string) (string, error) {
 	return "", fmt.Errorf("item: %s is missing or not a string", name)
 }
 
-// boxItemKey reads the key of an item of the --boxes-table table: its
+// mailboxItemKey reads the key of an item of the --mailboxes-table table: its
 // address, and its sk.
-func boxItemKey(it item) (protocol.Address, []byte, error) {
+func mailboxItemKey(it item) (protocol.Address, []byte, error) {
 	a, err := it.hash("addr")
 	if err != nil {
 		return a, nil, err
@@ -340,10 +340,10 @@ func boxItemKey(it item) (protocol.Address, []byte, error) {
 	return a, sk, err
 }
 
-// The box record.
+// The mailbox record.
 
-// boxState is every attribute of a box record that can change.
-func boxState(b *Box) map[string]types.AttributeValue {
+// mailboxState is every attribute of a mailbox record that can change.
+func mailboxState(b *Mailbox) map[string]types.AttributeValue {
 	retired := make([]types.AttributeValue, 0, len(b.Retired))
 	for _, r := range b.Retired {
 		retired = append(retired, &types.AttributeValueMemberM{Value: map[string]types.AttributeValue{
@@ -370,8 +370,8 @@ func boxState(b *Box) map[string]types.AttributeValue {
 	if !b.Expires.IsZero() {
 		st["expires_at"] = num(uint64(b.Expires.Unix())) //nolint:gosec // a time after 1970
 	}
-	// The box's ACL, as the document GET answers: absent until the box puts
-	// one, then replaced whole. No route removes it, and UpdateBox only sets.
+	// The mailbox's ACL, as the document GET answers: absent until the mailbox puts
+	// one, then replaced whole. No route removes it, and UpdateMailbox only sets.
 	if b.ACL != nil {
 		doc, err := json.Marshal(b.ACL.Document())
 		if err == nil { // a document of strings and a number always marshals
@@ -381,17 +381,17 @@ func boxState(b *Box) map[string]types.AttributeValue {
 	return st
 }
 
-func boxItem(b *Box) map[string]types.AttributeValue {
-	it := boxKey(b.Addr)
+func mailboxItem(b *Mailbox) map[string]types.AttributeValue {
+	it := mailboxKey(b.Addr)
 	it["identity"] = bin(b.Identity)
 	it["created"] = num(ms(b.Created))
-	for k, v := range boxState(b) {
+	for k, v := range mailboxState(b) {
 		it[k] = v
 	}
 	return it
 }
 
-// decodeStanding reads from a box record what memory holds of it, at its
+// decodeStanding reads from a mailbox record what memory holds of it, at its
 // rev. Listed is the revocations' to say (index.standing).
 func decodeStanding(it item) (Standing, uint64, error) {
 	state, err := it.string("state")
@@ -432,7 +432,7 @@ func decodeStanding(it item) (Standing, uint64, error) {
 	return st, rev, nil
 }
 
-// decodeACL reads a box record's ACL. It was checked when it was stored, so
+// decodeACL reads a mailbox record's ACL. It was checked when it was stored, so
 // one that does not read is a fault of the record.
 func decodeACL(it item) (*protocol.ACL, error) {
 	doc, err := it.bytes("acl")
@@ -450,7 +450,7 @@ func decodeACL(it item) (*protocol.ACL, error) {
 	return acl, nil
 }
 
-func decodeBox(it item) (*Box, error) {
+func decodeMailbox(it item) (*Mailbox, error) {
 	a, err := it.hash("addr")
 	if err != nil {
 		return nil, err
@@ -459,7 +459,7 @@ func decodeBox(it item) (*Box, error) {
 	if err != nil {
 		return nil, err
 	}
-	b := &Box{Addr: a, State: st.State, Cert: st.Cert, CertSerial: st.CertSerial, Rev: rev}
+	b := &Mailbox{Addr: a, State: st.State, Cert: st.Cert, CertSerial: st.CertSerial, Rev: rev}
 	if b.Identity, err = it.bytes("identity"); err != nil {
 		return nil, err
 	}
@@ -496,7 +496,7 @@ func decodeBox(it item) (*Box, error) {
 	if b.Prekey, err = protocol.ParsePrekey(b.Statement); err != nil {
 		return nil, fmt.Errorf("item: the stored prekey: %w", err)
 	}
-	// A record written before boxes declared sender key types has none: it
+	// A record written before mailboxes declared sender key types has none: it
 	// declared nothing.
 	if v, ok := it["senders"]; ok {
 		l, ok := v.(*types.AttributeValueMemberL)
@@ -569,12 +569,12 @@ func decodeRevocations(it item) (*Revocations, error) {
 }
 
 // ReadAddress implements Backend: one strongly consistent Query of the
-// address's items, its box's record and its revocations.
-func (s *dynamoBackend) ReadAddress(ctx context.Context, a protocol.Address) (*Box, *Revocations, error) {
-	var rec *Box
+// address's items, its mailbox's record and its revocations.
+func (s *dynamoBackend) ReadAddress(ctx context.Context, a protocol.Address) (*Mailbox, *Revocations, error) {
+	var rec *Mailbox
 	var rv *Revocations
 	p := dynamodb.NewQueryPaginator(s.db, &dynamodb.QueryInput{
-		TableName:                 &s.boxes,
+		TableName:                 &s.mailboxes,
 		KeyConditionExpression:    aws.String("#a = :a"),
 		ExpressionAttributeNames:  map[string]string{"#a": "addr"},
 		ExpressionAttributeValues: map[string]types.AttributeValue{":a": bin(a[:])},
@@ -586,13 +586,13 @@ func (s *dynamoBackend) ReadAddress(ctx context.Context, a protocol.Address) (*B
 			return nil, nil, err
 		}
 		for _, it := range out.Items {
-			_, sk, err := boxItemKey(it)
+			_, sk, err := mailboxItemKey(it)
 			if err != nil {
 				return nil, nil, err
 			}
 			switch {
-			case bytes.Equal(sk, []byte{skBox}):
-				if rec, err = decodeBox(it); err != nil {
+			case bytes.Equal(sk, []byte{skMailbox}):
+				if rec, err = decodeMailbox(it); err != nil {
 					return nil, nil, err
 				}
 			case bytes.Equal(sk, []byte{skRevocations}):
@@ -609,9 +609,9 @@ func (s *dynamoBackend) ReadAddress(ctx context.Context, a protocol.Address) (*B
 
 // msgItem is a new message's item: its header, and its entry in the live
 // index. It names no sender (PROTOCOL.md §13).
-func msgItem(box protocol.Address, h *Header) map[string]types.AttributeValue {
+func msgItem(mailbox protocol.Address, h *Header) map[string]types.AttributeValue {
 	recv := ms(h.ReceivedAt)
-	it := msgKey(box, h.ID)
+	it := msgKey(mailbox, h.ID)
 	it["size"] = num(uint64(h.Size)) //nolint:gosec // a size is not negative
 	it["received_at"] = num(recv)
 	it["expires_at"] = num(ttlSeconds(recv + ttlMs))
@@ -750,11 +750,11 @@ func written(err error, n *note, cond error) error {
 	return unknown(err)
 }
 
-// ReadLive implements Backend: one strongly consistent Query of the box's
+// ReadLive implements Backend: one strongly consistent Query of the mailbox's
 // entries in the live index, which a local secondary index allows.
-func (s *dynamoBackend) ReadLive(ctx context.Context, box protocol.Address) ([]Header, error) {
+func (s *dynamoBackend) ReadLive(ctx context.Context, mailbox protocol.Address) ([]Header, error) {
 	var hs []Header
-	p := dynamodb.NewQueryPaginator(s.db, s.liveQuery(box, s.liveFrom(), true))
+	p := dynamodb.NewQueryPaginator(s.db, s.liveQuery(mailbox, s.liveFrom(), true))
 	for p.HasMorePages() {
 		out, err := p.NextPage(ctx)
 		if err != nil {
@@ -776,40 +776,40 @@ func (s *dynamoBackend) ReadLive(ctx context.Context, box protocol.Address) ([]H
 // deleted is never read.
 func (s *dynamoBackend) liveFrom() []byte { return liveKey(s.nowMs()-ttlMs+1, [32]byte{}) }
 
-// liveQuery is a Query of a box's entries in the live index from lo.
-func (s *dynamoBackend) liveQuery(box protocol.Address, lo []byte, consistent bool) *dynamodb.QueryInput {
+// liveQuery is a Query of a mailbox's entries in the live index from lo.
+func (s *dynamoBackend) liveQuery(mailbox protocol.Address, lo []byte, consistent bool) *dynamodb.QueryInput {
 	return &dynamodb.QueryInput{
 		TableName:                 &s.msgs,
 		IndexName:                 aws.String(liveIndex),
 		KeyConditionExpression:    aws.String("#b = :b AND #l BETWEEN :lo AND :hi"),
 		ProjectionExpression:      aws.String("#l, #s"),
 		ExpressionAttributeNames:  map[string]string{"#b": "box", "#l": "live", "#s": "size"},
-		ExpressionAttributeValues: map[string]types.AttributeValue{":b": bin(box[:]), ":lo": bin(lo), ":hi": bin(bytes.Repeat([]byte{0xff}, 40))},
+		ExpressionAttributeValues: map[string]types.AttributeValue{":b": bin(mailbox[:]), ":lo": bin(lo), ":hi": bin(bytes.Repeat([]byte{0xff}, 40))},
 		ConsistentRead:            aws.Bool(consistent),
 	}
 }
 
-// CreateBox implements Backend.
-func (s *dynamoBackend) CreateBox(ctx context.Context, b *Box) error {
+// CreateMailbox implements Backend.
+func (s *dynamoBackend) CreateMailbox(ctx context.Context, b *Mailbox) error {
 	n := new(note)
 	_, err := s.db.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName:                &s.boxes,
-		Item:                     boxItem(b),
+		TableName:                &s.mailboxes,
+		Item:                     mailboxItem(b),
 		ConditionExpression:      aws.String("attribute_not_exists(#a)"),
 		ExpressionAttributeNames: map[string]string{"#a": "addr"},
 	}, n.option())
 	return written(err, n, ErrExists) // it has a record, whoever wrote it
 }
 
-// UpdateBox implements Backend: every attribute that can change, if the
+// UpdateMailbox implements Backend: every attribute that can change, if the
 // record is still at b.Rev. Attributes it does not name are left alone.
-func (s *dynamoBackend) UpdateBox(ctx context.Context, b *Box) error {
-	next := cloneBox(b)
+func (s *dynamoBackend) UpdateMailbox(ctx context.Context, b *Mailbox) error {
+	next := cloneMailbox(b)
 	next.Rev = b.Rev + 1
 	names := map[string]string{}
 	values := map[string]types.AttributeValue{":old": num(b.Rev)}
 	var sets []string
-	for k, v := range boxState(next) {
+	for k, v := range mailboxState(next) {
 		names["#"+k] = k
 		values[":"+k] = v
 		sets = append(sets, "#"+k+" = :"+k)
@@ -817,8 +817,8 @@ func (s *dynamoBackend) UpdateBox(ctx context.Context, b *Box) error {
 	slices.Sort(sets)
 	n := new(note)
 	_, err := s.db.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName:                 &s.boxes,
-		Key:                       boxKey(b.Addr),
+		TableName:                 &s.mailboxes,
+		Key:                       mailboxKey(b.Addr),
 		UpdateExpression:          aws.String("SET " + strings.Join(sets, ", ")),
 		ConditionExpression:       aws.String("#rev = :old"),
 		ExpressionAttributeNames:  names,
@@ -827,10 +827,10 @@ func (s *dynamoBackend) UpdateBox(ctx context.Context, b *Box) error {
 	return written(err, n, ErrStale)
 }
 
-// DeleteBox implements Backend.
-func (s *dynamoBackend) DeleteBox(ctx context.Context, a protocol.Address) error {
+// DeleteMailbox implements Backend.
+func (s *dynamoBackend) DeleteMailbox(ctx context.Context, a protocol.Address) error {
 	n := new(note)
-	_, err := s.db.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: &s.boxes, Key: boxKey(a)}, n.option())
+	_, err := s.db.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: &s.mailboxes, Key: mailboxKey(a)}, n.option())
 	return written(err, n, nil)
 }
 
@@ -870,7 +870,7 @@ func (s *dynamoBackend) Revoke(ctx context.Context, a protocol.Address, rv *Revo
 	}
 	n := new(note)
 	out, err := s.db.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName:                 &s.boxes,
+		TableName:                 &s.mailboxes,
 		Key:                       revocationsKey(a),
 		UpdateExpression:          aws.String("SET " + strings.Join(sets, ", ")),
 		ConditionExpression:       cond,
@@ -890,8 +890,8 @@ func (s *dynamoBackend) Revoke(ctx context.Context, a protocol.Address, rv *Revo
 
 // getMsg reads a live message's item; ErrNotFound if there is none, it is
 // out of the list (decodeMsg), or it has expired.
-func (s *dynamoBackend) getMsg(ctx context.Context, box protocol.Address, id [32]byte) (*Header, error) {
-	out, err := s.db.GetItem(ctx, &dynamodb.GetItemInput{TableName: &s.msgs, Key: msgKey(box, id), ConsistentRead: aws.Bool(s.consistent)})
+func (s *dynamoBackend) getMsg(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
+	out, err := s.db.GetItem(ctx, &dynamodb.GetItemInput{TableName: &s.msgs, Key: msgKey(mailbox, id), ConsistentRead: aws.Bool(s.consistent)})
 	if err != nil {
 		return nil, err
 	}
@@ -910,8 +910,8 @@ func (s *dynamoBackend) getMsg(ctx context.Context, box protocol.Address, id [32
 
 // Dedupe implements Backend: the live message's item. A stale miss is
 // caught by PutMessage's conditional write.
-func (s *dynamoBackend) Dedupe(ctx context.Context, box protocol.Address, id [32]byte) (*Header, error) {
-	return s.getMsg(ctx, box, id)
+func (s *dynamoBackend) Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
+	return s.getMsg(ctx, mailbox, id)
 }
 
 // crashed is a step of a two-step write failing as a crash there would.
@@ -931,10 +931,10 @@ func (s *dynamoBackend) crashed(step string) error {
 // the write, applied (dromas-dev/dromas-server#89), and so is another post's
 // of the same bytes in the same millisecond, whose item is this one's to the
 // byte; another's is a duplicate.
-func (s *dynamoBackend) PutMessage(ctx context.Context, box protocol.Address, h *Header, body []byte) error {
+func (s *dynamoBackend) PutMessage(ctx context.Context, mailbox protocol.Address, h *Header, body []byte) error {
 	if _, err := s.s3.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: &s.bucket,
-		Key:    aws.String(bodyKey(box, h.ID)),
+		Key:    aws.String(bodyKey(mailbox, h.ID)),
 		Body:   bytes.NewReader(body),
 	}); err != nil {
 		return fmt.Errorf("%w: %w", errNotStored, err)
@@ -946,7 +946,7 @@ func (s *dynamoBackend) PutMessage(ctx context.Context, box protocol.Address, h 
 	n := new(note)
 	out, err := s.db.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName:                           &s.msgs,
-		Item:                                msgItem(box, h),
+		Item:                                msgItem(mailbox, h),
 		ConditionExpression:                 aws.String("attribute_not_exists(#l) OR #r <= :cutoff"),
 		ExpressionAttributeNames:            map[string]string{"#l": "live", "#r": "received_at"},
 		ExpressionAttributeValues:           map[string]types.AttributeValue{":cutoff": num(now - ttlMs)},
@@ -974,12 +974,12 @@ func (s *dynamoBackend) PutMessage(ctx context.Context, box protocol.Address, h 
 
 // Retire implements Backend: the item is deleted, if it is live, and nothing
 // of the message is kept.
-func (s *dynamoBackend) Retire(ctx context.Context, box protocol.Address, id [32]byte) (time.Time, error) {
+func (s *dynamoBackend) Retire(ctx context.Context, mailbox protocol.Address, id [32]byte) (time.Time, error) {
 	now := s.nowMs()
 	n := new(note)
 	out, err := s.db.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName:                 &s.msgs,
-		Key:                       msgKey(box, id),
+		Key:                       msgKey(mailbox, id),
 		ConditionExpression:       aws.String("attribute_exists(#l) AND #r > :cutoff"),
 		ExpressionAttributeNames:  map[string]string{"#l": "live", "#r": "received_at"},
 		ExpressionAttributeValues: map[string]types.AttributeValue{":cutoff": num(now - ttlMs)},
@@ -998,8 +998,8 @@ func (s *dynamoBackend) Retire(ctx context.Context, box protocol.Address, id [32
 	return time.Time{}, unknown(fmt.Errorf("applied, and its answer does not read: %w", err))
 }
 
-func (s *dynamoBackend) deleteBody(ctx context.Context, box protocol.Address, id [32]byte) error {
-	_, err := s.s3.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: &s.bucket, Key: aws.String(bodyKey(box, id))})
+func (s *dynamoBackend) deleteBody(ctx context.Context, mailbox protocol.Address, id [32]byte) error {
+	_, err := s.s3.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: &s.bucket, Key: aws.String(bodyKey(mailbox, id))})
 	if err != nil && !isNoSuchKey(err) {
 		return err
 	}
@@ -1010,12 +1010,12 @@ func (s *dynamoBackend) deleteBody(ctx context.Context, box protocol.Address, id
 // errNoBody. The body's bytes from byte from on are read with the same
 // range (GetObject's Range, RFC 9110 §14.2), so a fetch that resumes moves
 // only the rest out of S3.
-func (s *dynamoBackend) Message(ctx context.Context, box protocol.Address, id [32]byte, from int64) (*Header, []byte, error) {
-	h, err := s.getMsg(ctx, box, id)
+func (s *dynamoBackend) Message(ctx context.Context, mailbox protocol.Address, id [32]byte, from int64) (*Header, []byte, error) {
+	h, err := s.getMsg(ctx, mailbox, id)
 	if err != nil {
 		return nil, nil, err
 	}
-	in := &s3.GetObjectInput{Bucket: &s.bucket, Key: aws.String(bodyKey(box, id))}
+	in := &s3.GetObjectInput{Bucket: &s.bucket, Key: aws.String(bodyKey(mailbox, id))}
 	if from > 0 && from < int64(h.Size) {
 		in.Range = aws.String(protocol.RangeAsk(from))
 	}
@@ -1036,25 +1036,25 @@ func (s *dynamoBackend) Message(ctx context.Context, box protocol.Address, id [3
 
 // DeleteMessage implements Backend (ack): the body, then the item. A body
 // that was not deleted leaves the list as it was: a refusal.
-func (s *dynamoBackend) DeleteMessage(ctx context.Context, box protocol.Address, id [32]byte) (time.Time, error) {
-	if err := s.deleteBody(ctx, box, id); err != nil {
+func (s *dynamoBackend) DeleteMessage(ctx context.Context, mailbox protocol.Address, id [32]byte) (time.Time, error) {
+	if err := s.deleteBody(ctx, mailbox, id); err != nil {
 		return time.Time{}, refused(fmt.Errorf("the body was not deleted, and the message is listed as it was: %w", err))
 	}
 	if err := s.crashed("ack: after the body"); err != nil {
 		return time.Time{}, err
 	}
-	return s.Retire(ctx, box, id)
+	return s.Retire(ctx, mailbox, id)
 }
 
-// DeleteAll implements Backend: the box's live messages, as acks: bodies
+// DeleteAll implements Backend: the mailbox's live messages, as acks: bodies
 // first, then each item. One Query of the live index finds them, strongly
 // consistent, which a local secondary index allows: a message stored just
 // before it is in it (dromas-dev/dromas-server#15). Until a retire is made,
 // nothing a reader of the list sees has changed: a failure there is a
 // refusal.
-func (s *dynamoBackend) DeleteAll(ctx context.Context, box protocol.Address, retired func([32]byte, time.Time)) error {
+func (s *dynamoBackend) DeleteAll(ctx context.Context, mailbox protocol.Address, retired func([32]byte, time.Time)) error {
 	var ids [][32]byte
-	p := dynamodb.NewQueryPaginator(s.db, s.liveQuery(box, s.liveFrom(), true))
+	p := dynamodb.NewQueryPaginator(s.db, s.liveQuery(mailbox, s.liveFrom(), true))
 	for p.HasMorePages() {
 		out, err := p.NextPage(ctx)
 		if err != nil {
@@ -1075,7 +1075,7 @@ func (s *dynamoBackend) DeleteAll(ctx context.Context, box protocol.Address, ret
 	for chunk := range slices.Chunk(ids, 1000) {
 		objs := make([]s3types.ObjectIdentifier, 0, len(chunk))
 		for _, id := range chunk {
-			objs = append(objs, s3types.ObjectIdentifier{Key: aws.String(bodyKey(box, id))})
+			objs = append(objs, s3types.ObjectIdentifier{Key: aws.String(bodyKey(mailbox, id))})
 		}
 		out, err := s.s3.DeleteObjects(ctx, &s3.DeleteObjectsInput{Bucket: &s.bucket, Delete: &s3types.Delete{Objects: objs, Quiet: aws.Bool(true)}})
 		if err != nil {
@@ -1086,7 +1086,7 @@ func (s *dynamoBackend) DeleteAll(ctx context.Context, box protocol.Address, ret
 		}
 	}
 	for _, id := range ids {
-		switch received, err := s.Retire(ctx, box, id); {
+		switch received, err := s.Retire(ctx, mailbox, id); {
 		case err == nil:
 			retired(id, received)
 		case !errors.Is(err, ErrNotFound):
@@ -1100,12 +1100,12 @@ func (s *dynamoBackend) DeleteAll(ctx context.Context, box protocol.Address, ret
 // range, strongly consistent where consistent is set, which a local secondary
 // index allows. Eventually consistent, a page read just after a write may
 // miss it while memory's count has it.
-func (s *dynamoBackend) List(ctx context.Context, box protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error) {
+func (s *dynamoBackend) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error) {
 	lo := s.liveFrom()
-	in := s.liveQuery(box, lo, consistent || s.consistent)
+	in := s.liveQuery(mailbox, lo, consistent || s.consistent)
 	if after != nil {
 		if start := liveKey(ms(after.ReceivedAt), after.ID); bytes.Compare(start, lo) >= 0 {
-			k := msgKey(box, after.ID)
+			k := msgKey(mailbox, after.ID)
 			k["live"] = bin(start)
 			in.ExclusiveStartKey = k
 		}

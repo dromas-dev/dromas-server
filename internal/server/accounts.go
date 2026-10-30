@@ -11,8 +11,8 @@ import (
 	"github.com/dromas-dev/dromas-client/protocol"
 )
 
-// Accounts (PROTOCOL.md §11.16): a box may belong to one account, which
-// may lift its limits. A box joins with an adopt key the account minted, and
+// Accounts (PROTOCOL.md §11.16): a mailbox may belong to one account, which
+// may lift its limits. A mailbox joins with an adopt key the account minted, and
 // leaves on its own, or the account drops it.
 
 // accountID is an account id: a minted one is 32 hex characters, and a few
@@ -42,9 +42,9 @@ func keyRefused() *problem {
 	return fail(protocol.CodeAdoptKeyRefused, "ask the account for a new adopt key", "the adopt key is spent, expired, revoked or not this server's")
 }
 
-// adopt is PUT /v1/<address>/account (with the pass): the box joins the account its
+// adopt is PUT /v1/<address>/account (with the pass): the mailbox joins the account its
 // adopt key names, spending one of the key's uses. Naming the account the
-// box is already in spends none, so a retry whose answer was lost is 200
+// mailbox is already in spends none, so a retry whose answer was lost is 200
 // even once the key is spent.
 func (s *Server) adopt(w http.ResponseWriter, r *http.Request) error {
 	a, err := s.owner(r)
@@ -68,21 +68,21 @@ func (s *Server) adopt(w http.ResponseWriter, r *http.Request) error {
 	if !ok {
 		return keyRefused()
 	}
-	b, err := s.box(r.Context(), a)
+	b, err := s.mailbox(r.Context(), a)
 	if err != nil {
 		return err
 	}
 	if b == nil {
 		return noSuchMailbox
 	}
-	// The target is the box's place in an account: there is one once it is
+	// The target is the mailbox's place in an account: there is one once it is
 	// in any (precondition). The write holds what they held, the record at
 	// the rev read.
 	if err := precondition(r, targetState{exists: b.Account != "", hint: hintConditions}); err != nil {
 		return err
 	}
 	// The key is read before anything is written, so one that is not ours
-	// costs a read of the accounts table and no write of the box's record.
+	// costs a read of the accounts table and no write of the mailbox's record.
 	k, err := s.store.AdoptKey(r.Context(), account, hash)
 	if errors.Is(err, ErrNotFound) {
 		return keyRefused()
@@ -98,7 +98,7 @@ func (s *Server) adopt(w http.ResponseWriter, r *http.Request) error {
 		case errors.Is(err, ErrKeyRefused):
 			return keyRefused()
 		case errors.Is(err, ErrStale):
-			return fail(protocol.CodeBoxChanged, "retry: dromas account adopt", "the box changed during the request")
+			return fail(protocol.CodeMailboxChanged, "retry: dromas account adopt", "the mailbox changed during the request")
 		case err != nil:
 			return err
 		}
@@ -107,8 +107,8 @@ func (s *Server) adopt(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// leave is DELETE /v1/<address>/account (with the pass): the box leaves its
-// account, and has the server's limits again. A box in no account is
+// leave is DELETE /v1/<address>/account (with the pass): the mailbox leaves its
+// account, and has the server's limits again. A mailbox in no account is
 // already there.
 func (s *Server) leave(w http.ResponseWriter, r *http.Request) error {
 	a, err := s.owner(r)
@@ -118,7 +118,7 @@ func (s *Server) leave(w http.ResponseWriter, r *http.Request) error {
 	if err := s.spendOwner(r.Context(), a); err != nil {
 		return err
 	}
-	b, err := s.box(r.Context(), a)
+	b, err := s.mailbox(r.Context(), a)
 	if err != nil {
 		return err
 	}
@@ -131,7 +131,7 @@ func (s *Server) leave(w http.ResponseWriter, r *http.Request) error {
 	if b.Account != "" {
 		switch err := s.store.Leave(detached(r.Context()), b); {
 		case errors.Is(err, ErrStale):
-			return fail(protocol.CodeBoxChanged, "retry: dromas account leave", "the box changed during the request")
+			return fail(protocol.CodeMailboxChanged, "retry: dromas account leave", "the mailbox changed during the request")
 		case err != nil:
 			return err
 		}
@@ -140,12 +140,12 @@ func (s *Server) leave(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// limitsFor returns the limits a box gets: the server's, unless it is in an
-// unmetered account, whose boxes have no daily limit, the largest cap, no
-// budget of calls or of mail drained, and new mail at ReceiveCeiling. A box
+// limitsFor returns the limits a mailbox gets: the server's, unless it is in an
+// unmetered account, whose mailboxes have no daily limit, the largest cap, no
+// budget of calls or of messages drained, and new messages at ReceiveCeiling. A mailbox
 // whose account is gone has the server's. These are the volume levers
 // (LIMITS.md): what an account may lift.
-func (s *Server) limitsFor(ctx context.Context, b *Box) (Limits, error) {
+func (s *Server) limitsFor(ctx context.Context, b *Mailbox) (Limits, error) {
 	l := s.limits
 	if b.Account == "" {
 		return l, nil
@@ -164,7 +164,7 @@ func (s *Server) limitsFor(ctx context.Context, b *Box) (Limits, error) {
 	return l, nil
 }
 
-// receivesAt is the budget of new mail of a box with limits l: the server's,
+// receivesAt is the budget of new messages of a mailbox with limits l: the server's,
 // or the one an account lifts it to. Each refill has buckets of its own
 // (LIMITS.md § Accounts).
 func (s *Server) receivesAt(l Limits) *buckets {

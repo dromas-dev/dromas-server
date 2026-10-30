@@ -15,7 +15,7 @@ import (
 // in this process (memBackend), on the given clock, nothing persisted.
 // Memory follows its feed from the start.
 func NewMemStore(now func() time.Time) *Memory {
-	s := newMemory(now, DefaultBoxCache, nil, nil)
+	s := newMemory(now, DefaultMailboxCache, nil, nil)
 	b := newMemBackend(s.clock)
 	s.backend = b
 	_ = b.Start(context.Background(), s.apply) // it never fails
@@ -25,9 +25,9 @@ func NewMemStore(now func() time.Time) *Memory {
 // memBackend keeps what a store keeps in maps, as the DynamoDB backend
 // keeps it in tables: each write has the outcome its DynamoDB write would
 // have, and each change it makes goes to its feed. Expired messages vanish
-// at their ExpiresAt, as reads of the tables judge expiry. A box's record stays past its Expires, as one in DynamoDB does
+// at their ExpiresAt, as reads of the tables judge expiry. A mailbox's record stays past its Expires, as one in DynamoDB does
 // until the TTL deletes it, which may be days after: a test stands in for
-// the TTL with DeleteBox, which is the delete the TTL makes.
+// the TTL with DeleteMailbox, which is the delete the TTL makes.
 //
 // Its feed hands each change a write made to apply at the start of the
 // backend's next write, in the order the writes were made, on that write's
@@ -40,7 +40,7 @@ type memBackend struct {
 	now func() time.Time
 
 	mu          sync.Mutex
-	boxes       map[protocol.Address]*Box         // each box's record, with none of its revocations
+	mailboxes   map[protocol.Address]*Mailbox     // each mailbox's record, with none of its revocations
 	revocations map[protocol.Address]*Revocations // each address's revocations item
 	messages    map[protocol.Address]map[[32]byte]*memMessage
 	accounts    map[string]*Account
@@ -65,7 +65,7 @@ type memMessage struct {
 func newMemBackend(now func() time.Time) *memBackend {
 	return &memBackend{
 		now:         now,
-		boxes:       map[protocol.Address]*Box{},
+		mailboxes:   map[protocol.Address]*Mailbox{},
 		revocations: map[protocol.Address]*Revocations{},
 		messages:    map[protocol.Address]map[[32]byte]*memMessage{},
 		accounts:    map[string]*Account{},
@@ -105,17 +105,17 @@ func (s *memBackend) deliver() {
 }
 
 // recordChange is the feed's change of a's record as it now is.
-func recordChange(rec *Box) Change {
-	return Change{Kind: RecordChange, Addr: rec.Addr, Box: cloneBox(rec)}
+func recordChange(rec *Mailbox) Change {
+	return Change{Kind: RecordChange, Addr: rec.Addr, Mailbox: cloneMailbox(rec)}
 }
 
 // ReadAddress implements Backend.
-func (s *memBackend) ReadAddress(_ context.Context, a protocol.Address) (*Box, *Revocations, error) {
+func (s *memBackend) ReadAddress(_ context.Context, a protocol.Address) (*Mailbox, *Revocations, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var rec *Box
-	if b := s.boxes[a]; b != nil {
-		rec = cloneBox(b)
+	var rec *Mailbox
+	if b := s.mailboxes[a]; b != nil {
+		rec = cloneMailbox(b)
 	}
 	var rv *Revocations
 	if r, ok := s.revocations[a]; ok {
@@ -125,10 +125,10 @@ func (s *memBackend) ReadAddress(_ context.Context, a protocol.Address) (*Box, *
 	return rec, rv, nil
 }
 
-// live is box's live messages at now, the expired dropped.
-func (s *memBackend) live(box protocol.Address) map[[32]byte]*memMessage {
+// live is mailbox's live messages at now, the expired dropped.
+func (s *memBackend) live(mailbox protocol.Address) map[[32]byte]*memMessage {
 	now := s.now()
-	m := s.messages[box]
+	m := s.messages[mailbox]
 	for id, msg := range m {
 		if !now.Before(msg.h.ExpiresAt) {
 			delete(m, id)
@@ -138,56 +138,56 @@ func (s *memBackend) live(box protocol.Address) map[[32]byte]*memMessage {
 }
 
 // ReadLive implements Backend.
-func (s *memBackend) ReadLive(_ context.Context, box protocol.Address) ([]Header, error) {
+func (s *memBackend) ReadLive(_ context.Context, mailbox protocol.Address) ([]Header, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var hs []Header
-	for _, m := range s.live(box) {
+	for _, m := range s.live(mailbox) {
 		hs = append(hs, m.h)
 	}
 	return hs, nil
 }
 
-// CreateBox implements Backend.
-func (s *memBackend) CreateBox(_ context.Context, b *Box) error {
+// CreateMailbox implements Backend.
+func (s *memBackend) CreateMailbox(_ context.Context, b *Mailbox) error {
 	s.deliver()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.boxes[b.Addr] != nil {
+	if s.mailboxes[b.Addr] != nil {
 		return ErrExists
 	}
 	if _, err := identityWire(b.Identity); err != nil {
 		return refused(fmt.Errorf("the identity: %w", err))
 	}
 	rec := storedRecord(b)
-	s.boxes[b.Addr] = rec
+	s.mailboxes[b.Addr] = rec
 	s.changed(recordChange(rec))
 	return nil
 }
 
-// UpdateBox implements Backend.
-func (s *memBackend) UpdateBox(_ context.Context, b *Box) error {
+// UpdateMailbox implements Backend.
+func (s *memBackend) UpdateMailbox(_ context.Context, b *Mailbox) error {
 	s.deliver()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cur := s.boxes[b.Addr]
+	cur := s.mailboxes[b.Addr]
 	if cur == nil || cur.Rev != b.Rev {
 		return ErrStale
 	}
 	rec := storedRecord(b)
 	rec.Rev++
-	s.boxes[b.Addr] = rec
+	s.mailboxes[b.Addr] = rec
 	s.changed(recordChange(rec))
 	return nil
 }
 
-// DeleteBox implements Backend.
-func (s *memBackend) DeleteBox(_ context.Context, a protocol.Address) error {
+// DeleteMailbox implements Backend.
+func (s *memBackend) DeleteMailbox(_ context.Context, a protocol.Address) error {
 	s.deliver()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.boxes[a]; ok {
-		delete(s.boxes, a)
+	if _, ok := s.mailboxes[a]; ok {
+		delete(s.mailboxes, a)
 		s.changed(Change{Kind: RecordChange, Addr: a, Gone: true})
 	}
 	return nil
@@ -217,10 +217,10 @@ func (s *memBackend) Revoke(_ context.Context, a protocol.Address, rv *Revocatio
 }
 
 // Dedupe implements Backend.
-func (s *memBackend) Dedupe(_ context.Context, box protocol.Address, id [32]byte) (*Header, error) {
+func (s *memBackend) Dedupe(_ context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	m, ok := s.live(box)[id]
+	m, ok := s.live(mailbox)[id]
 	if !ok {
 		return nil, ErrNotFound
 	}
@@ -230,20 +230,20 @@ func (s *memBackend) Dedupe(_ context.Context, box protocol.Address, id [32]byte
 
 // PutMessage implements Backend: a live message of the id refuses it, as
 // the condition of DynamoDB's write does.
-func (s *memBackend) PutMessage(_ context.Context, box protocol.Address, h *Header, body []byte) error {
+func (s *memBackend) PutMessage(_ context.Context, mailbox protocol.Address, h *Header, body []byte) error {
 	s.deliver()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if m, ok := s.live(box)[h.ID]; ok {
+	if m, ok := s.live(mailbox)[h.ID]; ok {
 		orig := m.h
 		return duplicate{&orig}
 	}
-	if s.messages[box] == nil {
-		s.messages[box] = map[[32]byte]*memMessage{}
+	if s.messages[mailbox] == nil {
+		s.messages[mailbox] = map[[32]byte]*memMessage{}
 	}
-	s.messages[box][h.ID] = &memMessage{h: *h, body: bytes.Clone(body)}
+	s.messages[mailbox][h.ID] = &memMessage{h: *h, body: bytes.Clone(body)}
 	echo := *h
-	s.changed(Change{Kind: MessageChange, Addr: box, Header: &echo, Live: true})
+	s.changed(Change{Kind: MessageChange, Addr: mailbox, Header: &echo, Live: true})
 	return nil
 }
 
@@ -255,11 +255,11 @@ func less(a, b Header) int {
 }
 
 // List implements Backend: every read of the maps is consistent.
-func (s *memBackend) List(_ context.Context, box protocol.Address, after *Cursor, limit int, _ bool) ([]Header, error) {
+func (s *memBackend) List(_ context.Context, mailbox protocol.Address, after *Cursor, limit int, _ bool) ([]Header, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var all []Header
-	for _, m := range s.live(box) {
+	for _, m := range s.live(mailbox) {
 		if after != nil && less(m.h, Header{ReceivedAt: after.ReceivedAt, ID: after.ID}) <= 0 {
 			continue
 		}
@@ -274,10 +274,10 @@ func (s *memBackend) List(_ context.Context, box protocol.Address, after *Cursor
 
 // Message implements Backend: the body, or its bytes from byte from on, a
 // slice of what the map keeps.
-func (s *memBackend) Message(_ context.Context, box protocol.Address, id [32]byte, from int64) (*Header, []byte, error) {
+func (s *memBackend) Message(_ context.Context, mailbox protocol.Address, id [32]byte, from int64) (*Header, []byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	m, ok := s.live(box)[id]
+	m, ok := s.live(mailbox)[id]
 	if !ok {
 		return nil, nil, ErrNotFound
 	}
@@ -291,34 +291,34 @@ func (s *memBackend) Message(_ context.Context, box protocol.Address, id [32]byt
 // retireLocked deletes a live message, its body with it, and records the
 // change: a deletion, which names the id alone, as DynamoDB's stream does.
 // The caller holds mu.
-func (s *memBackend) retireLocked(box protocol.Address, id [32]byte) (time.Time, error) {
-	m, ok := s.live(box)[id]
+func (s *memBackend) retireLocked(mailbox protocol.Address, id [32]byte) (time.Time, error) {
+	m, ok := s.live(mailbox)[id]
 	if !ok {
 		return time.Time{}, ErrNotFound
 	}
-	delete(s.messages[box], id)
-	if len(s.messages[box]) == 0 {
-		delete(s.messages, box)
+	delete(s.messages[mailbox], id)
+	if len(s.messages[mailbox]) == 0 {
+		delete(s.messages, mailbox)
 	}
-	s.changed(Change{Kind: MessageChange, Addr: box, Header: &Header{ID: id}, Gone: true})
+	s.changed(Change{Kind: MessageChange, Addr: mailbox, Header: &Header{ID: id}, Gone: true})
 	return m.h.ReceivedAt, nil
 }
 
 // Retire implements Backend.
-func (s *memBackend) Retire(_ context.Context, box protocol.Address, id [32]byte) (time.Time, error) {
+func (s *memBackend) Retire(_ context.Context, mailbox protocol.Address, id [32]byte) (time.Time, error) {
 	s.deliver()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.retireLocked(box, id)
+	return s.retireLocked(mailbox, id)
 }
 
 // DeleteMessage implements Backend: the body and the item go together.
-func (s *memBackend) DeleteMessage(ctx context.Context, box protocol.Address, id [32]byte) (time.Time, error) {
-	return s.Retire(ctx, box, id)
+func (s *memBackend) DeleteMessage(ctx context.Context, mailbox protocol.Address, id [32]byte) (time.Time, error) {
+	return s.Retire(ctx, mailbox, id)
 }
 
 // DeleteAll implements Backend.
-func (s *memBackend) DeleteAll(_ context.Context, box protocol.Address, retired func([32]byte, time.Time)) error {
+func (s *memBackend) DeleteAll(_ context.Context, mailbox protocol.Address, retired func([32]byte, time.Time)) error {
 	s.deliver()
 	type taken struct {
 		id       [32]byte
@@ -326,8 +326,8 @@ func (s *memBackend) DeleteAll(_ context.Context, box protocol.Address, retired 
 	}
 	var out []taken
 	s.mu.Lock()
-	for id := range s.live(box) {
-		if received, err := s.retireLocked(box, id); err == nil {
+	for id := range s.live(mailbox) {
+		if received, err := s.retireLocked(mailbox, id); err == nil {
 			out = append(out, taken{id, received})
 		}
 	}
@@ -390,11 +390,11 @@ func (s *memBackend) AdoptKey(_ context.Context, account string, hash [32]byte) 
 
 // Adopt implements Backend: the record and the key's use in one step, as
 // DynamoDB's transaction.
-func (s *memBackend) Adopt(_ context.Context, b *Box, account string, key [32]byte) error {
+func (s *memBackend) Adopt(_ context.Context, b *Mailbox, account string, key [32]byte) error {
 	s.deliver()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cur := s.boxes[b.Addr]
+	cur := s.mailboxes[b.Addr]
 	if cur == nil || cur.Rev != b.Rev {
 		return ErrStale
 	}
@@ -403,25 +403,25 @@ func (s *memBackend) Adopt(_ context.Context, b *Box, account string, key [32]by
 		return ErrKeyRefused
 	}
 	k.Uses--
-	rec := cloneBox(cur)
+	rec := cloneMailbox(cur)
 	rec.Account, rec.Rev = account, cur.Rev+1
-	s.boxes[b.Addr] = rec
+	s.mailboxes[b.Addr] = rec
 	s.changed(recordChange(rec))
 	return nil
 }
 
 // Leave implements Backend.
-func (s *memBackend) Leave(_ context.Context, b *Box) error {
+func (s *memBackend) Leave(_ context.Context, b *Mailbox) error {
 	s.deliver()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cur := s.boxes[b.Addr]
+	cur := s.mailboxes[b.Addr]
 	if cur == nil || cur.Rev != b.Rev {
 		return ErrStale
 	}
-	rec := cloneBox(cur)
+	rec := cloneMailbox(cur)
 	rec.Account, rec.Rev = "", cur.Rev+1
-	s.boxes[b.Addr] = rec
+	s.mailboxes[b.Addr] = rec
 	s.changed(recordChange(rec))
 	return nil
 }

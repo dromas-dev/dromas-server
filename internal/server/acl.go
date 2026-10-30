@@ -22,7 +22,7 @@ func (s *Server) aclBodyLimit() int64 {
 }
 
 // hintACL names what writes an ACL: the client does, from its own lists.
-const hintACL = "dromas peer allow and dromas peer block write this box's ACL from its own lists"
+const hintACL = "dromas peer allow and dromas peer block write this mailbox's ACL from its own lists"
 
 // aclTooLarge is the answer to an ACL over --acl-entries, by its entries or by
 // the body bound drawn from them.
@@ -30,14 +30,14 @@ func (s *Server) aclTooLarge() *problem {
 	return fail(protocol.CodeTooLarge, "list fewer addresses: "+hintACL, "an ACL here holds at most %d entries, its two lists together", limitValue(s.limits.ACLEntries))
 }
 
-// putACL is PUT /v1/<address>/acl (with the pass): the box's sender ACL,
+// putACL is PUT /v1/<address>/acl (with the pass): the mailbox's sender ACL,
 // replaced whole (PROTOCOL.md §11.14). Its preconditions are evaluated against
-// the ACL held, a box with none included, after the call's other checks and
+// the ACL held, a mailbox with none included, after the call's other checks and
 // before its body is read, as RFC 9110 §13.2.1 has an origin server evaluate
 // them (precondition): a false If-Match is 412, and so is an If-None-Match
 // that is "*" or names the held ACL's tag, and nothing changes. The write is
 // conditional on the record's revision, so the ACL the If-Match was held to
-// is the one replaced. It refuses later sends, and deletes no mail. It answers the ACL as held with
+// is the one replaced. It refuses later sends, and deletes no messages. It answers the ACL as held with
 // no ETag: the lists are sorted and each entry kept once, so what is held may
 // not be what was sent, and RFC 9110 §9.3.4 lets a PUT's answer carry a
 // validator only for content saved as it came.
@@ -49,7 +49,7 @@ func (s *Server) putACL(w http.ResponseWriter, r *http.Request) error {
 	if err := s.spendOwner(r.Context(), a); err != nil {
 		return err
 	}
-	b, err := s.box(r.Context(), a)
+	b, err := s.mailbox(r.Context(), a)
 	if err != nil {
 		return err
 	}
@@ -86,9 +86,9 @@ func (s *Server) putACL(w http.ResponseWriter, r *http.Request) error {
 	}
 	b.ACL = acl
 	ctx := detached(r.Context())
-	if err := s.store.UpdateBox(ctx, b); err != nil {
+	if err := s.store.UpdateMailbox(ctx, b); err != nil {
 		if errors.Is(err, ErrStale) {
-			return fail(protocol.CodeBoxChanged, "retry", "the box changed during the request")
+			return fail(protocol.CodeMailboxChanged, "retry", "the mailbox changed during the request")
 		}
 		return err
 	}
@@ -99,8 +99,8 @@ func (s *Server) putACL(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// getACL is GET /v1/<address>/acl (with the pass): the box's ACL as it was
-// put, or, for a box that has put none, the one allowing everyone, with its
+// getACL is GET /v1/<address>/acl (with the pass): the mailbox's ACL as it was
+// put, or, for a mailbox that has put none, the one allowing everyone, with its
 // ETag. Its preconditions are evaluated as every route's are (precondition),
 // once the answer without them would be 200 (RFC 9110 §13.2.1), and in
 // §13.2.2's order: an If-Match, compared strongly, that is false is 412; then
@@ -114,7 +114,7 @@ func (s *Server) getACL(w http.ResponseWriter, r *http.Request) error {
 	if err := s.spendOwner(r.Context(), a); err != nil {
 		return err
 	}
-	b, err := s.box(r.Context(), a)
+	b, err := s.mailbox(r.Context(), a)
 	if err != nil {
 		return err
 	}
@@ -140,7 +140,7 @@ func (s *Server) getACL(w http.ResponseWriter, r *http.Request) error {
 // ETag, entityTag of those bytes, so the tag is a strong validator of what
 // GET answers (RFC 9110 §8.8.1). It changes whenever the lists do, needs
 // nothing stored, and every process makes the same one; an ACL put back as
-// it was has its old tag again, and a box with none has the tag of the ACL
+// it was has its old tag again, and a mailbox with none has the tag of the ACL
 // it answers.
 type aclAnswer struct {
 	body []byte

@@ -15,7 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
-// emptyTag registers a box and returns it with its empty first page's tag.
+// emptyTag registers a mailbox and returns it with its empty first page's tag.
 func emptyTag(e *env) (*raw, *raw, string) {
 	e.t.Helper()
 	from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
@@ -46,9 +46,9 @@ func heldList(e *env, to *raw, tag, query string) <-chan struct {
 	return c
 }
 
-// A held list is answered the moment the box changes: here, a send stored
+// A held list is answered the moment the mailbox changes: here, a send stored
 // by this process (PROTOCOL.md §11.11).
-func TestAHeldListIsAnsweredWhenMailArrives(t *testing.T) {
+func TestAHeldListIsAnsweredWhenAMessageArrives(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	from, to, tag := emptyTag(e)
@@ -199,11 +199,11 @@ func TestAHeldListIsAnsweredWhenAMessageExpires(t *testing.T) {
 // write: it misses every message, as a Query read just after a write can.
 type laggingList struct{ *memBackend }
 
-func (b laggingList) List(ctx context.Context, box protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error) {
+func (b laggingList) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error) {
 	if !consistent {
 		return nil, nil
 	}
-	return b.memBackend.List(ctx, box, after, limit, consistent)
+	return b.memBackend.List(ctx, mailbox, after, limit, consistent)
 }
 
 // The page of a list asked to wait is read strongly consistent: a held list
@@ -212,7 +212,7 @@ func (b laggingList) List(ctx context.Context, box protocol.Address, after *Curs
 func TestAHeldListIsAnsweredAPageThatHoldsWhatWokeIt(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed(), func(c *Config) {
-		m := newMemory(c.Now, DefaultBoxCache, nil, nil)
+		m := newMemory(c.Now, DefaultMailboxCache, nil, nil)
 		b := laggingList{newMemBackend(m.clock)}
 		m.backend = b
 		if err := b.Start(context.Background(), m.apply); err != nil {
@@ -305,18 +305,18 @@ func TestACallerThatLeavesAHeldListIsReleasedAndRecordedGone(t *testing.T) {
 	}
 }
 
-// failingCount fails the box's count once fail is set: a read of the box,
+// failingCount fails the mailbox's count once fail is set: a read of the mailbox,
 // after a wake, that fails.
 type failingCount struct {
 	Store
 	fail atomic.Bool
 }
 
-func (s *failingCount) Count(ctx context.Context, box protocol.Address) (int, error) {
+func (s *failingCount) Count(ctx context.Context, mailbox protocol.Address) (int, error) {
 	if s.fail.Load() {
 		return 0, errors.New("injected: a read that fails")
 	}
-	return s.Store.Count(ctx, box)
+	return s.Store.Count(ctx, mailbox)
 }
 
 // A held list whose read after a wake fails is answered 503, and is no

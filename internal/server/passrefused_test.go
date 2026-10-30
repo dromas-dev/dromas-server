@@ -4,12 +4,12 @@ package server
 //
 // Every certificate_not_current to a pass names, in certificate_serial, the
 // certificate the call takes a pass under, at each caller of checkPass and
-// checkPassBounded: register for a new box, registered for a box held in
+// checkPassBounded: register for a new mailbox, registered for a mailbox held in
 // memory or read, prekey's identical retry and its upload, owner and sender.
 // Each test below reaches one caller, and both of passCheck's refusals where
 // a caller can reach the second (a record that does not verify).
 //
-// A box whose current certificate its identity revoked is answered
+// A mailbox whose current certificate its identity revoked is answered
 // certificate_revoked from its record before any pass is checked, at every
 // call that takes a pass under that certificate, and the way back is an
 // upload under a later certificate, whose pass is read under that one.
@@ -30,15 +30,15 @@ import (
 )
 
 // unknownStore is a store whose memory holds no record (Known), as a
-// process's that has not loaded the box: a registration of a box that exists
+// process's that has not loaded the mailbox: a registration of a mailbox that exists
 // then reads the record, under the registrations it would spend, which it
 // gives back, and is answered from it by registered, as one held in memory
 // is.
 type unknownStore struct{ Store }
 
-func (unknownStore) Known(protocol.Address) (*Box, bool) { return nil, false }
+func (unknownStore) Known(protocol.Address) (*Mailbox, bool) { return nil, false }
 
-// at3 is a raw box registered at prekey 1 under certificate 1, then renewed
+// at3 is a raw mailbox registered at prekey 1 under certificate 1, then renewed
 // to prekey 3 under certificate 3: its current certificate is 3, and work[1]
 // is a certificate of its identity that was its current one before.
 func at3(e *env) *raw {
@@ -47,7 +47,7 @@ func at3(e *env) *raw {
 	r.prekey(3, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(3), r.pass(3)), 200, "")
 	if _, c := e.numbers(r.id.Address()); c != 3 {
-		e.t.Fatalf("the box stands at certificate %d, want 3", c)
+		e.t.Fatalf("the mailbox stands at certificate %d, want 3", c)
 	}
 	return r
 }
@@ -57,7 +57,7 @@ func at3(e *env) *raw {
 // (2), and one never on record above it (n+1).
 func otherPasses(r *raw, n uint64) map[string]string {
 	return map[string]string{
-		"under certificate 1, the box's before":      r.e.passFor(r.work[1], r.id.Address(), r.e.name()),
+		"under certificate 1, the mailbox's before":  r.e.passFor(r.work[1], r.id.Address(), r.e.name()),
 		"under certificate 2, never on record":       r.e.passFor(r.certify(2), r.id.Address(), r.e.name()),
 		"under a certificate above, never on record": r.e.passFor(r.certify(n+1), r.id.Address(), r.e.name()),
 	}
@@ -71,9 +71,9 @@ func forgeRecord(e *env, r *raw) string {
 	e.t.Helper()
 	ctx := context.Background()
 	a := r.id.Address()
-	b, err := e.store.Box(ctx, a)
+	b, err := e.store.Mailbox(ctx, a)
 	if err != nil || b == nil {
-		e.t.Fatalf("the box's record: %v", err)
+		e.t.Fatalf("the mailbox's record: %v", err)
 	}
 	_, wpriv, _ := ed25519.GenerateKey(rand.Reader)
 	work, err := ssh.NewSignerFromKey(wpriv)
@@ -91,7 +91,7 @@ func forgeRecord(e *env, r *raw) string {
 		e.t.Fatal(err)
 	}
 	b.Cert = sha256.Sum256(c.Marshal())
-	if err := e.store.UpdateBox(ctx, b); err != nil {
+	if err := e.store.UpdateMailbox(ctx, b); err != nil {
 		e.t.Fatal(err)
 	}
 	return e.passFor(under, a, e.name())
@@ -107,9 +107,9 @@ func (e *env) notCurrentNaming(r reply, n uint64) {
 	}
 }
 
-// register: a new box's registration takes a pass under its statement's
+// register: a new mailbox's registration takes a pass under its statement's
 // certificate, and names that one.
-func TestARegistrationOfANewBoxNamesItsStatementsCertificate(t *testing.T) {
+func TestARegistrationOfANewMailboxNamesItsStatementsCertificate(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	r := e.raw()
@@ -125,10 +125,10 @@ func TestARegistrationOfANewBoxNamesItsStatementsCertificate(t *testing.T) {
 	e.want(e.do("PUT", r.path(""), r.registration(5), r.pass(5)), 201, "")
 
 	// An address whose identity revoked certificates before it registered
-	// anything (a record, no box): the same line, with what is kept.
+	// anything (a record, no mailbox): the same line, with what is kept.
 	m := e.raw()
 	if got := e.do("PUT", m.path("/revocations"), m.certs(2), ""); got.status >= 300 {
-		t.Fatalf("the revocation of certificates of an address with no box: %d %s", got.status, got.body)
+		t.Fatalf("the revocation of certificates of an address with no mailbox: %d %s", got.status, got.body)
 	}
 	m.prekey(5, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	e.notCurrentNaming(e.do("PUT", m.path(""), m.registration(5), e.passFor(m.certify(4), m.id.Address(), e.name())), 5)
@@ -136,10 +136,10 @@ func TestARegistrationOfANewBoxNamesItsStatementsCertificate(t *testing.T) {
 	e.want(e.do("PUT", m.path(""), m.registration(5), m.pass(5)), 201, "")
 }
 
-// registered, read: a registration of a box that exists, which this
-// process's memory does not hold, names the box's current certificate, for a
+// registered, read: a registration of a mailbox that exists, which this
+// process's memory does not hold, names the mailbox's current certificate, for a
 // pass under another certificate and for a record that does not verify.
-func TestARegistrationOfABoxNotInMemoryNamesItsCurrentCertificate(t *testing.T) {
+func TestARegistrationOfAMailboxNotInMemoryNamesItsCurrentCertificate(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed(), func(c *Config) { c.Store = unknownStore{c.Store} })
 	r := at3(e)
@@ -151,8 +151,8 @@ func TestARegistrationOfABoxNotInMemoryNamesItsCurrentCertificate(t *testing.T) 
 	e.notCurrentNaming(e.do("PUT", r.path(""), r.registration(3), forgeRecord(e, r)), 3)
 }
 
-// registered: the same, for a box this process holds.
-func TestARegistrationOfABoxInMemoryNamesItsCurrentCertificate(t *testing.T) {
+// registered: the same, for a mailbox this process holds.
+func TestARegistrationOfAMailboxInMemoryNamesItsCurrentCertificate(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	r := at3(e)
@@ -164,7 +164,7 @@ func TestARegistrationOfABoxInMemoryNamesItsCurrentCertificate(t *testing.T) {
 	e.notCurrentNaming(e.do("PUT", r.path(""), r.registration(3), forgeRecord(e, r)), 3)
 }
 
-// prekey, an identical retry: the box's current certificate.
+// prekey, an identical retry: the mailbox's current certificate.
 func TestAnIdenticalUploadNamesTheCurrentCertificate(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
@@ -177,7 +177,7 @@ func TestAnIdenticalUploadNamesTheCurrentCertificate(t *testing.T) {
 	e.notCurrentNaming(e.do("PUT", r.path("/prekey"), r.upload(3), forgeRecord(e, r)), 3)
 }
 
-// prekey, an upload: the new statement's certificate, not the box's current
+// prekey, an upload: the new statement's certificate, not the mailbox's current
 // one, whatever the pass is under.
 func TestAnUploadNamesItsStatementsCertificate(t *testing.T) {
 	t.Parallel()
@@ -185,9 +185,9 @@ func TestAnUploadNamesItsStatementsCertificate(t *testing.T) {
 	r := at3(e)
 	r.prekey(5, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	for name, pass := range map[string]string{
-		"under certificate 3, the box's current": r.pass(3),
-		"under certificate 1, the box's before":  r.pass(1),
-		"under certificate 4, never on record":   e.passFor(r.certify(4), r.id.Address(), e.name()),
+		"under certificate 3, the mailbox's current": r.pass(3),
+		"under certificate 1, the mailbox's before":  r.pass(1),
+		"under certificate 4, never on record":       e.passFor(r.certify(4), r.id.Address(), e.name()),
 	} {
 		t.Logf("upload %s", name)
 		e.notCurrentNaming(e.do("PUT", r.path("/prekey"), r.upload(5), pass), 5)
@@ -195,7 +195,7 @@ func TestAnUploadNamesItsStatementsCertificate(t *testing.T) {
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(5), r.pass(5)), 200, "")
 }
 
-// owner: every call a box makes about itself names the box's current
+// owner: every call a mailbox makes about itself names the mailbox's current
 // certificate, for a pass under another certificate and for a record that
 // does not verify.
 func TestEveryOwnerCallNamesTheCurrentCertificate(t *testing.T) {
@@ -221,7 +221,7 @@ func TestEveryOwnerCallNamesTheCurrentCertificate(t *testing.T) {
 			e.notCurrentNaming(e.do(c.method, r.path(c.path), c.body, pass), 3)
 		}
 		if got := e.do(c.method, r.path(c.path), c.body, r.pass(3)); got.status == http.StatusUnauthorized {
-			t.Fatalf("control: %s %s under the box's current certificate: %d %s", c.method, c.path, got.status, got.body)
+			t.Fatalf("control: %s %s under the mailbox's current certificate: %d %s", c.method, c.path, got.status, got.body)
 		}
 	}
 	forged := forgeRecord(e, r)
@@ -247,7 +247,7 @@ func TestASendNamesTheSendersCurrentCertificate(t *testing.T) {
 	e.notCurrentNaming(got, 3)
 }
 
-// Once the box's identity revokes its current certificate, every call that
+// Once the mailbox's identity revokes its current certificate, every call that
 // takes a pass under that certificate is certificate_revoked before any pass
 // is checked: with no pass, one under the revoked current certificate, one
 // under an older one (revoked too), one under a later one never on record,
@@ -318,7 +318,7 @@ func TestARevokedCurrentCertificateIsAnsweredBeforeThePass(t *testing.T) {
 	e.want(e.do("GET", r.path("/messages"), nil, r.pass(6)), 200, "")
 }
 
-// An address with no box whose identity revoked certificates: a registration
+// An address with no mailbox whose identity revoked certificates: a registration
 // of a statement under one of them is certificate_revoked before its pass is
 // read, whatever it carries (PROTOCOL.md §11.7 step 6, §8). Control: one
 // above them has its pass read.

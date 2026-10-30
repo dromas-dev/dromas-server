@@ -73,45 +73,45 @@ type Server struct {
 	ready   func() bool
 	proxies []netip.Prefix
 	names   []string
-	// identityTypes are the identity key types a box may register with.
+	// identityTypes are the identity key types a mailbox may register with.
 	identityTypes []string
 	site          http.Handler
 	metrics       *Metrics
 
-	polls     *buckets // per box
-	pages     *buckets // per box: list pages after the first
-	repeats   *buckets // per box: fetches of a message already fetched
+	polls     *buckets // per mailbox
+	pages     *buckets // per mailbox: list pages after the first
+	repeats   *buckets // per mailbox: fetches of a message already fetched
 	regs      *buckets // per IP
 	rangeRegs *buckets // per IPv6 /48: registrations, beside regs
 	sendIPs   *buckets // per IP
-	misses    *buckets // per IP: reads of the boxes table that found no box, and checks that failed
+	misses    *buckets // per IP: reads of the mailboxes table that found no mailbox, and checks that failed
 	requests  *buckets // per IP: every call with no pass this process has checked, and every request no route matches
-	calls     *buckets // per box: its calls with its pass that no other budget counts
-	receives  *buckets // per box: new messages it takes
-	lifted    *buckets // per box whose account lifts its new mail: at ReceiveCeiling
-	drained   *buckets // per box: its first fetches of held messages
+	calls     *buckets // per mailbox: its calls with its pass that no other budget counts
+	receives  *buckets // per mailbox: new messages it takes
+	lifted    *buckets // per mailbox whose account lifts its new messages: at ReceiveCeiling
+	drained   *buckets // per mailbox: its first fetches of held messages
 	sends     *buckets // per sender, a number a day
-	renewals  *buckets // per box, a number a day: renewals under its current certificate
-	certs     *buckets // per box, a number a day: renewals under a later certificate, which only its identity can make
-	raises    *buckets // per box, a number a day: raises of its revocation of certificates, which only its identity can make
-	// inFlight counts the sends let past the box cap and not yet stored, by
+	renewals  *buckets // per mailbox, a number a day: renewals under its current certificate
+	certs     *buckets // per mailbox, a number a day: renewals under a later certificate, which only its identity can make
+	raises    *buckets // per mailbox, a number a day: raises of its revocation of certificates, which only its identity can make
+	// inFlight counts the sends let past the mailbox cap and not yet stored, by
 	// the recipient's first byte (reserveCaps).
 	inFlight [256]inFlight
-	// drains is the cursor each box was handed last (list).
+	// drains is the cursor each mailbox was handed last (list).
 	drains drains
 	// held counts the lists this process holds (list), and stopping is
 	// closed once it stops (StopHolds), which answers every one.
 	holding  atomic.Int64
 	stopping chan struct{}
 	stopOnce sync.Once
-	// purges are the deletes of what is left of revoked boxes in flight, one
+	// purges are the deletes of what is left of revoked mailboxes in flight, one
 	// per address (purge). Never DoChan (reads).
 	purges singleflight.Group
-	// posts are the posts of one ciphertext to one box in flight at once,
+	// posts are the posts of one ciphertext to one mailbox in flight at once,
 	// from any sender (send): one call, which the others wait for. Never
 	// DoChan (reads).
 	posts singleflight.Group
-	// reads are the reads of box records in flight (lookup), one per
+	// reads are the reads of mailbox records in flight (lookup), one per
 	// address, which lookups of it made meanwhile share. Never DoChan: with
 	// a caller waiting on its channel, a panic in the shared function is
 	// raised again on a goroutine of its own, which ends the process.
@@ -121,7 +121,7 @@ type Server struct {
 	// cap is larger ever asks for it.
 	largeRead chan struct{}
 
-	// passes remembers the pass each box showed last (pass.go).
+	// passes remembers the pass each mailbox showed last (pass.go).
 	passes *passes
 }
 
@@ -174,56 +174,56 @@ func New(c Config) *Server {
 var wildcard = regexp.MustCompile(`\{[^}]*\}`)
 
 // route is one of the API's routes: its pattern, its handler, and whose pass
-// this process has checked makes a call on it its box's at the gate.
+// this process has checked makes a call on it its mailbox's at the gate.
 type route struct {
 	pattern string
 	h       func(http.ResponseWriter, *http.Request) error
 	pass    passRule
 }
 
-// passRule is whose checked pass makes a call its box's at the gate, on a
+// passRule is whose checked pass makes a call its mailbox's at the gate, on a
 // route that checks the pass before it does anything else.
 type passRule int
 
 const (
 	// passNone: none. The route reads its pass, if it takes one, after its
-	// body, or takes none: the read of a box, which is public, among them.
+	// body, or takes none: the read of a mailbox, which is public, among them.
 	passNone passRule = iota
-	// passAnyBox: the pass's own box's, whichever box the path names: a
-	// send, which a box makes to another.
-	passAnyBox
-	// passPathBox: only the pass of the box the path names: the calls a box
-	// makes about itself, which answer that box's state before they look at
+	// passAnyMailbox: the pass's own mailbox's, whichever mailbox the path names: a
+	// send, which a mailbox makes to another.
+	passAnyMailbox
+	// passPathMailbox: only the pass of the mailbox the path names: the calls a mailbox
+	// makes about itself, which answer that mailbox's state before they look at
 	// a pass (dromas-dev/dromas-server#74).
-	passPathBox
+	passPathMailbox
 )
 
 // routes are the API's, each the client repo's api/openapi.yaml gives
 // (TestTheRoutesAreTheDescriptions).
 func (s *Server) routes() []route {
 	return []route{
-		{"GET /v1/{addr}", s.getBox, passNone},        // it takes no pass
+		{"GET /v1/{addr}", s.getMailbox, passNone},    // it takes no pass
 		{"PUT /v1/{addr}", s.register, passNone},      // its pass is read after its body
 		{"PUT /v1/{addr}/prekey", s.prekey, passNone}, // its pass is read after its body
 		{"PUT /v1/{addr}/revocations", s.revoke, passNone},
 		{"GET /v1/{addr}/revocations", s.getRevocations, passNone},
-		{"PUT /v1/{addr}/acl", s.putACL, passPathBox},
-		{"GET /v1/{addr}/acl", s.getACL, passPathBox},
-		{"PUT /v1/{addr}/account", s.adopt, passPathBox},
-		{"DELETE /v1/{addr}/account", s.leave, passPathBox},
-		{"POST /v1/{addr}/messages", s.send, passAnyBox},
-		{"GET /v1/{addr}/messages", s.list, passPathBox},
-		{"GET /v1/{addr}/messages/{id}", s.fetch, passPathBox},
-		{"DELETE /v1/{addr}/messages/{id}", s.ack, passPathBox},
+		{"PUT /v1/{addr}/acl", s.putACL, passPathMailbox},
+		{"GET /v1/{addr}/acl", s.getACL, passPathMailbox},
+		{"PUT /v1/{addr}/account", s.adopt, passPathMailbox},
+		{"DELETE /v1/{addr}/account", s.leave, passPathMailbox},
+		{"POST /v1/{addr}/messages", s.send, passAnyMailbox},
+		{"GET /v1/{addr}/messages", s.list, passPathMailbox},
+		{"GET /v1/{addr}/messages/{id}", s.fetch, passPathMailbox},
+		{"DELETE /v1/{addr}/messages/{id}", s.ack, passPathMailbox},
 	}
 }
 
-// linkRoute is the page a box's link opens, the server's one route outside
+// linkRoute is the page a mailbox's link opens, the server's one route outside
 // /v1/, under /to/, which is the server's too; a site, when there is one,
 // answers the rest.
 const linkRoute = "GET " + protocol.LinkPath + "{addr}"
 
-// Handler returns the API's routes, the page a box's link opens, and the
+// Handler returns the API's routes, the page a mailbox's link opens, and the
 // site, if there is one. Every answer is paced, and every request is counted
 // before anything is done for it (LIMITS.md, rule 1): each handler is put on
 // its router by mount, through the gate, and a request no route answers is
@@ -261,8 +261,8 @@ func (s *Server) subtree(mux *http.ServeMux, prefix string, inner *http.ServeMux
 }
 
 // gate counts a request its route answers, before the route does anything
-// for it (LIMITS.md, rule 1). A call that is its box's (boxsCall) goes on to
-// spend the box's budgets. Every other spends one of its address's flood
+// for it (LIMITS.md, rule 1). A call that is its mailbox's (boxsCall) goes on to
+// spend the mailbox's budgets. Every other spends one of its address's flood
 // budget first (spendRequest): a call with no pass, and one with a pass the
 // process has not checked, which costs a parse and up to two signature
 // checks to find out whose it is (dromas-dev/dromas-server#67,
@@ -280,28 +280,28 @@ func (s *Server) gate(pass passRule, h http.Handler) http.Handler {
 	})
 }
 
-// boxsCall reports whether a call is its box's at the gate: it carries a
-// pass this process has checked, to a route that takes that box's pass
-// (pass), and the box is live in this process's memory (live). All this
+// boxsCall reports whether a call is its mailbox's at the gate: it carries a
+// pass this process has checked, to a route that takes that mailbox's pass
+// (pass), and the mailbox is live in this process's memory (live). All this
 // reads is the Authorization line, its hash, and lookups in memory, which
-// cost what reading its bytes does. Whether the pass is under the box's
+// cost what reading its bytes does. Whether the pass is under the mailbox's
 // current certificate, the route's own check of it says (checkPass).
 func (s *Server) boxsCall(pass passRule, r *http.Request) bool {
 	if pass == passNone {
 		return false
 	}
 	a, ok := s.checked(r)
-	if !ok || pass == passPathBox && r.PathValue("addr") != a.String() {
+	if !ok || pass == passPathMailbox && r.PathValue("addr") != a.String() {
 		return false
 	}
 	return s.live(a)
 }
 
-// live reports whether this process's memory holds box a as live, with no
+// live reports whether this process's memory holds mailbox a as live, with no
 // read of a store: loaded (Held), or its record in the cache (Known), and
 // active: not revoked, its current certificate not one its identity revoked.
 // Memory is what the stream keeps current, so a change made through another
-// process counts as one made here. A box memory does not hold is not live
+// process counts as one made here. A mailbox memory does not hold is not live
 // here: its call spends its address's flood budget, and its route reads it.
 func (s *Server) live(a protocol.Address) bool {
 	if st, ok := s.store.Held(a); ok {
@@ -315,7 +315,7 @@ func (s *Server) live(a protocol.Address) bool {
 	return err == nil && !listed
 }
 
-// checked returns the box whose pass the call carries, on one Authorization
+// checked returns the mailbox whose pass the call carries, on one Authorization
 // line, if this process has checked that pass and it has not run out: a
 // lookup in memory by the value's hash, with nothing parsed.
 func (s *Server) checked(r *http.Request) (protocol.Address, bool) {
@@ -386,9 +386,9 @@ func (s *Server) HTTPServer(addr string, idle time.Duration) *http.Server {
 }
 
 // notStored marks every answer of the API as one no cache may keep. What a
-// box's identity, prekey or revocation is can change at any moment, and an
+// mailbox's identity, prekey or revocation is can change at any moment, and an
 // answer served again from a cache would be this server's word outliving the
-// fact: a prekey that was replaced, or a box that has since been revoked. A
+// fact: a prekey that was replaced, or a mailbox that has since been revoked. A
 // 410 is cacheable by default (RFC 9110 §15.5.11), so this is said outright.
 // Each answer also carries the headers OWASP's REST Security Cheat Sheet
 // gives an API (apiHeaders).
@@ -701,7 +701,7 @@ func (p *pacedWriter) Write(b []byte) (int, error) {
 func (p *pacedWriter) Unwrap() http.ResponseWriter { return p.ResponseWriter }
 
 // pathAddr reads the address in the URL path, 64 lowercase hex characters:
-// one box has one URL, so any other form, uppercase among them, is no
+// one mailbox has one URL, so any other form, uppercase among them, is no
 // address. Then it holds the query to params, the parameters the call takes
 // (queryOf).
 func pathAddr(r *http.Request, params ...string) (protocol.Address, error) {
@@ -804,21 +804,21 @@ func detached(ctx context.Context) context.Context { return context.WithoutCance
 // but a refusal stated (Memory.write).
 func mayHaveApplied(err error) bool { return errors.Is(err, ErrUnknown) }
 
-// box reads a box's record; a box that does not exist is nil, not an error.
-func (s *Server) box(ctx context.Context, a protocol.Address) (*Box, error) {
-	b, err := s.store.Box(ctx, a)
+// mailbox reads a mailbox's record; a mailbox that does not exist is nil, not an error.
+func (s *Server) mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error) {
+	b, err := s.store.Mailbox(ctx, a)
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil
 	}
 	return b, err
 }
 
-// lookup reads a box's record for a call that has not shown that box's pass.
+// lookup reads a mailbox's record for a call that has not shown that mailbox's pass.
 // What memory holds is answered at once and is never refused or counted: a
-// box's record, or that a read found no such box a moment ago. Anything else
-// costs a read of the boxes table, and that read is what
+// mailbox's record, or that a read found no such mailbox a moment ago. Anything else
+// costs a read of the mailboxes table, and that read is what
 // Limits.MissesPerMinute guards: the caller's address reserves a count before
-// it, and keeps it only if the read finds no box (s.miss). Lookups of one
+// it, and keeps it only if the read finds no mailbox (s.miss). Lookups of one
 // address made while its read is in flight share that read, and are counted
 // for nothing: it costs no more for them (dromas-dev/dromas-server#6).
 // One whose token (Store.Begin), taken once memory could not answer it, is
@@ -826,7 +826,7 @@ func (s *Server) box(ctx context.Context, a protocol.Address) (*Box, error) {
 // before a write this process applied before the lookup came, a revocation
 // among them (#95). Each gets a copy of its own, since its caller may change
 // the one it has.
-func (s *Server) lookup(r *http.Request, a protocol.Address) (*Box, error) {
+func (s *Server) lookup(r *http.Request, a protocol.Address) (*Mailbox, error) {
 	var since uint64
 	for first := true; ; first = false {
 		if b, ok := s.store.Known(a); ok {
@@ -854,7 +854,7 @@ func (s *Server) lookup(r *http.Request, a protocol.Address) (*Box, error) {
 			continue // a read begun before a write this lookup came after: read again
 		}
 		if read.b != nil {
-			return cloneBox(read.b), nil
+			return cloneMailbox(read.b), nil
 		}
 		return nil, nil
 	}
@@ -863,7 +863,7 @@ func (s *Server) lookup(r *http.Request, a protocol.Address) (*Box, error) {
 // sharedRead is what a lookup's shared read found of an address, and the
 // token it began at.
 type sharedRead struct {
-	b     *Box
+	b     *Mailbox
 	since uint64
 }
 
@@ -883,7 +883,7 @@ func (s *Server) lead(r *http.Request, a protocol.Address) (sharedRead, error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), storeTimeout)
 	defer cancel()
 	since := s.store.Begin(a)
-	b, err := s.box(ctx, a)
+	b, err := s.mailbox(ctx, a)
 	if err == nil && b == nil {
 		m.keep()
 	} else {
@@ -899,15 +899,15 @@ type notRead struct{ err error }
 func (n notRead) Error() string { return n.err.Error() }
 
 // miss reserves a count of the caller's address under Limits.MissesPerMinute,
-// before work that a caller who named no box, or brought nothing that
-// verifies, makes the server do: a read that may find no box, or a
+// before work that a caller who named no mailbox, or brought nothing that
+// verifies, makes the server do: a read that may find no mailbox, or a
 // signature check that may fail. It is kept if the work comes to nothing and
 // released if not, so a caller is counted for what failed and never for what
 // passed.
 func (s *Server) miss(r *http.Request) (*reservation, error) {
 	m, ok, wait := s.misses.reserve(r.Context(), ipKey(s.clientIP(r)), s.now)
 	if !ok {
-		return nil, rateLimited(protocol.QuotaMisses, wait, "too many calls from this address that named no box or carried nothing that verified")
+		return nil, rateLimited(protocol.QuotaMisses, wait, "too many calls from this address that named no mailbox or carried nothing that verified")
 	}
 	return m, nil
 }
@@ -995,7 +995,7 @@ func (s *Server) reserveRegistration(r *http.Request, why string) (registration,
 	return g, nil
 }
 
-// perDay is one of a box's numbers a day: its buckets, the number, and the
+// perDay is one of a mailbox's numbers a day: its buckets, the number, and the
 // words of a refusal, with a %d for the number.
 type perDay struct {
 	bs    *buckets
@@ -1008,25 +1008,25 @@ func (d perDay) refusal(wait time.Duration) *problem {
 	return rateLimited(protocol.Quota(d.bs.name), wait, d.words, limitValue(d.n))
 }
 
-// The box's numbers a day, as a refusal names them.
+// The mailbox's numbers a day, as a refusal names them.
 func (s *Server) sendsADay(n int) perDay {
-	return perDay{s.sends, n, "this box has sent as many messages as %d a day allows"}
+	return perDay{s.sends, n, "this mailbox has sent as many messages as %d a day allows"}
 }
 
 func (s *Server) renewalsADay() perDay {
-	return perDay{s.renewals, s.limits.RenewalsPerDay, "this box has renewed its prekey as often as %d a day allows"}
+	return perDay{s.renewals, s.limits.RenewalsPerDay, "this mailbox has renewed its prekey as often as %d a day allows"}
 }
 
 func (s *Server) certificatesADay() perDay {
-	return perDay{s.certs, s.limits.CertificatesPerDay, "this box's identity has certified as many new working keys as %d a day allows"}
+	return perDay{s.certs, s.limits.CertificatesPerDay, "this mailbox's identity has certified as many new working keys as %d a day allows"}
 }
 
 func (s *Server) raisesADay() perDay {
-	return perDay{s.raises, s.limits.CertificateRevocationsPerDay, "this box's identity has raised its revocation of certificates as often as %d a day allows"}
+	return perDay{s.raises, s.limits.CertificateRevocationsPerDay, "this mailbox's identity has raised its revocation of certificates as often as %d a day allows"}
 }
 
-// longest is p, the refusal of one of box a's counts, or the refusal of one
-// of also, the box's other counts in memory that the same call would spend,
+// longest is p, the refusal of one of mailbox a's counts, or the refusal of one
+// of also, the mailbox's other counts in memory that the same call would spend,
 // read without taking from them: whichever waits longest, under its own name.
 // RFC 8555 §6.6 asks that Retry-After be when every limit lets the same
 // request through (dromas-dev/dromas-server#56). Counts behind work, a
@@ -1042,22 +1042,22 @@ func (s *Server) longest(p *problem, a protocol.Address, also ...perDay) *proble
 	return p
 }
 
-// spendCall spends one of box a's calls (Limits.CallBurst), the budget of
+// spendCall spends one of mailbox a's calls (Limits.CallBurst), the budget of
 // every call with its pass that no other budget counts. An account that lifts
-// it comes with lim.CallBurst zero. also are the box's other counts the same
+// it comes with lim.CallBurst zero. also are the mailbox's other counts the same
 // call would spend, which a refusal reads (longest).
 func (s *Server) spendCall(a protocol.Address, lim Limits, also ...perDay) error {
 	if lim.CallBurst == 0 {
 		return nil
 	}
 	if ok, wait := s.calls.take(a.String(), s.now()); !ok {
-		return s.longest(rateLimited(protocol.QuotaCalls, wait, "this box has made as many calls as it may for now"), a, also...)
+		return s.longest(rateLimited(protocol.QuotaCalls, wait, "this mailbox has made as many calls as it may for now"), a, also...)
 	}
 	return nil
 }
 
-// limitsOf returns the limits of box a, which showed its pass: the server's
-// for a box this process holds that is in no account, read from nothing;
+// limitsOf returns the limits of mailbox a, which showed its pass: the server's
+// for a mailbox this process holds that is in no account, read from nothing;
 // otherwise with whatever its account lifts.
 func (s *Server) limitsOf(ctx context.Context, a protocol.Address) (Limits, error) {
 	if st, ok := s.store.Held(a); ok && !st.InAccount {
@@ -1066,14 +1066,14 @@ func (s *Server) limitsOf(ctx context.Context, a protocol.Address) (Limits, erro
 	b, ok := s.store.Known(a)
 	if !ok || b == nil {
 		var err error
-		if b, err = s.box(ctx, a); err != nil || b == nil {
+		if b, err = s.mailbox(ctx, a); err != nil || b == nil {
 			return s.limits, err
 		}
 	}
 	return s.limitsFor(ctx, b)
 }
 
-// spendOwner spends a call by box a, which showed its pass, from its budget,
+// spendOwner spends a call by mailbox a, which showed its pass, from its budget,
 // with whatever its account lifts. also are as spendCall's.
 func (s *Server) spendOwner(ctx context.Context, a protocol.Address, also ...perDay) error {
 	lim, err := s.limitsOf(ctx, a)
@@ -1083,27 +1083,27 @@ func (s *Server) spendOwner(ctx context.Context, a protocol.Address, also ...per
 	return s.spendCall(a, lim, also...)
 }
 
-var noSuchMailbox = fail(protocol.CodeNoSuchMailbox, "check the address", "no box has this address")
+var noSuchMailbox = fail(protocol.CodeNoSuchMailbox, "check the address", "no mailbox has this address")
 
 func revoked() *problem {
-	return fail(protocol.CodeRevoked, "the box you named is revoked, forever: ask its owner for their new address", "this box is revoked")
+	return fail(protocol.CodeRevoked, "the mailbox you named is revoked, forever: ask its owner for their new address", "this mailbox is revoked")
 }
 
 // revokedWith is revoked carrying the record b holds of the revoked
 // address, its identity with what the identity revoked: every 410 revoked
 // answered from what is held of an address carries it, so a client checks
 // it with no second call (PROTOCOL.md §11.3; dromas-dev/dromas-client#353).
-func revokedWith(b *Box) *problem {
+func revokedWith(b *Mailbox) *problem {
 	p := revoked()
 	p.record = b.record()
 	return p
 }
 
-// fetchedAlready refuses a fetch of a message the box has fetched before, once
+// fetchedAlready refuses a fetch of a message the mailbox has fetched before, once
 // its allowance for that is spent (fetch in messages.go).
 func fetchedAlready(wait time.Duration) *problem {
 	p := fail(protocol.CodeRefetchSpent, "keep each message when you fetch it, then ack it (dromas recv does both); to fetch this one again, wait for Retry-After",
-		"this message was fetched before, and the box's allowance for fetching again is spent")
+		"this message was fetched before, and the mailbox's allowance for fetching again is spent")
 	p.retryAfter = wait
 	return p
 }

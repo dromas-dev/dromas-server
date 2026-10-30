@@ -101,17 +101,17 @@ func TestWhatTakesGzip(t *testing.T) {
 	}
 }
 
-// A box's read is gzipped to a request that takes gzip, with its own length,
+// A mailbox's read is gzipped to a request that takes gzip, with its own length,
 // and is the JSON it is otherwise; to any other it is the JSON. Both say
 // they vary by Accept-Encoding.
-func TestABoxsReadIsGzippedWhenTaken(t *testing.T) {
+func TestAMailboxsReadIsGzippedWhenTaken(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	b := e.raw().register(protocol.MaxPrekeyLifetime)
 	url := e.srv.URL + b.path("")
 	resp, plain := rawCall(t, http.MethodGet, url)
-	var box protocol.BoxResponse
-	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Encoding") != "" || protocol.Unmarshal(plain, &box) != nil {
+	var mailbox protocol.MailboxResponse
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Encoding") != "" || protocol.Unmarshal(plain, &mailbox) != nil {
 		t.Fatalf("no Accept-Encoding: %d in %q: %s", resp.StatusCode, resp.Header.Get("Content-Encoding"), plain)
 	}
 	if !varies(resp) || resp.Header.Get("Content-Length") != strconv.Itoa(len(plain)) {
@@ -144,7 +144,7 @@ func TestABoxsReadIsGzippedWhenTaken(t *testing.T) {
 func TestNoOtherAnswerIsGzipped(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	from, to := e.box(protocol.Classic), e.box(protocol.Classic)
+	from, to := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	r := send(t, from, to, strings.Repeat("the same words again ", 200))
 	send(t, from, to, "a second")
 	send(t, from, to, "a third, so that the list is long enough to compress")

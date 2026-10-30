@@ -62,7 +62,7 @@ func expected(r *http.Request) Expect {
 // as RFC 9110 §13.1.1 and §13.1.2 have an origin server evaluate each it
 // receives, in §13.2.2's order (dromas-dev/dromas-server#86), for
 // precondition, the one step every route takes for them: so whatever the
-// route answers before that point, a refusal of the pass, a box that does
+// route answers before that point, a refusal of the pass, a mailbox that does
 // not exist, a body it reads first that is refused, is answered as without
 // them (§13.2.1). PROTOCOL.md §11.2 has the rule.
 //

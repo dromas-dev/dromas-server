@@ -17,11 +17,11 @@ import (
 )
 
 // A fetch or an ack of a held message whose precondition is false is a call
-// like any other, and spends one of the box's calls (LIMITS.md rule 1;
+// like any other, and spends one of the mailbox's calls (LIMITS.md rule 1;
 // dromas-dev/dromas-server#102, the client repo's #412 item 1): with
-// them spent, the next is refused, so a box cannot ask without end whether
-// its mail is still held.
-func TestAFalsePreconditionOnAHeldMessageSpendsOneOfTheBoxsCalls(t *testing.T) {
+// them spent, the next is refused, so a mailbox cannot ask without end whether
+// its message is still held.
+func TestAFalsePreconditionOnAHeldMessageSpendsOneOfTheMailboxsCalls(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		method, field, value string
@@ -47,7 +47,7 @@ func TestAFalsePreconditionOnAHeldMessageSpendsOneOfTheBoxsCalls(t *testing.T) {
 }
 
 // A page after the first whose precondition is false takes no cursor and
-// puts none (the client repo's #412 item 2): the box still holds the cursor
+// puts none (the client repo's #412 item 2): the mailbox still holds the cursor
 // it was handed, and the page it names, asked for next, is a continuation.
 func TestAListWhosePreconditionIsFalseTakesNoCursor(t *testing.T) {
 	t.Parallel()
@@ -76,17 +76,17 @@ func TestAListWhosePreconditionIsFalseTakesNoCursor(t *testing.T) {
 				t.Fatalf("the page after the first, with %s: %d %s", c.name, r.status, r.body)
 			}
 			if got := e.server.drains.held(to.id.Address()); got != handed {
-				t.Errorf("after a page with %s, the box holds the cursor %q, not the one it was handed, %q", c.name, got, handed)
+				t.Errorf("after a page with %s, the mailbox holds the cursor %q, not the one it was handed, %q", c.name, got, handed)
 			}
 			if r := e.do("GET", next, nil, pass); r.status != http.StatusOK {
 				q, _ := r.quota()
-				t.Errorf("the page the box was handed, after one with %s: %d %s %s, want 200", c.name, r.status, r.code(), q)
+				t.Errorf("the page the mailbox was handed, after one with %s: %d %s %s, want 200", c.name, r.status, r.code(), q)
 			}
 		})
 	}
 }
 
-// held is the cursor box a was handed last, "" for none.
+// held is the cursor mailbox a was handed last, "" for none.
 func (d *drains) held(a protocol.Address) string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -112,7 +112,7 @@ func (s *revokeRace) Revoke(ctx context.Context, a protocol.Address, rv *Revocat
 // A revocation's If-None-Match: *, evaluated while none is held, is held to
 // what its write replaces (the client repo's #412 item 3): a revocation
 // written by another request between the evaluation and the write fails it,
-// 409 box_changed, and what that other request wrote stands.
+// 409 mailbox_changed, and what that other request wrote stands.
 func TestARevocationsIfNoneMatchIsHeldToWhatItsWriteReplaces(t *testing.T) {
 	t.Parallel()
 	race := &revokeRace{through: 2}
@@ -126,8 +126,8 @@ func TestARevocationsIfNoneMatchIsHeldToWhatItsWriteReplaces(t *testing.T) {
 	if f, err := protocol.ParseRevokedCertificates(held.RevokedCertificates); err == nil {
 		through = f.Through
 	}
-	if got.status != http.StatusConflict || got.code() != protocol.CodeBoxChanged || through != 1 {
-		t.Errorf("PUT …/revocations through 2 with If-None-Match: *, a revocation through 1 written after its evaluation: %d %s, held through %d; want 409 box_changed, held through 1", got.status, got.code(), through)
+	if got.status != http.StatusConflict || got.code() != protocol.CodeMailboxChanged || through != 1 {
+		t.Errorf("PUT …/revocations through 2 with If-None-Match: *, a revocation through 1 written after its evaluation: %d %s, held through %d; want 409 mailbox_changed, held through 1", got.status, got.code(), through)
 	}
 }
 
@@ -212,8 +212,8 @@ func TestAHeadIsItsGetWithoutContent(t *testing.T) {
 	}
 }
 
-// A message's HEAD takes no token of new mail and marks nothing (the client
-// repo's #412 item 4): after three, with a budget of two tokens, the box's
+// A message's HEAD takes no token of new messages and marks nothing (the client
+// repo's #412 item 4): after three, with a budget of two tokens, the mailbox's
 // first fetch is its first, and only the one after it is a repeat, within
 // an allowance of one.
 func TestAMessagesHeadTakesNoTokenAndMarksNothing(t *testing.T) {
@@ -234,7 +234,7 @@ func TestAMessagesHeadTakesNoTokenAndMarksNothing(t *testing.T) {
 	e.want(e.do(http.MethodGet, msg, nil, pass), http.StatusTooManyRequests, protocol.CodeRefetchSpent)
 }
 
-// A send's retry, the same bytes the box holds, whose precondition is false
+// A send's retry, the same bytes the mailbox holds, whose precondition is false
 // is 412, not its first receipt (PROTOCOL.md §11.4; the client repo's #412
 // item 5): the send evaluates them before its dedupe, and takes no MAY of
 // RFC 9110 §13.1.1.
@@ -252,7 +252,7 @@ func TestASendsRetryWithAFalsePreconditionIs412(t *testing.T) {
 }
 
 // A fetch whose precondition is false leaves the message unfetched (the
-// client repo's #412 item 6): the box's next fetch of it is its first, and
+// client repo's #412 item 6): the mailbox's next fetch of it is its first, and
 // only the one after that spends the repeat allowance, here one.
 func TestAFetchWithAFalsePreconditionLeavesTheMessageUnfetched(t *testing.T) {
 	t.Parallel()
@@ -302,7 +302,7 @@ func TestARevocationsWriteHoldsWhatItsPreconditionsHeld(t *testing.T) {
 			t.Errorf("write %d, through %d: %v, want %v", i+1, c.rv.Through, err, c.err)
 		}
 	}
-	b, err := e.store.Box(ctx, a)
+	b, err := e.store.Mailbox(ctx, a)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +329,7 @@ func debts(s *Server, now time.Time) map[string]int {
 	return d
 }
 
-// cursors is the cursor each box was handed last.
+// cursors is the cursor each mailbox was handed last.
 func (d *drains) cursors() map[protocol.Address]string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -337,13 +337,13 @@ func (d *drains) cursors() map[protocol.Address]string {
 }
 
 // served is how many times this process has served each live message memory
-// holds, by its box and tag: the mark a fetch makes.
+// holds, by its mailbox and tag: the mark a fetch makes.
 func (x *index) served() map[string]uint8 {
 	m := map[string]uint8{}
 	for i := range x.shards {
 		sh := &x.shards[i]
 		sh.mu.Lock()
-		for a, b := range sh.boxes {
+		for a, b := range sh.mailboxes {
 			for _, k := range b.marks {
 				m[fmt.Sprintf("%x/%x", a, k.tag)] = k.n
 			}
@@ -354,7 +354,7 @@ func (x *index) served() map[string]uint8 {
 }
 
 // warmed is pass checked by e's server, by a read of r's ACL, which makes a
-// call with it its box's at the gate (boxsCall), and the ACL's tag.
+// call with it its mailbox's at the gate (boxsCall), and the ACL's tag.
 func warmed(e *env, r *raw, pass string) string {
 	e.t.Helper()
 	got := e.do(http.MethodGet, r.path("/acl"), nil, pass)
@@ -365,7 +365,7 @@ func warmed(e *env, r *raw, pass string) string {
 // reach is a state of a route that reaches its preconditions: the call that
 // does, made once setup has made the state, whether its target exists and
 // its tag, and what the call spends before it reads its target, beside the
-// address's flood budget a call with no pass of its box's spends at the gate.
+// address's flood budget a call with no pass of its mailbox's spends at the gate.
 type reach struct {
 	name   string
 	exists bool
@@ -401,11 +401,11 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 	none := map[string]int{}
 	live := func(e *env) *raw { return e.raw().register(protocol.MaxPrekeyLifetime) }
 	states := map[string][]reach{
-		"GET /v1/{addr}": {{"a live box", true, none, func(e *env) (call, string) {
+		"GET /v1/{addr}": {{"a live mailbox", true, none, func(e *env) (call, string) {
 			return call{"GET", live(e).path(""), nil, ""}, ""
 		}}},
 		"PUT /v1/{addr}": {
-			{"a box not registered", false, map[string]int{string(protocol.QuotaRegistrations): 1}, func(e *env) (call, string) {
+			{"a mailbox not registered", false, map[string]int{string(protocol.QuotaRegistrations): 1}, func(e *env) (call, string) {
 				r := e.raw()
 				r.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 				return call{"PUT", r.path(""), r.registration(1), r.pass(1)}, ""
@@ -457,7 +457,7 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 				}
 				return call{"PUT", r.path("/revocations"), protocol.Revocations{Identity: r.id.Document(), Revocation: rev}, ""}, ""
 			}},
-			{"of a box with none held", false, none, func(e *env) (call, string) {
+			{"of a mailbox with none held", false, none, func(e *env) (call, string) {
 				r := live(e)
 				return call{"PUT", r.path("/revocations"), r.certs(1), ""}, ""
 			}},
@@ -471,22 +471,22 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 			e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), http.StatusOK, "")
 			return call{"GET", r.path("/revocations"), nil, ""}, ""
 		}}},
-		"PUT /v1/{addr}/acl": {{"a live box", true, calls, func(e *env) (call, string) {
+		"PUT /v1/{addr}/acl": {{"a live mailbox", true, calls, func(e *env) (call, string) {
 			r := live(e)
 			return call{"PUT", r.path("/acl"), aclOf([]string{}, []string{"*"}), r.pass(1)}, warmed(e, r, r.pass(1))
 		}}},
-		"GET /v1/{addr}/acl": {{"a live box", true, calls, func(e *env) (call, string) {
+		"GET /v1/{addr}/acl": {{"a live mailbox", true, calls, func(e *env) (call, string) {
 			r := live(e)
 			return call{"GET", r.path("/acl"), nil, r.pass(1)}, warmed(e, r, r.pass(1))
 		}}},
 		"PUT /v1/{addr}/account": {
-			{"a box in an account", true, calls, func(e *env) (call, string) {
+			{"a mailbox in an account", true, calls, func(e *env) (call, string) {
 				r := live(e)
 				key := inAccount(e, r, 1)
 				warmed(e, r, r.pass(1))
 				return call{"PUT", r.path("/account"), protocol.AdoptRequest{Key: key}, r.pass(1)}, ""
 			}},
-			{"a box in none", false, calls, func(e *env) (call, string) {
+			{"a mailbox in none", false, calls, func(e *env) (call, string) {
 				r := live(e)
 				_, key := accountEnv(e.t, e, false, 1)
 				warmed(e, r, r.pass(1))
@@ -494,13 +494,13 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 			}},
 		},
 		"DELETE /v1/{addr}/account": {
-			{"a box in an account", true, calls, func(e *env) (call, string) {
+			{"a mailbox in an account", true, calls, func(e *env) (call, string) {
 				r := live(e)
 				inAccount(e, r, 0)
 				warmed(e, r, r.pass(1))
 				return call{"DELETE", r.path("/account"), nil, r.pass(1)}, ""
 			}},
-			{"a box in none", false, calls, func(e *env) (call, string) {
+			{"a mailbox in none", false, calls, func(e *env) (call, string) {
 				r := live(e)
 				warmed(e, r, r.pass(1))
 				return call{"DELETE", r.path("/account"), nil, r.pass(1)}, ""
@@ -512,7 +512,7 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 				warmed(e, from, from.pass(1))
 				return call{"POST", to.path("/messages"), sealedTo(1, 1, ciphertextTo(e.t, to)), from.pass(1)}, ""
 			}},
-			{"a post of bytes the box holds", true, map[string]int{string(protocol.QuotaCalls): 1, string(protocol.QuotaSendsBeforePass): 1}, func(e *env) (call, string) {
+			{"a post of bytes the mailbox holds", true, map[string]int{string(protocol.QuotaCalls): 1, string(protocol.QuotaSendsBeforePass): 1}, func(e *env) (call, string) {
 				from, to := live(e), live(e)
 				post := sealedTo(1, 1, ciphertextTo(e.t, to))
 				e.want(e.do("POST", to.path("/messages"), post, from.pass(1)), http.StatusCreated, "")
@@ -521,17 +521,17 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 			}},
 		},
 		"GET /v1/{addr}/messages": {
-			{"a first page of a box with none", true, map[string]int{string(protocol.QuotaPolls): 1}, func(e *env) (call, string) {
+			{"a first page of a mailbox with none", true, map[string]int{string(protocol.QuotaPolls): 1}, func(e *env) (call, string) {
 				r := live(e)
 				warmed(e, r, r.pass(1))
 				return call{"GET", r.path("/messages"), nil, r.pass(1)}, e.do("GET", r.path("/messages"), nil, r.pass(1)).header.Get("ETag")
 			}},
-			{"a first page with mail", true, map[string]int{string(protocol.QuotaPolls): 1}, func(e *env) (call, string) {
+			{"a first page with messages", true, map[string]int{string(protocol.QuotaPolls): 1}, func(e *env) (call, string) {
 				r, _ := holding(e)
 				warmed(e, r, r.pass(1))
 				return call{"GET", r.path("/messages"), nil, r.pass(1)}, e.do("GET", r.path("/messages"), nil, r.pass(1)).header.Get("ETag")
 			}},
-			{"a page after the first, at the cursor the box was handed", true, map[string]int{string(protocol.QuotaPolls): 1}, func(e *env) (call, string) {
+			{"a page after the first, at the cursor the mailbox was handed", true, map[string]int{string(protocol.QuotaPolls): 1}, func(e *env) (call, string) {
 				from, to := live(e), live(e)
 				for range pageSize + 1 {
 					e.want(e.do("POST", to.path("/messages"), sealedTo(1, 1, ciphertextTo(e.t, to)), from.pass(1)), http.StatusCreated, "")
@@ -543,7 +543,7 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 				}
 				return call{"GET", to.path("/messages?cursor=" + *page.NextCursor), nil, to.pass(1)}, ""
 			}},
-			{"a page after the first, at a cursor the box was not handed", true, map[string]int{string(protocol.QuotaPolls): 1}, func(e *env) (call, string) {
+			{"a page after the first, at a cursor the mailbox was not handed", true, map[string]int{string(protocol.QuotaPolls): 1}, func(e *env) (call, string) {
 				to, _ := holding(e)
 				warmed(e, to, to.pass(1))
 				return call{"GET", to.path("/messages?cursor=" + formatCursor(Header{ReceivedAt: e.clock.Now()})), nil, to.pass(1)}, ""
@@ -675,7 +675,7 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 	}
 }
 
-// drained is a box holding n messages, more than a page, its first page,
+// drained is a mailbox holding n messages, more than a page, its first page,
 // and the cursor that page handed it, as the server holds it.
 func drained(e *env, n int) (*raw, protocol.MessageList, string) {
 	e.t.Helper()
@@ -688,16 +688,16 @@ func drained(e *env, n int) (*raw, protocol.MessageList, string) {
 		e.t.Fatalf("the first page: %v", err)
 	}
 	if got := e.server.drains.held(to.id.Address()); got != *page.NextCursor {
-		e.t.Fatalf("the box holds the cursor %q, its first page handed it %q", got, *page.NextCursor)
+		e.t.Fatalf("the mailbox holds the cursor %q, its first page handed it %q", got, *page.NextCursor)
 	}
 	return to, page, *page.NextCursor
 }
 
 // A list's HEAD is a poll whatever its cursor, and moves none (PROTOCOL.md
 // §11.11, §11.2; the client repo's #412 item 4): one of a first page whose next
-// cursor is not the one the box was handed hands out none, and one that
-// names the cursor the box was handed is 200, takes from the poll rate, and
-// leaves the box holding that cursor, whose GET then continues the drain.
+// cursor is not the one the mailbox was handed hands out none, and one that
+// names the cursor the mailbox was handed is 200, takes from the poll rate, and
+// leaves the mailbox holding that cursor, whose GET then continues the drain.
 func TestAListsHeadMovesNoCursor(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
@@ -711,19 +711,19 @@ func TestAListsHeadMovesNoCursor(t *testing.T) {
 		t.Fatalf("HEAD of the first page: %d", h.StatusCode)
 	}
 	if got := e.server.drains.held(to.id.Address()); got != cursor {
-		t.Errorf("after a HEAD of the first page, the box holds the cursor %q, not the one it was handed, %q", got, cursor)
+		t.Errorf("after a HEAD of the first page, the mailbox holds the cursor %q, not the one it was handed, %q", got, cursor)
 	}
 	next := to.path("/messages?cursor=" + cursor)
 	before := debts(e.server, e.clock.Now())
 	if h := e.head(next, to.pass(1)); h.StatusCode != http.StatusOK {
-		t.Fatalf("HEAD of the page the box was handed: %d", h.StatusCode)
+		t.Fatalf("HEAD of the page the mailbox was handed: %d", h.StatusCode)
 	}
 	after := debts(e.server, e.clock.Now())
 	if p, pages := after[string(protocol.QuotaPolls)]-before[string(protocol.QuotaPolls)], after[string(protocol.QuotaPages)]-before[string(protocol.QuotaPages)]; p != 1 || pages != 0 {
 		t.Errorf("a list's HEAD spent %d polls and %d pages, want a poll", p, pages)
 	}
 	if got := e.server.drains.held(to.id.Address()); got != cursor {
-		t.Errorf("after a HEAD, the box holds the cursor %q, not the one it was handed, %q", got, cursor)
+		t.Errorf("after a HEAD, the mailbox holds the cursor %q, not the one it was handed, %q", got, cursor)
 	}
 	e.want(e.do("GET", next, nil, to.pass(1)), http.StatusOK, "")
 	if got := debts(e.server, e.clock.Now())[string(protocol.QuotaPages)] - after[string(protocol.QuotaPages)]; got != 1 {
@@ -731,14 +731,14 @@ func TestAListsHeadMovesNoCursor(t *testing.T) {
 	}
 }
 
-// A page refused for the page allowance leaves the box holding its cursor
+// A page refused for the page allowance leaves the mailbox holding its cursor
 // (PROTOCOL.md §11.11: only a GET's 200 spends it; the client repo's #412
 // item 2): once a page is due again, the same page continues the drain,
 // spending a page and no poll.
-func TestARefusedPageLeavesTheBoxItsCursor(t *testing.T) {
+func TestARefusedPageLeavesTheMailboxItsCursor(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.BoxCap = pageSize + 1 // two pages to a full box: an allowance of four at once
+	l.MailboxCap = pageSize + 1 // two pages to a full mailbox: an allowance of four at once
 	l.PollBurst, l.PollRefill = 100, time.Hour
 	e := newEnv(t, l)
 	to, _, cursor := drained(e, pageSize+1)
@@ -749,7 +749,7 @@ func TestARefusedPageLeavesTheBoxItsCursor(t *testing.T) {
 	}
 	e.limited(e.do("GET", next, nil, to.pass(1)), protocol.QuotaPages)
 	if got := e.server.drains.held(to.id.Address()); got != cursor {
-		t.Fatalf("after a refused page, the box holds the cursor %q, not the one it was handed, %q", got, cursor)
+		t.Fatalf("after a refused page, the mailbox holds the cursor %q, not the one it was handed, %q", got, cursor)
 	}
 	e.clock.Add(l.PollRefill / 2)
 	before := debts(e.server, e.clock.Now())

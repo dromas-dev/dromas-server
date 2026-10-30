@@ -119,7 +119,7 @@ func (f *fakeStream) GetRecords(_ context.Context, in *dynamodbstreams.GetRecord
 
 // msgEvent is a message item's stream record: an insert lists the message;
 // an ack deletes the item, a removal whose record carries its keys alone.
-func msgEvent(op stypes.OperationType, box protocol.Address, id byte, recvMs uint64) stypes.Record {
+func msgEvent(op stypes.OperationType, mailbox protocol.Address, id byte, recvMs uint64) stypes.Record {
 	var mid [32]byte
 	mid[0] = id
 	b := func(v []byte) stypes.AttributeValue { return &stypes.AttributeValueMemberB{Value: v} }
@@ -127,7 +127,7 @@ func msgEvent(op stypes.OperationType, box protocol.Address, id byte, recvMs uin
 		return &stypes.AttributeValueMemberN{Value: strconv.FormatUint(v, 10)}
 	}
 	img := map[string]stypes.AttributeValue{
-		"box": b(box[:]), "id": b(mid[:]), "size": n(1), "received_at": n(recvMs), "live": b(liveKey(recvMs, mid)),
+		"box": b(mailbox[:]), "id": b(mid[:]), "size": n(1), "received_at": n(recvMs), "live": b(liveKey(recvMs, mid)),
 	}
 	keys := map[string]stypes.AttributeValue{"box": img["box"], "id": img["id"]}
 	if op == stypes.OperationTypeRemove {
@@ -139,20 +139,20 @@ func msgEvent(op stypes.OperationType, box protocol.Address, id byte, recvMs uin
 func feedFixture(t *testing.T) (*fakeStream, *feed, *Memory, protocol.Address, uint64) {
 	t.Helper()
 	now := time.Now()
-	s := &Memory{idx: newIndex(), cache: newBoxCache(0), now: func() time.Time { return now }}
+	s := &Memory{idx: newIndex(), cache: newMailboxCache(0), now: func() time.Time { return now }}
 	fs := &fakeStream{expire: map[string]bool{}}
 	f := &feed{streams: fs, interval: time.Hour, apply: s.applyMsgRecord, logf: func(string, ...any) {}, shards: map[string]*shard{}}
-	var box protocol.Address
-	box[0] = 1
-	// The box is in memory: a change to one that is not is dropped.
-	if err := s.idx.ensure(context.Background(), box, func() (boxRead, error) { return boxRead{exists: true}, nil }); err != nil {
+	var mailbox protocol.Address
+	mailbox[0] = 1
+	// The mailbox is in memory: a change to one that is not is dropped.
+	if err := s.idx.ensure(context.Background(), mailbox, func() (mailboxRead, error) { return mailboxRead{exists: true}, nil }); err != nil {
 		t.Fatal(err)
 	}
-	return fs, f, s, box, ms(now)
+	return fs, f, s, mailbox, ms(now)
 }
 
-func (s *Memory) countOf(box protocol.Address) int {
-	n, _ := s.Count(context.Background(), box)
+func (s *Memory) countOf(mailbox protocol.Address) int {
+	n, _ := s.Count(context.Background(), mailbox)
 	return n
 }
 
@@ -162,84 +162,84 @@ func TestFeed(t *testing.T) {
 	insert, ack := stypes.OperationTypeInsert, stypes.OperationTypeRemove
 
 	t.Run("closed shards are skipped and open ones start at LATEST", func(t *testing.T) {
-		fs, f, s, box, now := feedFixture(t)
+		fs, f, s, mailbox, now := feedFixture(t)
 		fs.open("a", "")
-		fs.write("a", msgEvent(insert, box, 1, now)) // before startup: the load's job
+		fs.write("a", msgEvent(insert, mailbox, 1, now)) // before startup: the load's job
 		fs.close("a")
 		fs.open("b", "a")
-		fs.write("b", msgEvent(insert, box, 2, now)) // also before startup
+		fs.write("b", msgEvent(insert, mailbox, 2, now)) // also before startup
 		if err := f.position(ctx, "arn"); err != nil {
 			t.Fatal(err)
 		}
-		fs.write("b", msgEvent(insert, box, 3, now))
+		fs.write("b", msgEvent(insert, mailbox, 3, now))
 		if err := f.pass(ctx); err != nil {
 			t.Fatal(err)
 		}
-		if n := s.countOf(box); n != 1 {
+		if n := s.countOf(mailbox); n != 1 {
 			t.Fatalf("count %d: want only the change made after startup", n)
 		}
 	})
 
 	t.Run("a parent is read before its child", func(t *testing.T) {
-		fs, f, s, box, now := feedFixture(t)
+		fs, f, s, mailbox, now := feedFixture(t)
 		fs.open("p", "")
 		if err := f.position(ctx, "arn"); err != nil {
 			t.Fatal(err)
 		}
 		// The message arrives in the parent; the shard ends; its ack lands
 		// in the child, whose id sorts first.
-		fs.write("p", msgEvent(insert, box, 1, now))
+		fs.write("p", msgEvent(insert, mailbox, 1, now))
 		fs.close("p")
 		fs.open("0child", "p")
-		fs.write("0child", msgEvent(ack, box, 1, now))
+		fs.write("0child", msgEvent(ack, mailbox, 1, now))
 		f.listed = time.Time{} // list now
 		for range 3 {
 			if err := f.pass(ctx); err != nil {
 				t.Fatal(err)
 			}
 		}
-		if n := s.countOf(box); n != 0 {
+		if n := s.countOf(mailbox); n != 0 {
 			t.Fatal("the child's ack was applied before the parent's insert")
 		}
 	})
 
 	t.Run("a child found when its parent ends", func(t *testing.T) {
-		fs, f, s, box, now := feedFixture(t)
+		fs, f, s, mailbox, now := feedFixture(t)
 		fs.open("p", "")
 		if err := f.position(ctx, "arn"); err != nil {
 			t.Fatal(err)
 		}
 		fs.close("p")
 		fs.open("c", "p")
-		fs.write("c", msgEvent(insert, box, 1, now))
+		fs.write("c", msgEvent(insert, mailbox, 1, now))
 		for range 2 {
 			if err := f.pass(ctx); err != nil {
 				t.Fatal(err)
 			}
 		}
-		if n := s.countOf(box); n != 1 {
+		if n := s.countOf(mailbox); n != 1 {
 			t.Fatal("the child shard was not followed")
 		}
 	})
 
 	t.Run("an expired iterator resumes after the last record", func(t *testing.T) {
-		fs, f, s, box, now := feedFixture(t)
+		fs, f, s, mailbox, now := feedFixture(t)
 		fs.open("a", "")
 		if err := f.position(ctx, "arn"); err != nil {
 			t.Fatal(err)
 		}
-		fs.write("a", msgEvent(insert, box, 1, now))
+		fs.write("a", msgEvent(insert, mailbox, 1, now))
 		if err := f.pass(ctx); err != nil {
 			t.Fatal(err)
 		}
 		fs.expire["a"] = true
-		fs.write("a", msgEvent(insert, box, 2, now))
+		fs.write("a", msgEvent(insert, mailbox, 2, now))
 		for range 2 {
 			if err := f.pass(ctx); err != nil {
 				t.Fatal(err)
 			}
 		}
-		if n := s.countOf(box); n != 2 {
+		if n := s.countOf(mailbox); n != 2 {
 			t.Fatalf("count %d after an expired iterator", n)
 		}
 	})

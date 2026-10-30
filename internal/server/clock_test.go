@@ -12,22 +12,22 @@ import (
 
 // Every check is exact at the clock of whoever makes it, and whoever makes a
 // time-limited thing leaves an hour of room (PROTOCOL.md §3.4). These tests
-// give a box a clock of its own, set apart from the server's: every other
+// give a mailbox a clock of its own, set apart from the server's: every other
 // test here shares one clock between the two, and so cannot see a check that
 // only a second of difference fails.
 
-// skewed returns the options of a box whose clock is *off from the server's.
+// skewed returns the options of a mailbox whose clock is *off from the server's.
 func (e *env) skewed(off *time.Duration) client.Options {
 	o := e.opts()
 	o.Now = func() time.Time { return e.clock.Now().Add(*off) }
 	return o
 }
 
-// A box whose clock is less than protocol.PassLifetime behind the server's,
+// A mailbox whose clock is less than protocol.PassLifetime behind the server's,
 // or up to protocol.MaxPassLifetime less protocol.PassLifetime ahead, works
-// in full: it registers, mail under a certificate made that moment reaches
-// it and is delivered, its own mail is delivered, and it renews.
-func TestABoxWhoseClockIsOffByLessThanThePassAllows(t *testing.T) {
+// in full: it registers, a message under a certificate made that moment reaches
+// it and is delivered, its own message is delivered, and it renews.
+func TestAMailboxWhoseClockIsOffByLessThanThePassAllows(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	for _, off := range []time.Duration{-9 * time.Minute, -2 * time.Minute, -time.Second, time.Second, 2 * time.Second, 30 * time.Second, 3 * time.Minute, 49 * time.Minute, 50 * time.Minute} {
@@ -38,18 +38,18 @@ func TestABoxWhoseClockIsOffByLessThanThePassAllows(t *testing.T) {
 			continue
 		}
 		landAll(t, b)
-		fresh := e.box(protocol.Classic) // made this moment, on the server's clock: no certificate is newer
+		fresh := e.mailbox(protocol.Classic) // made this moment, on the server's clock: no certificate is newer
 		if _, err := fresh.Send(ctx, b.Address(), "under a certificate made this moment"); err != nil {
-			t.Errorf("a clock %v off: mail to it: %v", off, err)
+			t.Errorf("a clock %v off: a message to it: %v", off, err)
 		}
 		if res, err := b.Receive(ctx); err != nil || len(res.Delivered) != 1 || len(res.Refused) != 0 {
 			t.Errorf("a clock %v off: it reads: %+v, %v", off, res, err)
 		}
-		if _, err := b.Send(ctx, fresh.Address(), "from the box whose clock is off"); err != nil {
+		if _, err := b.Send(ctx, fresh.Address(), "from the mailbox whose clock is off"); err != nil {
 			t.Errorf("a clock %v off: it sends: %v", off, err)
 		}
 		if res, err := fresh.Receive(ctx); err != nil || len(res.Delivered) != 1 || len(res.Refused) != 0 {
-			t.Errorf("a clock %v off: its mail is read: %+v, %v", off, res, err)
+			t.Errorf("a clock %v off: its message is read: %+v, %v", off, res, err)
 		}
 		if _, err := b.Rekey(ctx, protocol.Classic); err != nil {
 			t.Errorf("a clock %v off: it renews: %v", off, err)
@@ -57,8 +57,8 @@ func TestABoxWhoseClockIsOffByLessThanThePassAllows(t *testing.T) {
 	}
 }
 
-// The two boxes at the far edges of what the server takes, 49 minutes fast
-// and 9 slow, exchange mail under certificates made that moment.
+// The two mailboxes at the far edges of what the server takes, 49 minutes fast
+// and 9 slow, exchange messages under certificates made that moment.
 func TestTheTwoClocksFurthestApart(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -74,24 +74,24 @@ func TestTheTwoClocksFurthestApart(t *testing.T) {
 		t.Fatal(err)
 	}
 	landAll(t, s)
-	send(t, f, s, "from the fast box to the slow one")
-	send(t, s, f, "from the slow box to the fast one")
-	for _, b := range []*client.Box{f, s} {
+	send(t, f, s, "from the fast mailbox to the slow one")
+	send(t, s, f, "from the slow mailbox to the fast one")
+	for _, b := range []*client.Mailbox{f, s} {
 		if res, err := b.Receive(ctx); err != nil || len(res.Delivered) != 1 || len(res.Refused) != 0 {
 			t.Errorf("%+v, %v", res, err)
 		}
 	}
 }
 
-// Further off, the box is refused: more than 50 minutes ahead, for its
+// Further off, the mailbox is refused: more than 50 minutes ahead, for its
 // certificate, before its pass is read, since that certificate would not have
 // begun for a reader 10 minutes slow, a clock this server takes. The date on
 // every answer is how the server says what its clock reads (the client's
 // words for it are the client's to test, and the server's are not shown:
 // PROTOCOL.md §11.3).
-// A box that cannot register leaves nothing in the way of registering once
+// A mailbox that cannot register leaves nothing in the way of registering once
 // its clock is right.
-func TestABoxWhoseClockIsTooFarOffIsRefusedAndTold(t *testing.T) {
+func TestAMailboxWhoseClockIsTooFarOffIsRefusedAndTold(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	for _, c := range []struct {
@@ -112,7 +112,7 @@ func TestABoxWhoseClockIsTooFarOffIsRefusedAndTold(t *testing.T) {
 		// What the client tells its reader is the client's to test; the
 		// server's part is the date on its answer, which shows the gap.
 		if gap := clockGap(err); gap != c.off {
-			t.Errorf("a clock %v off: the answer's date is %v from the box's clock", c.off, gap)
+			t.Errorf("a clock %v off: the answer's date is %v from the mailbox's clock", c.off, gap)
 		}
 		off = 0
 		if _, err := client.Init(ctx, dir, e.skewed(&off), protocol.Classic); err != nil {
@@ -121,15 +121,15 @@ func TestABoxWhoseClockIsTooFarOffIsRefusedAndTold(t *testing.T) {
 	}
 }
 
-// A box holds a pass the server still takes, and its clock then goes back.
-// Mail waits for it under a certificate that has not begun by the clock as
+// A mailbox holds a pass the server still takes, and its clock then goes back.
+// A message waits for it under a certificate that has not begun by the clock as
 // it now reads: its sender's clock is 49 minutes fast, which the server
-// takes, so that certificate starts 11 minutes back. A box that fetched that
-// mail would refuse it and ack it. It does not fetch: it does not use a kept
+// takes, so that certificate starts 11 minutes back. A mailbox that fetched that
+// message would refuse it and ack it. It does not fetch: it does not use a kept
 // pass that has more left than it was signed for, and the server refuses the
-// one it signs instead, which has run out by the server's clock. The mail is
+// one it signs instead, which has run out by the server's clock. The message is
 // delivered when the clock is right.
-func TestABoxWhoseClockGoesBackFetchesNothing(t *testing.T) {
+func TestAMailboxWhoseClockGoesBackFetchesNothing(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
@@ -139,7 +139,7 @@ func TestABoxWhoseClockGoesBackFetchesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	landAll(t, b)
-	if res := receive(t, b); len(res.Delivered) != 0 { // the pass is in the box now, and the server remembers it
+	if res := receive(t, b); len(res.Delivered) != 0 { // the pass is in the mailbox now, and the server remembers it
 		t.Fatal(res)
 	}
 	fast := 49 * time.Minute
@@ -155,9 +155,9 @@ func TestABoxWhoseClockGoesBackFetchesNothing(t *testing.T) {
 	if codeOf(err) != protocol.CodePassExpired || clockGap(err) != off || (res != nil && len(res.Delivered)+len(res.Refused) != 0) {
 		t.Fatalf("its clock set back 12 minutes: %+v, %v", res, err)
 	}
-	// Control: at that clock the mail would be refused, so the stop above is
+	// Control: at that clock the message would be refused, so the stop above is
 	// what kept it. The certificate it is signed under has not begun.
-	held, rerr := e.store.Box(ctx, sender.Address())
+	held, rerr := e.store.Mailbox(ctx, sender.Address())
 	if rerr != nil || held == nil {
 		t.Fatalf("the sender's record: %v", rerr)
 	}

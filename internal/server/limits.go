@@ -13,21 +13,21 @@ import (
 // tunables, and a zero turns that limit off.
 type Limits struct {
 	MaxSize        int           // the cap on a ciphertext, in bytes, and what a send reads of its body; nothing may depend on its value
-	BoxCap         int           // total per box, a storage ceiling [tunable]
+	MailboxCap     int           // total per mailbox, a storage ceiling [tunable]
 	SendsPerDay    int           // per sender, a number a day: that many at once, one back each day divided by it (decided: 20)
-	PollBurst      int           // polls a box may make at once (decided: 10); also the fetches of messages already fetched
+	PollBurst      int           // polls a mailbox may make at once (decided: 10); also the fetches of messages already fetched
 	PollRefill     time.Duration // one more poll each (decided: 50 s; once a minute is stated); also one more such fetch
 	PollAfter      int           // seconds, told to clients (decided: 60)
 	MaxWait        time.Duration // the longest a list is held, whatever its wait asks (PROTOCOL.md §11.11) [tunable]
 	MaxHeldLists   int           // lists this process holds at once; past it a held list is answered 503 (0: none held) [tunable]
 	AccountMaxSize int           // the most an account lifts MaxSize to, so what a send reads first; up to MaxSize, nothing
-	RenewalsPerDay int           // prekey renewals per box, a number a day as SendsPerDay (decided: 10), so no box can spend the boxes table's write capacity
-	RetiredKept    int           // retired prekeys a box record keeps for the new-key rule, newest first (decided: 10), so a record stays small
+	RenewalsPerDay int           // prekey renewals per mailbox, a number a day as SendsPerDay (decided: 10), so no mailbox can spend the mailboxes table's write capacity
+	RetiredKept    int           // retired prekeys a mailbox record keeps for the new-key rule, newest first (decided: 10), so a record stays small
 
 	RegistrationsPerHour      int // per IPv4 address or IPv6 /64 [tunable]
 	RangeRegistrationsPerHour int // per IPv6 /48, beside the /64's (decided: 500, Let's Encrypt's ratio of the two, until measured)
 	SendsPerMinutePerIP       int // the pre-auth send rate per IP [tunable]
-	MissesPerMinute           int // per IP: reads of the boxes table that find no box, and checks that fail (decided: 10 for now)
+	MissesPerMinute           int // per IP: reads of the mailboxes table that find no mailbox, and checks that fail (decided: 10 for now)
 
 	// Requests is the flood budget of an IPv4 address or IPv6 /64: every call
 	// with no pass and every request no route matches (decided: 100 at once,
@@ -36,17 +36,17 @@ type Limits struct {
 	RequestRefill time.Duration
 
 	// Budgets: a burst at once and one more each refill (LIMITS.md).
-	ReceiveBurst                 int           // per box: new messages it takes, from all senders together (decided: 50, on, and never off: ReceiveCeiling)
+	ReceiveBurst                 int           // per mailbox: new messages it takes, from all senders together (decided: 50, on, and never off: ReceiveCeiling)
 	ReceiveRefill                time.Duration // (decided: 6 s, ten a minute; never shorter than ReceiveCeiling, which an account lifts it to)
-	DrainBurst                   int           // per box: its first fetches of held messages, spent only by its own calls (decided: 50, on); an account lifts it
+	DrainBurst                   int           // per mailbox: its first fetches of held messages, spent only by its own calls (decided: 50, on); an account lifts it
 	DrainRefill                  time.Duration // (decided: 6 s, ten a minute)
-	CallBurst                    int           // per box: its calls with its pass that no other budget counts [tunable]; an account lifts it
+	CallBurst                    int           // per mailbox: its calls with its pass that no other budget counts [tunable]; an account lifts it
 	CallRefill                   time.Duration // [tunable]
-	CertificatesPerDay           int           // per box, a number a day: renewals under a later certificate, but for one that replaces a revoked certificate (decided: 10, as renewals)
-	CertificateRevocationsPerDay int           // per box, a number a day: raises of its revocation of certificates (decided: a count of its own, apart from CertificatesPerDay; 10, as that one) [tunable]
+	CertificatesPerDay           int           // per mailbox, a number a day: renewals under a later certificate, but for one that replaces a revoked certificate (decided: 10, as renewals)
+	CertificateRevocationsPerDay int           // per mailbox, a number a day: raises of its revocation of certificates (decided: a count of its own, apart from CertificatesPerDay; 10, as that one) [tunable]
 
-	// ACLEntries is the most entries a box's ACL holds, its two lists
-	// together [tunable]: a box's record, with its ACL, is held in the box
+	// ACLEntries is the most entries a mailbox's ACL holds, its two lists
+	// together [tunable]: a mailbox's record, with its ACL, is held in the mailbox
 	// cache, so this bounds what one record costs memory there. Never off,
 	// and at most protocol.MaxACLEntries: dromas-server serve does not start
 	// otherwise.
@@ -80,7 +80,7 @@ type Limits struct {
 func DefaultLimits() Limits {
 	return Limits{
 		MaxSize:                      64 << 10,
-		BoxCap:                       1000,
+		MailboxCap:                   1000,
 		SendsPerDay:                  20,
 		PollBurst:                    10,
 		PollRefill:                   50 * time.Second,
@@ -113,24 +113,24 @@ func DefaultLimits() Limits {
 // ceiling is the largest ciphertext any sender may send.
 func (l Limits) ceiling() int { return max(l.MaxSize, l.AccountMaxSize) }
 
-// ReceiveCeiling is the shortest refill of any box's budget of new mail: no
-// box takes new mail faster than one each, ten a second, whatever its account
+// ReceiveCeiling is the shortest refill of any mailbox's budget of new messages: no
+// mailbox takes new messages faster than one each, ten a second, whatever its account
 // lifts, and dromas-server serve does not start with flags that would (decided).
-// A box's messages are one item collection of the messages
+// A mailbox's messages are one item collection of the messages
 // table, which its LSI holds to 10 GB on one partition, and every message
 // leaves an item there until it expires (ARCHITECTURE.md § Storage).
 const ReceiveCeiling = time.Second / 10
 
-// liftedReceives is the refill of new mail an account lifts a box's to.
+// liftedReceives is the refill of new messages an account lifts a mailbox's to.
 func (l Limits) liftedReceives() time.Duration { return min(l.ReceiveRefill, ReceiveCeiling) }
 
-// uncappedPages is how many list pages a box is taken to hold when no box
+// uncappedPages is how many list pages a mailbox is taken to hold when no mailbox
 // cap bounds it.
 const uncappedPages = 1000
 
-// continuations is the allowance for list pages after the first, per box. A
+// continuations is the allowance for list pages after the first, per mailbox. A
 // page after the first is not a poll (PROTOCOL.md §11.11), so it has its own:
-// two full boxes' worth of pages at once, and a full box's worth back each
+// two full mailboxes' worth of pages at once, and a full mailbox's worth back each
 // poll interval. A drain's pages are never refused (its fetches may be paced:
 // Limits.DrainBurst), and a cursor is no way around the poll rate. With no
 // poll limit there is none.
@@ -138,8 +138,8 @@ func (l Limits) continuations() *buckets {
 	if l.PollBurst == 0 || l.PollRefill <= 0 {
 		return newBuckets(string(protocol.QuotaPages), 0, 0)
 	}
-	pages := (l.BoxCap + pageSize - 1) / pageSize
-	if l.BoxCap == 0 {
+	pages := (l.MailboxCap + pageSize - 1) / pageSize
+	if l.MailboxCap == 0 {
 		pages = uncappedPages
 	}
 	return newBuckets(string(protocol.QuotaPages), 2*pages, l.PollRefill/time.Duration(pages))

@@ -25,7 +25,7 @@ if [ -n "$darwin" ] && command -v brew > /dev/null; then
     if [ -d "$d" ]; then PATH="$d:$PATH"; fi
   done
 fi
-unset DROMAS_HOME DROMAS_BOX DR_HOME DR_BOX # no test may meet a real box
+unset DROMAS_HOME DROMAS_MAILBOX DR_HOME DR_MAILBOX # no test may meet a real mailbox
 
 # On the in-memory store the AWS tests and the cost measurement skip; any
 # other skip fails `full`.

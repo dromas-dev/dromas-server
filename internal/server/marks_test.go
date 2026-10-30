@@ -24,7 +24,7 @@ import (
 // A first page carries an ETag, the first 16 bytes of the SHA-256 of its
 // body, and a poll that sends it back is 304 while the page is unchanged
 // (PROTOCOL.md §11.11). The tag is the page's own: every process computes it
-// alike, with no key, and an empty box's is the same on every server. A tag
+// alike, with no key, and an empty mailbox's is the same on every server. A tag
 // of the page before, the "<count>-<version>" form among them, is not
 // the page's. Weak comparison: W/ is read past, and * names any page. A page
 // after the first carries none, so no tag names it, and only * makes it 304
@@ -33,7 +33,7 @@ import (
 func TestAFirstPageIsNotModifiedWhileUnchanged(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.BoxCap = 0
+	l.MailboxCap = 0
 	e := newEnv(t, l)
 	from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 	poll := func(query, ifNoneMatch string) (*http.Response, []byte) {
@@ -59,11 +59,11 @@ func TestAFirstPageIsNotModifiedWhileUnchanged(t *testing.T) {
 	emptyTag := `"` + hex.EncodeToString(sum[:16]) + `"`
 	resp, body := poll("", "")
 	if resp.StatusCode != http.StatusOK || string(body) != emptyPage || resp.Header.Get("ETag") != emptyTag {
-		t.Fatalf("an empty box: %d %q, ETag %q, want 200 %q with the page's hash, %s", resp.StatusCode, body, resp.Header.Get("ETag"), emptyPage, emptyTag)
+		t.Fatalf("an empty mailbox: %d %q, ETag %q, want 200 %q with the page's hash, %s", resp.StatusCode, body, resp.Header.Get("ETag"), emptyPage, emptyTag)
 	}
 	for _, tag := range []string{emptyTag, "W/" + emptyTag, `"other", ` + emptyTag, "*"} {
 		if resp, body := poll("", tag); resp.StatusCode != http.StatusNotModified || len(body) != 0 || resp.Header.Get("ETag") != emptyTag {
-			t.Errorf("an empty box, If-None-Match %q: %d %q, ETag %q, want 304 with no body", tag, resp.StatusCode, body, resp.Header.Get("ETag"))
+			t.Errorf("an empty mailbox, If-None-Match %q: %d %q, ETag %q, want 304 with no body", tag, resp.StatusCode, body, resp.Header.Get("ETag"))
 		}
 	}
 	// A comma and a "*" are a tag's own characters (RFC 9110 §8.8.3): a tag
@@ -71,7 +71,7 @@ func TestAFirstPageIsNotModifiedWhileUnchanged(t *testing.T) {
 	planted := []string{`",*,"`, `"x,*,y"`, `W/"a,W/*,b"`, emptyTag[:len(emptyTag)-1] + `,x"`, emptyTag + `, *`, emptyTag + ` junk`}
 	for _, tag := range append([]string{`"0-0000000000000000"`, `"` + strings.Repeat("0", 32) + `"`, emptyTag[1 : len(emptyTag)-1]}, planted...) {
 		if resp, _ := poll("", tag); resp.StatusCode != http.StatusOK {
-			t.Errorf("an empty box, If-None-Match %q: %d, want 200", tag, resp.StatusCode)
+			t.Errorf("an empty mailbox, If-None-Match %q: %d, want 200", tag, resp.StatusCode)
 		}
 	}
 	const n = 3
@@ -85,14 +85,14 @@ func TestAFirstPageIsNotModifiedWhileUnchanged(t *testing.T) {
 	resp, body = poll("", emptyTag)
 	var list protocol.MessageList
 	if resp.StatusCode != http.StatusOK || json.Unmarshal(body, &list) != nil || list.Count != n || len(list.Messages) != n {
-		t.Fatalf("a box holding %d, sent the empty box's tag: %d %s, want 200 with the mail", n, resp.StatusCode, body)
+		t.Fatalf("a mailbox holding %d, sent the empty mailbox's tag: %d %s, want 200 with the messages", n, resp.StatusCode, body)
 	}
 	held := resp.Header.Get("ETag")
 	if sum := sha256.Sum256(body); held != `"`+hex.EncodeToString(sum[:16])+`"` || held == emptyTag {
-		t.Fatalf("a box holding %d: ETag %q, want its page's hash", n, held)
+		t.Fatalf("a mailbox holding %d: ETag %q, want its page's hash", n, held)
 	}
 	if resp, _ := poll("", held); resp.StatusCode != http.StatusNotModified {
-		t.Errorf("a box holding %d, sent its own page's tag: %d, want 304", n, resp.StatusCode)
+		t.Errorf("a mailbox holding %d, sent its own page's tag: %d, want 304", n, resp.StatusCode)
 	}
 	// A cursor after every message: a poll, answered with an empty page that
 	// is not the first, so untagged, and 304 only to *, which names any page.
@@ -109,12 +109,12 @@ func TestAFirstPageIsNotModifiedWhileUnchanged(t *testing.T) {
 // precondition_failed, before If-None-Match is read, and a page after the
 // first, which carries no tag, matches none but "*"
 // (dromas-dev/dromas-server#71). It comes after the poll's count, as
-// If-None-Match does: a box past its poll rate is refused 429 whatever it
+// If-None-Match does: a mailbox past its poll rate is refused 429 whatever it
 // sends.
 func TestAPollsIfMatchIsEvaluatedFirst(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.BoxCap = 0
+	l.MailboxCap = 0
 	e := newEnv(t, l)
 	from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 	var ct bytes.Buffer
@@ -180,7 +180,7 @@ func TestAPollsIfMatchIsEvaluatedFirst(t *testing.T) {
 	}
 }
 
-// A 304 is a poll: it takes from the poll rate, and a box that polls faster is
+// A 304 is a poll: it takes from the poll rate, and a mailbox that polls faster is
 // refused 429, never answered 304, whatever it sends (PROTOCOL.md §11.11).
 func TestA304IsAPoll(t *testing.T) {
 	t.Parallel()
@@ -222,7 +222,7 @@ func TestAnIDThatSharesAPrefixIsNotHeld(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	e := newEnv(t, l)
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	send(t, a, b, "held")
 	e2, cs := counted(t, e, l)
 	pass := e2.pass(b)
@@ -249,7 +249,7 @@ func TestAnIDThatSharesAPrefixIsNotHeld(t *testing.T) {
 	}
 }
 
-// tagFront stands between a box and the server. While plant is set, it gives a
+// tagFront stands between a mailbox and the server. While plant is set, it gives a
 // 200 to a first-page poll the tag plant in place of the page's own; after,
 // it records each first-page poll's status.
 type tagFront struct {
@@ -285,18 +285,18 @@ func (f *tagFront) honest() {
 	f.plant = ""
 }
 
-// A tag a hostile server hands an empty box once is one tag to this server,
-// whatever commas and "*" it holds: the box's polls are answered in full while
-// it keeps that tag, and the mail sent after is delivered
+// A tag a hostile server hands an empty mailbox once is one tag to this server,
+// whatever commas and "*" it holds: the mailbox's polls are answered in full while
+// it keeps that tag, and the messages sent after are delivered
 // (dromas-dev/dromas-client#149).
-func TestAPlantedTagHidesNoMailAtAnHonestServer(t *testing.T) {
+func TestAPlantedTagHidesNoMessageAtAnHonestServer(t *testing.T) {
 	t.Parallel()
 	for _, plant := range []string{`",*,"`, `"x,*,y"`, `W/"a,W/*,b"`} {
 		e := newEnv(t, relaxed())
-		a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+		a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 		f := &tagFront{plant: plant}
 		e.setMiddle(f.serve)
-		receive(t, b) // the one hostile answer: the box is empty, and only the tag is the front's
+		receive(t, b) // the one hostile answer: the mailbox is empty, and only the tag is the front's
 		f.honest()
 		send(t, a, b, "one")
 		send(t, a, b, "two")
@@ -315,12 +315,12 @@ func TestAPlantedTagHidesNoMailAtAnHonestServer(t *testing.T) {
 	}
 }
 
-// Nor is that mail lost to the renewals the box makes meanwhile, which retire
+// Nor is that message lost to the renewals the mailbox makes meanwhile, which retire
 // the prekey it was sealed to.
-func TestAMailHiddenByAPlantedTagIsNotLost(t *testing.T) {
+func TestAMessageHiddenByAPlantedTagIsNotLost(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	f := &tagFront{plant: `",*,"`}
 	e.setMiddle(f.serve)
 	receive(t, b)

@@ -23,14 +23,14 @@ const pageSize = 50
 // carries the poll interval in Retry-After; a first page carries its ETag
 // too, and a poll that sends it back is 304 while the page is unchanged
 // (listTag). The poll rate applies to every poll, empty ones and 304s
-// included, and is taken before a 304 or a 412 is answered: a box that
+// included, and is taken before a 304 or a 412 is answered: a mailbox that
 // polls too often is told 429, never 304. A page after the first is a
 // continuation, not a poll, with an allowance of its own
 // (Limits.continuations), where it is a GET whose preconditions hold and
-// that presents the cursor the box was handed last; a cursor with nothing
+// that presents the cursor the mailbox was handed last; a cursor with nothing
 // after it continues nothing, so it is a poll. Only a GET's 200 spends the
 // cursor and hands out the next (the client repo's #412 item 2): a HEAD, a
-// false precondition or a refusal leaves the box holding the one it was
+// false precondition or a refusal leaves the mailbox holding the one it was
 // handed. Only a list with something to return reads storage.
 func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
 	// The path and the query first, the cursor's decode among them, before
@@ -50,7 +50,7 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 	}
-	box, err := s.owner(r, cursorParam, waitParam)
+	mailbox, err := s.owner(r, cursorParam, waitParam)
 	if err != nil {
 		return err
 	}
@@ -60,25 +60,25 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
 	// cursor is looked at: a false one is a poll like any other (PROTOCOL.md
 	// §11.11), which takes no cursor.
 	if hasCursor {
-		if err := precondition(r, targetState{exists: true, hint: hintList, also: []string{"Retry-After", poll}, spend: func() error { return s.spendPoll(box) }}); err != nil {
+		if err := precondition(r, targetState{exists: true, hint: hintList, also: []string{"Retry-After", poll}, spend: func() error { return s.spendPoll(mailbox) }}); err != nil {
 			return err
 		}
 	}
 	more := 0 // live messages past the cursor
-	// The cursor this process handed the box last, a GET's, is taken for
+	// The cursor this process handed the mailbox last, a GET's, is taken for
 	// the call and given back unless the call is answered 200: so of the
 	// calls in flight at once that present it, one continues the drain.
 	held := false
 	if hasCursor {
-		if more, err = s.store.After(r.Context(), box, after); err != nil {
+		if more, err = s.store.After(r.Context(), mailbox, after); err != nil {
 			return err
 		}
-		held = r.Method == http.MethodGet && s.drains.take(box, cursor[0])
+		held = r.Method == http.MethodGet && s.drains.take(mailbox, cursor[0])
 	}
 	answered := false
 	defer func() {
 		if held && !answered {
-			s.drains.giveBack(box, cursor[0])
+			s.drains.giveBack(mailbox, cursor[0])
 		}
 	}()
 	// A page after the first is a continuation only when it presents the
@@ -86,18 +86,18 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
 	// is answered all the same, and charged as a poll
 	// (dromas-dev/dromas-server#5).
 	if more == 0 || !held {
-		if err := s.spendPoll(box); err != nil {
+		if err := s.spendPoll(mailbox); err != nil {
 			return err
 		}
-	} else if ok, wait := s.pages.take(box.String(), s.now()); !ok {
+	} else if ok, wait := s.pages.take(mailbox.String(), s.now()); !ok {
 		return rateLimited(protocol.QuotaPages, wait, "too many list pages at once")
 	} else {
 		s.metrics.list(true)
 	}
 	// A first page asked to wait is held while the If-None-Match names it
-	// (PROTOCOL.md §11.11): read, held until the box changes, its first
+	// (PROTOCOL.md §11.11): read, held until the mailbox changes, its first
 	// message expires, the wait passes or the server stops, and read again;
-	// then answered as any list. The box's change is taken before each read,
+	// then answered as any list. The mailbox's change is taken before each read,
 	// so none is missed between; and the page of a list asked to wait is read
 	// strongly consistent, so it holds every change memory applied before
 	// the read, and the next change wakes it: an eventually consistent page
@@ -119,15 +119,15 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
 again:
 	var changed <-chan struct{}
 	if !until.IsZero() {
-		changed = s.store.Changed(box)
+		changed = s.store.Changed(mailbox)
 	}
-	n, err := s.store.Count(r.Context(), box)
+	n, err := s.store.Count(r.Context(), mailbox)
 	if err != nil {
 		return err
 	}
 	resp := protocol.MessageList{Count: int64(n), Messages: []protocol.MessageInfo{}}
 	if n > 0 && (after == nil || more > 0) {
-		page, err := s.store.List(r.Context(), box, after, pageSize+1, asked)
+		page, err := s.store.List(r.Context(), mailbox, after, pageSize+1, asked)
 		if err != nil {
 			return err
 		}
@@ -169,10 +169,10 @@ again:
 				}
 			}
 			// An expiry is no change memory applies: the hold's timer ends
-			// at the box's first, by the store's clock, if it comes before
+			// at the mailbox's first, by the store's clock, if it comes before
 			// the wait's end.
 			d := time.Until(until)
-			if next := s.store.NextExpiry(box); !next.IsZero() {
+			if next := s.store.NextExpiry(mailbox); !next.IsZero() {
 				d = min(d, next.Sub(s.now()))
 			}
 			t := time.NewTimer(d)
@@ -200,7 +200,7 @@ again:
 		}
 	}
 	if r.Method == http.MethodGet && resp.NextCursor != nil {
-		s.drains.put(box, *resp.NextCursor)
+		s.drains.put(mailbox, *resp.NextCursor)
 	}
 	answered = true
 	writeList(w, body, tag, poll)
@@ -252,11 +252,11 @@ func (s *Server) unhold() {
 // Shutdown waits for none of them.
 func (s *Server) StopHolds() { s.stopOnce.Do(func() { close(s.stopping) }) }
 
-// spendPoll spends one of box a's polls (Limits.PollBurst): every list that
+// spendPoll spends one of mailbox a's polls (Limits.PollBurst): every list that
 // does not continue a drain, a 304 among them.
 func (s *Server) spendPoll(a protocol.Address) error {
 	if ok, wait := s.polls.take(a.String(), s.now()); !ok {
-		return rateLimited(protocol.QuotaPolls, wait, "this box has polled as often as it may for now: poll again after Retry-After")
+		return rateLimited(protocol.QuotaPolls, wait, "this mailbox has polled as often as it may for now: poll again after Retry-After")
 	}
 	s.metrics.list(false)
 	return nil
@@ -268,8 +268,8 @@ const hintList = "list again without If-Match: dromas recv does"
 // listTag is a first page's ETag: the first 16 bytes of the SHA-256 of its
 // body, in hex. It is a strong validator that every process computes alike
 // with no key, and it changes with any message that enters or leaves the
-// page or the count. A page that holds mail cannot be made to share an
-// empty box's tag, the one a client keeps: that is a second preimage of 128
+// page or the count. A page that holds messages cannot be made to share an
+// empty mailbox's tag, the one a client keeps: that is a second preimage of 128
 // bits. A page after the first has none.
 func listTag(body []byte) string {
 	sum := sha256.Sum256(body)
@@ -289,7 +289,7 @@ func writeList(w http.ResponseWriter, body []byte, tag, poll string) {
 	_, _ = w.Write(body)
 }
 
-// drains remembers, for each box with a drain open, the one next_cursor this
+// drains remembers, for each mailbox with a drain open, the one next_cursor this
 // process last handed it. Serving that cursor's page replaces it with the
 // next, and the last page of a drain clears it. It is this process's alone,
 // as every count is: a page that lands on another process is charged as a
@@ -299,7 +299,7 @@ type drains struct {
 	next map[protocol.Address]string
 }
 
-// take reports whether cursor is the one box a was handed last, and takes it
+// take reports whether cursor is the one mailbox a was handed last, and takes it
 // for the call: it is spent unless the call gives it back (giveBack).
 func (d *drains) take(a protocol.Address, cursor string) bool {
 	d.mu.Lock()
@@ -311,8 +311,8 @@ func (d *drains) take(a protocol.Address, cursor string) bool {
 	return ok
 }
 
-// giveBack gives box a the cursor a call took and did not spend, unless the
-// box was handed another meanwhile.
+// giveBack gives mailbox a the cursor a call took and did not spend, unless the
+// mailbox was handed another meanwhile.
 func (d *drains) giveBack(a protocol.Address, cursor string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -324,7 +324,7 @@ func (d *drains) giveBack(a protocol.Address, cursor string) {
 	}
 }
 
-// put remembers the cursor just handed to box a.
+// put remembers the cursor just handed to mailbox a.
 func (d *drains) put(a protocol.Address, cursor string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -356,28 +356,28 @@ func parseCursor(s string) (*Cursor, error) {
 	return c, nil
 }
 
-// gone is the answer for a message the box does not hold.
+// gone is the answer for a message the mailbox does not hold.
 func gone() *problem {
 	return fail(protocol.CodeNoSuchMessage, "treat it as gone", "no message has this id: acked or expired")
 }
 
-// held answers gone, from memory, for an id the box does not hold: a fetch
+// held answers gone, from memory, for an id the mailbox does not hold: a fetch
 // or an ack reads or writes storage only for a message that is there.
-func (s *Server) held(r *http.Request, box protocol.Address, id [32]byte) error {
-	ok, err := s.store.Holds(r.Context(), box, id)
+func (s *Server) held(r *http.Request, mailbox protocol.Address, id [32]byte) error {
+	ok, err := s.store.Holds(r.Context(), mailbox, id)
 	if err != nil {
 		return err
 	}
 	if !ok {
-		return s.notHeld(r, box)
+		return s.notHeld(r, mailbox)
 	}
 	return nil
 }
 
-// notHeld answers a fetch or an ack of an id box a does not hold. A held
-// message's first fetch spends the box's budget of mail taken out
+// notHeld answers a fetch or an ack of an id mailbox a does not hold. A held
+// message's first fetch spends the mailbox's budget of messages taken out
 // (Limits.DrainBurst), and its ack is paid for by its receive; anything else
-// is a call, spent from the box's budget (Limits.CallBurst): this, a false
+// is a call, spent from the mailbox's budget (Limits.CallBurst): this, a false
 // precondition (precondition) and a message's HEAD.
 func (s *Server) notHeld(r *http.Request, a protocol.Address) error {
 	if err := s.spendOwner(r.Context(), a); err != nil {
@@ -394,25 +394,25 @@ func (s *Server) notHeld(r *http.Request, a protocol.Address) error {
 // the bytes from there on, read from the store with the same range, and any
 // other with the whole body (PROTOCOL.md §11.12; protocol.RangeAsked): a fetch
 // that was cut resumes so. A ranged fetch is counted as any fetch is. A
-// HEAD is no fetch (PROTOCOL.md §11.2): it reads only whether the box holds
-// the message, takes no token of new mail and marks nothing, spends one of
-// the box's calls, and carries no Content-Length and reads no Range.
+// HEAD is no fetch (PROTOCOL.md §11.2): it reads only whether the mailbox holds
+// the message, takes no token of new messages and marks nothing, spends one of
+// the mailbox's calls, and carries no Content-Length and reads no Range.
 func (s *Server) fetch(w http.ResponseWriter, r *http.Request) error {
-	box, err := s.owner(r)
+	mailbox, err := s.owner(r)
 	if err != nil {
 		return err
 	}
 	id, err := pathID(r)
 	if err != nil {
-		return s.notHeld(r, box)
+		return s.notHeld(r, mailbox)
 	}
-	// Its target, from memory: whether the box holds the message. Its
+	// Its target, from memory: whether the mailbox holds the message. Its
 	// preconditions are evaluated for one it holds, before anything is
-	// counted for it, and a false one is a call, the box's (precondition).
-	if err := s.held(r, box, id); err != nil {
+	// counted for it, and a false one is a call, the mailbox's (precondition).
+	if err := s.held(r, mailbox, id); err != nil {
 		return err
 	}
-	owner := func() error { return s.spendOwner(r.Context(), box) }
+	owner := func() error { return s.spendOwner(r.Context(), mailbox) }
 	if err := precondition(r, targetState{exists: true, hint: hintConditions, spend: owner}); err != nil {
 		return err
 	}
@@ -424,12 +424,12 @@ func (s *Server) fetch(w http.ResponseWriter, r *http.Request) error {
 		w.WriteHeader(http.StatusOK)
 		return nil
 	}
-	// A first fetch of a held message is new mail drained, and spends the
-	// box's budget of it (Limits.DrainBurst): how much mail a box takes out,
-	// whoever sent it, which only the box's own calls spend. Whether a fetch
+	// A first fetch of a held message is a new message drained, and spends the
+	// mailbox's budget of them (Limits.DrainBurst): how many messages a mailbox takes out,
+	// whoever sent them, which only the mailbox's own calls spend. Whether a fetch
 	// is a first one is known only once memory counts it, so a token is
 	// reserved before and given back if it was not.
-	lim, err := s.limitsOf(r.Context(), box)
+	lim, err := s.limitsOf(r.Context(), mailbox)
 	if err != nil {
 		return err
 	}
@@ -437,12 +437,12 @@ func (s *Server) fetch(w http.ResponseWriter, r *http.Request) error {
 	if lim.DrainBurst > 0 {
 		var ok bool
 		var wait time.Duration
-		if drain, ok, wait = s.drained.reserve(r.Context(), box.String(), s.now); !ok {
-			return spent(protocol.CodeFetchPaced, wait, "this box has taken out as much new mail as it may for now: the rest waits on the server")
+		if drain, ok, wait = s.drained.reserve(r.Context(), mailbox.String(), s.now); !ok {
+			return spent(protocol.CodeFetchPaced, wait, "this mailbox has taken out as many new messages as it may for now: the rest waits on the server")
 		}
 	}
 	defer func() { drain.release(s.now()) }() // settled below, but for a panic
-	held, again, err := s.store.Fetched(r.Context(), box, id)
+	held, again, err := s.store.Fetched(r.Context(), mailbox, id)
 	if err != nil || !held || again {
 		drain.release(s.now())
 	} else {
@@ -452,20 +452,20 @@ func (s *Server) fetch(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if !held {
-		return s.notHeld(r, box)
+		return s.notHeld(r, mailbox)
 	}
 	// A message is fetched once and kept by its reader. Fetching it again is
 	// for catching up after a failure, so it has an allowance of its own, and
 	// only a repeat ever touches it: PollBurst at once, one more each PollRefill.
 	if again {
-		if ok, wait := s.repeats.take(box.String(), s.now()); !ok {
+		if ok, wait := s.repeats.take(mailbox.String(), s.now()); !ok {
 			return fetchedAlready(wait)
 		}
 	}
 	// Read after the preconditions, as RFC 9110 §14.2 has a Range read: a
 	// false one answered above leaves it unread.
 	from, ranged := protocol.RangeAsked(r.Header.Values("Range"), r.Header.Values("If-Range"))
-	m, body, err := s.store.Message(r.Context(), box, id, from)
+	m, body, err := s.store.Message(r.Context(), mailbox, id, from)
 	if errors.Is(err, ErrNotFound) {
 		return gone()
 	}
@@ -487,31 +487,31 @@ func (s *Server) fetch(w http.ResponseWriter, r *http.Request) error {
 		status = http.StatusPartialContent
 	}
 	w.WriteHeader(status)
-	_, _ = w.Write(body) //nolint:gosec // an age file, as application/octet-stream, to the box that holds it: no page renders it
+	_, _ = w.Write(body) //nolint:gosec // an age file, as application/octet-stream, to the mailbox that holds it: no page renders it
 	return nil
 }
 
 // ack is DELETE /v1/<address>/messages/<id>. Reading does not delete; this
 // does, and nothing of the message is kept (PROTOCOL.md §13). A held message's ack is paid
 // for by its receive; one whose preconditions are false spends one of the
-// box's calls (precondition). The delete is of a live message only, so an
+// mailbox's calls (precondition). The delete is of a live message only, so an
 // If-Match that held is held at it: one acked meanwhile is gone.
 func (s *Server) ack(w http.ResponseWriter, r *http.Request) error {
-	box, err := s.owner(r)
+	mailbox, err := s.owner(r)
 	if err != nil {
 		return err
 	}
 	id, err := pathID(r)
 	if err != nil {
-		return s.notHeld(r, box)
+		return s.notHeld(r, mailbox)
 	}
-	if err := s.held(r, box, id); err != nil {
+	if err := s.held(r, mailbox, id); err != nil {
 		return err
 	}
-	if err := precondition(r, targetState{exists: true, hint: hintConditions, spend: func() error { return s.spendOwner(r.Context(), box) }}); err != nil {
+	if err := precondition(r, targetState{exists: true, hint: hintConditions, spend: func() error { return s.spendOwner(r.Context(), mailbox) }}); err != nil {
 		return err
 	}
-	err = s.store.DeleteMessage(detached(r.Context()), box, id)
+	err = s.store.DeleteMessage(detached(r.Context()), mailbox, id)
 	if errors.Is(err, ErrNotFound) {
 		return gone()
 	}

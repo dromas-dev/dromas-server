@@ -7,7 +7,7 @@
 # On another OpenSSH (8.1p1 is alpine:3.11), with <dir>'s parent mounted so each version can check what the other made:
 #   docker run --rm -v "$PWD/test:/t:ro" -v <parent>:/d alpine:3.11 sh -c \
 #     'apk add --no-cache openssh-client openssh-keygen >/dev/null; sh /t/working-key-openssh.sh make /d/c; sh /t/working-key-openssh.sh check /d/c'
-# Needs ssh, ssh-keygen and, only if signing with -f work-cert.pub fails, ssh-agent and ssh-add. POSIX sh: it runs in BusyBox.
+# Needs ssh, ssh-keygen and, only if signing with -f work-cert.pub fails, ssh-agent and ssh-add. POSIX sh: it runs in BusyMailbox.
 set -u
 mode=$1; d=$2
 A=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa

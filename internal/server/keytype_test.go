@@ -23,7 +23,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// rawP256 is a raw box whose identity is a P-256 key.
+// rawP256 is a raw mailbox whose identity is a P-256 key.
 func (e *env) rawP256() *raw {
 	e.t.Helper()
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -42,23 +42,23 @@ func (e *env) rawP256() *raw {
 		work: map[uint64]ssh.Signer{}}
 }
 
-// A box whose identity is of the optional type registers, proves itself with
-// a pass, and moves to a new certificate, as a box on an Ed25519 key does:
+// A mailbox whose identity is of the optional type registers, proves itself with
+// a pass, and moves to a new certificate, as a mailbox on an Ed25519 key does:
 // the server checks the identity's signature when a certificate is put on
 // record, and a pass against that certificate after.
-func TestABoxOfTheOptionalKeyType(t *testing.T) {
+func TestAMailboxOfTheOptionalKeyType(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	now := e.clock.Now()
 	p := e.rawP256().register(protocol.MaxPrekeyLifetime)
 	if p.id.Type() != protocol.IdentityP256 {
-		t.Fatalf("the box's identity is a %s key", p.id.Type())
+		t.Fatalf("the mailbox's identity is a %s key", p.id.Type())
 	}
 	e.want(e.do("GET", p.path("/messages"), nil, p.pass(1)), 200, "")
 	e.want(e.do("GET", p.path("/messages"), nil, ""), 401, protocol.CodeUnauthorized)
 
-	// Another P-256 box's pass is not this one's, and neither is a pass an
-	// Ed25519 box signs for this address.
+	// Another P-256 mailbox's pass is not this one's, and neither is a pass an
+	// Ed25519 mailbox signs for this address.
 	q, ed := e.rawP256().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 	e.want(e.do("GET", p.path("/messages"), nil, q.pass(1)), 401, protocol.CodeUnauthorized)
 	e.want(e.do("GET", p.path("/messages"), nil, e.passFor(ed.work[1], p.id.Address(), e.name())), 401, protocol.CodeCertificateNotCurrent)
@@ -71,7 +71,7 @@ func TestABoxOfTheOptionalKeyType(t *testing.T) {
 	e.want(e.do("GET", p.path("/messages"), nil, p.pass(2)), 200, "")
 
 	// A certificate another P-256 key signed for this address is no
-	// certificate of this box: a prekey under it is refused.
+	// certificate of this mailbox: a prekey under it is refused.
 	_, wpriv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -94,11 +94,11 @@ func TestABoxOfTheOptionalKeyType(t *testing.T) {
 	e.want(e.do("PUT", p.path("/prekey"), p.upload(3), e.passFor(under, p.id.Address(), e.name())), 400, protocol.CodeBadKey)
 }
 
-// A pass's signature does not cover the certificate it names, and a box's
-// certificate is public: it rides in everything the box signs. So anyone can
-// put a box's certificate into a pass they signed with a key of their own.
+// A pass's signature does not cover the certificate it names, and a mailbox's
+// certificate is public: it rides in everything the mailbox signs. So anyone can
+// put a mailbox's certificate into a pass they signed with a key of their own.
 // The hash matches, and the signature is what refuses it.
-func TestAPassThatCarriesAnotherBoxsCertificate(t *testing.T) {
+func TestAPassThatCarriesAnotherMailboxsCertificate(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	for name, victim := range map[string]*raw{"ssh-ed25519": e.raw(), "ecdsa-sha2-nistp256": e.rawP256()} {
@@ -148,13 +148,13 @@ func TestACertificateOnRecordThatTheIdentityDidNotSign(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Its hash, written into the box's record.
-		b, err := e.store.Box(ctx, a)
+		// Its hash, written into the mailbox's record.
+		b, err := e.store.Mailbox(ctx, a)
 		if err != nil || b == nil {
-			t.Fatalf("%s: the box's record: %v", name, err)
+			t.Fatalf("%s: the mailbox's record: %v", name, err)
 		}
 		b.Cert = sha256.Sum256(c.Marshal())
-		if err := e.store.UpdateBox(ctx, b); err != nil {
+		if err := e.store.UpdateMailbox(ctx, b); err != nil {
 			t.Fatal(err)
 		}
 		pass := e.passFor(under, a, e.name())
@@ -168,7 +168,7 @@ func TestACertificateOnRecordThatTheIdentityDidNotSign(t *testing.T) {
 		if _, err := p.VerifyUnder(b.Cert, e.name(), now); err != nil {
 			t.Errorf("%s: control: the hash or the working key's signature refused it, so the identity's was never reached: %v", name, err)
 		}
-		// And the box's own pass, under the certificate its identity did
+		// And the mailbox's own pass, under the certificate its identity did
 		// sign, is no longer under the one on record.
 		e.wantNotCurrent(e.do("GET", victim.path("/messages"), nil, victim.pass(1)), b.CertSerial)
 	}
@@ -211,7 +211,7 @@ func TestARememberedPassEndsWithItsCertificate(t *testing.T) {
 	e.want(e.do("GET", r.path("/messages"), nil, pass), 401, protocol.CodePassExpired)
 }
 
-// passCarrying is a pass of box a that names cert as the key that signed it,
+// passCarrying is a pass of mailbox a that names cert as the key that signed it,
 // and was signed by another key: by, without its own certificate.
 func passCarrying(t *testing.T, cert ssh.PublicKey, by ssh.Signer, a protocol.Address, server string, notAfter time.Time) string {
 	t.Helper()
@@ -272,7 +272,7 @@ func TestAnIdentityTypeTheServerDoesNotRegister(t *testing.T) {
 }
 
 // The Go client on a P-256 identity, through the real server: it registers,
-// and exchanges mail with a box on an Ed25519 identity.
+// and exchanges messages with a mailbox on an Ed25519 identity.
 func TestGoClientOnAP256Identity(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
@@ -283,23 +283,23 @@ func TestGoClientOnAP256Identity(t *testing.T) {
 		t.Fatalf("init: %v", err)
 	}
 	landAll(t, p)
-	ed := e.box(protocol.Classic)
-	send(t, p, ed, "from the P-256 box")
-	send(t, ed, p, "to the P-256 box")
+	ed := e.mailbox(protocol.Classic)
+	send(t, p, ed, "from the P-256 mailbox")
+	send(t, ed, p, "to the P-256 mailbox")
 	if res, err := ed.Receive(context.Background()); err != nil || len(res.Delivered) != 1 || res.Delivered[0].Envelope.From != p.Address() {
-		t.Fatalf("the Ed25519 box: %+v, %v", res, err)
+		t.Fatalf("the Ed25519 mailbox: %+v, %v", res, err)
 	}
 	if res, err := p.Receive(context.Background()); err != nil || len(res.Delivered) != 1 || res.Delivered[0].Envelope.From != ed.Address() {
-		t.Fatalf("the P-256 box: %+v, %v", res, err)
+		t.Fatalf("the P-256 mailbox: %+v, %v", res, err)
 	}
 }
 
-// A box takes mail from a sender whose identity is of a key type it declared
+// A mailbox takes messages from a sender whose identity is of a key type it declared
 // with its prekey: Ed25519 always, another type if it listed it, any type if
 // it said "any". The server refuses the rest, so the sender has an error and
-// no receipt for mail the recipient's client would have refused. The
+// no receipt for a message the recipient's client would have refused. The
 // declaration is the last prekey's: a new prekey without one clears it.
-func TestTheSenderKeyTypesABoxDeclared(t *testing.T) {
+func TestTheSenderKeyTypesAMailboxDeclared(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	now := e.clock.Now()
@@ -315,7 +315,7 @@ func TestTheSenderKeyTypesABoxDeclared(t *testing.T) {
 	}
 	served := func(r *raw) []string {
 		t.Helper()
-		var br protocol.BoxResponse
+		var br protocol.MailboxResponse
 		rep := e.do("GET", r.path(""), nil, "")
 		e.want(rep, 200, "")
 		if err := json.Unmarshal(rep.body, &br); err != nil {
@@ -340,16 +340,16 @@ func TestTheSenderKeyTypesABoxDeclared(t *testing.T) {
 	anyType := declaring([]string{protocol.AnySender, protocol.IdentityP256})
 	unknown := declaring([]string{"no-such-key-type@dromas.invalid", protocol.IdentityEd25519})
 	for name, c := range map[string]struct {
-		box  *raw
-		want []string
+		mailbox *raw
+		want    []string
 	}{
 		"nothing":               {nothing, nil},
 		"Ed25519 and P-256":     {listed, []string{protocol.IdentityEd25519, protocol.IdentityP256}},
 		"any, and a type":       {anyType, []string{protocol.AnySender}},
 		"a name nobody defines": {unknown, []string{protocol.IdentityEd25519}},
 	} {
-		if got := served(c.box); !slices.Equal(got, c.want) {
-			t.Errorf("a box that declared %s is served as declaring %v, want %v", name, got, c.want)
+		if got := served(c.mailbox); !slices.Equal(got, c.want) {
+			t.Errorf("a mailbox that declared %s is served as declaring %v, want %v", name, got, c.want)
 		}
 	}
 
@@ -358,7 +358,7 @@ func TestTheSenderKeyTypesABoxDeclared(t *testing.T) {
 	e.want(sendTo(p256, unknown, 1), 403, protocol.CodeSenderKeyType)
 	e.want(sendTo(p256, listed, 1), 201, "")
 	e.want(sendTo(p256, anyType, 1), 201, "")
-	// A sender on an Ed25519 identity is taken by every box.
+	// A sender on an Ed25519 identity is taken by every mailbox.
 	for _, to := range []*raw{nothing, listed, anyType, unknown, p256} {
 		e.want(sendTo(ed, to, 1), 201, "")
 	}
@@ -368,7 +368,7 @@ func TestTheSenderKeyTypesABoxDeclared(t *testing.T) {
 	listed.prekey(2, now.Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", listed.path("/prekey"), listed.upload(2), listed.pass(2)), 200, "")
 	if got := served(listed); got != nil {
-		t.Errorf("after a prekey that declared nothing, the box is served as declaring %v", got)
+		t.Errorf("after a prekey that declared nothing, the mailbox is served as declaring %v", got)
 	}
 	e.want(sendTo(p256, listed, 2), 403, protocol.CodeSenderKeyType)
 	nothing.prekey(2, now.Add(protocol.MaxPrekeyLifetime), nil)

@@ -36,14 +36,14 @@ func onDynamo(st Store) (*Memory, bool) {
 	return s, ok
 }
 
-// applyBoxRecord applies a record of the --boxes-table stream as the
+// applyMailboxRecord applies a record of the --mailboxes-table stream as the
 // DynamoDB backend's feed hands it to memory.
-func (s *Memory) applyBoxRecord(r stypes.Record) { s.applyStream(boxStreamChange(r)) }
+func (s *Memory) applyMailboxRecord(r stypes.Record) { s.applyStream(mailboxStreamChange(r)) }
 
-// applyMsgRecord is applyBoxRecord for the --msgs-table stream.
+// applyMsgRecord is applyMailboxRecord for the --messages-table stream.
 func (s *Memory) applyMsgRecord(r stypes.Record) { s.applyStream(msgStreamChange(r)) }
 
-// applyAccountRecord is applyBoxRecord for the --accounts-table stream.
+// applyAccountRecord is applyMailboxRecord for the --accounts-table stream.
 func (s *Memory) applyAccountRecord(r stypes.Record) { s.applyStream(accountStreamChange(r)) }
 
 func (s *Memory) applyStream(c Change, err error) {
@@ -52,10 +52,10 @@ func (s *Memory) applyStream(c Change, err error) {
 	}
 }
 
-// applyBoxImage applies an item of the --boxes-table table as it now is, as
+// applyMailboxImage applies an item of the --mailboxes-table table as it now is, as
 // the stream's image of it.
-func (s *Memory) applyBoxImage(it item) {
-	s.applyBoxRecord(stypes.Record{EventName: stypes.OperationTypeModify, Dynamodb: &stypes.StreamRecord{NewImage: toStream(it)}})
+func (s *Memory) applyMailboxImage(it item) {
+	s.applyMailboxRecord(stypes.Record{EventName: stypes.OperationTypeModify, Dynamodb: &stypes.StreamRecord{NewImage: toStream(it)}})
 }
 
 // toStream is an item as a stream's image carries it.
@@ -148,9 +148,9 @@ func (f *faults) set(method string, x fault) {
 
 // ownRefusal is the refusal each write states of itself.
 var ownRefusal = map[string]error{
-	"CreateBox":     ErrExists,
-	"UpdateBox":     ErrStale,
-	"DeleteBox":     errStated,
+	"CreateMailbox": ErrExists,
+	"UpdateMailbox": ErrStale,
+	"DeleteMailbox": errStated,
 	"Revoke":        ErrStale,
 	"Adopt":         ErrStale,
 	"Leave":         ErrStale,
@@ -195,32 +195,32 @@ func (f *faults) answered(method string) {
 	}
 }
 
-func (f *faults) ReadAddress(ctx context.Context, a protocol.Address) (*Box, *Revocations, error) {
+func (f *faults) ReadAddress(ctx context.Context, a protocol.Address) (*Mailbox, *Revocations, error) {
 	b, rv, err := f.Backend.ReadAddress(ctx, a)
 	f.answered("ReadAddress")
 	return b, rv, err
 }
 
-func (f *faults) ReadLive(ctx context.Context, box protocol.Address) ([]Header, error) {
-	hs, err := f.Backend.ReadLive(ctx, box)
+func (f *faults) ReadLive(ctx context.Context, mailbox protocol.Address) ([]Header, error) {
+	hs, err := f.Backend.ReadLive(ctx, mailbox)
 	f.answered("ReadLive")
 	return hs, err
 }
 
-func (f *faults) List(ctx context.Context, box protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error) {
-	hs, err := f.Backend.List(ctx, box, after, limit, consistent)
+func (f *faults) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error) {
+	hs, err := f.Backend.List(ctx, mailbox, after, limit, consistent)
 	f.answered("List")
 	return hs, err
 }
 
-func (f *faults) Message(ctx context.Context, box protocol.Address, id [32]byte, from int64) (*Header, []byte, error) {
-	h, body, err := f.Backend.Message(ctx, box, id, from)
+func (f *faults) Message(ctx context.Context, mailbox protocol.Address, id [32]byte, from int64) (*Header, []byte, error) {
+	h, body, err := f.Backend.Message(ctx, mailbox, id, from)
 	f.answered("Message")
 	return h, body, err
 }
 
-func (f *faults) Dedupe(ctx context.Context, box protocol.Address, id [32]byte) (*Header, error) {
-	h, err := f.Backend.Dedupe(ctx, box, id)
+func (f *faults) Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
+	h, err := f.Backend.Dedupe(ctx, mailbox, id)
 	f.answered("Dedupe")
 	return h, err
 }
@@ -237,16 +237,16 @@ func (f *faults) AdoptKey(ctx context.Context, account string, hash [32]byte) (*
 	return k, err
 }
 
-func (f *faults) CreateBox(ctx context.Context, b *Box) error {
-	return f.write("CreateBox", func() error { return f.Backend.CreateBox(ctx, b) })
+func (f *faults) CreateMailbox(ctx context.Context, b *Mailbox) error {
+	return f.write("CreateMailbox", func() error { return f.Backend.CreateMailbox(ctx, b) })
 }
 
-func (f *faults) UpdateBox(ctx context.Context, b *Box) error {
-	return f.write("UpdateBox", func() error { return f.Backend.UpdateBox(ctx, b) })
+func (f *faults) UpdateMailbox(ctx context.Context, b *Mailbox) error {
+	return f.write("UpdateMailbox", func() error { return f.Backend.UpdateMailbox(ctx, b) })
 }
 
-func (f *faults) DeleteBox(ctx context.Context, a protocol.Address) error {
-	return f.write("DeleteBox", func() error { return f.Backend.DeleteBox(ctx, a) })
+func (f *faults) DeleteMailbox(ctx context.Context, a protocol.Address) error {
+	return f.write("DeleteMailbox", func() error { return f.Backend.DeleteMailbox(ctx, a) })
 }
 
 func (f *faults) Revoke(ctx context.Context, a protocol.Address, rv *Revocations, want Expect) (*Revocations, error) {
@@ -258,11 +258,11 @@ func (f *faults) Revoke(ctx context.Context, a protocol.Address, rv *Revocations
 	return held, err
 }
 
-func (f *faults) Adopt(ctx context.Context, b *Box, account string, key [32]byte) error {
+func (f *faults) Adopt(ctx context.Context, b *Mailbox, account string, key [32]byte) error {
 	return f.write("Adopt", func() error { return f.Backend.Adopt(ctx, b, account, key) })
 }
 
-func (f *faults) Leave(ctx context.Context, b *Box) error {
+func (f *faults) Leave(ctx context.Context, b *Mailbox) error {
 	return f.write("Leave", func() error { return f.Backend.Leave(ctx, b) })
 }
 
@@ -274,35 +274,35 @@ func (f *faults) PutAdoptKey(ctx context.Context, k *AdoptKey) error {
 	return f.write("PutAdoptKey", func() error { return f.Backend.PutAdoptKey(ctx, k) })
 }
 
-func (f *faults) PutMessage(ctx context.Context, box protocol.Address, h *Header, body []byte) error {
-	return f.write("PutMessage", func() error { return f.Backend.PutMessage(ctx, box, h, body) })
+func (f *faults) PutMessage(ctx context.Context, mailbox protocol.Address, h *Header, body []byte) error {
+	return f.write("PutMessage", func() error { return f.Backend.PutMessage(ctx, mailbox, h, body) })
 }
 
-func (f *faults) Retire(ctx context.Context, box protocol.Address, id [32]byte) (time.Time, error) {
+func (f *faults) Retire(ctx context.Context, mailbox protocol.Address, id [32]byte) (time.Time, error) {
 	var at time.Time
 	err := f.write("Retire", func() (err error) {
-		at, err = f.Backend.Retire(ctx, box, id)
+		at, err = f.Backend.Retire(ctx, mailbox, id)
 		return err
 	})
 	return at, err
 }
 
-func (f *faults) DeleteMessage(ctx context.Context, box protocol.Address, id [32]byte) (time.Time, error) {
+func (f *faults) DeleteMessage(ctx context.Context, mailbox protocol.Address, id [32]byte) (time.Time, error) {
 	var at time.Time
 	err := f.write("DeleteMessage", func() (err error) {
-		at, err = f.Backend.DeleteMessage(ctx, box, id)
+		at, err = f.Backend.DeleteMessage(ctx, mailbox, id)
 		return err
 	})
 	return at, err
 }
 
-func (f *faults) DeleteAll(ctx context.Context, box protocol.Address, retired func([32]byte, time.Time)) error {
-	return f.write("DeleteAll", func() error { return f.Backend.DeleteAll(ctx, box, retired) })
+func (f *faults) DeleteAll(ctx context.Context, mailbox protocol.Address, retired func([32]byte, time.Time)) error {
+	return f.write("DeleteAll", func() error { return f.Backend.DeleteAll(ctx, mailbox, retired) })
 }
 
-// holdsBox reports whether the index holds box a loaded, with a record or
+// holdsMailbox reports whether the index holds mailbox a loaded, with a record or
 // none.
-func (x *index) holdsBox(a protocol.Address) bool {
+func (x *index) holdsMailbox(a protocol.Address) bool {
 	sh := x.shard(a)
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
@@ -310,16 +310,16 @@ func (x *index) holdsBox(a protocol.Address) bool {
 }
 
 // heldWorld is a store over the in-memory backend, with the injector
-// between them, that holds: box a, registered, its record cached and the
-// box loaded, with two live messages, in no account; an
+// between them, that holds: mailbox a, registered, its record cached and the
+// mailbox loaded, with two live messages, in no account; an
 // account, acct, its record cached, with an adopt key; and an address n
-// with no box, read, remembered missing, and loaded. Every change the setup
+// with no mailbox, read, remembered missing, and loaded. Every change the setup
 // made has reached memory, so the write a test makes next is the only one
 // counted after it.
 type heldWorld struct {
 	s        *Memory
 	f        *faults
-	rec      *Box // a's record, as read
+	rec      *Mailbox // a's record, as read
 	a, n     protocol.Address
 	msgs     [2]*Header
 	acct     string
@@ -344,7 +344,7 @@ func newHeldWorld(t *testing.T, inAccount bool) *heldWorld {
 			t.Fatal(err)
 		}
 	}
-	must(w.s.CreateBox(ctx, cloneBox(rec)))
+	must(w.s.CreateMailbox(ctx, cloneMailbox(rec)))
 	must(w.s.CreateAccount(ctx, &Account{ID: w.acct}))
 	must(w.s.PutAdoptKey(ctx, &AdoptKey{Account: w.acct, Hash: w.key, Uses: 5, Expires: now.Add(time.Hour)}))
 	for i := range w.msgs {
@@ -354,13 +354,13 @@ func newHeldWorld(t *testing.T, inAccount bool) *heldWorld {
 		must(err)
 	}
 	if inAccount {
-		b, err := w.s.Box(ctx, w.a)
+		b, err := w.s.Mailbox(ctx, w.a)
 		must(err)
 		must(w.s.Adopt(ctx, b, w.acct, w.key))
 	}
 	w.backend.deliver()
 	var err error
-	w.rec, err = w.s.Box(ctx, w.a)
+	w.rec, err = w.s.Mailbox(ctx, w.a)
 	must(err)
 	if _, err := w.s.Count(ctx, w.a); err != nil {
 		t.Fatal(err)
@@ -368,22 +368,22 @@ func newHeldWorld(t *testing.T, inAccount bool) *heldWorld {
 	if _, err := w.s.Account(ctx, w.acct); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.s.Box(ctx, w.n); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("control: an address with no box: %v", err)
+	if _, err := w.s.Mailbox(ctx, w.n); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("control: an address with no mailbox: %v", err)
 	}
 	if _, err := w.s.Count(ctx, w.n); err != nil {
 		t.Fatal(err)
 	}
 	w.f = injectFaults(w.s)
 	var ok bool
-	if w.standing, ok = w.s.Held(w.a); !ok || !w.s.idx.holdsBox(w.n) {
-		t.Fatal("control: the box is not loaded, or the address with no box")
+	if w.standing, ok = w.s.Held(w.a); !ok || !w.s.idx.holdsMailbox(w.n) {
+		t.Fatal("control: the mailbox is not loaded, or the address with no mailbox")
 	}
 	if b, ok := w.s.Known(w.a); !ok || b == nil || (b.Account == w.acct) != inAccount {
 		t.Fatalf("control: the record is not cached as set up: %v", b)
 	}
 	if b, ok := w.s.Known(w.n); !ok || b != nil {
-		t.Fatal("control: the address with no box is not remembered missing")
+		t.Fatal("control: the address with no mailbox is not remembered missing")
 	}
 	if _, ok := w.s.accCache.get(w.acct); !ok {
 		t.Fatal("control: the account is not cached")
@@ -391,13 +391,13 @@ func newHeldWorld(t *testing.T, inAccount bool) *heldWorld {
 	return w
 }
 
-// marks is how many live messages the index holds of box a, with no load.
+// marks is how many live messages the index holds of mailbox a, with no load.
 func (w *heldWorld) marks() int { return w.s.idx.count(w.a, ms(w.now)) }
 
 // A write's target: what memory holds that it may change.
 const (
-	onBox     = "the box"
-	onNew     = "an address with no box"
+	onMailbox = "the mailbox"
+	onNew     = "an address with no mailbox"
 	onAccount = "a new account"
 	onNothing = "nothing memory holds"
 )
@@ -405,7 +405,7 @@ const (
 // backendWrite is a write of the Backend, as the store makes it.
 type backendWrite struct {
 	on string // its target
-	// inAccount sets the world up with the box in its account.
+	// inAccount sets the world up with the mailbox in its account.
 	inAccount bool
 	// run makes the write through the store; dup is a send answered with
 	// another's header.
@@ -420,25 +420,25 @@ type backendWrite struct {
 // backendWrites is every write of the Backend: TestEveryWriteOfTheBackend
 // ReachesMemoryByItsOutcome holds it to the interface's methods.
 func backendWrites() map[string]backendWrite {
-	cached := func(w *heldWorld) *Box { b, _ := w.s.Known(w.a); return b }
+	cached := func(w *heldWorld) *Mailbox { b, _ := w.s.Known(w.a); return b }
 	return map[string]backendWrite{
-		"CreateBox": {on: onNew, run: func(ctx context.Context, w *heldWorld) (*Header, error) {
-			b := cloneBox(w.rec)
+		"CreateMailbox": {on: onNew, run: func(ctx context.Context, w *heldWorld) (*Header, error) {
+			b := cloneMailbox(w.rec)
 			b.Addr, b.Account = w.n, ""
-			return nil, w.s.CreateBox(ctx, b)
+			return nil, w.s.CreateMailbox(ctx, b)
 		}, refusals: []error{ErrExists}, applied: func(w *heldWorld) string {
 			if b, ok := w.s.Known(w.n); !ok || b == nil || b.Rev != 1 {
 				return "the new record is not cached"
 			}
 			if _, ok := w.s.Held(w.n); !ok {
-				return "the index holds no standing of the new box"
+				return "the index holds no standing of the new mailbox"
 			}
 			return ""
 		}},
-		"UpdateBox": {on: onBox, run: func(ctx context.Context, w *heldWorld) (*Header, error) {
-			b := cloneBox(w.rec)
+		"UpdateMailbox": {on: onMailbox, run: func(ctx context.Context, w *heldWorld) (*Header, error) {
+			b := cloneMailbox(w.rec)
 			b.CertSerial += 10
-			return nil, w.s.UpdateBox(ctx, b)
+			return nil, w.s.UpdateMailbox(ctx, b)
 		}, refusals: []error{ErrStale}, applied: func(w *heldWorld) string {
 			if b := cached(w); b == nil || b.Rev != w.rec.Rev+1 || b.CertSerial != w.rec.CertSerial+10 {
 				return "the cache does not hold the record written"
@@ -448,15 +448,15 @@ func backendWrites() map[string]backendWrite {
 			}
 			return ""
 		}},
-		"DeleteBox": {on: onBox, run: func(ctx context.Context, w *heldWorld) (*Header, error) {
-			return nil, w.s.DeleteBox(ctx, w.a)
+		"DeleteMailbox": {on: onMailbox, run: func(ctx context.Context, w *heldWorld) (*Header, error) {
+			return nil, w.s.DeleteMailbox(ctx, w.a)
 		}, refusals: []error{errStated}, applied: func(w *heldWorld) string {
-			if _, ok := w.s.Known(w.a); ok || w.s.idx.holdsBox(w.a) {
-				return "memory holds the box whose record was deleted"
+			if _, ok := w.s.Known(w.a); ok || w.s.idx.holdsMailbox(w.a) {
+				return "memory holds the mailbox whose record was deleted"
 			}
 			return ""
 		}},
-		"Revoke": {on: onBox, run: func(ctx context.Context, w *heldWorld) (*Header, error) {
+		"Revoke": {on: onMailbox, run: func(ctx context.Context, w *heldWorld) (*Header, error) {
 			return nil, w.s.Revoke(ctx, w.a, &Revocations{Identity: w.rec.Identity, Address: []byte("the identity's revocation")}, ExpectAnything)
 		}, refusals: []error{ErrStale}, applied: func(w *heldWorld) string {
 			if b := cached(w); b == nil || b.State != Revoked {
@@ -467,25 +467,25 @@ func backendWrites() map[string]backendWrite {
 			}
 			return ""
 		}},
-		"Adopt": {on: onBox, run: func(ctx context.Context, w *heldWorld) (*Header, error) {
-			return nil, w.s.Adopt(ctx, cloneBox(w.rec), w.acct, w.key)
+		"Adopt": {on: onMailbox, run: func(ctx context.Context, w *heldWorld) (*Header, error) {
+			return nil, w.s.Adopt(ctx, cloneMailbox(w.rec), w.acct, w.key)
 		}, refusals: []error{ErrStale, ErrKeyRefused}, applied: func(w *heldWorld) string {
 			if b := cached(w); b == nil || b.Account != w.acct {
-				return "the cache does not hold the box in its account"
+				return "the cache does not hold the mailbox in its account"
 			}
 			if st, _ := w.s.Held(w.a); !st.InAccount {
-				return "the index does not hold the box in an account"
+				return "the index does not hold the mailbox in an account"
 			}
 			return ""
 		}},
-		"Leave": {on: onBox, inAccount: true, run: func(ctx context.Context, w *heldWorld) (*Header, error) {
-			return nil, w.s.Leave(ctx, cloneBox(w.rec))
+		"Leave": {on: onMailbox, inAccount: true, run: func(ctx context.Context, w *heldWorld) (*Header, error) {
+			return nil, w.s.Leave(ctx, cloneMailbox(w.rec))
 		}, refusals: []error{ErrStale}, applied: func(w *heldWorld) string {
 			if b := cached(w); b == nil || b.Account != "" {
-				return "the cache holds the box in its account"
+				return "the cache holds the mailbox in its account"
 			}
 			if st, _ := w.s.Held(w.a); st.InAccount {
-				return "the index holds the box in an account"
+				return "the index holds the mailbox in an account"
 			}
 			return ""
 		}},
@@ -495,7 +495,7 @@ func backendWrites() map[string]backendWrite {
 		"PutAdoptKey": {on: onNothing, run: func(ctx context.Context, w *heldWorld) (*Header, error) {
 			return nil, w.s.PutAdoptKey(ctx, &AdoptKey{Account: w.acct, Hash: [32]byte{9}, Uses: 1, Expires: w.now.Add(time.Hour)})
 		}, refusals: []error{ErrExists}, applied: func(*heldWorld) string { return "" }},
-		"PutMessage": {on: onBox, run: func(ctx context.Context, w *heldWorld) (*Header, error) {
+		"PutMessage": {on: onMailbox, run: func(ctx context.Context, w *heldWorld) (*Header, error) {
 			h := &Header{ID: [32]byte{0x1d, 9}, Size: 3, ReceivedAt: w.now, ExpiresAt: w.now.Add(protocol.Retention)}
 			return w.s.PutMessage(ctx, w.a, h, []byte("abc"))
 		}, refusals: []error{errNotStored, duplicate{}}, applied: func(w *heldWorld) string {
@@ -504,7 +504,7 @@ func backendWrites() map[string]backendWrite {
 			}
 			return ""
 		}},
-		"Retire": {on: onBox, run: func(ctx context.Context, w *heldWorld) (*Header, error) {
+		"Retire": {on: onMailbox, run: func(ctx context.Context, w *heldWorld) (*Header, error) {
 			return nil, w.s.retire(ctx, w.a, w.msgs[0].ID)
 		}, refusals: []error{ErrNotFound}, applied: func(w *heldWorld) string {
 			if n := w.marks(); n != 1 {
@@ -512,7 +512,7 @@ func backendWrites() map[string]backendWrite {
 			}
 			return ""
 		}},
-		"DeleteMessage": {on: onBox, run: func(ctx context.Context, w *heldWorld) (*Header, error) {
+		"DeleteMessage": {on: onMailbox, run: func(ctx context.Context, w *heldWorld) (*Header, error) {
 			return nil, w.s.DeleteMessage(ctx, w.a, w.msgs[0].ID)
 		}, refusals: []error{ErrNotFound}, applied: func(w *heldWorld) string {
 			if n := w.marks(); n != 1 {
@@ -520,7 +520,7 @@ func backendWrites() map[string]backendWrite {
 			}
 			return ""
 		}},
-		"DeleteAll": {on: onBox, run: func(ctx context.Context, w *heldWorld) (*Header, error) {
+		"DeleteAll": {on: onMailbox, run: func(ctx context.Context, w *heldWorld) (*Header, error) {
 			return nil, w.s.DeleteMessages(ctx, w.a)
 		}, refusals: []error{errStated}, applied: func(w *heldWorld) string {
 			if n := w.marks(); n != 0 {
@@ -540,7 +540,7 @@ var backendReads = []string{"ReadAddress", "ReadLive", "List", "Message", "Dedup
 // it is in memory, in the count reserved for the write and in its answer:
 // applied, memory holds the write and the count is kept; refused as the
 // store stated, memory is as it was, but for a refusal of a condition on
-// the box's record (ErrStale, ErrExists), which evicts the copy held,
+// the mailbox's record (ErrStale, ErrExists), which evicts the copy held,
 // counted as a write so that a read begun before it puts nothing, and the
 // count is given back; unknown, before or after the backend applied it,
 // memory forgets what it held of the write's target, the record cache and
@@ -616,7 +616,7 @@ func TestEveryWriteOfTheBackendReachesMemoryByItsOutcome(t *testing.T) {
 				}
 
 				// What memory holds of the write's target.
-				stale := (c.on == onBox || c.on == onNew) && (errors.Is(refusal, ErrStale) || errors.Is(refusal, ErrExists))
+				stale := (c.on == onMailbox || c.on == onNew) && (errors.Is(refusal, ErrStale) || errors.Is(refusal, ErrExists))
 				keptOut := func() bool { // a read begun before the write puts nothing
 					switch c.on {
 					case onAccount:
@@ -626,7 +626,7 @@ func TestEveryWriteOfTheBackendReachesMemoryByItsOutcome(t *testing.T) {
 					case onNothing:
 						return true
 					}
-					b := cloneBox(w.rec)
+					b := cloneMailbox(w.rec)
 					b.Addr = addr
 					w.s.cache.missed(addr, tok, w.now)
 					w.s.cache.fill(b, tok)
@@ -634,8 +634,8 @@ func TestEveryWriteOfTheBackendReachesMemoryByItsOutcome(t *testing.T) {
 					return !held
 				}
 				switch c.on {
-				case onBox, onNew:
-					loaded := w.s.idx.holdsBox(addr)
+				case onMailbox, onNew:
+					loaded := w.s.idx.holdsMailbox(addr)
 					b, cachedOK := w.s.Known(addr)
 					switch {
 					case unknown:
@@ -644,15 +644,15 @@ func TestEveryWriteOfTheBackendReachesMemoryByItsOutcome(t *testing.T) {
 						}
 					case refusal != nil:
 						if !loaded {
-							t.Errorf("refused: the index dropped the box")
+							t.Errorf("refused: the index dropped the mailbox")
 						}
-						if st, _ := w.s.Held(w.a); c.on == onBox && st != w.standing {
-							t.Errorf("refused: the index holds the box's standing %+v, not %+v as before", st, w.standing)
+						if st, _ := w.s.Held(w.a); c.on == onMailbox && st != w.standing {
+							t.Errorf("refused: the index holds the mailbox's standing %+v, not %+v as before", st, w.standing)
 						}
 						if stale && cachedOK {
 							t.Errorf("refused for its condition: the record cache still holds the copy from before it")
 						}
-						if !stale && c.on == onBox && (!cachedOK || b == nil || b.Rev != w.rec.Rev) {
+						if !stale && c.on == onMailbox && (!cachedOK || b == nil || b.Rev != w.rec.Rev) {
 							t.Errorf("refused: the record cache does not hold the record as before")
 						}
 					default:
@@ -661,8 +661,8 @@ func TestEveryWriteOfTheBackendReachesMemoryByItsOutcome(t *testing.T) {
 						}
 					}
 				case onNothing:
-					if !w.s.idx.holdsBox(w.a) {
-						t.Error("a write memory holds nothing of dropped the box")
+					if !w.s.idx.holdsMailbox(w.a) {
+						t.Error("a write memory holds nothing of dropped the mailbox")
 					}
 					if _, ok := w.s.Known(w.a); !ok {
 						t.Error("a write memory holds nothing of dropped the record")
@@ -680,14 +680,14 @@ func TestEveryWriteOfTheBackendReachesMemoryByItsOutcome(t *testing.T) {
 	}
 }
 
-// Every change memory applies to a box wakes the lists held on it
-// (PROTOCOL.md §11.11): every write of the Backend that targets a box,
+// Every change memory applies to a mailbox wakes the lists held on it
+// (PROTOCOL.md §11.11): every write of the Backend that targets a mailbox,
 // applied or of an outcome unknown, as backendWrites makes each (held to
 // the interface's methods by TestEveryWriteOfTheBackendReachesMemoryByIts
 // Outcome); and every kind of change the backend's feed hands memory, its
 // item as it now is, gone, and one that does not read. Each kind is here:
 // one added and not here fails.
-func TestEveryChangeMemoryAppliesToABoxWakesItsHeldLists(t *testing.T) {
+func TestEveryChangeMemoryAppliesToAMailboxWakesItsHeldLists(t *testing.T) {
 	t.Parallel()
 	woken := func(c <-chan struct{}) bool {
 		select {
@@ -701,8 +701,8 @@ func TestEveryChangeMemoryAppliesToABoxWakesItsHeldLists(t *testing.T) {
 	writes := backendWrites()
 	for _, name := range slices.Sorted(maps.Keys(writes)) {
 		c := writes[name]
-		if c.on != onBox && c.on != onNew {
-			continue // an account's, or nothing memory holds: no box's
+		if c.on != onMailbox && c.on != onNew {
+			continue // an account's, or nothing memory holds: no mailbox's
 		}
 		for _, f := range []fault{asIs, unknownBefore, unknownAfter} {
 			t.Run(name+"/"+f.String(), func(t *testing.T) {
@@ -715,7 +715,7 @@ func TestEveryChangeMemoryAppliesToABoxWakesItsHeldLists(t *testing.T) {
 				w.f.set(name, f)
 				_, _ = c.run(ctx, w)
 				if !woken(held) {
-					t.Error("a list held on the box is not woken")
+					t.Error("a list held on the mailbox is not woken")
 				}
 			})
 		}
@@ -723,10 +723,10 @@ func TestEveryChangeMemoryAppliesToABoxWakesItsHeldLists(t *testing.T) {
 	bad := errors.New("an image that does not read")
 	feed := map[ChangeKind]func(w *heldWorld) map[string]Change{
 		RecordChange: func(w *heldWorld) map[string]Change {
-			b := cloneBox(w.rec)
+			b := cloneMailbox(w.rec)
 			b.Rev++
 			return map[string]Change{
-				"a newer record": {Kind: RecordChange, Addr: w.a, Box: b},
+				"a newer record": {Kind: RecordChange, Addr: w.a, Mailbox: b},
 				"gone":           {Kind: RecordChange, Addr: w.a, Gone: true},
 				"unread":         {Kind: RecordChange, Addr: w.a, Err: bad},
 			}
@@ -748,7 +748,7 @@ func TestEveryChangeMemoryAppliesToABoxWakesItsHeldLists(t *testing.T) {
 				"unread":                {Kind: MessageChange, Addr: w.a, Err: bad},
 			}
 		},
-		AccountChange: func(*heldWorld) map[string]Change { return nil }, // an account's: no box's
+		AccountChange: func(*heldWorld) map[string]Change { return nil }, // an account's: no mailbox's
 	}
 	for k := ChangeKind(1); int(k) <= numChangeKinds; k++ {
 		changes, ok := feed[k]
@@ -762,7 +762,7 @@ func TestEveryChangeMemoryAppliesToABoxWakesItsHeldLists(t *testing.T) {
 				held := w.s.Changed(w.a)
 				w.s.apply(changes(w)[name])
 				if !woken(held) {
-					t.Error("a list held on the box is not woken")
+					t.Error("a list held on the mailbox is not woken")
 				}
 			})
 		}
@@ -786,12 +786,12 @@ func TestAnItemThatDoesNotReadIsGoneWhateverItsKind(t *testing.T) {
 	// decoder of its stream.
 	cases := map[ChangeKind]func(w *heldWorld) (func(stypes.Record) (Change, error), stypes.Record){
 		RecordChange: func(w *heldWorld) (func(stypes.Record) (Change, error), stypes.Record) {
-			img := toStream(boxItem(w.rec))
+			img := toStream(mailboxItem(w.rec))
 			img["state"] = s("deleted") // a state this build never writes
-			return boxStreamChange, modify(img)
+			return mailboxStreamChange, modify(img)
 		},
 		RevocationsChange: func(w *heldWorld) (func(stypes.Record) (Change, error), stypes.Record) {
-			return boxStreamChange, modify(map[string]stypes.AttributeValue{"addr": b(w.a[:]), "sk": b([]byte{skRevocations}),
+			return mailboxStreamChange, modify(map[string]stypes.AttributeValue{"addr": b(w.a[:]), "sk": b([]byte{skRevocations}),
 				"identity": s("not the bytes of an identity document"), "revocation": b([]byte("the identity's revocation"))})
 		},
 		MessageChange: func(w *heldWorld) (func(stypes.Record) (Change, error), stypes.Record) {
@@ -827,8 +827,8 @@ func TestAnItemThatDoesNotReadIsGoneWhateverItsKind(t *testing.T) {
 				}
 				return
 			}
-			if w.s.idx.holdsBox(w.a) {
-				t.Error("the index still holds the box")
+			if w.s.idx.holdsMailbox(w.a) {
+				t.Error("the index still holds the mailbox")
 			}
 			if _, ok := w.s.Known(w.a); ok {
 				t.Error("the record cache still answers for the address")
@@ -856,15 +856,15 @@ func TestTheInMemoryFeedComesAfterItsWritersApply(t *testing.T) {
 	b := s.backend.(*memBackend)
 	var handed []uint64 // the revs of the records' changes handed to memory, in order
 	b.apply = func(c Change) {
-		if c.Box != nil {
-			handed = append(handed, c.Box.Rev)
+		if c.Mailbox != nil {
+			handed = append(handed, c.Mailbox.Rev)
 		}
 		s.apply(c)
 	}
-	if _, err := s.Box(ctx, rec.Addr); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("control: an address with no box: %v", err)
+	if _, err := s.Mailbox(ctx, rec.Addr); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("control: an address with no mailbox: %v", err)
 	}
-	if err := s.CreateBox(ctx, cloneBox(rec)); err != nil {
+	if err := s.CreateMailbox(ctx, cloneMailbox(rec)); err != nil {
 		t.Fatal(err)
 	}
 	if len(handed) != 0 {
@@ -874,9 +874,9 @@ func TestTheInMemoryFeedComesAfterItsWritersApply(t *testing.T) {
 		t.Errorf("a registration of an address read missing is not cached by its own write: %v", got)
 	}
 	for rev := uint64(1); rev <= 2; rev++ {
-		next := cloneBox(rec)
+		next := cloneMailbox(rec)
 		next.Rev = rev
-		if err := s.UpdateBox(ctx, next); err != nil {
+		if err := s.UpdateMailbox(ctx, next); err != nil {
 			t.Fatal(err)
 		}
 	}

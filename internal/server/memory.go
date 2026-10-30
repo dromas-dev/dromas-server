@@ -12,8 +12,8 @@ import (
 
 // Memory is the store: what this process holds in memory, over a Backend
 // that holds the durable state (ARCHITECTURE.md § Memory). What a poll needs
-// lives here (index), loaded per box on its first use, and bounded caches of
-// box and account records serve sends and reads of a box (recCache). Every
+// lives here (index), loaded per mailbox on its first use, and bounded caches of
+// mailbox and account records serve sends and reads of a mailbox (recCache). Every
 // write goes through one function (write), which applies its outcome, and
 // every change the backend's feed hands over goes through one (apply). It
 // is the one implementation of Store, whatever the backend: NewDynamoStore
@@ -22,29 +22,29 @@ type Memory struct {
 	backend Backend
 	now     func() time.Time
 	log     *log.Logger
-	// loads counts boxes read into memory, for tests.
+	// loads counts mailboxes read into memory, for tests.
 	loads atomic.Int64
 
 	idx      *index
-	cache    *boxCache // with the boxes a read found missing
+	cache    *mailboxCache // with the mailboxes a read found missing
 	accCache *accountCache
 }
 
-// DefaultBoxCache is how many box records memory holds by default, as many
-// account records, and as many boxes remembered as missing.
-const DefaultBoxCache = 10000
+// DefaultMailboxCache is how many mailbox records memory holds by default, as many
+// account records, and as many mailboxes remembered as missing.
+const DefaultMailboxCache = 10000
 
 // newMemory is memory with no backend yet, on a clock (time.Now if nil),
-// holding boxCache box records, as many account records and as many boxes
+// holding mailboxCache mailbox records, as many account records and as many mailboxes
 // remembered missing. Metrics, if set, count the caches' hits, misses and
 // evictions.
-func newMemory(now func() time.Time, boxCache int, l *log.Logger, m *Metrics) *Memory {
-	s := &Memory{now: now, log: redacting(l), idx: newIndex(), cache: newBoxCache(boxCache), accCache: newAccountCache(boxCache)}
+func newMemory(now func() time.Time, mailboxCache int, l *log.Logger, m *Metrics) *Memory {
+	s := &Memory{now: now, log: redacting(l), idx: newIndex(), cache: newMailboxCache(mailboxCache), accCache: newAccountCache(mailboxCache)}
 	if s.now == nil {
 		s.now = time.Now
 	}
 	if m != nil {
-		s.cache.note = func(e string) { m.cacheEvent("boxes", e) }
+		s.cache.note = func(e string) { m.cacheEvent("mailboxes", e) }
 		s.cache.missing.note = func(e string) { m.cacheEvent("missing", e) }
 		s.accCache.note = func(e string) { m.cacheEvent("accounts", e) }
 	}
@@ -63,7 +63,7 @@ func (s *Memory) logf(format string, args ...any) {
 }
 
 // Start follows the backend's feed: from then on every change it hands
-// over is applied (apply). Memory starts empty, and a box is loaded on its
+// over is applied (apply). Memory starts empty, and a mailbox is loaded on its
 // first use, after the feed is followed: a change made before its load is
 // in the load, one made after reaches memory by the feed, or both, and
 // applying it twice is harmless (ARCHITECTURE.md § Startup). Nothing is
@@ -89,7 +89,7 @@ func ofAccount(id string) target          { return target{account: &id} }
 //
 //   - Applied: applied, if any, puts it in memory.
 //   - Refused, as the store stated: nothing changes, but a refusal of the
-//     write's condition on a box's record or revocations (ErrStale,
+//     write's condition on a mailbox's record or revocations (ErrStale,
 //     ErrExists) says the store holds what this process never applied, so
 //     the copy memory holds of the address is evicted, counted as a write
 //     (recCache.write), and a read begun before it puts nothing.
@@ -110,7 +110,7 @@ func (s *Memory) write(t target, do func() error, applied func()) error {
 		return nil
 	case isRefusal(err):
 		if t.addr != nil && (errors.Is(err, ErrStale) || errors.Is(err, ErrExists)) {
-			s.cache.write(*t.addr, evicted[*Box])
+			s.cache.write(*t.addr, evicted[*Mailbox])
 		}
 		return err
 	}
@@ -123,23 +123,23 @@ func (s *Memory) write(t target, do func() error, applied func()) error {
 	return unknown(err)
 }
 
-// ensure loads box a into memory on its first use by this process. The
+// ensure loads mailbox a into memory on its first use by this process. The
 // callers that come while it loads share the load, so it reads apart from
 // the context of the caller that began it, each of its backend's calls
 // bounded there.
 func (s *Memory) ensure(ctx context.Context, a protocol.Address) error {
-	return s.idx.ensure(ctx, a, func() (boxRead, error) {
-		return s.readBox(context.WithoutCancel(ctx), a)
+	return s.idx.ensure(ctx, a, func() (mailboxRead, error) {
+		return s.readMailbox(context.WithoutCancel(ctx), a)
 	})
 }
 
-// readBox reads what memory holds of a box: its record's standing, its
+// readMailbox reads what memory holds of a mailbox: its record's standing, its
 // identity's revocations and its live messages, strongly consistent, so a
 // change made before the read is in it (one made after reaches memory by the
 // feed). What it read joins the cache, as of its token (recCache.fill).
-func (s *Memory) readBox(ctx context.Context, a protocol.Address) (boxRead, error) {
+func (s *Memory) readMailbox(ctx context.Context, a protocol.Address) (mailboxRead, error) {
 	s.loads.Add(1)
-	var r boxRead
+	var r mailboxRead
 	tok := s.cache.begin(a)
 	rec, rv, err := s.backend.ReadAddress(ctx, a)
 	if err != nil {
@@ -152,7 +152,7 @@ func (s *Memory) readBox(ctx context.Context, a protocol.Address) (boxRead, erro
 		r.revoked, r.through = len(rv.Address) > 0, rv.Through
 	}
 	if rec == nil {
-		return r, nil // no box: no mail either
+		return r, nil // no mailbox: no messages either
 	}
 	if r.st, _, err = rec.standing(); err != nil {
 		return r, err
@@ -169,10 +169,10 @@ func (s *Memory) readBox(ctx context.Context, a protocol.Address) (boxRead, erro
 	return r, nil
 }
 
-// Held implements Store: the standing of a box memory has loaded.
+// Held implements Store: the standing of a mailbox memory has loaded.
 func (s *Memory) Held(a protocol.Address) (Standing, bool) { return s.idx.standing(a) }
 
-// Changed returns a channel closed at box a's next change in memory
+// Changed returns a channel closed at mailbox a's next change in memory
 // (Store.Changed).
 func (s *Memory) Changed(a protocol.Address) <-chan struct{} { return s.idx.changed(a) }
 
@@ -184,26 +184,26 @@ func (s *Memory) NextExpiry(a protocol.Address) time.Time {
 	return time.Time{}
 }
 
-// applyBox records a box record this process wrote: b is what is held of
+// applyMailbox records a mailbox record this process wrote: b is what is held of
 // its address, the record and the revocations read with it. Those were read
 // before the write, so in the step that counts the write (recCache.write)
 // b merges with what the cache holds of the address, every image since
 // applied to it, and where the cache holds nothing, joins it only where the
 // read before a registration found the address missing and no write to it
 // was counted since. A read begun before the write puts nothing after it.
-func (s *Memory) applyBox(b *Box) {
-	s.cache.write(b.Addr, func(cur *Box, held, missing bool) (*Box, bool) {
+func (s *Memory) applyMailbox(b *Mailbox) {
+	s.cache.write(b.Addr, func(cur *Mailbox, held, missing bool) (*Mailbox, bool) {
 		switch {
 		case held:
 			return mergeViews(cur, b), true
 		case missing:
-			return cloneBox(b), true
+			return cloneMailbox(b), true
 		}
 		return nil, false
 	})
 	st, _, err := storedRecord(b).standing()
 	if err != nil { // a record this process just checked and wrote
-		s.logf("boxes: a record written with a bad identity: %v", err)
+		s.logf("mailboxes: a record written with a bad identity: %v", err)
 		return
 	}
 	s.idx.setStanding(b.Addr, st, versionOf(b))
@@ -212,7 +212,7 @@ func (s *Memory) applyBox(b *Box) {
 // applyRevocations records an address's revocations as they now are, from
 // this process's write or the feed.
 func (s *Memory) applyRevocations(a protocol.Address, rv *Revocations) {
-	s.cache.write(a, func(cur *Box, held, _ bool) (*Box, bool) {
+	s.cache.write(a, func(cur *Mailbox, held, _ bool) (*Mailbox, bool) {
 		if !held {
 			return nil, false
 		}
@@ -228,14 +228,14 @@ func (s *Memory) applyRevocations(a protocol.Address, rv *Revocations) {
 // from the feed may be of a record older than one this process has written
 // since: the read after it is what tells.
 func (s *Memory) forget(a protocol.Address) {
-	s.cache.write(a, evicted[*Box])
+	s.cache.write(a, evicted[*Mailbox])
 	s.idx.forget(a)
 }
 
 // retired takes a message this process deleted out of memory, leaving a
 // tomb until the feed's echo (index.remove, index.deleted).
-func (s *Memory) retired(box protocol.Address, id [32]byte, received time.Time) {
-	s.idx.remove(box, s.idx.tagOf(id), ms(received)+ttlMs, s.nowMs(), false)
+func (s *Memory) retired(mailbox protocol.Address, id [32]byte, received time.Time) {
+	s.idx.remove(mailbox, s.idx.tagOf(id), ms(received)+ttlMs, s.nowMs(), false)
 }
 
 // apply applies one change of the backend's feed to memory: one rule for
@@ -258,7 +258,7 @@ func (s *Memory) apply(c Change) {
 		var st Standing
 		var err error
 		if !gone {
-			if st, _, err = c.Box.standing(); err != nil {
+			if st, _, err = c.Mailbox.standing(); err != nil {
 				s.logf("%s: a record whose standing does not read, taken as gone: %v", c.Kind, err)
 				gone = true
 			}
@@ -267,8 +267,8 @@ func (s *Memory) apply(c Change) {
 			s.forget(c.Addr)
 			return
 		}
-		s.cache.write(c.Addr, s.cache.image(c.Box))
-		s.idx.setStanding(c.Addr, st, versionOf(c.Box))
+		s.cache.write(c.Addr, s.cache.image(c.Mailbox))
+		s.idx.setStanding(c.Addr, st, versionOf(c.Mailbox))
 	case RevocationsChange:
 		// They add to what memory holds, since nothing in them is ever
 		// taken away; they are never deleted.
@@ -282,7 +282,7 @@ func (s *Memory) apply(c Change) {
 		case c.Err != nil:
 			s.forget(c.Addr)
 		case c.Gone:
-			// Acked, its body found gone, its box's address revoked, or
+			// Acked, its body found gone, its mailbox's address revoked, or
 			// expired and taken by the TTL, whose mark memory dropped at its
 			// expiry.
 			s.idx.deleted(c.Addr, s.idx.tagOf(c.Header.ID), s.nowMs())
@@ -303,9 +303,9 @@ func (s *Memory) apply(c Change) {
 func (k ChangeKind) String() string {
 	switch k {
 	case RecordChange:
-		return "boxes: a record"
+		return "mailboxes: a record"
 	case RevocationsChange:
-		return "boxes: an address's revocations"
+		return "mailboxes: an address's revocations"
 	case MessageChange:
 		return "msgs: a message"
 	case AccountChange:
@@ -314,13 +314,13 @@ func (k ChangeKind) String() string {
 	return "a change of no kind"
 }
 
-// Box implements Store: the cache, or a read. An address the read finds
+// Mailbox implements Store: the cache, or a read. An address the read finds
 // nothing of is remembered as missing for a while (missCache), so naming it
 // again costs no read. The read fills the cache, so it is strongly
-// consistent, as a box's load is: a write made before it is in it, and one
+// consistent, as a mailbox's load is: a write made before it is in it, and one
 // made after reaches the cache by the feed, or, where it was counted after
 // the read's token, keeps the fill out (recCache.fill, missed).
-func (s *Memory) Box(ctx context.Context, a protocol.Address) (*Box, error) {
+func (s *Memory) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error) {
 	if b, ok := s.cache.get(a); ok {
 		return b, nil
 	}
@@ -341,9 +341,9 @@ func (s *Memory) Box(ctx context.Context, a protocol.Address) (*Box, error) {
 	return b, nil
 }
 
-// Known implements Store: the record cache, or the memory of a box a read did
+// Known implements Store: the record cache, or the memory of a mailbox a read did
 // not find.
-func (s *Memory) Known(a protocol.Address) (*Box, bool) {
+func (s *Memory) Known(a protocol.Address) (*Mailbox, bool) {
 	if b, ok := s.cache.get(a); ok {
 		return b, true
 	}
@@ -353,29 +353,29 @@ func (s *Memory) Known(a protocol.Address) (*Box, bool) {
 // Begin implements Store: a's token in the record cache (recCache.begin).
 func (s *Memory) Begin(a protocol.Address) uint64 { return uint64(s.cache.begin(a)) }
 
-// CreateBox implements Store.
-func (s *Memory) CreateBox(ctx context.Context, b *Box) error {
+// CreateMailbox implements Store.
+func (s *Memory) CreateMailbox(ctx context.Context, b *Mailbox) error {
 	if err := b.writable(); err != nil {
 		return err
 	}
 	b.Rev = 1
-	return s.write(ofAddress(b.Addr), func() error { return s.backend.CreateBox(ctx, b) }, func() { s.applyBox(b) })
+	return s.write(ofAddress(b.Addr), func() error { return s.backend.CreateMailbox(ctx, b) }, func() { s.applyMailbox(b) })
 }
 
-// UpdateBox implements Store.
-func (s *Memory) UpdateBox(ctx context.Context, b *Box) error {
+// UpdateMailbox implements Store.
+func (s *Memory) UpdateMailbox(ctx context.Context, b *Mailbox) error {
 	if err := b.writable(); err != nil {
 		return err
 	}
-	return s.write(ofAddress(b.Addr), func() error { return s.backend.UpdateBox(ctx, b) }, func() {
+	return s.write(ofAddress(b.Addr), func() error { return s.backend.UpdateMailbox(ctx, b) }, func() {
 		b.Rev++
-		s.applyBox(b)
+		s.applyMailbox(b)
 	})
 }
 
-// DeleteBox implements Store.
-func (s *Memory) DeleteBox(ctx context.Context, a protocol.Address) error {
-	return s.write(ofAddress(a), func() error { return s.backend.DeleteBox(ctx, a) }, func() { s.forget(a) })
+// DeleteMailbox implements Store.
+func (s *Memory) DeleteMailbox(ctx context.Context, a protocol.Address) error {
+	return s.write(ofAddress(a), func() error { return s.backend.DeleteMailbox(ctx, a) }, func() { s.forget(a) })
 }
 
 // Revoke implements Store.
@@ -388,18 +388,18 @@ func (s *Memory) Revoke(ctx context.Context, a protocol.Address, rv *Revocations
 }
 
 // Adopt implements Store.
-func (s *Memory) Adopt(ctx context.Context, b *Box, account string, key [32]byte) error {
+func (s *Memory) Adopt(ctx context.Context, b *Mailbox, account string, key [32]byte) error {
 	return s.write(ofAddress(b.Addr), func() error { return s.backend.Adopt(ctx, b, account, key) }, func() {
 		b.Account, b.Rev = account, b.Rev+1
-		s.applyBox(b)
+		s.applyMailbox(b)
 	})
 }
 
 // Leave implements Store.
-func (s *Memory) Leave(ctx context.Context, b *Box) error {
+func (s *Memory) Leave(ctx context.Context, b *Mailbox) error {
 	return s.write(ofAddress(b.Addr), func() error { return s.backend.Leave(ctx, b) }, func() {
 		b.Account, b.Rev = "", b.Rev+1
-		s.applyBox(b)
+		s.applyMailbox(b)
 	})
 }
 
@@ -439,16 +439,16 @@ func (s *Memory) Account(ctx context.Context, id string) (*Account, error) {
 
 // Dedupe implements Store: the live message's item. A stale miss is caught by
 // PutMessage's conditional write.
-func (s *Memory) Dedupe(ctx context.Context, box protocol.Address, id [32]byte) (*Header, error) {
-	return s.backend.Dedupe(ctx, box, id)
+func (s *Memory) Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
+	return s.backend.Dedupe(ctx, mailbox, id)
 }
 
 // PutMessage implements Store: stored, the message's mark joins memory; met
 // by another send's live item of the same ciphertext, that item's header is
 // returned.
-func (s *Memory) PutMessage(ctx context.Context, box protocol.Address, h *Header, body []byte) (*Header, error) {
-	err := s.write(ofAddress(box), func() error { return s.backend.PutMessage(ctx, box, h, body) }, func() {
-		s.idx.insert(box, s.idx.newMark(h.ID, ms(h.ReceivedAt)+ttlMs), s.nowMs())
+func (s *Memory) PutMessage(ctx context.Context, mailbox protocol.Address, h *Header, body []byte) (*Header, error) {
+	err := s.write(ofAddress(mailbox), func() error { return s.backend.PutMessage(ctx, mailbox, h, body) }, func() {
+		s.idx.insert(mailbox, s.idx.newMark(h.ID, ms(h.ReceivedAt)+ttlMs), s.nowMs())
 	})
 	var d duplicate
 	if errors.As(err, &d) {
@@ -461,17 +461,17 @@ func (s *Memory) PutMessage(ctx context.Context, box protocol.Address, h *Header
 // write may miss it while memory's count has it, and a client lists at every
 // poll, so the next one has it; a held list's, which no later change may
 // wake, is read strongly consistent (Server.list).
-func (s *Memory) List(ctx context.Context, box protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error) {
-	return s.backend.List(ctx, box, after, limit, consistent)
+func (s *Memory) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error) {
+	return s.backend.List(ctx, mailbox, after, limit, consistent)
 }
 
 // Message implements Store. A live message whose body is gone (a
 // half-finished ack, or a body the lifecycle rule took early) is retired and
 // answered as gone.
-func (s *Memory) Message(ctx context.Context, box protocol.Address, id [32]byte, from int64) (*Header, []byte, error) {
-	h, body, err := s.backend.Message(ctx, box, id, from)
+func (s *Memory) Message(ctx context.Context, mailbox protocol.Address, id [32]byte, from int64) (*Header, []byte, error) {
+	h, body, err := s.backend.Message(ctx, mailbox, id, from)
 	if errors.Is(err, errNoBody) {
-		if err := s.retire(ctx, box, id); err != nil && !errors.Is(err, ErrNotFound) {
+		if err := s.retire(ctx, mailbox, id); err != nil && !errors.Is(err, ErrNotFound) {
 			return nil, nil, err
 		}
 		return nil, nil, ErrNotFound
@@ -484,64 +484,64 @@ func (s *Memory) Message(ctx context.Context, box protocol.Address, id [32]byte,
 
 // retire deletes a live message's item, so it leaves the list, and takes it
 // out of memory. ErrNotFound if it is not live.
-func (s *Memory) retire(ctx context.Context, box protocol.Address, id [32]byte) error {
+func (s *Memory) retire(ctx context.Context, mailbox protocol.Address, id [32]byte) error {
 	var received time.Time
-	return s.write(ofAddress(box), func() (err error) {
-		received, err = s.backend.Retire(ctx, box, id)
+	return s.write(ofAddress(mailbox), func() (err error) {
+		received, err = s.backend.Retire(ctx, mailbox, id)
 		return err
-	}, func() { s.retired(box, id, received) })
+	}, func() { s.retired(mailbox, id, received) })
 }
 
 // DeleteMessage implements Store (ack): the body, then the item. Both steps
 // are safe to repeat, so a crash between them is finished by the client's
 // next ack, and a fetch in between finds no body and retires it.
-func (s *Memory) DeleteMessage(ctx context.Context, box protocol.Address, id [32]byte) error {
+func (s *Memory) DeleteMessage(ctx context.Context, mailbox protocol.Address, id [32]byte) error {
 	var received time.Time
-	return s.write(ofAddress(box), func() (err error) {
-		received, err = s.backend.DeleteMessage(ctx, box, id)
+	return s.write(ofAddress(mailbox), func() (err error) {
+		received, err = s.backend.DeleteMessage(ctx, mailbox, id)
 		return err
-	}, func() { s.retired(box, id, received) })
+	}, func() { s.retired(mailbox, id, received) })
 }
 
 // DeleteMessages implements Store (a revocation): every live message in the
-// box, as acks, each out of memory as its item is deleted.
-func (s *Memory) DeleteMessages(ctx context.Context, box protocol.Address) error {
-	return s.write(ofAddress(box), func() error {
-		return s.backend.DeleteAll(ctx, box, func(id [32]byte, received time.Time) { s.retired(box, id, received) })
+// mailbox, as acks, each out of memory as its item is deleted.
+func (s *Memory) DeleteMessages(ctx context.Context, mailbox protocol.Address) error {
+	return s.write(ofAddress(mailbox), func() error {
+		return s.backend.DeleteAll(ctx, mailbox, func(id [32]byte, received time.Time) { s.retired(mailbox, id, received) })
 	}, nil)
 }
 
-// Count implements Store: from memory, after the box's load on its first
+// Count implements Store: from memory, after the mailbox's load on its first
 // use.
-func (s *Memory) Count(ctx context.Context, box protocol.Address) (int, error) {
-	if err := s.ensure(ctx, box); err != nil {
+func (s *Memory) Count(ctx context.Context, mailbox protocol.Address) (int, error) {
+	if err := s.ensure(ctx, mailbox); err != nil {
 		return 0, err
 	}
-	return s.idx.count(box, s.nowMs()), nil
+	return s.idx.count(mailbox, s.nowMs()), nil
 }
 
-// After implements Store: from memory, after the box's load on its first use.
-func (s *Memory) After(ctx context.Context, box protocol.Address, c *Cursor) (int, error) {
-	if err := s.ensure(ctx, box); err != nil {
+// After implements Store: from memory, after the mailbox's load on its first use.
+func (s *Memory) After(ctx context.Context, mailbox protocol.Address, c *Cursor) (int, error) {
+	if err := s.ensure(ctx, mailbox); err != nil {
 		return 0, err
 	}
-	return s.idx.after(box, ms(c.ReceivedAt)+ttlMs, prefix8(c.ID[:]), s.nowMs()), nil
+	return s.idx.after(mailbox, ms(c.ReceivedAt)+ttlMs, prefix8(c.ID[:]), s.nowMs()), nil
 }
 
-// Holds implements Store: from memory, after the box's load on its first use.
+// Holds implements Store: from memory, after the mailbox's load on its first use.
 // A message another process stored is held once the feed has brought it.
-func (s *Memory) Holds(ctx context.Context, box protocol.Address, id [32]byte) (bool, error) {
-	if err := s.ensure(ctx, box); err != nil {
+func (s *Memory) Holds(ctx context.Context, mailbox protocol.Address, id [32]byte) (bool, error) {
+	if err := s.ensure(ctx, mailbox); err != nil {
 		return false, err
 	}
-	return s.idx.holds(box, s.idx.tagOf(id), s.nowMs()), nil
+	return s.idx.holds(mailbox, s.idx.tagOf(id), s.nowMs()), nil
 }
 
 // Fetched implements Store, from memory as Holds does.
-func (s *Memory) Fetched(ctx context.Context, box protocol.Address, id [32]byte) (held, again bool, err error) {
-	if err := s.ensure(ctx, box); err != nil {
+func (s *Memory) Fetched(ctx context.Context, mailbox protocol.Address, id [32]byte) (held, again bool, err error) {
+	if err := s.ensure(ctx, mailbox); err != nil {
 		return false, false, err
 	}
-	held, again = s.idx.fetched(box, s.idx.tagOf(id), s.nowMs())
+	held, again = s.idx.fetched(mailbox, s.idx.tagOf(id), s.nowMs())
 	return held, again, nil
 }

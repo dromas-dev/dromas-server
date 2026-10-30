@@ -27,27 +27,27 @@ import (
 //
 // A write of several steps is one operation, whose outcome is its item's
 // write: a send writes its body, then its item; an ack deletes its body,
-// then its item; DeleteAll finds a box's messages, deletes their bodies,
+// then its item; DeleteAll finds a mailbox's messages, deletes their bodies,
 // then each item, and hands each it took to retired as it lands. A step that fails before the item's write is
 // a refusal: it changed nothing a reader of the list sees.
 type Backend interface {
 	// ReadAddress reads what is held of address a, strongly consistent:
-	// its box's record and its identity's revocations, each nil if absent.
-	ReadAddress(ctx context.Context, a protocol.Address) (*Box, *Revocations, error)
-	// ReadLive reads a box's live messages, strongly consistent: what a
-	// box's load counts (Memory.readBox).
-	ReadLive(ctx context.Context, box protocol.Address) ([]Header, error)
+	// its mailbox's record and its identity's revocations, each nil if absent.
+	ReadAddress(ctx context.Context, a protocol.Address) (*Mailbox, *Revocations, error)
+	// ReadLive reads a mailbox's live messages, strongly consistent: what a
+	// mailbox's load counts (Memory.readMailbox).
+	ReadLive(ctx context.Context, mailbox protocol.Address) ([]Header, error)
 	// List returns up to limit live headers, oldest first by (ReceivedAt,
 	// ID), after the given key (nil: from the start); strongly consistent
 	// where consistent is set.
-	List(ctx context.Context, box protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error)
+	List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error)
 	// Message returns a live message and its body, from byte from on where
 	// from is inside it, above 0 and below its Size, and otherwise whole; or
 	// ErrNotFound; or errNoBody for a live item whose body is gone.
-	Message(ctx context.Context, box protocol.Address, id [32]byte, from int64) (*Header, []byte, error)
-	// Dedupe returns the header of the live message box holds with this
+	Message(ctx context.Context, mailbox protocol.Address, id [32]byte, from int64) (*Header, []byte, error)
+	// Dedupe returns the header of the live message mailbox holds with this
 	// id, or ErrNotFound.
-	Dedupe(ctx context.Context, box protocol.Address, id [32]byte) (*Header, error)
+	Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error)
 	// Account reads an account's record, strongly consistent, or returns
 	// ErrNotFound.
 	Account(ctx context.Context, id string) (*Account, error)
@@ -55,15 +55,15 @@ type Backend interface {
 	// ErrNotFound.
 	AdoptKey(ctx context.Context, account string, hash [32]byte) (*AdoptKey, error)
 
-	// CreateBox stores b's record, at b.Rev, if the address has none;
+	// CreateMailbox stores b's record, at b.Rev, if the address has none;
 	// otherwise ErrExists.
-	CreateBox(ctx context.Context, b *Box) error
-	// UpdateBox stores b's record at b.Rev+1 if the stored one is at b.Rev;
+	CreateMailbox(ctx context.Context, b *Mailbox) error
+	// UpdateMailbox stores b's record at b.Rev+1 if the stored one is at b.Rev;
 	// otherwise ErrStale. It writes nothing of the revocations, and leaves b
 	// as it is.
-	UpdateBox(ctx context.Context, b *Box) error
-	// DeleteBox deletes a's record, and keeps its revocations.
-	DeleteBox(ctx context.Context, a protocol.Address) error
+	UpdateMailbox(ctx context.Context, b *Mailbox) error
+	// DeleteMailbox deletes a's record, and keeps its revocations.
+	DeleteMailbox(ctx context.Context, a protocol.Address) error
 	// Revoke keeps what the identity of address a revoked (Store.Revoke),
 	// and returns the address's revocations as they now are; ErrStale if a
 	// revocation of certificates through as high a serial was stored first,
@@ -71,29 +71,29 @@ type Backend interface {
 	// not. The item exists only holding a revocation, since none is written
 	// that holds neither, so that is whether any is held.
 	Revoke(ctx context.Context, a protocol.Address, rv *Revocations, want Expect) (*Revocations, error)
-	// Adopt moves box b, at b.Rev, into account, spending a use of the
+	// Adopt moves mailbox b, at b.Rev, into account, spending a use of the
 	// account's adopt key whose hash is key, in one write: ErrStale,
 	// ErrKeyRefused.
-	Adopt(ctx context.Context, b *Box, account string, key [32]byte) error
-	// Leave takes box b, at b.Rev, out of its account, or returns ErrStale.
-	Leave(ctx context.Context, b *Box) error
+	Adopt(ctx context.Context, b *Mailbox, account string, key [32]byte) error
+	// Leave takes mailbox b, at b.Rev, out of its account, or returns ErrStale.
+	Leave(ctx context.Context, b *Mailbox) error
 	// CreateAccount stores a new account at a.Rev, or returns ErrExists.
 	CreateAccount(ctx context.Context, a *Account) error
 	// PutAdoptKey stores a new adopt key's state, or returns ErrExists.
 	PutAdoptKey(ctx context.Context, k *AdoptKey) error
 	// PutMessage stores a message: its body, then its item. A live item of
 	// another send of the id refuses it (duplicate).
-	PutMessage(ctx context.Context, box protocol.Address, h *Header, body []byte) error
+	PutMessage(ctx context.Context, mailbox protocol.Address, h *Header, body []byte) error
 	// Retire deletes a live message's item, so it leaves the list and
 	// nothing of it is kept, and returns when it was received; ErrNotFound
 	// if it is not live.
-	Retire(ctx context.Context, box protocol.Address, id [32]byte) (time.Time, error)
+	Retire(ctx context.Context, mailbox protocol.Address, id [32]byte) (time.Time, error)
 	// DeleteMessage acks a message: its body goes, then it is retired.
-	DeleteMessage(ctx context.Context, box protocol.Address, id [32]byte) (time.Time, error)
-	// DeleteAll deletes, as acks do, every live message in a box, and hands
+	DeleteMessage(ctx context.Context, mailbox protocol.Address, id [32]byte) (time.Time, error)
+	// DeleteAll deletes, as acks do, every live message in a mailbox, and hands
 	// each retired as its item is deleted. A message already gone is no
 	// error.
-	DeleteAll(ctx context.Context, box protocol.Address, retired func(id [32]byte, received time.Time)) error
+	DeleteAll(ctx context.Context, mailbox protocol.Address, retired func(id [32]byte, received time.Time)) error
 
 	// Start hands every change to what the backend keeps, from then on, to
 	// apply: in order for each item, and at least once. It returns once the
@@ -112,7 +112,7 @@ type ChangeKind int
 
 // The kinds of change, each with one rule in Memory.apply.
 const (
-	// RecordChange is a box's record.
+	// RecordChange is a mailbox's record.
 	RecordChange ChangeKind = iota + 1
 	// RevocationsChange is an address's revocations.
 	RevocationsChange
@@ -130,7 +130,7 @@ const (
 // reads it again (dromas-dev/dromas-client#407 item 1).
 type Change struct {
 	Kind ChangeKind
-	// Addr is the record's address, the revocations', or the message's box.
+	// Addr is the record's address, the revocations', or the message's mailbox.
 	Addr protocol.Address
 	// AccountID is the account's id.
 	AccountID string
@@ -139,7 +139,7 @@ type Change struct {
 	// Err is an item whose image does not read.
 	Err error
 
-	Box         *Box         // RecordChange
+	Mailbox     *Mailbox     // RecordChange
 	Revocations *Revocations // RevocationsChange
 	Header      *Header      // MessageChange: of an item deleted, its ID alone
 	Live        bool         // MessageChange: in the list
