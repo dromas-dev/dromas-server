@@ -86,13 +86,13 @@ func TestACLRoute(t *testing.T) {
 	}
 
 	for name, body := range map[string]any{
-		"no allow list":      []byte(`{"deny":[]}`),
-		"allow null":         []byte(`{"allow":null}`),
-		"a version":          []byte(`{"version":1,"allow":["*"]}`),
-		"an uppercase entry": aclOf([]string{strings.ToUpper(y)}, nil),
-		"a partial pattern":  aclOf([]string{"*" + y[1:]}, nil),
-		"a member it lacks":  []byte(`{"allow":["*"],"block":[]}`),
-		"not JSON":           []byte(`allow everyone`),
+		"no allow list":     []byte(`{"deny":[]}`),
+		"allow null":        []byte(`{"allow":null}`),
+		"a version":         []byte(`{"version":1,"allow":["*"]}`),
+		"a base64 entry":    aclOf([]string{"+" + y[1:]}, nil), // base64's alphabet, not base64url's
+		"a partial pattern": aclOf([]string{"*" + y[1:]}, nil),
+		"a member it lacks": []byte(`{"allow":["*"],"block":[]}`),
+		"not JSON":          []byte(`allow everyone`),
 	} {
 		if r := e.do("PUT", path, body, pass); r.status != 400 || r.code() != protocol.CodeBadRequest {
 			t.Errorf("%s: %d %s, want 400 %s: %s", name, r.status, r.code(), protocol.CodeBadRequest, r.body)

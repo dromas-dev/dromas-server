@@ -59,7 +59,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 	if err := required("identity", req.Identity, "prekey", req.Prekey, "prekey_signature", req.PrekeySignature); err != nil {
 		return err
 	}
-	if protocol.Address(sha256.Sum256(req.Identity)) != h {
+	if protocol.AddressOf(req.Identity) != h {
 		return fail(protocol.CodeIdentityMismatch, hintDocument, "the identity document does not hash to the address")
 	}
 	// The document's form, then its key's type, then its key (PROTOCOL.md §11.7).
@@ -612,7 +612,7 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	if protocol.Address(sha256.Sum256(req.Identity)) != h {
+	if protocol.AddressOf(req.Identity) != h {
 		return fail(protocol.CodeIdentityMismatch, hintDocument, "the identity document does not hash to the address")
 	}
 	b, err := s.lookup(r, h)

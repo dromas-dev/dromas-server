@@ -713,14 +713,14 @@ func (p *pacedWriter) Write(b []byte) (int, error) {
 // Unwrap lets http.ResponseController reach the connection.
 func (p *pacedWriter) Unwrap() http.ResponseWriter { return p.ResponseWriter }
 
-// pathAddr reads the address in the URL path, 64 lowercase hex characters:
-// one mailbox has one URL, so any other form, uppercase among them, is no
-// address. Then it holds the query to params, the parameters the call takes
+// pathAddr reads the address in the URL path, 64 characters of unpadded
+// base64url: one mailbox has one URL, so any other form, base64's own
+// alphabet among them, is no address. Then it holds the query to params, the parameters the call takes
 // (queryOf).
 func pathAddr(r *http.Request, params ...string) (protocol.Address, error) {
 	a, err := protocol.ParseAddress(r.PathValue("addr"))
 	if err != nil {
-		return a, fail(protocol.CodeBadAddress, "an address is 64 lowercase hex characters", "the path does not name an address")
+		return a, fail(protocol.CodeBadAddress, "an address is 64 characters of unpadded base64url", "the path does not name an address")
 	}
 	if _, err := queryOf(r, params...); err != nil {
 		return a, err
@@ -1157,24 +1157,26 @@ func pathID(r *http.Request) ([32]byte, error) {
 	return id, err
 }
 
-// hexRun is a run of 64 or more hex characters, in either case: every
-// address and message id, wherever a log line holds one.
-var hexRun = regexp.MustCompile(`[0-9A-Fa-f]{64,}`)
+// nameRun is a run of 64 or more characters of base64url's alphabet: every
+// address, and every message id, whose hex is of that alphabet too, wherever
+// a log line holds one.
+var nameRun = regexp.MustCompile(`[A-Za-z0-9_-]{64,}`)
 
-// redact replaces each run of 64 or more hex characters in a log line with
-// "#" and the first 16 hex characters of the SHA-256 of the run in lower
-// case, a name only someone already holding the run can match: no log line
-// carries an address or a message id, in a path, a store's error or
+// redact replaces each run of 64 or more characters of base64url's alphabet
+// in a log line with "#" and the first 16 hex characters of the SHA-256 of
+// the run, a name only someone already holding the run can match: no log
+// line carries an address or a message id, in a path, a store's error or
 // anywhere else (dromas-dev/dromas-server#9).
 func redact(line []byte) []byte {
-	return hexRun.ReplaceAllFunc(line, func(run []byte) []byte { return []byte(logName(run)) })
+	return nameRun.ReplaceAllFunc(line, func(run []byte) []byte { return []byte(logName(run)) })
 }
 
 // logName is the name a log gives a value it never writes: "#" and the first
-// 16 hex characters of the SHA-256 of the value in lower case, the name
-// redact gives a run of hex.
+// 16 hex characters of the SHA-256 of the value, the name redact gives a run.
+// The value is hashed as it is: a letter of an address in the other case is
+// another address.
 func logName(v []byte) string {
-	h := sha256.Sum256([]byte(protocol.LowerASCII(string(v))))
+	h := sha256.Sum256(v)
 	return "#" + hex.EncodeToString(h[:8])
 }
 

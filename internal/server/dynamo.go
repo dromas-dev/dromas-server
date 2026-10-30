@@ -289,6 +289,20 @@ func (it item) bytes(name string) ([]byte, error) {
 }
 
 // hash reads a 32-byte binary attribute: an address or an id.
+// address reads an address: its 48 bytes, the SHA-384 of its identity document.
+func (it item) address(name string) (protocol.Address, error) {
+	var a protocol.Address
+	b, err := it.bytes(name)
+	if err != nil {
+		return a, err
+	}
+	if len(b) != len(a) {
+		return a, fmt.Errorf("item: %s is not %d bytes", name, len(a))
+	}
+	copy(a[:], b)
+	return a, nil
+}
+
 func (it item) hash(name string) ([32]byte, error) {
 	var h [32]byte
 	b, err := it.bytes(name)
@@ -332,7 +346,7 @@ func (it item) string(name string) (string, error) {
 // mailboxItemKey reads the key of an item of the --mailboxes-table table: its
 // address, and its sk.
 func mailboxItemKey(it item) (protocol.Address, []byte, error) {
-	a, err := it.hash("addr")
+	a, err := it.address("addr")
 	if err != nil {
 		return a, nil, err
 	}
@@ -451,7 +465,7 @@ func decodeACL(it item) (*protocol.ACL, error) {
 }
 
 func decodeMailbox(it item) (*Mailbox, error) {
-	a, err := it.hash("addr")
+	a, err := it.address("addr")
 	if err != nil {
 		return nil, err
 	}

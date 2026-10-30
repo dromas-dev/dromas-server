@@ -6,7 +6,6 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -422,13 +421,13 @@ func TestRegistration(t *testing.T) {
 
 	// A document that hashes to its address but breaks the grammar.
 	commented := append(bytes.TrimSuffix(r.id.Document(), []byte("\n")), []byte(" comment\n")...)
-	h := sha256.Sum256(commented)
-	e.want(e.do("PUT", "/v1/"+hex.EncodeToString(h[:]), protocol.RegisterRequest{Identity: commented, Prekey: reg.Prekey, PrekeySignature: reg.PrekeySignature}, pass), 400, protocol.CodeIdentityMismatch)
+	h := protocol.AddressOf(commented)
+	e.want(e.do("PUT", "/v1/"+h.String(), protocol.RegisterRequest{Identity: commented, Prekey: reg.Prekey, PrekeySignature: reg.PrekeySignature}, pass), 400, protocol.CodeIdentityMismatch)
 
 	// A small-order key: the grammar holds, the key check fails.
 	small := clientFile(t, "testdata/vectors/identity/small-order-1.doc")
-	h = sha256.Sum256(small)
-	e.want(e.do("PUT", "/v1/"+hex.EncodeToString(h[:]), protocol.RegisterRequest{Identity: small, Prekey: reg.Prekey, PrekeySignature: reg.PrekeySignature}, pass), 400, protocol.CodeBadKey)
+	h = protocol.AddressOf(small)
+	e.want(e.do("PUT", "/v1/"+h.String(), protocol.RegisterRequest{Identity: small, Prekey: reg.Prekey, PrekeySignature: reg.PrekeySignature}, pass), 400, protocol.CodeBadKey)
 
 	// A prekey statement under another identity's certificate; one the
 	// identity signed itself; one a working key signed with no certificate;
@@ -700,30 +699,31 @@ func TestOwnerCalls(t *testing.T) {
 	e.want(e.do("GET", r.path("/messages"), nil, ahead), 200, "")
 }
 
-// An address in a path is 64 lowercase hex characters, so a mailbox has one URL:
-// the same address in uppercase is no address, on every route that names
-// one, whoever calls (PROTOCOL.md §2.2).
-func TestAnAddressInAPathIsLowercase(t *testing.T) {
+// An address in a path is 64 characters of unpadded base64url, so a mailbox
+// has one URL: the same address in base64's alphabet is no address, on every
+// route that names one, whoever calls, and with a letter in the other case it
+// is another address (PROTOCOL.md §2.2, §4.2).
+func TestAnAddressInAPathIsBase64url(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	pass := r.pass(1)
-	upper := "/v1/" + strings.ToUpper(r.id.Address().String())
-	lower := r.id.Address().String()
-	i := strings.IndexAny(lower, "abcdef") // one letter in uppercase
-	mixed := "/v1/" + lower[:i] + strings.ToUpper(lower[i:i+1]) + lower[i+1:]
+	addr := r.id.Address().String()
+	std := "/v1/+" + addr[1:] // + is base64's 62nd character, - is base64url's
 	for _, c := range []struct{ method, path, pass string }{
-		{"GET", upper, ""},
-		{"GET", mixed, ""},
-		{"GET", upper + "/messages", pass},
-		{"GET", upper + "/messages/" + strings.Repeat("a", 64), pass},
-		{"DELETE", upper + "/messages/" + strings.Repeat("a", 64), pass},
-		{"GET", upper + "/acl", pass},
-		{"DELETE", upper + "/account", pass},
+		{"GET", std, ""},
+		{"GET", std + "/messages", pass},
+		{"GET", std + "/messages/" + strings.Repeat("a", 64), pass},
+		{"DELETE", std + "/messages/" + strings.Repeat("a", 64), pass},
+		{"GET", std + "/acl", pass},
+		{"DELETE", std + "/account", pass},
 	} {
 		e.want(e.do(c.method, c.path, nil, c.pass), 400, protocol.CodeBadAddress)
 	}
-	e.want(e.do("PUT", upper+"/prekey", r.upload(1), pass), 400, protocol.CodeBadAddress)
+	e.want(e.do("PUT", std+"/prekey", r.upload(1), pass), 400, protocol.CodeBadAddress)
+	i := strings.IndexAny(addr, "abcdefghijklmnopqrstuvwxyz")
+	other := addr[:i] + strings.ToUpper(addr[i:i+1]) + addr[i+1:]
+	e.want(e.do("GET", "/v1/"+other, nil, ""), 404, protocol.CodeNoSuchMailbox)
 	e.want(e.do("GET", r.path(""), nil, ""), 200, "")
 	e.want(e.do("GET", r.path("/messages"), nil, pass), 200, "")
 }
@@ -1011,7 +1011,7 @@ func TestSendPipeline(t *testing.T) {
 	// named in member. The sender is the mailbox the pass names, so the query
 	// names none.
 	e.want(e.do("POST", "/v1/nope/messages?x=1", ok.ciphertext, pass), 400, protocol.CodeBadAddress)
-	e.want(e.do("POST", "/v1/"+strings.ToUpper(b.Address().String())+"/messages", ok, pass), 400, protocol.CodeBadAddress)
+	e.want(e.do("POST", "/v1/+"+b.Address().String()[1:]+"/messages", ok, pass), 400, protocol.CodeBadAddress)
 	serials := ok.Encode()
 	for query, member := range map[string]string{
 		"":                                                    protocol.PrekeySerialParam,

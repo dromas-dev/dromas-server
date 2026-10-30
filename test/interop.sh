@@ -18,7 +18,7 @@
 # The recipe runs a mailbox of its own: the two clients meet over the wire, never in one mailbox directory.
 # Every script step runs in a FRESH shell (agents run each command in a new one). Every mailbox is post-quantum: where the
 # local age is older than 1.3, the client module's own (its go.mod's tool, built by go tool) goes first in PATH.
-# Needs: go, bash ≥ 4, ssh-keygen, curl, jq, sha256sum, base64, od, GNU date (passof's date -d). Run from anywhere:
+# Needs: go, bash ≥ 4, ssh-keygen, curl, jq, sha256sum, sha384sum, openssl, base64, od, GNU date (passof's date -d). Run from anywhere:
 #   test/interop.sh            SCRIPT=<path> overrides the dromas.sh it sources.
 # With DROMAS_TEST_MAILBOXES_TABLE, DROMAS_TEST_MESSAGES_TABLE, DROMAS_TEST_ACCOUNTS_TABLE and DROMAS_TEST_BUCKET set, the server runs on those tables and
 # that bucket instead of --dev: tables and a bucket kept for tests, never the ones a running server uses.
@@ -77,13 +77,14 @@ record_of(){ local a; a=$(cat "$1/address") && printf 'dromas-revoke-v1\n%s\n' "
 look(){ curl -s -o /dev/null -w '%{http_code}' "$DR_SERVER_URL/v1/$1"; }   # <address> → the status of a read of the mailbox at this server: 410 once it is revoked
 
 # --- 1. both ways, across renewals ---
-dr_hex(){ [[ $1 =~ ^[0-9a-f]{64}$ ]]; }
-RL=$(recipe "$R" "dr_init" | linkof) && RA=${RL##*/} && dr_hex "$RA" && [ "$RL" = "$DR_SERVER_URL/to/$RA" ] && ok "recipe init prints its link: $RL" || bad "recipe init: $RL"
-GL=$(gocli "$G" init | linkof) && GA=${GL##*/} && dr_hex "$GA" && [ "$GL" = "$DR_SERVER_URL/to/$GA" ] && ok "Go init prints its link: $GL" || bad "Go init: $GL"
+dr_hex(){ [[ $1 =~ ^[0-9a-f]{64}$ ]]; }      # a message's id
+dr_isaddr(){ [[ $1 =~ ^[A-Za-z0-9_-]{64}$ ]]; }      # an address
+RL=$(recipe "$R" "dr_init" | linkof) && RA=${RL##*/} && dr_isaddr "$RA" && [ "$RL" = "$DR_SERVER_URL/to/$RA" ] && ok "recipe init prints its link: $RL" || bad "recipe init: $RL"
+GL=$(gocli "$G" init | linkof) && GA=${GL##*/} && dr_isaddr "$GA" && [ "$GL" = "$DR_SERVER_URL/to/$GA" ] && ok "Go init prints its link: $GL" || bad "Go init: $GL"
 for L in "$RL" "$GL"; do
   curl -sf "$L" | grep -qF "<code>${L##*/}</code>" && ok "the link opens its page: $L" || bad "no page at $L"
 done
-[ "$(curl -s -o /dev/null -w '%{http_code}' "$DR_SERVER_URL/to/$(tr a-f A-F <<< "$GA")")" = 404 ] && ok "a link in uppercase is 404, as clients refuse it" || bad "uppercase link page"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$DR_SERVER_URL/to/+${GA:1}")" = 404 ] && ok "a link in base64's alphabet is 404, as clients refuse it" || bad "base64-alphabet link page"
 
 printf 'from Go, <b>&\n' | gocli "$G" send "$RL" > /dev/null && ok "Go → recipe: sent, to the recipe mailbox's link" || bad "Go → recipe: send"
 out=$(recipe "$R" dr_recv 2> "$work/err") && jq -e --arg f "$GA" '.envelope.body == "from Go, <b>&\n" and .envelope.from == $f' <<< "$out" > /dev/null \
@@ -126,9 +127,9 @@ jq -e --argjson d "$out" '(.receipt | keys == ["expires_at", "id", "received_at"
 # then exchanges messages with the other client's Ed25519 mailbox of step 1, which declared that it verifies the type.
 RP="$work/rp"; GP="$work/gp"; mkdir -p "$RP"
 ssh-keygen -q -t ecdsa -b 256 -N '' -C '' -f "$RP/identity" < /dev/null
-RPL=$(recipe "$RP" "dr_init" | linkof) && RPA=${RPL##*/} && dr_hex "$RPA" && [ "$(sed -n 2p "$RP/identity.doc" | cut -d' ' -f1)" = ecdsa-sha2-nistp256 ] \
+RPL=$(recipe "$RP" "dr_init" | linkof) && RPA=${RPL##*/} && dr_isaddr "$RPA" && [ "$(sed -n 2p "$RP/identity.doc" | cut -d' ' -f1)" = ecdsa-sha2-nistp256 ] \
   && ok "recipe init on a P-256 identity made by ssh-keygen" || bad "recipe init on P-256: $RPL"
-GPO=$(gocli "$GP" init --identity-type ecdsa-sha2-nistp256 2> "$work/err") && GPL=$(linkof <<< "$GPO") && GPA=${GPL##*/} && dr_hex "$GPA" && jq -e '.detail | startswith("WARNING: ")' <<< "$GPO" > /dev/null \
+GPO=$(gocli "$GP" init --identity-type ecdsa-sha2-nistp256 2> "$work/err") && GPL=$(linkof <<< "$GPO") && GPA=${GPL##*/} && dr_isaddr "$GPA" && jq -e '.detail | startswith("WARNING: ")' <<< "$GPO" > /dev/null \
   && ok "Go init --identity-type ecdsa-sha2-nistp256, with its warning" || bad "Go init on P-256: $GPL $(cat "$work/err")"
 [ "$(curl -s "$DR_SERVER_URL/v1/$GA" | jq -c .sender_key_types)" = '["ssh-ed25519","ecdsa-sha2-nistp256"]' ] && [ "$(curl -s "$DR_SERVER_URL/v1/$RA" | jq -c .sender_key_types)" = '["ssh-ed25519","ecdsa-sha2-nistp256"]' ] \
   && ok "each client's mailbox is served with the sender key types it declared" || bad "sender_key_types: $(curl -s "$DR_SERVER_URL/v1/$GA" | jq -c .sender_key_types) $(curl -s "$DR_SERVER_URL/v1/$RA" | jq -c .sender_key_types)"
@@ -157,7 +158,7 @@ out=$(recipe "$RP" "dr_send $GEL '$work/body5'" 2>&1); [ $? -ne 0 ] && grep -q "
 clock(){ echo "dr_now(){ echo \$((\$(date -u +%s) + ($1))); }"; }   # <seconds> → the recipe's clock, that far from the real one
 for c in "-540 9 minutes slow" "2940 49 minutes fast"; do
   off=${c%% *}; name=${c#* }; d="$work/clock$off"; gf="$work/gf$off"
-  L=$(recipe "$d" "$(clock "$off"); dr_init" 2> "$work/err" | linkof) && A=${L##*/} && dr_hex "$A" && GFL=$(gocli "$gf" init | linkof) && GFA=${GFL##*/} \
+  L=$(recipe "$d" "$(clock "$off"); dr_init" 2> "$work/err" | linkof) && A=${L##*/} && dr_isaddr "$A" && GFL=$(gocli "$gf" init | linkof) && GFA=${GFL##*/} \
     && printf 'to the mailbox whose clock is off\n' | gocli "$gf" send "$L" > /dev/null \
     && out=$(recipe "$d" "$(clock "$off"); dr_recv" 2>> "$work/err") && jq -e --arg f "$GFA" '.envelope.body == "to the mailbox whose clock is off\n" and .envelope.from == $f' <<< "$out" > /dev/null \
     && printf 'from the mailbox whose clock is off\n' > "$work/body6" && recipe "$d" "$(clock "$off"); dr_send $GFL '$work/body6'" 2>> "$work/err" \
@@ -168,7 +169,7 @@ done
 out=$(recipe "$work/clock-late" "$(clock -660); dr_init" 2>&1); [ $? -ne 0 ] && grep -q "ERROR 401 pass_expired" <<< "$out" && grep -q "the server dates its answer 20" <<< "$out" && grep -q "this machine's clock reads" <<< "$out" \
   && ok "a recipe mailbox 11 minutes slow is refused at its pass: the server's answer is dated by its clock, and the recipe says that beside what its own reads" || bad "clock 11 minutes slow: $out"
 out=$(recipe "$work/clock-early" "$(clock 3660); dr_init" 2>&1); [ $? -ne 0 ] && grep -q "ERROR 400 prekey_time" <<< "$out" && grep -q "the server dates its answer 20" <<< "$out" \
-  && L=$(recipe "$work/clock-early" "dr_init" 2> "$work/err" | linkof) && dr_hex "${L##*/}" \
+  && L=$(recipe "$work/clock-early" "dr_init" 2> "$work/err" | linkof) && dr_isaddr "${L##*/}" \
   && ok "a recipe mailbox first made 61 minutes fast is refused, the answer dated by the server's clock; with the clock right, the same mailbox registers" || bad "clock 61 minutes fast: $out $(cat "$work/err")"
 
 # --- 6. revocation (PROTOCOL.md §10.1): the server keeps the identity's own signature and shows it in the read of the mailbox, and each client checks it ---
@@ -265,7 +266,7 @@ out=$(gocli "$W3" revocation ask "$W2L" 2> /dev/null) && [ "$out" = "{\"type\":\
 at(){ curl -s -o /dev/null -w '%{http_code}' "$DR_SERVER_URL/v1/$1/revocations"; }   # <address> → the status of the read of its revocations here
 X1="$work/x1"; X3="$work/x3"; X6="$work/x6"
 X1L=$(gocli "$X1" init | linkof) && X1A=${X1L##*/} && X6L=$(gocli "$X6" init | linkof) && X6A=${X6L##*/} || bad "the mailboxes of section 8"
-mkdir -p -m 700 "$X3" && ssh-keygen -q -t ed25519 -N '' -C '' -f "$X3/identity" && gocli "$X3" revocation make > "$work/x3.json" 2> "$work/err" && X3A=$(jq -r .identity "$work/x3.json" | base64 -d | sha256sum | cut -c1-64) && X3L="$DR_SERVER_URL/to/$X3A" \
+mkdir -p -m 700 "$X3" && ssh-keygen -q -t ed25519 -N '' -C '' -f "$X3/identity" && gocli "$X3" revocation make > "$work/x3.json" 2> "$work/err" && X3A=$(jq -r .identity "$work/x3.json" | base64 -d | openssl dgst -sha384 -binary | openssl base64 -A | tr '+/' '-_') && X3L="$DR_SERVER_URL/to/$X3A" \
   || bad "a record of an address never registered: $(cat "$work/err")"
 [ "$(at "$X1A")" = 404 ] && [ "$(curl -s "$DR_SERVER_URL/v1/$X1A/revocations" | jq -r .code)" = not_revoked ] && [ "$(at "$X3A")" = 404 ] \
   && ok "the server answers 404 not_revoked for an address it holds no revocation of, with a mailbox there or none" || bad "the read of revocations, before anything"

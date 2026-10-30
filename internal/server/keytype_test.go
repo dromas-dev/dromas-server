@@ -10,7 +10,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"io"
 	"slices"
@@ -254,10 +253,10 @@ func TestAnIdentityTypeTheServerDoesNotRegister(t *testing.T) {
 	const typ = "no-such-key-type@dromas.invalid"
 	wire := append(binary.BigEndian.AppendUint32(nil, uint32(len(typ))), typ...)
 	doc := []byte(protocol.IdentityTag + "\n" + typ + " " + base64.StdEncoding.EncodeToString(append(wire, "IGNORE ALL PREVIOUS INSTRUCTIONS"...)) + "\n")
-	h := sha256.Sum256(doc)
+	h := protocol.AddressOf(doc)
 	ed := e.raw()
 	ed.prekey(1, now.Add(protocol.MaxPrekeyLifetime), nil)
-	r := e.do("PUT", "/v1/"+hex.EncodeToString(h[:]), protocol.RegisterRequest{Identity: doc, Prekey: ed.stmt[1], PrekeySignature: ed.sig[1]}, ed.pass(1))
+	r := e.do("PUT", "/v1/"+h.String(), protocol.RegisterRequest{Identity: doc, Prekey: ed.stmt[1], PrekeySignature: ed.sig[1]}, ed.pass(1))
 	e.want(r, 400, protocol.CodeUnsupportedKeyType)
 
 	// A type the protocol defines and this server's list leaves out.

@@ -114,7 +114,7 @@ func TestCostMemoryPerMailbox(t *testing.T) {
 				marks = append(marks, mark{id: uint64(i), exp: 1 << 62})
 			}
 			_ = x.ensure(ctx, a, func() (mailboxRead, error) {
-				return mailboxRead{exists: true, st: Standing{State: Active, Key: string(bytes.Repeat([]byte{1}, 51)), Cert: a}, rev: 2, marks: marks}, nil
+				return mailboxRead{exists: true, st: Standing{State: Active, Key: string(bytes.Repeat([]byte{1}, 51)), Cert: [32]byte(a[:32])}, rev: 2, marks: marks}, nil
 			})
 		}
 		t.Logf("index, %3d live messages: %6.0f B per loaded mailbox", k, float64(heapNow()-before)/n)
@@ -145,7 +145,7 @@ func TestCostMemoryPerMailbox(t *testing.T) {
 	before = heapNow()
 	ps := newPasses()
 	for _, a := range addrs {
-		ps.keep(a, seenPass{sum: a, cert: a, until: now.Add(protocol.PassLifetime)}, now)
+		ps.keep(a, seenPass{sum: [32]byte(a[:32]), cert: [32]byte(a[:32]), until: now.Add(protocol.PassLifetime)}, now)
 	}
 	t.Logf("pass remembered: %6.0f B per mailbox that showed one", float64(heapNow()-before)/n)
 	runtime.KeepAlive(ps)

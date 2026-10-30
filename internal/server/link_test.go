@@ -84,7 +84,7 @@ func TestLinkPage(t *testing.T) {
 	if resp, _ := get(http.MethodPost, "/to/"+a); resp.StatusCode == http.StatusOK {
 		t.Error("POST: 200")
 	}
-	for _, p := range []string{"/to/" + strings.ToUpper(a), "/to/" + a[:63], "/to/" + a + "0", "/to/" + a + "/", "/to/", "/to/%3Cscript%3E" + a[13:]} {
+	for _, p := range []string{"/to/+" + a[1:], "/to/" + a[:63], "/to/" + a + "0", "/to/" + a + "/", "/to/", "/to/%3Cscript%3E" + a[13:]} {
 		if resp, body := get(http.MethodGet, p); resp.StatusCode != http.StatusNotFound || strings.Contains(body, "dromas send") {
 			t.Errorf("GET %s: %d", p, resp.StatusCode)
 		}
