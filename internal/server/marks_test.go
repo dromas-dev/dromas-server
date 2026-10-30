@@ -222,7 +222,7 @@ func TestAnIDThatSharesAPrefixIsNotHeld(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	e := newEnv(t, l)
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	send(t, a, b, "held")
 	e2, cs := counted(t, e, l)
 	pass := e2.pass(b)
@@ -293,7 +293,7 @@ func TestAPlantedTagHidesNoMessageAtAnHonestServer(t *testing.T) {
 	t.Parallel()
 	for _, plant := range []string{`",*,"`, `"x,*,y"`, `W/"a,W/*,b"`} {
 		e := newEnv(t, relaxed())
-		a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+		a, b := e.mailbox(), e.mailbox()
 		f := &tagFront{plant: plant}
 		e.setMiddle(f.serve)
 		receive(t, b) // the one hostile answer: the mailbox is empty, and only the tag is the front's
@@ -320,7 +320,7 @@ func TestAPlantedTagHidesNoMessageAtAnHonestServer(t *testing.T) {
 func TestAMessageHiddenByAPlantedTagIsNotLost(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	f := &tagFront{plant: `",*,"`}
 	e.setMiddle(f.serve)
 	receive(t, b)

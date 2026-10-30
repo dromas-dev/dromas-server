@@ -18,7 +18,7 @@
 | What | How many | Notes |
 |---|---|---|
 | `dromas-server` | 1 today, then one per host; a scaled shape is ~4 hosts of 4 cores | All identical; one is to hold a lease and run the background jobs (not built: there are no jobs yet). **One Go process uses every core of its host**, so it's one process per host, never one per core: the runtime spreads goroutines across all CPUs, and since Go 1.25 it reads the container's CPU limit too. CPU is never the reason for more hosts: 1M mailboxes polling once a minute is about 0.9 vCPU, 0.57 for the polls at 34 µs each and 0.32 for the check of each mailbox's new pass every ten minutes at 190 µs (measured 2026-10-13, § Estimates and measurements) |
-| Echo mailboxes | 2 | `dromas` clients with their own keys, one post-quantum and one X25519-only (decided), never inside the server |
+| Echo mailbox | 1 | A `dromas` client with its own keys, never inside the server |
 | AWS, managed | — | Three DynamoDB tables, mailboxes, messages and accounts, each with its stream on; the S3 Express One Zone directory bucket |
 | Edge | — | A load balancer passing TCP, then a reverse proxy that terminates TLS (for dromas.dev, an NLB and nginx on each host) and calls `dromas-server` over plain HTTP on one or more `--listen` addresses; `dromas-server` takes the client's address from the proxy's `X-Forwarded-For` (§ Behind a reverse proxy) |
 | The site | — | A deployment's site is not in this repo: with `--site-backend`, `dromas-server` passes every request outside `/v1/` and `/to/` to the deployment's own web server, as a reverse proxy does (`net/http/httputil`), and its answer back as that server sent it, a 404 among them (`internal/server/site.go`) |
@@ -343,7 +343,6 @@ Mailboxes: PITR on, AWS Backup on, TTL on, stream `NEW_IMAGE`. Messages: neither
 | Message | Stored | Best compressed |
 |---|---|---|
 | 1 KiB of text, PQ | 2,919 B | 2,732 B (−6%; only the PQ header's base64 shrinks) |
-| 1 KiB of text, `--no-pq` | 1,460 B | 1,474 B (grows) |
 | 14 KB of text, PQ | 15,895 B | 15,872 B (−0.1%) |
 
 - That saves about $0.001 per million messages.
@@ -389,7 +388,7 @@ dromas-server (this repo)
 | Stage | Shape |
 |---|---|
 | Dev | `dromas-server serve --dev`, the in-memory backend |
-| 1: first production (**live**, with the echo mailboxes) | one host: a reverse proxy terminating TLS, one `dromas-server` with the stream on, and the echo mailboxes beside it |
+| 1: first production (**live**, with the echo mailbox) | one host: a reverse proxy terminating TLS, one `dromas-server` with the stream on, and the echo mailbox beside it |
 | 2: availability and scale | first a second host for availability, then 2–4 hosts across AZs, one `dromas-server` each using every core (e.g. 4 hosts of 4 cores), behind a load balancer |
 | Later, only if measured | our own stream bouncer for more than ~4 processes; Redis if sub-second delivery or exact global limits are ever needed |
 | Extreme | shard by the address's first hex character at the edge, with the bouncer routing by the same character (§ Extreme scale) |
@@ -401,7 +400,7 @@ dromas-server (this repo)
 3. ✅ **`dromas-server --dev`, the `client` library and the `dromas` CLI**, end to end on one machine. The decided paths only; what is still open is unbuilt or chosen provisionally.
 4. ✅ **The DynamoDB + S3 Express store, the stream follower and layer 1**, with the poll path answered from memory (lazy per mailbox, § Startup). Every server test runs on both backends, under the one memory (the AWS ones against tables kept for tests), and the failure injected between each pair of writes is tested. Deployed as stage 1: one process, `Dockerfile` here.
 5. **`dromas.sh` in the public repo, named in `llms.txt`** — built, with its forging tests (Go tests in `sh/` on the client's fake server), held to the Go client only on the vectors that are the proof and on the five outcomes a difference could let through (the client repo's `AGENTS.md` § The shell client), and interop with the Go client, all in dromas-client.
-6. **`dromas mcp` and `SKILL.md`.** The echo mailboxes are built and live.
+6. **`dromas mcp` and `SKILL.md`.** The echo mailbox is built and live.
 7. **Layer 2 with its byte budget, stream-fed global limits, readiness gating, and a second process.** That's stage 2, and with the second process a send's read of its recipient after its write (§ Storage) becomes strongly consistent, and a send refused at its counts reads the dedupe again strongly consistent: the posts of one ciphertext in flight are one call only within a process.
 
 ## Open

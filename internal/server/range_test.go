@@ -55,7 +55,7 @@ func ranged(t *testing.T, e *env, l Limits) (*env, *rangeStore) {
 func TestAFetchResumesByRange(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	e2, rs := ranged(t, e, relaxed())
 	tok := e2.pass(b)
 	path := "/v1/" + b.Address().String() + "/messages/" + send(t, a, b, "read in two parts").ID
@@ -115,7 +115,7 @@ func TestAFetchResumesByRange(t *testing.T) {
 func TestARangedFetchIsCountedAsAnyFetch(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	l := relaxed()
 	l.PollBurst, l.PollRefill = 1, time.Minute
 	e2, _ := ranged(t, e, l)

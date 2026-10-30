@@ -742,7 +742,7 @@ func TestAFetchNeverReadIsCutWhateverItsSize(t *testing.T) {
 	l := relaxed()
 	l.BodyTimeout, l.BodyMinRate, l.MaxSize = time.Second, 8<<10, 1<<20
 	e := newEnv(t, l)
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	body := strings.Repeat("a message that is never read. ", 17000) // its ciphertext is larger
 	if len(body) < 60*l.BodyMinRate {
 		t.Fatalf("a message of %d bytes earns less than a minute", len(body))

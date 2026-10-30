@@ -144,7 +144,7 @@ func TestAMailboxsReadIsGzippedWhenTaken(t *testing.T) {
 func TestNoOtherAnswerIsGzipped(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	from, to := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	from, to := e.mailbox(), e.mailbox()
 	r := send(t, from, to, strings.Repeat("the same words again ", 200))
 	send(t, from, to, "a second")
 	send(t, from, to, "a third, so that the list is long enough to compress")

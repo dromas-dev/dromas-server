@@ -87,7 +87,7 @@ func TestNoLogLineCarriesAnAddress(t *testing.T) {
 		BaseEndpoint: aws.String("http://127.0.0.1:1"), RetryMaxAttempts: 1}, MailboxesTable: "b", MessagesTable: "m", AccountsTable: "a", Bucket: "bucket", Log: log.New(&sdk, "", 0)})
 	logged.Reset()
 	e := newEnv(t, relaxed(), func(c *Config) { c.Store, c.Log = deadS3{c.Store, d}, log.New(&logged, "", 0) })
-	from, to := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	from, to := e.mailbox(), e.mailbox()
 	if _, err := from.Send(context.Background(), to.Address(), "never stored"); err == nil {
 		t.Fatal("a send stored through a closed port")
 	}

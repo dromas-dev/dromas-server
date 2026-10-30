@@ -63,7 +63,7 @@ func polledMailbox(tb testing.TB) (http.Handler, Store, protocol.Address, *fakeA
 	if err != nil {
 		tb.Fatal(err)
 	}
-	key, err := age.GenerateX25519Identity()
+	key, err := age.GenerateHybridIdentity()
 	if err != nil {
 		tb.Fatal(err)
 	}

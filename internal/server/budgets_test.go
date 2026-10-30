@@ -39,11 +39,11 @@ func TestARetryAfterARenewalGetsItsReceipt(t *testing.T) {
 	l := relaxed()
 	l.SendsPerDay = 1
 	e := newEnv(t, l)
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	sent := capture(e, "/v1/"+b.Address().String())
 	first := send(t, a, b, "sent before the renewal")
 	e.setMiddle(nil)
-	if _, err := b.Rekey(ctx, ""); err != nil {
+	if _, err := b.Rekey(ctx); err != nil {
 		t.Fatal(err)
 	}
 	r := e.do(http.MethodPost, "/v1/"+b.Address().String()+"/messages", *sent, e.pass(a))
@@ -67,7 +67,7 @@ func TestASendersCallsBoundTheDedupeRead(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	e := newEnv(t, l)
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	sent := capture(e, "/v1/"+b.Address().String())
 	send(t, a, b, "once")
 	e.setMiddle(nil)
@@ -98,8 +98,8 @@ func TestTheReceiveBudget(t *testing.T) {
 	l := relaxed()
 	l.ReceiveBurst, l.ReceiveRefill = 2, time.Minute
 	e := newEnv(t, l)
-	b := e.mailbox(protocol.Classic)
-	s1, s2, s3 := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	b := e.mailbox()
+	s1, s2, s3 := e.mailbox(), e.mailbox(), e.mailbox()
 	sent := capture(e, "/v1/"+b.Address().String())
 	send(t, s1, b, "one")
 	e.setMiddle(nil)
@@ -121,7 +121,7 @@ func TestTheReceiveBudget(t *testing.T) {
 	// An unmetered account's mailbox takes messages at the ceiling: the same burst,
 	// then one each ReceiveCeiling, and never with no budget.
 	_, key := accountEnv(t, e, true, 1)
-	echo := e.mailbox(protocol.Classic)
+	echo := e.mailbox()
 	adopt(t, echo, key)
 	for i, s := range []*client.Mailbox{s1, s2} {
 		if _, err := s.Send(ctx, echo.Address(), "to the unmetered mailbox"); err != nil {
@@ -169,7 +169,7 @@ func TestLookupsArePaidByTheirCaller(t *testing.T) {
 		l := relaxed()
 		l.CallBurst, l.CallRefill = 1, time.Hour
 		e, _, reg := metered(t, l)
-		a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+		a, b := e.mailbox(), e.mailbox()
 		e.clock.Add(time.Second) // past the passes the registrations showed
 		pass := e.pass(a)
 		e.want(e.do(http.MethodGet, "/v1/"+a.Address().String()+"/acl", nil, pass), http.StatusOK, "") // a's one call, which checks its pass
@@ -204,7 +204,7 @@ func TestLookupsArePaidByTheirCaller(t *testing.T) {
 	t.Run("with none", func(t *testing.T) {
 		l := relaxed()
 		e := newEnv(t, l)
-		b := e.mailbox(protocol.Classic)
+		b := e.mailbox()
 		l.MissesPerMinute = 2
 		e2, cs := counted(t, e, l)
 		read := "/v1/" + b.Address().String()
@@ -229,7 +229,7 @@ func TestUnknownIDsSpendTheMailboxsCalls(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	e := newEnv(t, l)
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	send(t, a, b, "held")
 	l.CallBurst, l.CallRefill = 2, time.Minute
 	e2, _ := counted(t, e, l)
@@ -254,7 +254,7 @@ func TestAStatementOutOfOrderIsRefusedBeforeItsSignature(t *testing.T) {
 	l.MissesPerMinute = 1
 	e := newEnv(t, l)
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
-	key, _ := age.GenerateX25519Identity()
+	key, _ := age.GenerateHybridIdentity()
 	stale := &protocol.Prekey{Address: r.id.Address(), Serial: 1, Key: key.Recipient().String(), NotAfter: e.clock.Now().Add(time.Hour)}
 	misSigned := protocol.PrekeyRequest{Prekey: stale.Statement(), PrekeySignature: r.sig[1]} // statement 1's signature, over other bytes
 	e.want(e.do("PUT", r.path("/prekey"), misSigned, r.pass(1)), http.StatusConflict, protocol.CodeConflict)
@@ -531,7 +531,7 @@ func TestFailedPassesAreCountedPerCaller(t *testing.T) {
 	l := relaxed()
 	l.MissesPerMinute = 2
 	e := newEnv(t, l)
-	b := e.mailbox(protocol.Classic)
+	b := e.mailbox()
 	list := "/v1/" + b.Address().String() + "/messages"
 	good := e.pass(b)
 	e.want(e.do(http.MethodGet, list, nil, good), http.StatusOK, "")
@@ -1003,7 +1003,7 @@ func TestTheDrainBudget(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	e := newEnv(t, l)
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	for _, body := range []string{"1", "2", "3"} {
 		send(t, a, b, body)
 	}
@@ -1032,7 +1032,7 @@ func TestTheDrainBudget(t *testing.T) {
 
 	// An unmetered account's mailbox drains with no budget.
 	_, key := accountEnv(t, e, true, 1)
-	echo := e.mailbox(protocol.Classic)
+	echo := e.mailbox()
 	adopt(t, echo, key)
 	for range 3 {
 		send(t, a, echo, "to the unmetered mailbox")

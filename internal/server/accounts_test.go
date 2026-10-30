@@ -167,7 +167,7 @@ func TestAccounts(t *testing.T) {
 	t.Run("an unmetered account lifts the daily limit and the cap", func(t *testing.T) {
 		e := newEnv(t, l)
 		acc, key := accountEnv(t, e, true, 1)
-		a, b, c := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+		a, b, c := e.mailbox(), e.mailbox(), e.mailbox()
 		if got := adopt(t, a, key); got != acc.ID || e.accountOf(a) != acc.ID {
 			t.Fatalf("adopted into %q, the record says %q", got, e.accountOf(a))
 		}
@@ -212,7 +212,7 @@ func TestAccounts(t *testing.T) {
 	t.Run("a metered account has the free limits until credit exists", func(t *testing.T) {
 		e := newEnv(t, l)
 		_, key := accountEnv(t, e, false, 1)
-		a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+		a, b := e.mailbox(), e.mailbox()
 		adopt(t, a, key)
 		send(t, a, b, "1")
 		send(t, a, b, "2")
@@ -225,7 +225,7 @@ func TestAccounts(t *testing.T) {
 		e := newEnv(t, l)
 		acc, key := accountEnv(t, e, true, 2)
 		other, _ := accountEnv(t, e, true, 1)
-		a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+		a, b := e.mailbox(), e.mailbox()
 		unstored, _, _ := NewAdoptKey(acc.ID)
 		raw, _ := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(key, adoptPrefix))
 		moved := adoptPrefix + base64.RawURLEncoding.EncodeToString(append([]byte(other.ID), raw[len(acc.ID):]...)) // its secret, naming another account
@@ -253,7 +253,7 @@ func TestAccounts(t *testing.T) {
 			t.Fatalf("a key never stored, naming the mailbox's own account: %v", err)
 		}
 		adopt(t, b, key)
-		if _, err := e.mailbox(protocol.Classic).Adopt(ctx, key); codeOf(err) != protocol.CodeAdoptKeyRefused {
+		if _, err := e.mailbox().Adopt(ctx, key); codeOf(err) != protocol.CodeAdoptKeyRefused {
 			t.Fatalf("a third mailbox on a two-use key: %v", err)
 		}
 		// The key is spent, and a mailbox already in its account is still
@@ -267,7 +267,7 @@ func TestAccounts(t *testing.T) {
 		e := newEnv(t, l)
 		first, key1 := accountEnv(t, e, false, 1)
 		second, key2 := accountEnv(t, e, true, 1)
-		a := e.mailbox(protocol.Classic)
+		a := e.mailbox()
 		adopt(t, a, key1)
 		if got := adopt(t, a, key2); got != second.ID || e.accountOf(a) != second.ID {
 			t.Fatalf("moved to %q", e.accountOf(a))
@@ -313,7 +313,7 @@ func TestARevokedMailboxLeavesItsAccount(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	acc, key := accountEnv(t, e, true, 2)
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	if got := adopt(t, a, key); got != acc.ID || e.accountOf(a) != acc.ID {
 		t.Fatalf("adopted into %q, the record says %q", got, e.accountOf(a))
 	}
@@ -341,7 +341,7 @@ func TestAdoptAndLeaveNameTheRecord(t *testing.T) {
 	e := newEnv(t, relaxed())
 	acc, key := accountEnv(t, e, true, 1)
 	_, id, _ := parseAdopt(key)
-	a := e.mailbox(protocol.Classic)
+	a := e.mailbox()
 	old, err := e.store.Mailbox(ctx, a.Address())
 	if err != nil {
 		t.Fatal(err)
@@ -394,7 +394,7 @@ func TestARefusedKeyWritesNothing(t *testing.T) {
 	cs := &adoptCounting{Store: e.store}
 	h := New(Config{Store: cs, Limits: l, Now: e.clock.Now}).Handler()
 	e.setMiddle(func(w http.ResponseWriter, r *http.Request, _ http.Handler) { h.ServeHTTP(w, r) })
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	adopt(t, a, key)
 	unstored, _, _ := NewAdoptKey(acc.ID)
 	expiring := e.adoptKey(t, acc.ID, 1, time.Minute)
@@ -414,11 +414,11 @@ func TestAdoptRaceIsAConflict(t *testing.T) {
 	l := relaxed()
 	e := newEnv(t, l)
 	acc, key := accountEnv(t, e, true, 2)
-	a := e.mailbox(protocol.Classic)
+	a := e.mailbox()
 	adopt(t, a, e.adoptKey(t, acc.ID, 1, time.Hour))
 	stale := New(Config{Store: staleStore{e.store}, Limits: l, Now: e.clock.Now}).Handler()
 	e.setMiddle(func(w http.ResponseWriter, r *http.Request, _ http.Handler) { stale.ServeHTTP(w, r) })
-	b := e.mailbox(protocol.Classic)
+	b := e.mailbox()
 	if _, err := b.Adopt(context.Background(), key); codeOf(err) != protocol.CodeMailboxChanged {
 		t.Fatalf("adopt: %v", err)
 	}
@@ -485,7 +485,7 @@ func TestAnAdoptThatMeetsAnotherIsSentAgain(t *testing.T) {
 	e := newEnv(t, relaxed())
 	acc, key := accountEnv(t, e, true, 5)
 	_, hash, _ := parseAdopt(key)
-	a := e.mailbox(protocol.Classic)
+	a := e.mailbox()
 	conflict := cancelled("None", "TransactionConflict")
 	for _, c := range []struct {
 		name    string
@@ -521,7 +521,7 @@ func TestAnAdoptThatMeetsAnotherIsSentAgain(t *testing.T) {
 	srv := New(Config{Store: dynamoAdopt{e.store, (&cannedDynamo{answers: []string{conflict}}).store(&logged)}, Limits: relaxed(), Now: e.clock.Now, Log: log.New(&logged, "", 0)}).Handler()
 	e.setMiddle(func(w http.ResponseWriter, r *http.Request, _ http.Handler) { srv.ServeHTTP(w, r) })
 	defer e.setMiddle(nil)
-	if _, err := e.mailbox(protocol.Classic).Adopt(ctx, key); codeOf(err) != protocol.CodeMailboxChanged {
+	if _, err := e.mailbox().Adopt(ctx, key); codeOf(err) != protocol.CodeMailboxChanged {
 		t.Errorf("an adopt that met another every time: %v, want mailbox_changed", err)
 	}
 	if strings.Contains(logged.String(), "internal error") {
@@ -563,7 +563,7 @@ func TestAnAdoptPausesBetweenItsTries(t *testing.T) {
 	e := newEnv(t, relaxed())
 	acc, key := accountEnv(t, e, true, 5)
 	_, hash, _ := parseAdopt(key)
-	b, err := e.store.Mailbox(ctx, e.mailbox(protocol.Classic).Address())
+	b, err := e.store.Mailbox(ctx, e.mailbox().Address())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -619,7 +619,7 @@ func TestARecordWriteThatMeetsATransactionIsStale(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
-	a := e.mailbox(protocol.Classic)
+	a := e.mailbox()
 	b, err := e.store.Mailbox(ctx, a.Address())
 	if err != nil {
 		t.Fatal(err)
@@ -654,7 +654,7 @@ func TestAccountChangesReachMemory(t *testing.T) {
 	e := newEnv(t, l)
 	s := e.store.(*Memory)
 	acc, key := accountEnv(t, e, false, 1)
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	adopt(t, a, key)
 	send(t, a, b, "1")
 	if _, err := a.Send(ctx, b.Address(), "2"); !limitedBy(err, protocol.QuotaSends) {
@@ -704,7 +704,7 @@ func TestLargeReadsTakeTurns(t *testing.T) {
 	l.MaxSize, l.AccountMaxSize = 16<<10, 64<<10 // bodies read at once up to 16 KiB, at most 64 KiB
 	e := newEnv(t, l)
 	_, key := accountEnv(t, e, true, 1)
-	lifted, free, to := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	lifted, free, to := e.mailbox(), e.mailbox(), e.mailbox()
 	adopt(t, lifted, key)
 	post := func(pass string, size int, wait time.Duration) (int, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), wait)
@@ -760,7 +760,7 @@ func TestAStalledBodyGivesTheLargeReadBack(t *testing.T) {
 	m := NewMetrics(prometheus.NewRegistry())
 	e := newEnv(t, l, func(c *Config) { c.Metrics = m })
 	_, key := accountEnv(t, e, true, 1)
-	lifted, to := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	lifted, to := e.mailbox(), e.mailbox()
 	adopt(t, lifted, key)
 	addr := strings.TrimPrefix(e.srv.URL, "http://")
 	conn, err := net.Dial("tcp", addr)
@@ -816,7 +816,7 @@ func TestAWaitForTheLargeReadIsBounded(t *testing.T) {
 	m := NewMetrics(prometheus.NewRegistry())
 	e := newEnv(t, l, func(c *Config) { c.Metrics = m })
 	_, key := accountEnv(t, e, true, 1)
-	lifted, to := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	lifted, to := e.mailbox(), e.mailbox()
 	adopt(t, lifted, key)
 	e.server.largeRead <- struct{}{} // another large send is being read
 	defer func() { <-e.server.largeRead }()

@@ -259,7 +259,7 @@ type raw struct {
 	e      *env
 	signer ssh.Signer // the identity
 	id     *protocol.Identity
-	keys   map[uint64]*age.X25519Identity
+	keys   map[uint64]*age.HybridIdentity
 	stmt   map[uint64][]byte
 	sig    map[uint64][]byte
 	work   map[uint64]ssh.Signer // a working key under its certificate, by the certificate's serial
@@ -273,7 +273,7 @@ func (e *env) raw() *raw {
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	return &raw{e: e, signer: s, id: id, keys: map[uint64]*age.X25519Identity{}, stmt: map[uint64][]byte{}, sig: map[uint64][]byte{},
+	return &raw{e: e, signer: s, id: id, keys: map[uint64]*age.HybridIdentity{}, stmt: map[uint64][]byte{}, sig: map[uint64][]byte{},
 		work: map[uint64]ssh.Signer{}}
 }
 
@@ -299,16 +299,16 @@ func (r *raw) certify(serial uint64) ssh.Signer {
 
 // prekey makes statement serial, with a new key unless key is given, signed
 // by a new working key under a new certificate of the same serial.
-func (r *raw) prekey(serial uint64, notAfter time.Time, key *age.X25519Identity) {
+func (r *raw) prekey(serial uint64, notAfter time.Time, key *age.HybridIdentity) {
 	r.e.t.Helper()
 	r.prekeyUnder(r.certify(serial), serial, notAfter, key)
 }
 
 // prekeyUnder makes statement serial, signed by signer.
-func (r *raw) prekeyUnder(signer ssh.Signer, serial uint64, notAfter time.Time, key *age.X25519Identity) {
+func (r *raw) prekeyUnder(signer ssh.Signer, serial uint64, notAfter time.Time, key *age.HybridIdentity) {
 	r.e.t.Helper()
 	if key == nil {
-		key, _ = age.GenerateX25519Identity()
+		key, _ = age.GenerateHybridIdentity()
 	}
 	r.keys[serial] = key
 	p := &protocol.Prekey{Address: r.id.Address(), Serial: serial, Key: key.Recipient().String(), NotAfter: notAfter}
@@ -373,6 +373,33 @@ func TestASignatureIsBounded(t *testing.T) {
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(2), r.pass(2)), 400, protocol.CodeBadKey)
 
 	e.want(e.do("GET", r.path("/messages"), nil, strings.Repeat("x", protocol.MaxPassAuthorization+1)), 401, protocol.CodeUnauthorized)
+}
+
+// A prekey that is no prekey's type, an X25519 recipient or one of a type
+// nobody defines, is bad_key at a registration and at a renewal (PROTOCOL.md
+// §6, §11.7 step 6).
+func TestAPrekeyOfAnotherTypeIsBadKey(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, relaxed())
+	x25519, _ := age.GenerateX25519Identity()
+	unknown := strings.Split(string(clientFile(t, "testdata/vectors/prekey/unsupported-type.txt")), "\n")[3]
+	for _, key := range []string{x25519.Recipient().String(), unknown} {
+		other := func(r *raw, serial uint64) {
+			signer := r.certify(serial)
+			p := &protocol.Prekey{Address: r.id.Address(), Serial: serial, Key: key, NotAfter: e.clock.Now().Add(protocol.PrekeyLifetime)}
+			sig, err := protocol.Sign(signer, p.Statement(), protocol.PrekeyNamespace(r.id.Address()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.stmt[serial], r.sig[serial] = p.Statement(), sig
+		}
+		fresh := e.raw()
+		other(fresh, 1)
+		e.want(e.do("PUT", fresh.path(""), fresh.registration(1), fresh.pass(1)), 400, protocol.CodeBadKey)
+		r := e.raw().register(protocol.PrekeyLifetime)
+		other(r, 2)
+		e.want(e.do("PUT", r.path("/prekey"), r.upload(2), r.pass(2)), 400, protocol.CodeBadKey)
+	}
 }
 
 func TestRegistration(t *testing.T) {
@@ -485,7 +512,7 @@ func TestRegistration(t *testing.T) {
 	e.want(e.do("PUT", r.path(""), r2.registration(1), r2.pass(1)), 409, protocol.CodeConflict)
 
 	// In use at once: it takes messages, and its owner's calls are served.
-	a := e.mailbox(protocol.Classic)
+	a := e.mailbox()
 	if _, err := a.Send(context.Background(), r.id.Address(), "at once"); err != nil {
 		t.Fatalf("send to a mailbox just registered: %v", err)
 	}
@@ -792,7 +819,7 @@ func TestACursorIsReadBeforeThePass(t *testing.T) {
 func TestTwoAuthorizationLinesAreNoPass(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	pass := e.pass(b)
 	twice := func(method, path string, body []byte, lines ...string) reply {
 		t.Helper()
@@ -977,7 +1004,7 @@ func TestSendPipeline(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.PostQuantum)
+	a, b := e.mailbox(), e.mailbox()
 	bMailbox, _ := e.store.Mailbox(ctx, b.Address())
 	pqRecipient, _ := bMailbox.Prekey.Recipient()
 
@@ -1058,7 +1085,7 @@ func TestSendPipeline(t *testing.T) {
 	big := relaxed()
 	big.MaxSize = 100
 	small := newEnv(t, big)
-	sa, sb := small.mailbox(protocol.Classic), small.mailbox(protocol.Classic)
+	sa, sb := small.mailbox(), small.mailbox()
 	if _, err := sa.Send(ctx, sb.Address(), strings.Repeat("x", 200)); codeOf(err) != protocol.CodeTooLarge {
 		t.Fatalf("send over the cap: %v", err)
 	}
@@ -1121,7 +1148,7 @@ func TestSendPipeline(t *testing.T) {
 	// The same ciphertext under another mailbox's pass: the receipt held, as
 	// for any post of bytes the mailbox holds unacked (PROTOCOL.md §11.10 step
 	// 6), and nothing new stored.
-	d := e.mailbox(protocol.Classic)
+	d := e.mailbox()
 	again := e.do("POST", to+"/messages", ok, e.pass(d))
 	e.want(again, 200, "")
 	if !bytes.Equal(first.body, again.body) {
@@ -1151,7 +1178,7 @@ func TestSendPipeline(t *testing.T) {
 	// keeps it: by its identity's own signature, with the mailbox's record left
 	// in place, which the revocation answers for. The route itself is
 	// TestRevocation.
-	f := e.mailbox(protocol.Classic)
+	f := e.mailbox()
 	for _, mailbox := range []*client.Mailbox{a, f} {
 		rv := record(t, mailbox)
 		if err := e.store.Revoke(ctx, mailbox.Address(), &Revocations{Identity: rv.Identity, Address: rv.Revocation}, ExpectAnything); err != nil {
@@ -1175,11 +1202,26 @@ func (greaseRecipient) Wrap([]byte) ([]*age.Stanza, error) {
 	return []*age.Stanza{{Type: "x-grease", Args: []string{"a", "b"}, Body: []byte("junk")}}, nil
 }
 
+func (g greaseRecipient) WrapWithLabels(k []byte) ([]*age.Stanza, []string, error) {
+	return postQuantum{g}.WrapWithLabels(k)
+}
+
+// postQuantum is r, labelled post-quantum, as age requires of a recipient
+// beside a post-quantum one: a stanza of r beside the mailbox's own.
+type postQuantum struct{ r age.Recipient }
+
+func (p postQuantum) Wrap(k []byte) ([]*age.Stanza, error) { return p.r.Wrap(k) }
+
+func (p postQuantum) WrapWithLabels(k []byte) ([]*age.Stanza, []string, error) {
+	s, err := p.r.Wrap(k)
+	return s, []string{"postquantum"}, err
+}
+
 func TestGreaseIsIgnored(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	bMailbox, _ := e.store.Mailbox(ctx, b.Address())
 	rcpt, _ := bMailbox.Prekey.Recipient()
 	var ct bytes.Buffer
@@ -1219,41 +1261,41 @@ func (otherRecipient) Wrap([]byte) ([]*age.Stanza, error) {
 	return []*age.Stanza{{Type: "x-other", Body: []byte("junk")}}, nil
 }
 
+func (o otherRecipient) WrapWithLabels(k []byte) ([]*age.Stanza, []string, error) {
+	return postQuantum{o}.WrapWithLabels(k)
+}
+
 // A send whose stanzas a mailbox does not take is refused wrong_recipient_type
 // with the hint of its case, in PROTOCOL.md §11.10 step 7's order: a stanza
-// of another type first, whatever else the file holds; then no native
-// stanza; then more than one; then a native stanza of the other type.
+// of another type first, an X25519 one among them, whatever else the file
+// holds; then no native stanza; then more than one.
 func TestEachWrongRecipientTypeIsToldItsOwnCase(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
-	a, classic, pq := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic), e.mailbox(protocol.PostQuantum)
-	own := func(b *client.Mailbox) age.Recipient {
-		mailbox, _ := e.store.Mailbox(ctx, b.Address())
-		r, err := mailbox.Prekey.Recipient()
-		if err != nil {
-			t.Fatal(err)
-		}
-		return r
+	a, b := e.mailbox(), e.mailbox()
+	mailbox, _ := e.store.Mailbox(ctx, b.Address())
+	own, err := mailbox.Prekey.Recipient()
+	if err != nil {
+		t.Fatal(err)
 	}
-	stranger, _ := age.GenerateX25519Identity()
-	hybrid, _ := age.GenerateHybridIdentity()
+	stranger, _ := age.GenerateHybridIdentity()
+	x25519, _ := age.GenerateX25519Identity()
 	const another, none, two = "encrypt to the mailbox's prekey", "the file has no recipient: encrypt to the mailbox's prekey", "encrypt to one recipient only"
 	for _, c := range []struct {
 		name string
-		to   *client.Mailbox
 		rs   []age.Recipient
 		hint string
 	}{
-		{"a stanza of another type beside the mailbox's own", classic, []age.Recipient{own(classic), otherRecipient{}}, another},
-		{"a stanza of another type alone", classic, []age.Recipient{otherRecipient{}}, another},
-		{"a stanza of another type and two native", classic, []age.Recipient{own(classic), stranger.Recipient(), otherRecipient{}}, another},
-		{"a stanza of another type and grease", classic, []age.Recipient{greaseRecipient{}, otherRecipient{}}, another},
-		{"grease alone", classic, []age.Recipient{greaseRecipient{}}, none},
-		{"two native", classic, []age.Recipient{own(classic), stranger.Recipient()}, two},
-		{"two native beside grease", classic, []age.Recipient{greaseRecipient{}, stranger.Recipient(), own(classic)}, two},
-		{"a post-quantum stanza to a --no-pq mailbox", classic, []age.Recipient{hybrid.Recipient()}, "this mailbox is --no-pq (X25519 only): re-fetch its prekey"},
-		{"an X25519 stanza to a post-quantum mailbox", pq, []age.Recipient{stranger.Recipient()}, "this mailbox needs age >= 1.3 or age-plugin-pq"},
+		{"a stanza of another type beside the mailbox's own", []age.Recipient{own, otherRecipient{}}, another},
+		{"a stanza of another type alone", []age.Recipient{otherRecipient{}}, another},
+		{"a stanza of another type and two native", []age.Recipient{own, stranger.Recipient(), otherRecipient{}}, another},
+		{"a stanza of another type and grease", []age.Recipient{greaseRecipient{}, otherRecipient{}}, another},
+		{"an X25519 stanza alone", []age.Recipient{x25519.Recipient()}, another},
+		{"an X25519 stanza beside the mailbox's own", []age.Recipient{own, postQuantum{x25519.Recipient()}}, another},
+		{"grease alone", []age.Recipient{greaseRecipient{}}, none},
+		{"two native", []age.Recipient{own, stranger.Recipient()}, two},
+		{"two native beside grease", []age.Recipient{greaseRecipient{}, stranger.Recipient(), own}, two},
 	} {
 		var ct bytes.Buffer
 		w, err := age.Encrypt(&ct, c.rs...)
@@ -1262,8 +1304,8 @@ func TestEachWrongRecipientTypeIsToldItsOwnCase(t *testing.T) {
 		}
 		_, _ = io.WriteString(w, "x")
 		_ = w.Close()
-		serial, under := e.numbers(c.to.Address())
-		got := e.do("POST", "/v1/"+c.to.Address().String()+"/messages", sealedTo(serial, under, ct.Bytes()), e.pass(a))
+		serial, under := e.numbers(b.Address())
+		got := e.do("POST", "/v1/"+b.Address().String()+"/messages", sealedTo(serial, under, ct.Bytes()), e.pass(a))
 		if p := got.problem(); got.status != 400 || p.Code != protocol.CodeWrongRecipientType || p.Hint != c.hint {
 			t.Errorf("%s: %d %s, hint %q; want 400 %s, hint %q", c.name, got.status, p.Code, p.Hint, protocol.CodeWrongRecipientType, c.hint)
 		}
@@ -1275,7 +1317,7 @@ func TestPerIPLimits(t *testing.T) {
 	l := relaxed()
 	l.SendsPerMinutePerIP = 1
 	e := newEnv(t, l)
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	send(t, a, b, "1")
 	_, err := a.Send(context.Background(), b.Address(), "2")
 	var ae *client.APIError
@@ -1370,22 +1412,21 @@ func TestTheClientIsTheLastForwardedAddress(t *testing.T) {
 	}
 }
 
-// A send must name the mailbox's current prekey serial, so after a renewal
-// (here one that switches type) no message reaches the retired key: a send
-// naming its serial is stale, and one naming the current serial but sealed
-// to the retired key's type is refused. The mailbox may then delete the key.
+// A send must name the mailbox's current prekey serial, so after a renewal no
+// message is taken for the retired key: a send naming its serial is stale.
+// The mailbox may then delete the key.
 func TestSendNamesTheCurrentPrekey(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	old, _ := e.store.Mailbox(ctx, b.Address())
 	oldRecipient, _ := old.Prekey.Recipient()
 	e.clock.Add(20 * 24 * time.Hour) // a renewal well before not_after
-	if p, err := b.Rekey(ctx, protocol.PostQuantum); err != nil || p.Type() != protocol.PostQuantum {
-		t.Fatalf("rekey to post-quantum: %v", err)
+	if _, err := b.Rekey(ctx); err != nil {
+		t.Fatalf("rekey: %v", err)
 	}
-	// sealOld seals to the retired classic key, naming serial.
+	// sealOld seals to the retired key, naming serial.
 	sealOld := func(body string, serial uint64) sealed {
 		var ct bytes.Buffer
 		w, _ := age.Encrypt(&ct, oldRecipient)
@@ -1394,10 +1435,8 @@ func TestSendNamesTheCurrentPrekey(t *testing.T) {
 		return sealedTo(serial, serial, ct.Bytes())
 	}
 	to := "/v1/" + b.Address().String()
-	current, _ := e.numbers(b.Address())
 	e.want(e.do("POST", to+"/messages", sealOld("named the retired serial", old.Prekey.Serial), e.pass(a)), 409, protocol.CodeStalePrekey)
-	e.want(e.do("POST", to+"/messages", sealOld("sealed to the retired key", current), e.pass(a)), 400, protocol.CodeWrongRecipientType)
-	send(t, a, b, "after the switch") // to the post-quantum key
+	send(t, a, b, "after the renewal") // to the new key
 	if res := receive(t, b); len(res.Delivered) != 1 {
 		t.Fatalf("delivered %d, want 1", len(res.Delivered))
 	}
@@ -1417,16 +1456,16 @@ func TestRenewalLimits(t *testing.T) {
 	l.RenewalsPerDay, l.CertificatesPerDay, l.RetiredKept = 3, 3, 2
 	e := newEnv(t, l)
 	ctx := context.Background()
-	b := e.mailbox(protocol.Classic)
+	b := e.mailbox()
 	var renewed []*protocol.Prekey
 	for i := range 3 {
-		p, err := b.Rekey(ctx, "")
+		p, err := b.Rekey(ctx)
 		if err != nil {
 			t.Fatalf("renewal %d: %v", i+1, err)
 		}
 		renewed = append(renewed, p)
 	}
-	_, err := b.Rekey(ctx, "")
+	_, err := b.Rekey(ctx)
 	var ae *client.APIError
 	if !limitedBy(err, protocol.QuotaCertificates) || !errors.As(err, &ae) || ae.RetryAfter != 8*time.Hour || ae.Problem.Limit == nil || *ae.Problem.Limit != 3 {
 		t.Fatalf("a fourth renewal at once, of three a day: %v", err)
@@ -1442,11 +1481,11 @@ func TestRenewalLimits(t *testing.T) {
 		}
 	}
 	e.clock.Add(8*time.Hour - time.Second)
-	if _, err := b.Rekey(ctx, ""); !limitedBy(err, protocol.QuotaCertificates) {
+	if _, err := b.Rekey(ctx); !limitedBy(err, protocol.QuotaCertificates) {
 		t.Fatalf("a renewal a second before the next comes back: %v", err)
 	}
 	e.clock.Add(time.Second)
-	if _, err := b.Rekey(ctx, ""); err != nil {
+	if _, err := b.Rekey(ctx); err != nil {
 		t.Fatalf("a renewal once the next came back: %v", err)
 	}
 }

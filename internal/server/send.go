@@ -450,8 +450,6 @@ func checkStanzas(st protocol.Stanzas, b *Mailbox) *problem {
 		return fail(protocol.CodeWrongRecipientType, "encrypt to one recipient only", "the file has more than one native stanza")
 	case st.Native[0] == b.Prekey.Type():
 		return nil
-	case b.Prekey.Type() == protocol.PostQuantum:
-		return fail(protocol.CodeWrongRecipientType, "this mailbox needs age >= 1.3 or age-plugin-pq", "this mailbox is post-quantum and the file is X25519 only")
 	}
-	return fail(protocol.CodeWrongRecipientType, "this mailbox is --no-pq (X25519 only): re-fetch its prekey", "this mailbox is --no-pq (X25519 only) and the file is post-quantum")
+	return fail(protocol.CodeWrongRecipientType, "re-fetch the mailbox's prekey", "the file's stanza is not of the type of the mailbox's prekey")
 }

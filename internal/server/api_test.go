@@ -45,7 +45,7 @@ func TestTheRoutesAreTheDescriptions(t *testing.T) {
 func TestTheReadTheMailboxReplacedIsGone(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	b := e.mailbox(protocol.Classic)
+	b := e.mailbox()
 	resp, err := http.Get(e.srv.URL + "/v1/" + b.Address().String() + "/identity")
 	if err != nil {
 		t.Fatal(err)

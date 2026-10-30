@@ -97,9 +97,9 @@ func (e *env) opts() client.Options {
 }
 
 // mailbox makes and registers a mailbox.
-func (e *env) mailbox(kt protocol.KeyType) *client.Mailbox {
+func (e *env) mailbox() *client.Mailbox {
 	e.t.Helper()
-	b := e.heldMailbox(kt)
+	b := e.heldMailbox()
 	landAll(e.t, b)
 	return b
 }
@@ -116,9 +116,9 @@ func landAll(t *testing.T, b *client.Mailbox) {
 
 // heldMailbox makes a mailbox with the client's default policy, which holds messages
 // from a sender it has not allowed.
-func (e *env) heldMailbox(kt protocol.KeyType) *client.Mailbox {
+func (e *env) heldMailbox() *client.Mailbox {
 	e.t.Helper()
-	b, err := client.Init(context.Background(), e.t.TempDir(), e.opts(), kt)
+	b, err := client.Init(context.Background(), e.t.TempDir(), e.opts())
 	if err != nil {
 		e.t.Fatalf("init: %v", err)
 	}
@@ -170,7 +170,7 @@ func signer(t *testing.T, b *client.Mailbox) ssh.Signer {
 func TestEndToEnd(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b := e.mailbox(protocol.PostQuantum), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 
 	body := "hello <b>&é☃ — a message is data"
 	r := send(t, a, b, body)
@@ -252,7 +252,7 @@ func capture(e *env, to string) *sealed {
 func TestASendNamesTheMessageItMade(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	req := e.sealTo(b)
 	made := e.do(http.MethodPost, "/v1/"+b.Address().String()+"/messages", req, e.pass(a))
 	var r protocol.Receipt
@@ -279,7 +279,7 @@ func TestASendNamesTheMessageItMade(t *testing.T) {
 func TestRetryGetsOriginalReceipt(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b, c := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b, c := e.mailbox(), e.mailbox(), e.mailbox()
 	sent := capture(e, "/v1/"+b.Address().String())
 	r := send(t, a, b, "once")
 	e.setMiddle(nil)
@@ -309,14 +309,14 @@ func TestRetryGetsOriginalReceipt(t *testing.T) {
 func TestPassRefusedAfterRekey(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	b := e.mailbox(protocol.Classic)
+	b := e.mailbox()
 	receive(t, b)
 	// A pass under the certificate in use, as the mailbox signs one.
 	pass := func() string { return e.pass(b) }
 	old := pass()
 	messages := "/v1/" + b.Address().String() + "/messages"
 	e.want(e.do(http.MethodGet, messages, nil, old), http.StatusOK, "")
-	if _, err := b.Rekey(context.Background(), ""); err != nil {
+	if _, err := b.Rekey(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if pass() == old {
@@ -354,12 +354,12 @@ func mustHex(t *testing.T, s string) []byte {
 func TestRenewalAfterExpiry(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	e.clock.Add(protocol.MaxPrekeyLifetime)
 	// Both renew: b for a prekey messages can be sent to, a for a certificate
 	// with long enough left to sign messages under.
 	for _, x := range []*client.Mailbox{a, b} {
-		if _, err := x.Rekey(context.Background(), ""); err != nil {
+		if _, err := x.Rekey(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -372,7 +372,7 @@ func TestRenewalAfterExpiry(t *testing.T) {
 func TestRecoveryWithIdentityAlone(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b := e.mailbox(protocol.PostQuantum), e.mailbox(protocol.PostQuantum)
+	a, b := e.mailbox(), e.mailbox()
 	// A restored machine: the identity, nothing else.
 	for _, g := range []string{"prekeys/*", "work/*", "state"} {
 		names, _ := filepath.Glob(filepath.Join(b.Dir(), g))
@@ -382,7 +382,7 @@ func TestRecoveryWithIdentityAlone(t *testing.T) {
 			}
 		}
 	}
-	if _, err := b.Rekey(context.Background(), ""); err != nil {
+	if _, err := b.Rekey(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	send(t, a, b, "after recovery")
@@ -396,7 +396,7 @@ func TestPagination(t *testing.T) {
 	l := relaxed()
 	l.PollBurst = 1 // a drain of two pages is one poll, and a continuation
 	e := newEnv(t, l)
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	const n = pageSize + 5
 	for i := range n {
 		send(t, a, b, strings.Repeat("x", i))
@@ -421,7 +421,7 @@ func TestLimits(t *testing.T) {
 		l := relaxed()
 		l.MailboxCap = 2
 		e := newEnv(t, l)
-		a, b, c := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+		a, b, c := e.mailbox(), e.mailbox(), e.mailbox()
 		send(t, a, b, "1")
 		send(t, c, b, "2")
 		_, err := c.Send(ctx, b.Address(), "3")
@@ -440,7 +440,7 @@ func TestLimits(t *testing.T) {
 		l := relaxed()
 		l.SendsPerDay = 2
 		e := newEnv(t, l)
-		a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+		a, b := e.mailbox(), e.mailbox()
 		send(t, a, b, "1")
 		send(t, a, b, "2")
 		if _, err := a.Send(ctx, b.Address(), "3"); !limitedBy(err, protocol.QuotaSends) {
@@ -454,7 +454,7 @@ func TestLimits(t *testing.T) {
 		d := DefaultLimits()
 		l.PollBurst, l.PollRefill = d.PollBurst, d.PollRefill
 		e := newEnv(t, l)
-		b := e.mailbox(protocol.Classic)
+		b := e.mailbox()
 		for range 10 {
 			receive(t, b)
 		}
@@ -491,7 +491,7 @@ func TestTheGoClientsACL(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
-	a, b, c, stranger := e.heldMailbox(protocol.Classic), e.heldMailbox(protocol.Classic), e.heldMailbox(protocol.Classic), e.heldMailbox(protocol.Classic)
+	a, b, c, stranger := e.heldMailbox(), e.heldMailbox(), e.heldMailbox(), e.heldMailbox()
 	send(t, a, b, "waits on the server")
 	if _, err := b.Block(ctx, a.Address()); err != nil {
 		t.Fatal(err)

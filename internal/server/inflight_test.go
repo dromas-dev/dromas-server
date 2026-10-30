@@ -168,7 +168,7 @@ func TestPUTsDuringARevocationsDeleteStartNoOther(t *testing.T) {
 	t.Parallel()
 	hs := &heldDeletes{started: make(chan struct{}), release: make(chan struct{})}
 	e := newEnv(t, relaxed(), func(c *Config) { hs.Store, c.Store = c.Store, hs })
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	send(t, b, a, "waiting in A's mailbox when it is revoked")
 	rec := record(t, a)
 	path := revocationPath(a.Address())
@@ -205,7 +205,7 @@ func TestAPutAfterAnAckIsStored(t *testing.T) {
 	t.Parallel()
 	e, s := dynamoEnv(t)
 	ctx := context.Background()
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	body := []byte("acked, then posted again")
 	id := idOf(t, send(t, a, b, string(body)))
 	if res := receive(t, b); len(res.Delivered) != 1 {
