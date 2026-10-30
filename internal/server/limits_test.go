@@ -96,7 +96,7 @@ func TestCursorIsNoWayAroundThePollRate(t *testing.T) {
 	l.MailboxCap = pageSize // a mailbox of one page: two continuations at once, one back each poll interval
 	l.PollBurst, l.PollRefill = 3, 50*time.Second
 	e := newEnv(t, l)
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	e2, cs := counted(t, e, l)
 	tok := e2.pass(b)
 	list := func(c Cursor) reply {
@@ -188,7 +188,7 @@ func TestAContinuationIsTheCursorHandedOutLast(t *testing.T) {
 func TestUnknownIDsStayInMemory(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	e2, cs := counted(t, e, relaxed())
 	tok := e2.pass(b)
 	msg := func(method, id string) reply {
@@ -220,7 +220,7 @@ func TestMissesPerIP(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	e := newEnv(t, l)
-	b := e.mailbox(protocol.Classic)
+	b := e.mailbox()
 	l.MissesPerMinute = 2
 	e2, cs := counted(t, e, l)
 	nobody := func(i byte) protocol.Address {
@@ -291,7 +291,7 @@ func TestANewMailboxIsUsedWhateverItsAddressMissed(t *testing.T) {
 	e.want(e.do(http.MethodGet, "/v1/"+nobody.String(), nil, ""), http.StatusNotFound, protocol.CodeNoSuchMailbox)
 	nobody[1] = 1
 	e.want(e.do(http.MethodGet, "/v1/"+nobody.String(), nil, ""), http.StatusTooManyRequests, protocol.CodeRateLimited)
-	b := e.mailbox(protocol.Classic)
+	b := e.mailbox()
 	if r := e.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages", nil, e.pass(b)); r.status != http.StatusOK {
 		t.Fatalf("the new mailbox's poll: %d %s", r.status, r.body)
 	}
@@ -326,7 +326,7 @@ func TestARememberedMissIsFree(t *testing.T) {
 func TestAFetchedMessageIsFetchedAgainFromAnAllowance(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	l := relaxed()
 	l.PollBurst, l.PollRefill = 2, time.Minute
 	e2, cs := counted(t, e, l)
@@ -509,7 +509,7 @@ func TestThePollsRefusalNamesNoRateItDoesNotCarry(t *testing.T) {
 	l := relaxed()
 	l.PollBurst, l.PollRefill, l.PollAfter = 1, 10*time.Second, 10 // a server that asks for a poll every 10 seconds
 	e := newEnv(t, l)
-	b := e.mailbox(protocol.Classic)
+	b := e.mailbox()
 	path := "/v1/" + b.Address().String() + "/messages"
 	e.want(e.do("GET", path, nil, e.pass(b)), http.StatusOK, "")
 	got := e.do("GET", path, nil, e.pass(b))

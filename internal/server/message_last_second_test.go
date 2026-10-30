@@ -37,11 +37,11 @@ func TestAMessageAtTheLastSecondOfItsLife(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			e := newEnv(t, relaxed())
 			so, ro := c.sender, c.reader
-			s, err := client.Init(ctx, t.TempDir(), e.skewed(&so), protocol.Classic)
+			s, err := client.Init(ctx, t.TempDir(), e.skewed(&so))
 			if err != nil {
 				t.Fatal(err)
 			}
-			r, err := client.Init(ctx, t.TempDir(), e.skewed(&ro), protocol.Classic)
+			r, err := client.Init(ctx, t.TempDir(), e.skewed(&ro))
 			if err != nil {
 				t.Fatal(err)
 			}

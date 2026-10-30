@@ -20,7 +20,7 @@ func TestAnErrorsValuesAreMembers(t *testing.T) {
 	l := relaxed()
 	l.SendsPerDay = 1
 	e := newEnv(t, l)
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	problem := func(err error) protocol.Problem {
 		t.Helper()
 		var ae *client.APIError

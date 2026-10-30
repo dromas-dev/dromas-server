@@ -37,7 +37,7 @@ func (e *env) rawP256() *raw {
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	return &raw{e: e, signer: s, id: id, keys: map[uint64]*age.X25519Identity{}, stmt: map[uint64][]byte{}, sig: map[uint64][]byte{},
+	return &raw{e: e, signer: s, id: id, keys: map[uint64]*age.HybridIdentity{}, stmt: map[uint64][]byte{}, sig: map[uint64][]byte{},
 		work: map[uint64]ssh.Signer{}}
 }
 
@@ -277,12 +277,12 @@ func TestGoClientOnAP256Identity(t *testing.T) {
 	e := newEnv(t, relaxed())
 	o := e.opts()
 	o.IdentityType = protocol.IdentityP256
-	p, err := client.Init(context.Background(), t.TempDir(), o, protocol.Classic)
+	p, err := client.Init(context.Background(), t.TempDir(), o)
 	if err != nil {
 		t.Fatalf("init: %v", err)
 	}
 	landAll(t, p)
-	ed := e.mailbox(protocol.Classic)
+	ed := e.mailbox()
 	send(t, p, ed, "from the P-256 mailbox")
 	send(t, ed, p, "to the P-256 mailbox")
 	if res, err := ed.Receive(context.Background()); err != nil || len(res.Delivered) != 1 || res.Delivered[0].Envelope.From != p.Address() {

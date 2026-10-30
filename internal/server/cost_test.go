@@ -49,9 +49,9 @@ func costAddrs(n int) []protocol.Address {
 }
 
 // costMailbox is a real mailbox record: an identity, and a prekey statement signed
-// by a working key under its certificate, post-quantum or not, with n retired
-// prekeys. It returns the working key's signer too.
-func costMailbox(t *testing.T, pq bool, retired int) (*Mailbox, ssh.Signer) {
+// by a working key under its certificate, with n retired prekeys. It returns
+// the working key's signer too.
+func costMailbox(t *testing.T, retired int) (*Mailbox, ssh.Signer) {
 	t.Helper()
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	identity, _ := ssh.NewSignerFromKey(priv)
@@ -69,17 +69,11 @@ func costMailbox(t *testing.T, pq bool, retired int) (*Mailbox, ssh.Signer) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var key string
-	if pq {
-		k, err := age.GenerateHybridIdentity()
-		if err != nil {
-			t.Fatal(err)
-		}
-		key = k.Recipient().String()
-	} else {
-		k, _ := age.GenerateX25519Identity()
-		key = k.Recipient().String()
+	k, err := age.GenerateHybridIdentity()
+	if err != nil {
+		t.Fatal(err)
 	}
+	key := k.Recipient().String()
 	now := time.Now().UTC().Truncate(time.Second)
 	p := &protocol.Prekey{Address: id.Address(), Serial: uint64(retired) + 1, Key: key, NotAfter: now.Add(protocol.TTL)}
 	sig, err := protocol.Sign(signer, p.Statement(), protocol.PrekeyNamespace(id.Address()))
@@ -154,7 +148,7 @@ func TestCostMemoryPerMailbox(t *testing.T) {
 	// it carries and two signature checks, the working key's and then the
 	// identity's; and every later call that carries it, a hash of the header
 	// and a lookup.
-	mailbox, work := costMailbox(t, false, 0)
+	mailbox, work := costMailbox(t, 0)
 	store := NewMemStore(time.Now)
 	if err := store.CreateMailbox(ctx, mailbox); err != nil {
 		t.Fatal(err)
@@ -191,7 +185,7 @@ func TestCostMemoryPerMailbox(t *testing.T) {
 	// which is public, with a signature that does not verify: one, the
 	// working key's. The identity's is reached only by a pass that is the
 	// mailbox's.
-	_, otherWork := costMailbox(t, false, 0)
+	_, otherWork := costMailbox(t, 0)
 	notAfter := time.Now().UTC().Truncate(time.Second).Add(protocol.PassLifetime)
 	elsewhere, _, err := protocol.NewPass(otherWork, mailbox.Addr, name, time.Now())
 	if err != nil {
@@ -212,12 +206,9 @@ func TestCostMemoryPerMailbox(t *testing.T) {
 	}
 
 	// The mailbox record cache: bounded (--mailbox-cache, default 10,000).
-	for _, c := range []struct {
-		pq      bool
-		retired int
-	}{{true, 0}, {true, 10}, {false, 0}} {
+	for _, retired := range []int{0, 10} {
 		const m = 10_000
-		b, _ := costMailbox(t, c.pq, c.retired)
+		b, _ := costMailbox(t, retired)
 		before := heapNow()
 		cache := newMailboxCache(m)
 		for _, a := range addrs[:m] {
@@ -230,7 +221,7 @@ func TestCostMemoryPerMailbox(t *testing.T) {
 			x.Prekey = &p
 			cache.put(x)
 		}
-		t.Logf("mailbox record cache, pq=%v, %2d retired: %6.0f B per record", c.pq, c.retired, float64(heapNow()-before)/m)
+		t.Logf("mailbox record cache, %2d retired: %6.0f B per record", retired, float64(heapNow()-before)/m)
 		runtime.KeepAlive(cache)
 	}
 }
@@ -279,21 +270,18 @@ func TestCostItemSizes(t *testing.T) {
 	t.Parallel()
 	costOnly(t)
 	wcu := func(n int) int { return (n + 1023) / 1024 }
-	for _, c := range []struct {
-		pq      bool
-		retired int
-	}{{true, 0}, {true, 1}, {true, 10}, {false, 0}, {false, 10}} {
-		b, _ := costMailbox(t, c.pq, c.retired)
+	for _, retired := range []int{0, 1, 10} {
+		b, _ := costMailbox(t, retired)
 		n := itemSize(mailboxItem(b))
-		t.Logf("mailbox record, pq=%v, %2d retired: %5d B = %d write units (identity %d, statement %d, signature %d)",
-			c.pq, c.retired, n, wcu(n), len(b.Identity), len(b.Statement), len(b.Signature))
+		t.Logf("mailbox record, %2d retired: %5d B = %d write units (identity %d, statement %d, signature %d)",
+			retired, n, wcu(n), len(b.Identity), len(b.Statement), len(b.Signature))
 	}
 	// An ACL is part of the record, so every write of it costs its size.
 	for _, entries := range []int{1, 50, DefaultLimits().ACLEntries} {
-		b, _ := costMailbox(t, true, 10)
+		b, _ := costMailbox(t, 10)
 		b.ACL = &protocol.ACL{Allow: protocol.NewACLList(false, costAddrs(entries))}
 		n := itemSize(mailboxItem(b))
-		t.Logf("mailbox record, pq, 10 retired, an ACL of %3d entries: %5d B = %d write units", entries, n, wcu(n))
+		t.Logf("mailbox record, 10 retired, an ACL of %3d entries: %5d B = %d write units", entries, n, wcu(n))
 	}
 
 	to := costAddrs(1)[0]

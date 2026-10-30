@@ -331,11 +331,11 @@ func TestTheClientRevokesItsEarlierCertificates(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	send(t, a, b, "under A's first certificate")
 	taken, old := worker(t, a), e.pass(a)
 	_, first := e.numbers(a.Address())
-	if _, err := a.Rekey(ctx, protocol.Classic); err != nil {
+	if _, err := a.Rekey(ctx); err != nil {
 		t.Fatal(err)
 	}
 	_, second := e.numbers(a.Address())
@@ -348,7 +348,7 @@ func TestTheClientRevokesItsEarlierCertificates(t *testing.T) {
 	// names (dromas-dev/dromas-client#263), and a prekey it signs at the
 	// highest serial there is, is refused too.
 	e.wantNotCurrent(e.do("GET", "/v1/"+a.Address().String()+"/messages", nil, old), second)
-	key, _ := age.GenerateX25519Identity()
+	key, _ := age.GenerateHybridIdentity()
 	top := &protocol.Prekey{Address: a.Address(), Serial: protocol.MaxSerial, Key: key.Recipient().String(), NotAfter: e.clock.Now().Add(time.Hour)}
 	sig, err := protocol.Sign(taken, top.Statement(), protocol.PrekeyNamespace(a.Address()))
 	if err != nil {
@@ -374,10 +374,10 @@ func TestAPrekeyAtTheHighestSerialDoesNotEndTheAddress(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	taken := worker(t, a)
 	_, first := e.numbers(a.Address())
-	key, _ := age.GenerateX25519Identity()
+	key, _ := age.GenerateHybridIdentity()
 	top := &protocol.Prekey{Address: a.Address(), Serial: protocol.MaxSerial, Key: key.Recipient().String(), NotAfter: e.clock.Now().Add(time.Hour)}
 	sig, err := protocol.Sign(taken, top.Statement(), protocol.PrekeyNamespace(a.Address()))
 	if err != nil {
@@ -385,7 +385,7 @@ func TestAPrekeyAtTheHighestSerialDoesNotEndTheAddress(t *testing.T) {
 	}
 	e.want(e.do("PUT", "/v1/"+a.Address().String()+"/prekey", protocol.PrekeyRequest{Prekey: top.Statement(), PrekeySignature: sig}, e.passFor(taken, a.Address(), e.name())), 200, "")
 	send(t, b, a, "encrypted to the prekey the thief published")
-	if _, err := a.Rekey(ctx, protocol.Classic); err != nil {
+	if _, err := a.Rekey(ctx); err != nil {
 		t.Fatalf("a renewal after a prekey at the highest serial: %v", err)
 	}
 	stored, err := e.store.Mailbox(ctx, a.Address())
@@ -490,11 +490,11 @@ func TestTheRemedyRenewsWhenATakerSpentTheDaysRenewals(t *testing.T) {
 	l.RenewalsPerDay = DefaultLimits().RenewalsPerDay
 	l.CertificatesPerDay = DefaultLimits().CertificatesPerDay
 	e := newEnv(t, l)
-	a := e.mailbox(protocol.Classic)
+	a := e.mailbox()
 	taken := worker(t, a)
 	_, inUse := e.numbers(a.Address())
 	thief := func(serial uint64) reply {
-		key, err := age.GenerateX25519Identity()
+		key, err := age.GenerateHybridIdentity()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -509,7 +509,7 @@ func TestTheRemedyRenewsWhenATakerSpentTheDaysRenewals(t *testing.T) {
 		e.want(thief(inUse+uint64(i)+1), 200, "")
 	}
 	e.limited(thief(inUse+uint64(l.RenewalsPerDay)+1), protocol.QuotaRenewals) // the taker is out of renewals
-	r, err := a.RenewAndRevoke(ctx, protocol.Classic)
+	r, err := a.RenewAndRevoke(ctx)
 	if err != nil || r == nil || r.NotRenewed != nil || r.Prekey == nil || r.Revoked == nil || !r.Revoked.Revokes(inUse) || r.Revoked.Revokes(r.Below) {
 		t.Fatalf("the owner's remedy after the taker's renewals: %+v, %v", r, err)
 	}

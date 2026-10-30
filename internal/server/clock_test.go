@@ -32,13 +32,13 @@ func TestAMailboxWhoseClockIsOffByLessThanThePassAllows(t *testing.T) {
 	ctx := context.Background()
 	for _, off := range []time.Duration{-9 * time.Minute, -2 * time.Minute, -time.Second, time.Second, 2 * time.Second, 30 * time.Second, 3 * time.Minute, 49 * time.Minute, 50 * time.Minute} {
 		e := newEnv(t, relaxed())
-		b, err := client.Init(ctx, t.TempDir(), e.skewed(&off), protocol.Classic)
+		b, err := client.Init(ctx, t.TempDir(), e.skewed(&off))
 		if err != nil {
 			t.Errorf("a clock %v off: init: %v", off, err)
 			continue
 		}
 		landAll(t, b)
-		fresh := e.mailbox(protocol.Classic) // made this moment, on the server's clock: no certificate is newer
+		fresh := e.mailbox() // made this moment, on the server's clock: no certificate is newer
 		if _, err := fresh.Send(ctx, b.Address(), "under a certificate made this moment"); err != nil {
 			t.Errorf("a clock %v off: a message to it: %v", off, err)
 		}
@@ -51,7 +51,7 @@ func TestAMailboxWhoseClockIsOffByLessThanThePassAllows(t *testing.T) {
 		if res, err := fresh.Receive(ctx); err != nil || len(res.Delivered) != 1 || len(res.Refused) != 0 {
 			t.Errorf("a clock %v off: its message is read: %+v, %v", off, res, err)
 		}
-		if _, err := b.Rekey(ctx, protocol.Classic); err != nil {
+		if _, err := b.Rekey(ctx); err != nil {
 			t.Errorf("a clock %v off: it renews: %v", off, err)
 		}
 	}
@@ -64,12 +64,12 @@ func TestTheTwoClocksFurthestApart(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
 	fast, slow := 49*time.Minute, -9*time.Minute
-	f, err := client.Init(ctx, t.TempDir(), e.skewed(&fast), protocol.Classic)
+	f, err := client.Init(ctx, t.TempDir(), e.skewed(&fast))
 	if err != nil {
 		t.Fatal(err)
 	}
 	landAll(t, f)
-	s, err := client.Init(ctx, t.TempDir(), e.skewed(&slow), protocol.Classic)
+	s, err := client.Init(ctx, t.TempDir(), e.skewed(&slow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestAMailboxWhoseClockIsTooFarOffIsRefusedAndTold(t *testing.T) {
 	} {
 		e := newEnv(t, relaxed())
 		off, dir := c.off, t.TempDir()
-		_, err := client.Init(ctx, dir, e.skewed(&off), protocol.Classic)
+		_, err := client.Init(ctx, dir, e.skewed(&off))
 		if codeOf(err) != c.code {
 			t.Errorf("a clock %v off: init: %v, want the code %s", c.off, err, c.code)
 			continue
@@ -115,7 +115,7 @@ func TestAMailboxWhoseClockIsTooFarOffIsRefusedAndTold(t *testing.T) {
 			t.Errorf("a clock %v off: the answer's date is %v from the mailbox's clock", c.off, gap)
 		}
 		off = 0
-		if _, err := client.Init(ctx, dir, e.skewed(&off), protocol.Classic); err != nil {
+		if _, err := client.Init(ctx, dir, e.skewed(&off)); err != nil {
 			t.Errorf("a clock %v off, then set right: init: %v", c.off, err)
 		}
 	}
@@ -134,7 +134,7 @@ func TestAMailboxWhoseClockGoesBackFetchesNothing(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
 	var off time.Duration
-	b, err := client.Init(ctx, t.TempDir(), e.skewed(&off), protocol.Classic)
+	b, err := client.Init(ctx, t.TempDir(), e.skewed(&off))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestAMailboxWhoseClockGoesBackFetchesNothing(t *testing.T) {
 		t.Fatal(res)
 	}
 	fast := 49 * time.Minute
-	sender, err := client.Init(ctx, t.TempDir(), e.skewed(&fast), protocol.Classic)
+	sender, err := client.Init(ctx, t.TempDir(), e.skewed(&fast))
 	if err != nil {
 		t.Fatal(err)
 	}

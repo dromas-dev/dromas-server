@@ -95,7 +95,7 @@ func TestEveryStoreCallSendsAWSWhatItSentBefore(t *testing.T) {
 		Addr: mailbox, Identity: []byte("an identity document"), State: Active,
 		Statement: []byte("a prekey statement"), Signature: []byte("its signature"),
 		CertSerial: 7, Cert: [32]byte{0xce, 5}, SenderKeyTypes: []string{"ssh-ed25519"},
-		Retired: []Retired{{Type: protocol.Classic, NotAfter: now.Add(24 * time.Hour), KeyHash: [32]byte{0x4b, 6}}},
+		Retired: []Retired{{Type: protocol.PostQuantum, NotAfter: now.Add(24 * time.Hour), KeyHash: [32]byte{0x4b, 6}}},
 		Rev:     3, Created: now.Add(-48 * time.Hour), Expires: now.Add(60 * 24 * time.Hour),
 		ACL: &protocol.ACL{Allow: protocol.ACLList{Any: true}, Deny: protocol.NewACLList(false, []protocol.Address{other})},
 	}

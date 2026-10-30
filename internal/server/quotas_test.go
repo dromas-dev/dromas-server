@@ -99,7 +99,7 @@ func TestARefusalGivesTheLongestWait(t *testing.T) {
 	l.CallBurst, l.CallRefill = 1, time.Minute
 	l.SendsPerDay, l.RenewalsPerDay = 1, 1
 	e := newEnv(t, l)
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	to := "/v1/" + b.Address().String()
 
 	e.want(e.do("POST", to+"/messages", e.sealTo(b), e.pass(a)), http.StatusCreated, "")
@@ -142,7 +142,7 @@ func TestARetryPastTheCallsIsDeferredByTheCalls(t *testing.T) {
 	l.CallBurst, l.CallRefill = 2, time.Minute
 	l.SendsPerDay = 1
 	e := newEnv(t, l)
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	to := "/v1/" + b.Address().String() + "/messages"
 	x := e.sealTo(b)
 
@@ -350,7 +350,7 @@ func TestLimitsTop(t *testing.T) {
 	l := relaxed()
 	l.ReceiveBurst, l.ReceiveRefill = 10, time.Minute
 	e := newEnv(t, l)
-	a, b, c := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b, c := e.mailbox(), e.mailbox(), e.mailbox()
 	for range 3 {
 		e.want(e.do("POST", "/v1/"+b.Address().String()+"/messages", e.sealTo(b), e.pass(a)), http.StatusCreated, "")
 	}

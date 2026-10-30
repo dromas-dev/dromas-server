@@ -169,7 +169,7 @@ func (s *Memory) listed(t *testing.T, mailbox protocol.Address, id [32]byte) boo
 func TestCrashAfterTheBody(t *testing.T) {
 	t.Parallel()
 	e, s := dynamoEnv(t)
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	failOnce(s, "put: after the body")
 	if _, err := a.Send(context.Background(), b.Address(), "an orphan body first"); err == nil {
 		t.Fatal("the crash was not reported")
@@ -190,7 +190,7 @@ func TestTheSameBytesAfterAnAckAreANewMessage(t *testing.T) {
 	t.Parallel()
 	e, s := dynamoEnv(t)
 	ctx := context.Background()
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	sent := capture(e, "/v1/"+b.Address().String())
 	send(t, a, b, "once")
 	e.setMiddle(nil)
@@ -232,7 +232,7 @@ func TestTheSameBytesAfterAnAckAreANewMessage(t *testing.T) {
 func TestCrashBetweenAnAcksDeletes(t *testing.T) {
 	t.Parallel()
 	e, s := dynamoEnv(t)
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	ctx := context.Background()
 	send(t, a, b, "acked halfway")
 	failOnce(s, "ack: after the body")
@@ -256,7 +256,7 @@ func TestCrashBetweenAnAcksDeletes(t *testing.T) {
 func TestHeaderWithoutBodyIsGone(t *testing.T) {
 	t.Parallel()
 	e, s := dynamoEnv(t)
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	ctx := context.Background()
 	id := idOf(t, send(t, a, b, "its body expires early"))
 	if _, _, err := s.Message(ctx, b.Address(), id, 0); err != nil {
@@ -281,7 +281,7 @@ func TestHeaderWithoutBodyIsGone(t *testing.T) {
 func TestAckedMessageWithABodyAgainIsGone(t *testing.T) {
 	t.Parallel()
 	e, s := dynamoEnv(t)
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	ctx := context.Background()
 	id := idOf(t, send(t, a, b, "acked, then its body rewritten"))
 	if res := receive(t, b); len(res.Delivered) != 1 {
@@ -307,7 +307,7 @@ func TestTwoProcesses(t *testing.T) {
 	t.Cleanup(srv2.Close)
 	e2 := &env{t: t, clock: e.clock, store: other, srv: srv2}
 
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	tok := func() string { return e2.pass(b) }
 	waitFor := func(what string, ok func() bool) time.Duration {
 		t.Helper()
@@ -368,7 +368,7 @@ func TestTwoProcesses(t *testing.T) {
 	if r := e2.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages", nil, old); r.status != http.StatusOK {
 		t.Fatalf("the pass before the renewal, on the other process: %d %s", r.status, r.body)
 	}
-	if _, err := b.Rekey(ctx, ""); err != nil {
+	if _, err := b.Rekey(ctx); err != nil {
 		t.Fatal(err)
 	}
 	rec, err := e.store.Mailbox(ctx, b.Address())
@@ -393,11 +393,11 @@ func TestRestartLoadsLazily(t *testing.T) {
 	t.Parallel()
 	e, _ := dynamoEnv(t)
 	ctx := context.Background()
-	a, b, c, f := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic), e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b, c, f := e.mailbox(), e.mailbox(), e.mailbox(), e.mailbox()
 	one := send(t, a, b, "one")
 	send(t, a, b, "two")
 	send(t, a, f, "three")
-	if _, err := c.Rekey(ctx, ""); err != nil {
+	if _, err := c.Rekey(ctx); err != nil {
 		t.Fatal(err)
 	}
 	renewed, err := e.store.Mailbox(ctx, c.Address())
@@ -448,7 +448,7 @@ func TestRestartLoadsLazily(t *testing.T) {
 func TestAResentRevocationLoadsNothingElsewhere(t *testing.T) {
 	t.Parallel()
 	e, _ := dynamoEnv(t)
-	a := e.mailbox(protocol.Classic)
+	a := e.mailbox()
 	rec := record(t, a)
 	e.want(e.do("PUT", revocationPath(a.Address()), rec, ""), 201, "")
 
@@ -470,7 +470,7 @@ func TestAResentRevocationLoadsNothingElsewhere(t *testing.T) {
 func TestPollsReadOncePerProcess(t *testing.T) {
 	t.Parallel()
 	e, s := dynamoEnv(t)
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	poll := func() reply {
 		e.clock.Add(time.Minute) // past the poll limit
 		return e.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages", nil, e.pass(b))
@@ -503,7 +503,7 @@ func (throttled) Count(context.Context, protocol.Address) (int, error) {
 func TestThrottleIs503(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	b := e.mailbox(protocol.Classic)
+	b := e.mailbox()
 	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: throttled{e.store}, Limits: relaxed(), Now: e.clock.Now}).Handler()))
 	defer srv.Close()
 	e2 := &env{t: t, clock: e.clock, srv: srv}
@@ -658,7 +658,7 @@ func TestPollStaysInMemory(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
-	b, c := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	b, c := e.mailbox(), e.mailbox()
 	cs := &countingStore{s: e.store}
 	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: cs, Limits: relaxed(), Now: e.clock.Now}).Handler()))
 	defer srv.Close()
@@ -684,7 +684,7 @@ func TestPollStaysInMemory(t *testing.T) {
 	if r := poll(c, old); r.status != http.StatusOK {
 		t.Fatalf("before the renewal: %d %s", r.status, r.body)
 	}
-	if _, err := c.Rekey(ctx, ""); err != nil {
+	if _, err := c.Rekey(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if r := poll(c, e2.pass(c)); r.status != http.StatusOK {
@@ -714,7 +714,7 @@ func TestPollStaysInMemory(t *testing.T) {
 func TestExpiredHeadersAreNotListed(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	send(t, a, b, "expires first")
 	e.clock.Add(protocol.TTL / 2)
 	live := send(t, a, b, "still live")
@@ -744,7 +744,7 @@ func TestExpiredHeadersAreNotListed(t *testing.T) {
 func TestTheDedupeSpansAnUnackedMessagesLife(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	sent := capture(e, "/v1/"+b.Address().String())
 	first := send(t, a, b, "once, then again")
 	e.setMiddle(nil)
@@ -966,7 +966,7 @@ func TestUpdateMailboxIsConditional(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
-	b := e.mailbox(protocol.Classic)
+	b := e.mailbox()
 	first, _ := e.store.Mailbox(ctx, b.Address())
 	second, _ := e.store.Mailbox(ctx, b.Address())
 	first.CertSerial++
@@ -1029,7 +1029,7 @@ func TestTheMailboxsStateAnswersBeforeItsPass(t *testing.T) {
 	poll := func(a protocol.Address, pass string) reply {
 		return e.do(http.MethodGet, "/v1/"+a.String()+"/messages", nil, pass)
 	}
-	b, c, d := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	b, c, d := e.mailbox(), e.mailbox(), e.mailbox()
 	if r := poll(b.Address(), "dromas-pass not-a-pass"); r.code() != protocol.CodeUnauthorized {
 		t.Fatalf("not a pass: %d %s", r.status, r.body)
 	}
@@ -1069,7 +1069,7 @@ func TestDynamoObservesTheItemCollection(t *testing.T) {
 	e, s := dynamoEnv(t)
 	m := NewMetrics(prometheus.NewRegistry())
 	s.dynamo().metrics = m
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	send(t, a, b, "sized")
 	if err := testutil.CollectAndCompare(m.collections, strings.NewReader(collectionsWant(1)), "dromas_server_item_collection_estimate_bytes"); err != nil {
 		t.Error(err)

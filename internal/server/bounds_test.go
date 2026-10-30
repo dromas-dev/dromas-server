@@ -392,9 +392,9 @@ func TestAHeldReadGivesBackTheLargeRead(t *testing.T) {
 	e := newEnv(t, l, func(c *Config) { h.Store, c.Store = c.Store, h })
 	t.Cleanup(sync.OnceFunc(func() { close(h.let) })) // or the server's Close waits on the handler for ever
 	_, key := accountEnv(t, e, true, 1)
-	lifted, to := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	lifted, to := e.mailbox(), e.mailbox()
 	adopt(t, lifted, key)
-	id, err := age.GenerateX25519Identity()
+	id, err := age.GenerateHybridIdentity()
 	if err != nil {
 		t.Fatal(err)
 	}

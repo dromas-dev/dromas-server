@@ -75,7 +75,7 @@ func TestRevocation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
-	a, b, c := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b, c := e.mailbox(), e.mailbox(), e.mailbox()
 	send(t, b, a, "waiting in A's mailbox when it is revoked")
 	send(t, a, b, "sent by A before it was revoked")
 	passA := e.pass(a)
@@ -203,7 +203,7 @@ func TestRevocation(t *testing.T) {
 	// Nothing brings it back: not a registration, not a new prekey, and a
 	// second revocation changes nothing. Whatever is sent for a revoked mailbox
 	// is answered from its record, with no check: nothing could change it.
-	if _, err := a.Rekey(ctx, protocol.Classic); !errors.As(err, &gone) || !gone.Own {
+	if _, err := a.Rekey(ctx); !errors.As(err, &gone) || !gone.Own {
 		t.Fatalf("a revoked mailbox's renewal: %v", err)
 	}
 	e.want(e.do("PUT", path, rec, ""), 410, protocol.CodeRevoked)
@@ -405,7 +405,7 @@ func TestJunkRevocationsAreLimited(t *testing.T) {
 	l := relaxed()
 	l.MissesPerMinute = 2
 	e := newEnv(t, l)
-	a := e.mailbox(protocol.Classic)
+	a := e.mailbox()
 	junk := protocol.Revocations{Identity: a.Identity().Document(), Revocation: []byte("revoke it")}
 	path := revocationPath(a.Address())
 	e.want(e.do("PUT", path, junk, ""), 400, protocol.CodeBadRevocation)
@@ -426,7 +426,7 @@ func TestJunkRevocationsAreLimited(t *testing.T) {
 func TestNoAnswerOfTheAPIIsStored(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a := e.mailbox(protocol.Classic)
+	a := e.mailbox()
 	base := "/v1/" + a.Address().String()
 	check := func(r reply, what string) {
 		t.Helper()
@@ -461,7 +461,7 @@ func mustJSONBytes(t *testing.T, b []byte) []byte {
 func TestARevocationOutlivesTheProcess(t *testing.T) {
 	t.Parallel()
 	e, _ := dynamoEnv(t)
-	a := e.mailbox(protocol.Classic)
+	a := e.mailbox()
 	rec := record(t, a)
 	e.want(e.do("PUT", revocationPath(a.Address()), rec, ""), 201, "")
 
@@ -530,7 +530,7 @@ func TestASecondRevocationReadsNoMessages(t *testing.T) {
 	t.Parallel()
 	w := &watchedStore{}
 	e := newEnv(t, relaxed(), watching(w))
-	owner := e.mailbox(protocol.Classic)
+	owner := e.mailbox()
 	signed := record(t, owner)
 	// The same signature with a line feed after its armour, which anyone can
 	// add.
@@ -563,7 +563,7 @@ func TestARevocationRetriedAfterAFailedDeleteDeletes(t *testing.T) {
 	ctx := context.Background()
 	w := &watchedStore{}
 	e := newEnv(t, relaxed(), watching(w))
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	send(t, b, a, "waiting in A's mailbox when it is revoked")
 	rec := record(t, a)
 	path := revocationPath(a.Address())
@@ -597,10 +597,10 @@ func TestARevocationDeletesEveryMessageFromTheStore(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
-	a := e.mailbox(protocol.Classic)
+	a := e.mailbox()
 	var ids [][32]byte
 	for i := range 3 {
-		from := e.mailbox(protocol.Classic)
+		from := e.mailbox()
 		var id [32]byte
 		copy(id[:], mustHex(t, send(t, from, a, "waiting in A's mailbox when it is revoked, "+string(rune('a'+i))).ID))
 		ids = append(ids, id)
@@ -637,7 +637,7 @@ func TestAResentRevocationLoadsNothing(t *testing.T) {
 	ctx := context.Background()
 	w := &watchedStore{}
 	e := newEnv(t, relaxed(), watching(w))
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	send(t, b, a, "waiting in A's mailbox when it is revoked")
 	rec := record(t, a)
 	path := revocationPath(a.Address())

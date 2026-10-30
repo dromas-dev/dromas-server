@@ -120,7 +120,7 @@ func TestASunsetIsPassedByTheServersClock(t *testing.T) {
 		o := e.skewed(&off)
 		o.Version = "1.3.7" // sunset at the server's start plus an hour
 		e.clock.Add(15 * time.Minute)
-		b, err := client.Init(ctx, t.TempDir(), o, protocol.Classic)
+		b, err := client.Init(ctx, t.TempDir(), o)
 		if err != nil {
 			t.Fatalf("%s: init before the sunset by the server's clock: %v", c.name, err)
 		}

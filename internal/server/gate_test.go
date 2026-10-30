@@ -298,7 +298,7 @@ func TestANewPassSpendsItsAddresssFloodBudget(t *testing.T) {
 	l := relaxed()
 	l.RequestBurst, l.RequestRefill = 20, time.Hour
 	e, m, _ := metered(t, l)
-	b, c := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	b, c := e.mailbox(), e.mailbox()
 	call := e.caller()
 	kept := e.pass(c)
 	e.want(call("198.51.100.8", "GET", "/v1/"+c.Address().String()+"/messages", nil, kept), http.StatusOK, "")
@@ -329,7 +329,7 @@ func TestANewPassSpendsItsAddresssFloodBudget(t *testing.T) {
 
 	// A pass first shown in another form a server reads, the scheme in
 	// capitals, is checked in that form too: it goes on from that address.
-	d := e.mailbox(protocol.Classic)
+	d := e.mailbox()
 	e.clock.Add(time.Second) // not the pass its registration showed
 	upper := strings.Replace(e.pass(d), "dromas-pass ", "DROMAS-PASS ", 1)
 	e.want(call("198.51.100.9", "GET", "/v1/"+d.Address().String()+"/messages", nil, upper), http.StatusOK, "")
@@ -362,7 +362,7 @@ func TestANewPassSpendsItsAddresssFloodBudget(t *testing.T) {
 func TestARespelledPassCostsNoSecondCheck(t *testing.T) {
 	t.Parallel()
 	e, m, _ := metered(t, relaxed())
-	b := e.mailbox(protocol.Classic)
+	b := e.mailbox()
 	poll := func(auth string) reply { return e.do("GET", "/v1/"+b.Address().String()+"/messages", nil, auth) }
 	e.clock.Add(time.Second) // not the pass the registration showed
 	pass := e.pass(b)

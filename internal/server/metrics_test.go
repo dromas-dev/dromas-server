@@ -51,7 +51,7 @@ func TestMetricsCountWhatTheServerDoes(t *testing.T) {
 	l.PollBurst, l.PollRefill = 1, time.Minute
 	l.ReceiveBurst, l.ReceiveRefill = 10, time.Minute
 	e, m, _ := metered(t, l)
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	to := "/v1/" + b.Address().String()
 	id := e.sent(e.do("POST", to+"/messages", e.sealTo(b), e.pass(a)))
 	e.want(e.do("GET", to+"/messages", nil, e.pass(b)), http.StatusOK, "")
@@ -104,7 +104,7 @@ func TestMetricsCarryNoCallerValue(t *testing.T) {
 	// their first reads of the server's document, from the test's address.
 	l.MissesPerMinute, l.RequestBurst, l.RequestRefill = 1, 6, time.Minute
 	e, _, reg := metered(t, l)
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	to := "/v1/" + b.Address().String()
 	id := e.sent(e.do("POST", to+"/messages", e.sealTo(b), e.pass(a)))
 	e.want(e.do("GET", to+"/messages/"+id, nil, e.pass(b)), http.StatusOK, "")

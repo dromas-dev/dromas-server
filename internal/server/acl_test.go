@@ -66,7 +66,7 @@ func TestACLRoute(t *testing.T) {
 	l := relaxed()
 	l.ACLEntries = 3
 	e := newEnv(t, l)
-	b, other := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	b, other := e.mailbox(), e.mailbox()
 	path := "/v1/" + b.Address().String() + "/acl"
 	pass := e.pass(b)
 	x, y := other.Address().String(), strings.Repeat("ab", 38)+"a"
@@ -175,7 +175,7 @@ func TestAnACLsIfMatch(t *testing.T) {
 	l := relaxed()
 	l.ACLEntries = 3
 	e := newEnv(t, l)
-	b, c := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	b, c := e.mailbox(), e.mailbox()
 	path := "/v1/" + b.Address().String() + "/acl"
 	pass := e.pass(b)
 	pause, open := aclOf([]string{}, []string{"*"}), aclOf([]string{"*"}, nil)
@@ -267,7 +267,7 @@ func (o *onRead) Read(p []byte) (int, error) {
 func TestAnACLsIfMatchIsHeldToTheACLItsWriteReplaces(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	b, x := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	b, x := e.mailbox(), e.mailbox()
 	path := "/v1/" + b.Address().String() + "/acl"
 	pass := e.pass(b)
 	tag := e.do("GET", path, nil, pass).header.Get("ETag")
@@ -312,7 +312,7 @@ func TestAnACLsIfMatchIsHeldToTheACLItsWriteReplaces(t *testing.T) {
 func TestAnACLsGETReadsItsPreconditions(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	b, other := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	b, other := e.mailbox(), e.mailbox()
 	path := "/v1/" + b.Address().String() + "/acl"
 	pass := e.pass(b)
 	e.want(e.do("PUT", path, aclOf([]string{"*"}, []string{other.Address().String()}), pass), 200, "")
@@ -363,7 +363,7 @@ func TestACLRefusesSends(t *testing.T) {
 	l := relaxed()
 	l.SendsPerDay = 1
 	e := newEnv(t, l)
-	a, b, c := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b, c := e.mailbox(), e.mailbox(), e.mailbox()
 	to := "/v1/" + b.Address().String()
 	acl := func(allow, deny []string) {
 		t.Helper()
@@ -400,7 +400,7 @@ func TestACLDeletesNoMessages(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
-	a, b, c := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b, c := e.mailbox(), e.mailbox(), e.mailbox()
 	to := "/v1/" + b.Address().String()
 	first := e.sealTo(b)
 	stored := e.do("POST", to+"/messages", first, e.pass(a))
@@ -447,7 +447,7 @@ func TestACLReachesAnotherProcess(t *testing.T) {
 	srv2 := httptest.NewServer(apitest.Handler(t, New(Config{Store: other, Limits: relaxed(), Now: e.clock.Now, Ready: other.Ready}).Handler()))
 	t.Cleanup(srv2.Close)
 	e2 := &env{t: t, clock: e.clock, store: other, srv: srv2}
-	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	a, b := e.mailbox(), e.mailbox()
 	to := "/v1/" + b.Address().String()
 
 	// The other process holds b's record, with no ACL in it.
