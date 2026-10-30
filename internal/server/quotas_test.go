@@ -51,7 +51,7 @@ func waits(r reply) int {
 }
 
 // Every limit a rate_limited answers for names itself in quota_id, and whom
-// it counted the call against in subject (PROTOCOL.md §11.5): the box for a
+// it counted the call against in subject (PROTOCOL.md §11.5): the mailbox for a
 // call with its pass, the address for one with none.
 func TestEveryRefusalNamesItsLimit(t *testing.T) {
 	t.Parallel()
@@ -86,11 +86,11 @@ func TestEveryRefusalNamesItsLimit(t *testing.T) {
 	e.limited(e.do("PUT", r.path(""), r.registration(1), r.pass(1)), protocol.QuotaRegistrations)
 }
 
-// A refusal of a box's calls gives the longest wait among the box's other
+// A refusal of a mailbox's calls gives the longest wait among the mailbox's other
 // counts in memory that the same call would spend, under that count's name
 // (RFC 8555 §6.6; dromas-dev/dromas-server#56): a renewal's renewals a
 // day. A send's sends a day are not among them: only the dedupe, behind the
-// body, shows whether a send is new mail that spends them, so a send past
+// body, shows whether a send is a new message that spends them, so a send past
 // its calls is told their wait, and one past its sends too meets them once
 // that wait is over (dromas-dev/dromas-server#61).
 func TestARefusalGivesTheLongestWait(t *testing.T) {
@@ -99,7 +99,7 @@ func TestARefusalGivesTheLongestWait(t *testing.T) {
 	l.CallBurst, l.CallRefill = 1, time.Minute
 	l.SendsPerDay, l.RenewalsPerDay = 1, 1
 	e := newEnv(t, l)
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	to := "/v1/" + b.Address().String()
 
 	e.want(e.do("POST", to+"/messages", e.sealTo(b), e.pass(a)), http.StatusCreated, "")
@@ -142,7 +142,7 @@ func TestARetryPastTheCallsIsDeferredByTheCalls(t *testing.T) {
 	l.CallBurst, l.CallRefill = 2, time.Minute
 	l.SendsPerDay = 1
 	e := newEnv(t, l)
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	to := "/v1/" + b.Address().String() + "/messages"
 	x := e.sealTo(b)
 
@@ -202,7 +202,7 @@ func TestRegistrationsAreCountedByTheRange(t *testing.T) {
 // requests. So do a registration and a renewal, whose bodies are read before
 // any pass, and they are refused before their bodies are read
 // (dromas-dev/dromas-server#34). A call whose pass comes first spends its
-// box's budgets, never this one, and another address's budget is its own.
+// mailbox's budgets, never this one, and another address's budget is its own.
 func TestTheFloodBudget(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
@@ -246,7 +246,7 @@ func TestTheFloodBudget(t *testing.T) {
 		status int
 	}{
 		{b.path(""), b.registration(2), "", http.StatusUnauthorized},                       // sent again with no pass
-		{b.path("/prekey"), b.upload(1), "", http.StatusConflict},                          // the box's previous statement
+		{b.path("/prekey"), b.upload(1), "", http.StatusConflict},                          // the mailbox's previous statement
 		{b.path("/prekey"), strings.Repeat("A", 60<<10), b.pass(1), http.StatusBadRequest}, // not an object
 	} {
 		if got := call("198.51.100.6", "PUT", c.path, c.body, c.pass); got.status != c.status {
@@ -288,7 +288,7 @@ func TestWhatNoRouteAnswersIsCounted(t *testing.T) {
 		{"DELETE", b.path("/revocations"), http.StatusMethodNotAllowed, call},
 		{"GET", "/v1", http.StatusTemporaryRedirect, direct},
 		{"GET", b.path("/messages/../acl"), http.StatusTemporaryRedirect, direct},
-		{"HEAD", b.path(""), http.StatusOK, call}, // the read of a box with no pass, which spends it as a route
+		{"HEAD", b.path(""), http.StatusOK, call}, // the read of a mailbox with no pass, which spends it as a route
 	} {
 		ip := "198.51.100." + strconv.Itoa(i+1)
 		if got := c.call(ip, c.method, c.path, nil, ""); got.status != c.status {
@@ -322,7 +322,7 @@ func TestARequestIsCountedOnceWhateverItsPathEscapes(t *testing.T) {
 	}{
 		{"GET", "/v1/%2e%2e/x", "", http.StatusNotFound, 1},                         // the router's 404, under /v1/
 		{"CONNECT", "/v1/x/../y", "", http.StatusNotFound, 1},                       // the one method whose path the router leaves as sent
-		{"GET", "/v1/%2e", "", http.StatusBadRequest, 1},                            // the read of a box, with no pass: a route
+		{"GET", "/v1/%2e", "", http.StatusBadRequest, 1},                            // the read of a mailbox, with no pass: a route
 		{"GET", "/to/%2e", "", http.StatusNotFound, 1},                              // the link page: a route
 		{"GET", b.path("/messages/%2e%2e"), b.pass(1), http.StatusNotFound, 0},      // a route that takes a pass
 		{"GET", b.path("/messages/.."), b.pass(1), http.StatusTemporaryRedirect, 1}, // the router's redirect
@@ -343,14 +343,14 @@ func TestARequestIsCountedOnceWhateverItsPathEscapes(t *testing.T) {
 }
 
 // The operator lists the keys a limit holds deepest in debt now, deepest
-// first, by the limit's name (limits top): which box takes the most new mail,
+// first, by the limit's name (limits top): which mailbox takes the most new messages,
 // say. It keeps nothing, and knows every limit by the name a refusal gives it.
 func TestLimitsTop(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	l.ReceiveBurst, l.ReceiveRefill = 10, time.Minute
 	e := newEnv(t, l)
-	a, b, c := e.box(protocol.Classic), e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b, c := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	for range 3 {
 		e.want(e.do("POST", "/v1/"+b.Address().String()+"/messages", e.sealTo(b), e.pass(a)), http.StatusCreated, "")
 	}

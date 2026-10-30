@@ -182,17 +182,17 @@ func fakeStore(t testing.TB, f *fakeAWS) *Memory {
 			return retry.AddWithMaxBackoffDelay(retry.NewStandard(), time.Millisecond)
 		},
 	}
-	s := NewDynamoStore(DynamoConfig{AWS: cfg, BoxesTable: "boxes", MsgsTable: "msgs", AccountsTable: "accounts", Bucket: "bodies", BoxCache: 16})
+	s := NewDynamoStore(DynamoConfig{AWS: cfg, MailboxesTable: "mailboxes", MessagesTable: "msgs", AccountsTable: "accounts", Bucket: "bodies", MailboxCache: 16})
 	s.dynamo().s3 = newS3(cfg, func(o *s3.Options) { o.UsePathStyle = true })
 	return s
 }
 
-// heldRecord is a registered box's record, from the suite's store.
-func heldRecord(t *testing.T) (*env, *raw, *Box) {
+// heldRecord is a registered mailbox's record, from the suite's store.
+func heldRecord(t *testing.T) (*env, *raw, *Mailbox) {
 	t.Helper()
 	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
-	b, err := e.store.Box(t.Context(), r.id.Address())
+	b, err := e.store.Mailbox(t.Context(), r.id.Address())
 	if err != nil {
 		t.Fatal(err)
 	}

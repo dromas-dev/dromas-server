@@ -12,7 +12,7 @@ import (
 	"github.com/dromas-dev/dromas-client/protocol"
 )
 
-// The one page of this server's own outside /v1/: the page a box's link
+// The one page of this server's own outside /v1/: the page a mailbox's link
 // opens (PROTOCOL.md §4.3). It needs no store, so it is served while the
 // API still answers 503. A site's pages, when there is one, are a
 // deployment's (site.go).
@@ -37,9 +37,9 @@ var linkCSP = func() string {
 	return "default-src 'none'; style-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 }()
 
-// linkPage serves the page a box's link opens, <server>/to/<address>: what
+// linkPage serves the page a mailbox's link opens, <server>/to/<address>: what
 // dromas is, for whoever was handed the link. It is fixed text, the
-// address and the link itself, never text a box supplied, for any 64
+// address and the link itself, never text a mailbox supplied, for any 64
 // lowercase hex characters, the form clients take; it reads no store, so it
 // answers before the API is ready. The link is a send capability: the page
 // keeps it out of Referer headers and search engines.
@@ -76,7 +76,7 @@ func (s *Server) linkPage() http.Handler {
 	})
 }
 
-// linkBase is this server as a box's link names it: by the scheme the caller
+// linkBase is this server as a mailbox's link names it: by the scheme the caller
 // reached it by, and by the name the caller called it by when that is one of
 // its own (serverName), as a client's base URL names it; called by any other
 // name, by the first of its own. So each server's page names that server,

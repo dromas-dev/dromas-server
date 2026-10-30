@@ -41,24 +41,24 @@ func (h *heldTillGone) hold(ctx context.Context) bool {
 	return true
 }
 
-func (h *heldTillGone) PutMessage(ctx context.Context, box protocol.Address, hd *Header, body []byte) (*Header, error) {
+func (h *heldTillGone) PutMessage(ctx context.Context, mailbox protocol.Address, hd *Header, body []byte) (*Header, error) {
 	held := h.hold(ctx)
-	orig, err := h.Store.PutMessage(ctx, box, hd, body)
+	orig, err := h.Store.PutMessage(ctx, mailbox, hd, body)
 	if err != nil || orig != nil || !held {
 		return orig, err
 	}
 	return nil, ctx.Err()
 }
 
-func (h *heldTillGone) UpdateBox(ctx context.Context, b *Box) error {
+func (h *heldTillGone) UpdateMailbox(ctx context.Context, b *Mailbox) error {
 	held := h.hold(ctx)
-	if err := h.Store.UpdateBox(ctx, b); err != nil || !held {
+	if err := h.Store.UpdateMailbox(ctx, b); err != nil || !held {
 		return err
 	}
 	return ctx.Err()
 }
 
-// sealFor is an age file sealed to raw box to's prekey of the given serial.
+// sealFor is an age file sealed to raw mailbox to's prekey of the given serial.
 func sealFor(t *testing.T, to *raw, serial uint64) []byte {
 	t.Helper()
 	var ct bytes.Buffer
@@ -120,7 +120,7 @@ func TestAWriteOutlivesItsCallersHangUp(t *testing.T) {
 	from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 	hangUp("POST", to.path("/messages?")+sealedTo(1, 1, nil).Encode(), protocol.CiphertextContentType, sealFor(t, to, 1), from.pass(1))
 	if n, _ := e.store.Count(ctx0, to.id.Address()); n != 1 {
-		t.Fatalf("a send whose caller hung up mid-write: the box holds %d messages", n)
+		t.Fatalf("a send whose caller hung up mid-write: the mailbox holds %d messages", n)
 	}
 	e.want(e.sendTo(to, 1, 1, from, 1), http.StatusTooManyRequests, protocol.CodeRateLimited)
 
@@ -128,8 +128,8 @@ func TestAWriteOutlivesItsCallersHangUp(t *testing.T) {
 	r.prekeyUnder(r.work[1], 2, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	up, _ := json.Marshal(r.upload(2))
 	hangUp("PUT", r.path("/prekey"), "application/json", up, r.pass(1))
-	if b, _ := e.store.Box(ctx0, r.id.Address()); b.Prekey.Serial != 2 {
-		t.Fatalf("a renewal whose caller hung up mid-write: the box is at prekey %d", b.Prekey.Serial)
+	if b, _ := e.store.Mailbox(ctx0, r.id.Address()); b.Prekey.Serial != 2 {
+		t.Fatalf("a renewal whose caller hung up mid-write: the mailbox is at prekey %d", b.Prekey.Serial)
 	}
 	r.prekeyUnder(r.work[1], 3, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(3), r.pass(1)), http.StatusTooManyRequests, protocol.CodeRateLimited)
@@ -149,7 +149,7 @@ type heldPut struct {
 	put func()
 }
 
-func (s *heldPut) PutMessage(ctx context.Context, box protocol.Address, h *Header, body []byte) (*Header, error) {
+func (s *heldPut) PutMessage(ctx context.Context, mailbox protocol.Address, h *Header, body []byte) (*Header, error) {
 	s.mu.Lock()
 	f := s.put
 	s.put = nil
@@ -157,14 +157,14 @@ func (s *heldPut) PutMessage(ctx context.Context, box protocol.Address, h *Heade
 	if f != nil {
 		f()
 	}
-	return s.Store.PutMessage(ctx, box, h, body)
+	return s.Store.PutMessage(ctx, mailbox, h, body)
 }
 
-// Mail sent around a revocation of its box's address does not outlive it
-// (dromas-dev/dromas-server#15): a send that passed its check of the box
+// A message sent around a revocation of its mailbox's address does not outlive it
+// (dromas-dev/dromas-server#15): a send that passed its check of the mailbox
 // before the revocation and writes after it deletes what it wrote, and is
 // answered 410.
-func TestMailSentAroundARevocationDoesNotOutliveIt(t *testing.T) {
+func TestAMessageSentAroundARevocationDoesNotOutliveIt(t *testing.T) {
 	t.Parallel()
 	ctx0 := context.Background()
 	s := &heldPut{}
@@ -197,14 +197,14 @@ type failPut struct {
 	err error
 }
 
-func (s *failPut) PutMessage(ctx context.Context, box protocol.Address, h *Header, body []byte) (*Header, error) {
+func (s *failPut) PutMessage(ctx context.Context, mailbox protocol.Address, h *Header, body []byte) (*Header, error) {
 	s.mu.Lock()
 	err := s.err
 	s.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
-	return s.Store.PutMessage(ctx, box, h, body)
+	return s.Store.PutMessage(ctx, mailbox, h, body)
 }
 
 // A count reserved for a write is kept when the write may have been applied,

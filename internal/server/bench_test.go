@@ -2,7 +2,7 @@ package server
 
 // What an empty poll costs on the DynamoDB store, the primary one: through
 // the handler, and the store's count alone. Both run over the fake of AWS
-// (awsfake_test.go), on a box loaded once, after which a poll reads no AWS:
+// (awsfake_test.go), on a mailbox loaded once, after which a poll reads no AWS:
 // each benchmark checks that it read none. Run under nice, each alone:
 //
 //	go test -run '^$' -bench BenchmarkAnEmptyPoll -benchtime 2s -count 5 ./internal/server
@@ -23,13 +23,13 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// polledBox is a box registered through the handler of a server on the
+// polledMailbox is a mailbox registered through the handler of a server on the
 // DynamoDB store over the fake of AWS, and polled once, which loads it: the
-// handler, the store, the box's address, the fake, and a poll of the box with
+// handler, the store, the mailbox's address, the fake, and a poll of the mailbox with
 // a pass the server has taken, which answers its status.
-func polledBox(tb testing.TB) (http.Handler, Store, protocol.Address, *fakeAWS, func() int) {
+func polledMailbox(tb testing.TB) (http.Handler, Store, protocol.Address, *fakeAWS, func() int) {
 	tb.Helper()
-	tbl := &boxesTable{items: map[string]map[string]any{}}
+	tbl := &mailboxesTable{items: map[string]map[string]any{}}
 	f := newFakeAWS()
 	f.dynamo = tbl.answer
 	s := fakeStore(tb, f)
@@ -113,10 +113,10 @@ func (f *fakeAWS) callsTo() int {
 	return n
 }
 
-// An empty poll through the handler, on the DynamoDB store, of a box loaded
+// An empty poll through the handler, on the DynamoDB store, of a mailbox loaded
 // by a first poll, with a pass the server has taken: it reads no AWS.
 func BenchmarkAnEmptyPollOnTheDynamoDBStore(b *testing.B) {
-	_, _, _, f, poll := polledBox(b)
+	_, _, _, f, poll := polledMailbox(b)
 	before := f.callsTo()
 	b.ResetTimer()
 	for b.Loop() {
@@ -126,13 +126,13 @@ func BenchmarkAnEmptyPollOnTheDynamoDBStore(b *testing.B) {
 	}
 	b.StopTimer()
 	if n := f.callsTo() - before; n != 0 {
-		b.Fatalf("%d calls to AWS for polls of a loaded box", n)
+		b.Fatalf("%d calls to AWS for polls of a loaded mailbox", n)
 	}
 }
 
-// The store's count of a loaded box, alone: what every poll asks of memory.
-func BenchmarkCountOfALoadedBoxOnTheDynamoDBStore(b *testing.B) {
-	_, s, a, f, _ := polledBox(b)
+// The store's count of a loaded mailbox, alone: what every poll asks of memory.
+func BenchmarkCountOfALoadedMailboxOnTheDynamoDBStore(b *testing.B) {
+	_, s, a, f, _ := polledMailbox(b)
 	ctx := context.Background()
 	before := f.callsTo()
 	b.ResetTimer()
@@ -143,6 +143,6 @@ func BenchmarkCountOfALoadedBoxOnTheDynamoDBStore(b *testing.B) {
 	}
 	b.StopTimer()
 	if n := f.callsTo() - before; n != 0 {
-		b.Fatalf("%d calls to AWS for counts of a loaded box", n)
+		b.Fatalf("%d calls to AWS for counts of a loaded mailbox", n)
 	}
 }

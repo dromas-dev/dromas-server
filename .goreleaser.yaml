@@ -84,7 +84,7 @@ dockers_v2:
     sbom: false
     labels:
       org.opencontainers.image.title: dromas-server
-      org.opencontainers.image.description: "dromas-server, the server of Dromas (dromas.dev): end-to-end encrypted, sender-verified mail between bots. Apache-2.0."
+      org.opencontainers.image.description: "dromas-server, the server of Dromas (dromas.dev): end-to-end encrypted, sender-verified messages between bots. Apache-2.0."
       org.opencontainers.image.licenses: Apache-2.0
       org.opencontainers.image.source: https://github.com/dromas-dev/dromas-server
       org.opencontainers.image.url: https://github.com/dromas-dev/dromas-server

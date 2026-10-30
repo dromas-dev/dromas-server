@@ -1,16 +1,16 @@
 // Command dromas-server is the dromas.dev server.
 //
-//	dromas-server serve --boxes-table T --msgs-table T --accounts-table T --bucket B --names NAMES [--listen addr] [options] [limits]
+//	dromas-server serve --mailboxes-table T --messages-table T --accounts-table T --bucket B --names NAMES [--listen addr] [options] [limits]
 //	dromas-server serve --dev [--listen addr] [limits]
 //	dromas-server account create --accounts-table T [--id NAME] [--unmetered]
 //	dromas-server account key --accounts-table T --account ID --uses N --ttl D
-//	dromas-server account drop --boxes-table T --accounts-table T --account ID --box ADDR
+//	dromas-server account drop --mailboxes-table T --accounts-table T --account ID --mailbox ADDR
 //	dromas-server limits clear --socket PATH --ip ADDR
 //
-// The first keeps state in three DynamoDB tables, boxes, messages and
+// The first keeps state in three DynamoDB tables, mailboxes, messages and
 // accounts, and an S3 Express One Zone directory bucket (ARCHITECTURE.md § Storage),
 // with AWS credentials from the usual chain; it answers 503 until its stream
-// followers are positioned, loads each box into memory on its first use, and
+// followers are positioned, loads each mailbox into memory on its first use, and
 // exits if a stream follower loses its place, since a restart rebuilds
 // memory.
 //
@@ -20,7 +20,7 @@
 //
 // account is the operator's hand on accounts (PROTOCOL.md §11.16) until
 // accounts have users who log in: create one, mint an adopt key for it, or
-// drop a box from it.
+// drop a mailbox from it.
 package main
 
 import (
@@ -59,7 +59,7 @@ func main() {
 	case len(os.Args) >= 3 && os.Args[1] == "limits":
 		err = limits(os.Args[2], os.Args[3:])
 	default:
-		fmt.Fprintln(os.Stderr, "usage: dromas-server serve (--boxes-table T --msgs-table T --accounts-table T --bucket B --names NAMES | --dev) [--listen addr] [options] [limits]")
+		fmt.Fprintln(os.Stderr, "usage: dromas-server serve (--mailboxes-table T --messages-table T --accounts-table T --bucket B --names NAMES | --dev) [--listen addr] [options] [limits]")
 		fmt.Fprintln(os.Stderr, "       dromas-server account (create | key | drop) [flags]")
 		fmt.Fprintln(os.Stderr, "       dromas-server limits clear --socket PATH --ip ADDR")
 		fmt.Fprintln(os.Stderr, "       dromas-server limits top --socket PATH --limit NAME [--count N]")
@@ -92,15 +92,15 @@ func sizeCaps(l server.Limits) error {
 	return nil
 }
 
-// receiveRate refuses a budget of new mail that would let a box take mail
+// receiveRate refuses a budget of new messages that would let a mailbox take messages
 // faster than server.ReceiveCeiling: one turned off, or one refilled faster.
 // serve checks it before anything starts.
 func receiveRate(l server.Limits) error {
 	switch {
 	case l.ReceiveBurst <= 0:
-		return fmt.Errorf("--receive-burst: %d is no budget, and no box takes new mail faster than one each %v (server.ReceiveCeiling)", l.ReceiveBurst, server.ReceiveCeiling)
+		return fmt.Errorf("--receive-burst: %d is no budget, and no mailbox takes new messages faster than one each %v (server.ReceiveCeiling)", l.ReceiveBurst, server.ReceiveCeiling)
 	case l.ReceiveRefill < server.ReceiveCeiling:
-		return fmt.Errorf("--receive-refill: %v is shorter than %v, the fastest any box takes new mail (server.ReceiveCeiling)", l.ReceiveRefill, server.ReceiveCeiling)
+		return fmt.Errorf("--receive-refill: %v is shorter than %v, the fastest any mailbox takes new messages (server.ReceiveCeiling)", l.ReceiveRefill, server.ReceiveCeiling)
 	}
 	return nil
 }
@@ -119,24 +119,24 @@ func serve(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	dev := fs.Bool("dev", false, "keep everything in memory, with no AWS")
 	listen := fs.String("listen", "127.0.0.1:8080", "comma-separated TCP addresses to listen on, each served alike: a reverse proxy in front spreads its connections across several, and each is one more range of its ephemeral ports")
-	boxes := fs.String("boxes-table", "", "the DynamoDB table of boxes")
-	msgs := fs.String("msgs-table", "", "the DynamoDB table of messages")
+	mailboxes := fs.String("mailboxes-table", "", "the DynamoDB table of mailboxes")
+	msgs := fs.String("messages-table", "", "the DynamoDB table of messages")
 	accts := fs.String("accounts-table", "", "the DynamoDB table of accounts")
 	bucket := fs.String("bucket", "", "the S3 Express One Zone directory bucket")
 	names := fs.String("names", "", "comma-separated names clients call this server by: the host of its URL, lowercase, with its port only when that is not the scheme's default; a pass is taken only for one of them")
-	idTypes := fs.String("identity-types", strings.Join(protocol.IdentityTypes(), ","), "comma-separated identity key types a box may register with, of those this build verifies; "+protocol.IdentityEd25519+" is always one of them")
+	idTypes := fs.String("identity-types", strings.Join(protocol.IdentityTypes(), ","), "comma-separated identity key types a mailbox may register with, of those this build verifies; "+protocol.IdentityEd25519+" is always one of them")
 	region := fs.String("region", "us-east-1", "the AWS region")
-	boxCache := fs.Int("box-cache", server.DefaultBoxCache, "box records held in memory, for sends and reads of a box")
+	mailboxCache := fs.Int("mailbox-cache", server.DefaultMailboxCache, "mailbox records held in memory, for sends and reads of a mailbox")
 	streamEvery := fs.Duration("stream-interval", time.Second, "how often each stream shard is read")
 	proxies := fs.String("trusted-proxy", "", "comma-separated CIDRs of the reverse proxy in front, if any, whose X-Forwarded-For names the client: its last address, the one the proxy wrote")
 	l := server.DefaultLimits()
 	fs.IntVar(&l.MaxSize, "max-size", l.MaxSize, "cap on a ciphertext, bytes: a send reads its body to it. A whole number of its own padding blocks, at most the protocol's largest ciphertext (PROTOCOL.md §9.3, §11.10), or serve does not start")
 	fs.IntVar(&l.AccountMaxSize, "account-max-size", l.AccountMaxSize, "the most an account can lift --max-size to, bytes (up to --max-size: nothing). Held as --max-size is")
-	fs.IntVar(&l.BoxCap, "box-cap", l.BoxCap, "messages per box (0: off)")
+	fs.IntVar(&l.MailboxCap, "mailbox-cap", l.MailboxCap, "messages per mailbox (0: off)")
 	fs.IntVar(&l.SendsPerDay, "sends-per-day", l.SendsPerDay, "sends per sender a day: that many at once, then one back each day divided by it (0: off)")
-	fs.IntVar(&l.RenewalsPerDay, "renewals-per-day", l.RenewalsPerDay, "prekey renewals per box a day, as --sends-per-day (0: off)")
-	fs.IntVar(&l.RetiredKept, "retired-kept", l.RetiredKept, "retired prekeys a box record keeps, newest first (0: all live ones)")
-	fs.IntVar(&l.PollBurst, "poll-burst", l.PollBurst, "polls a box may make at once (0: off)")
+	fs.IntVar(&l.RenewalsPerDay, "renewals-per-day", l.RenewalsPerDay, "prekey renewals per mailbox a day, as --sends-per-day (0: off)")
+	fs.IntVar(&l.RetiredKept, "retired-kept", l.RetiredKept, "retired prekeys a mailbox record keeps, newest first (0: all live ones)")
+	fs.IntVar(&l.PollBurst, "poll-burst", l.PollBurst, "polls a mailbox may make at once (0: off)")
 	fs.DurationVar(&l.PollRefill, "poll-refill", l.PollRefill, "one more poll each")
 	fs.IntVar(&l.PollAfter, "poll-after", l.PollAfter, "poll interval told to clients, seconds")
 	fs.DurationVar(&l.MaxWait, "max-wait", l.MaxWait, "the longest a list is held for a change, whatever its wait asks: under the read timeout of a proxy in front (0: none held)")
@@ -144,18 +144,18 @@ func serve(args []string) error {
 	fs.IntVar(&l.RegistrationsPerHour, "registrations-per-hour", l.RegistrationsPerHour, "registrations per IPv4 address or IPv6 /64 (0: off)")
 	fs.IntVar(&l.RangeRegistrationsPerHour, "range-registrations-per-hour", l.RangeRegistrationsPerHour, "registrations per IPv6 /48, beside --registrations-per-hour (0: off)")
 	fs.IntVar(&l.SendsPerMinutePerIP, "sends-per-minute-per-ip", l.SendsPerMinutePerIP, "pre-auth sends per IP (0: off)")
-	fs.IntVar(&l.MissesPerMinute, "misses-per-minute", l.MissesPerMinute, "calls per IP that named no box or carried nothing that verified (0: off)")
-	fs.IntVar(&l.RequestBurst, "request-burst", l.RequestBurst, "per IP, at once: every call but a box's own with a pass this process has checked, a new pass among them, and every request no route matches, the link page and the site's pages among them; a budget for floods alone (0: off)")
+	fs.IntVar(&l.MissesPerMinute, "misses-per-minute", l.MissesPerMinute, "calls per IP that named no mailbox or carried nothing that verified (0: off)")
+	fs.IntVar(&l.RequestBurst, "request-burst", l.RequestBurst, "per IP, at once: every call but a mailbox's own with a pass this process has checked, a new pass among them, and every request no route matches, the link page and the site's pages among them; a budget for floods alone (0: off)")
 	fs.DurationVar(&l.RequestRefill, "request-refill", l.RequestRefill, "one more such request each")
-	fs.IntVar(&l.ReceiveBurst, "receive-burst", l.ReceiveBurst, "new messages a box takes at once, from all senders together; never off, or serve does not start")
-	fs.DurationVar(&l.ReceiveRefill, "receive-refill", l.ReceiveRefill, "one more new message each: at least "+server.ReceiveCeiling.String()+", the fastest any box takes new mail, or serve does not start; an account lifts it to that")
-	fs.IntVar(&l.DrainBurst, "drain-burst", l.DrainBurst, "a box's first fetches of held messages, at once: the new mail it takes out (0: off)")
+	fs.IntVar(&l.ReceiveBurst, "receive-burst", l.ReceiveBurst, "new messages a mailbox takes at once, from all senders together; never off, or serve does not start")
+	fs.DurationVar(&l.ReceiveRefill, "receive-refill", l.ReceiveRefill, "one more new message each: at least "+server.ReceiveCeiling.String()+", the fastest any mailbox takes new messages, or serve does not start; an account lifts it to that")
+	fs.IntVar(&l.DrainBurst, "drain-burst", l.DrainBurst, "a mailbox's first fetches of held messages, at once: the new messages it takes out (0: off)")
 	fs.DurationVar(&l.DrainRefill, "drain-refill", l.DrainRefill, "one more first fetch each")
-	fs.IntVar(&l.CallBurst, "call-burst", l.CallBurst, "a box's calls with its pass that no other budget counts, at once (0: off)")
+	fs.IntVar(&l.CallBurst, "call-burst", l.CallBurst, "a mailbox's calls with its pass that no other budget counts, at once (0: off)")
 	fs.DurationVar(&l.CallRefill, "call-refill", l.CallRefill, "one more such call each")
-	fs.IntVar(&l.CertificatesPerDay, "certificates-per-day", l.CertificatesPerDay, "per box a day, as --sends-per-day: renewals under a later certificate, but for one that replaces a revoked certificate (0: off)")
-	fs.IntVar(&l.CertificateRevocationsPerDay, "certificate-revocations-per-day", l.CertificateRevocationsPerDay, "per box a day, as --sends-per-day: raises of its revocation of certificates (0: off)")
-	fs.IntVar(&l.ACLEntries, "acl-entries", l.ACLEntries, "the most entries a box's ACL holds, its two lists together: from 1 to the protocol's "+strconv.Itoa(protocol.MaxACLEntries)+", or serve does not start")
+	fs.IntVar(&l.CertificatesPerDay, "certificates-per-day", l.CertificatesPerDay, "per mailbox a day, as --sends-per-day: renewals under a later certificate, but for one that replaces a revoked certificate (0: off)")
+	fs.IntVar(&l.CertificateRevocationsPerDay, "certificate-revocations-per-day", l.CertificateRevocationsPerDay, "per mailbox a day, as --sends-per-day: raises of its revocation of certificates (0: off)")
+	fs.IntVar(&l.ACLEntries, "acl-entries", l.ACLEntries, "the most entries a mailbox's ACL holds, its two lists together: from 1 to the protocol's "+strconv.Itoa(protocol.MaxACLEntries)+", or serve does not start")
 	fs.DurationVar(&l.BodyTimeout, "body-timeout", l.BodyTimeout, "how long a request body, or each write of a response, may take before one more second for each --body-min-rate bytes of it moved; what a handler leaves of a body is read before the answer, to the deadline the handler's reads left, and the answer has this from then; also the longest wait for the one large read (0: off)")
 	fs.IntVar(&l.BodyMinRate, "body-min-rate", l.BodyMinRate, "bytes a second a body, or a write of a response, must keep up, as Apache's RequestReadTimeout MinRate; a write is credited in pieces of this many bytes, once each has gone (0: off)")
 	fs.IntVar(&l.HeadBytes, "max-header-bytes", l.HeadBytes, "the most of a request's head, its request line and headers, the server reads: what the longest call needs, its pass at the longest a pass can be, and no more; net/http answers a longer one 431 (0: net/http's default)")
@@ -228,13 +228,13 @@ func serve(args []string) error {
 	var start func() error
 	switch {
 	case *dev:
-		if *boxes != "" || *msgs != "" || *accts != "" || *bucket != "" {
+		if *mailboxes != "" || *msgs != "" || *accts != "" || *bucket != "" {
 			return errors.New("--dev takes no tables or --bucket")
 		}
 		cfg.Store = server.NewMemStore(time.Now)
 		logger.Printf("dromas-server --dev on %s (in memory: nothing survives a restart)", *listen)
-	case *boxes == "" || *msgs == "" || *accts == "" || *bucket == "" || len(cfg.Names) == 0:
-		return errors.New("name --boxes-table, --msgs-table, --accounts-table, --bucket and --names, or run --dev")
+	case *mailboxes == "" || *msgs == "" || *accts == "" || *bucket == "" || len(cfg.Names) == 0:
+		return errors.New("name --mailboxes-table, --messages-table, --accounts-table, --bucket and --names, or run --dev")
 	default:
 		awsCfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(*region), config.WithLogger(server.AWSLogger(os.Stderr)))
 		if err != nil {
@@ -244,11 +244,11 @@ func serve(args []string) error {
 		fatal := make(chan error, 1)
 		store := server.NewDynamoStore(server.DynamoConfig{
 			AWS:            awsCfg,
-			BoxesTable:     *boxes,
-			MsgsTable:      *msgs,
+			MailboxesTable: *mailboxes,
+			MessagesTable:  *msgs,
 			AccountsTable:  *accts,
 			Bucket:         *bucket,
-			BoxCache:       *boxCache,
+			MailboxCache:   *mailboxCache,
 			StreamInterval: *streamEvery,
 			Log:            logger,
 			Fatal:          func(err error) { fatal <- err },
@@ -258,9 +258,9 @@ func serve(args []string) error {
 		start = func() error {
 			t := time.Now()
 			if err := store.Start(ctx); err != nil {
-				return fmt.Errorf("following %s, %s and %s: %w", *boxes, *msgs, *accts, err)
+				return fmt.Errorf("following %s, %s and %s: %w", *mailboxes, *msgs, *accts, err)
 			}
-			logger.Printf("following the streams of %s, %s and %s (ready in %s); boxes load on first use", *boxes, *msgs, *accts, time.Since(t).Round(time.Millisecond))
+			logger.Printf("following the streams of %s, %s and %s (ready in %s); mailboxes load on first use", *mailboxes, *msgs, *accts, time.Since(t).Round(time.Millisecond))
 			go func() {
 				if err := <-fatal; err != nil {
 					logger.Printf("%v: exiting, so a restart rebuilds memory", err)
@@ -269,7 +269,7 @@ func serve(args []string) error {
 			}()
 			return nil
 		}
-		logger.Printf("dromas-server on %s: tables %s, %s and %s, bucket %s", *listen, *boxes, *msgs, *accts, *bucket)
+		logger.Printf("dromas-server on %s: tables %s, %s and %s, bucket %s", *listen, *mailboxes, *msgs, *accts, *bucket)
 	}
 
 	api := server.New(cfg)

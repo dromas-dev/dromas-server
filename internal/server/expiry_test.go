@@ -17,11 +17,11 @@ import (
 	"github.com/dromas-dev/dromas-client/protocol"
 )
 
-// stands reads a box's record and the certificate its current statement is
+// stands reads a mailbox's record and the certificate its current statement is
 // signed under.
-func (e *env) stands(a protocol.Address) (*Box, *protocol.Certificate) {
+func (e *env) stands(a protocol.Address) (*Mailbox, *protocol.Certificate) {
 	e.t.Helper()
-	b, err := e.store.Box(context.Background(), a)
+	b, err := e.store.Mailbox(context.Background(), a)
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -36,17 +36,17 @@ func (e *env) stands(a protocol.Address) (*Box, *protocol.Certificate) {
 	return b, cert
 }
 
-// A box's record may go once nothing of the box is valid any more
+// A mailbox's record may go once nothing of the mailbox is valid any more
 // (PROTOCOL.md §13): a registration and every renewal set its expiry to the
-// later of its certificate's end and its prekey's last mail.
-func TestARecordExpiresWhenNothingOfTheBoxIsValid(t *testing.T) {
+// later of its certificate's end and its prekey's last message.
+func TestARecordExpiresWhenNothingOfTheMailboxIsValid(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	now := e.clock.Now()
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	b, cert := e.stands(r.id.Address())
 	if want := b.Prekey.NotAfter.Add(protocol.TTL); !b.Expires.Equal(want) || !want.After(cert.NotAfter()) {
-		t.Fatalf("a registration's record expires %v, want its prekey's last mail, %v, which is after its certificate's end %v", b.Expires, want, cert.NotAfter())
+		t.Fatalf("a registration's record expires %v, want its prekey's last message, %v, which is after its certificate's end %v", b.Expires, want, cert.NotAfter())
 	}
 	// A prekey that ends early leaves the certificate's end the later.
 	r.prekey(2, now.Add(time.Hour), nil)
@@ -55,7 +55,7 @@ func TestARecordExpiresWhenNothingOfTheBoxIsValid(t *testing.T) {
 	if !b.Expires.Equal(cert.NotAfter()) || !cert.NotAfter().After(b.Prekey.NotAfter.Add(protocol.TTL)) {
 		t.Fatalf("a renewal's record expires %v, want its certificate's end, %v", b.Expires, cert.NotAfter())
 	}
-	// A renewal for the full lifetime moves it back to its prekey's last mail.
+	// A renewal for the full lifetime moves it back to its prekey's last message.
 	r.prekey(3, now.Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(3), r.pass(3)), 200, "")
 	if b, _ = e.stands(r.id.Address()); !b.Expires.Equal(b.Prekey.NotAfter.Add(protocol.TTL)) {
@@ -63,11 +63,11 @@ func TestARecordExpiresWhenNothingOfTheBoxIsValid(t *testing.T) {
 	}
 }
 
-// Once the TTL has deleted a box's record, the box is forgotten: its
-// renewal is answered as for no box, and it registers anew, its ACL and its
+// Once the TTL has deleted a mailbox's record, the mailbox is forgotten: its
+// renewal is answered as for no mailbox, and it registers anew, its ACL and its
 // account gone with the old one. What its identity revoked stays. A test
 // makes the delete the TTL makes.
-func TestAForgottenBoxRegistersAnew(t *testing.T) {
+func TestAForgottenMailboxRegistersAnew(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
@@ -77,7 +77,7 @@ func TestAForgottenBoxRegistersAnew(t *testing.T) {
 	e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), 200, "")
 	r.prekey(2, now.Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(2), r.pass(2)), 200, "")
-	if err := e.store.DeleteBox(ctx, r.id.Address()); err != nil {
+	if err := e.store.DeleteMailbox(ctx, r.id.Address()); err != nil {
 		t.Fatal(err)
 	}
 	e.want(e.do("GET", r.path(""), nil, ""), 404, protocol.CodeNoSuchMailbox)
@@ -87,14 +87,14 @@ func TestAForgottenBoxRegistersAnew(t *testing.T) {
 	e.want(e.do("PUT", r.path(""), r.registration(1), r.pass(1)), 401, protocol.CodeCertificateRevoked) // still held to what its identity revoked
 	e.want(e.do("PUT", r.path(""), r.registration(3), r.pass(3)), 201, "")
 	if got := e.do("GET", r.path("/acl"), nil, r.pass(3)); got.status != 200 || string(got.body) != `{"allow":["*"],"deny":[]}`+"\n" {
-		t.Fatalf("a box registered anew has an ACL: %d %s", got.status, got.body)
+		t.Fatalf("a mailbox registered anew has an ACL: %d %s", got.status, got.body)
 	}
 	if b := held(t, e.do("GET", r.path(""), nil, "")); b == nil || len(b.RevokedCertificates) == 0 {
-		t.Fatal("a box registered anew is read without its identity's revocation of certificates")
+		t.Fatal("a mailbox registered anew is read without its identity's revocation of certificates")
 	}
 }
 
-// In DynamoDB a box's record carries its expiry as the TTL attribute, in
+// In DynamoDB a mailbox's record carries its expiry as the TTL attribute, in
 // seconds, and nothing its identity revoked, which is the item beside it
 // (sk 0x01); a revocation of the address deletes the record and keeps the
 // item. AWS only.
@@ -106,13 +106,13 @@ func TestTheRecordAndTheRevocationsAreTwoItems(t *testing.T) {
 	e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), 200, "")
 	get := func(key map[string]types.AttributeValue) item {
 		t.Helper()
-		out, err := s.dynamo().db.GetItem(ctx, &dynamodb.GetItemInput{TableName: &s.dynamo().boxes, Key: key, ConsistentRead: aws.Bool(true)})
+		out, err := s.dynamo().db.GetItem(ctx, &dynamodb.GetItemInput{TableName: &s.dynamo().mailboxes, Key: key, ConsistentRead: aws.Bool(true)})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return out.Item
 	}
-	recKey, revsKey := boxKey(r.id.Address()), revocationsKey(r.id.Address())
+	recKey, revsKey := mailboxKey(r.id.Address()), revocationsKey(r.id.Address())
 	rec, revs := get(recKey), get(revsKey)
 	b, _ := e.stands(r.id.Address())
 	if exp, err := rec.uint("expires_at"); err != nil || exp != uint64(b.Expires.Unix()) {
@@ -135,7 +135,7 @@ func TestTheRecordAndTheRevocationsAreTwoItems(t *testing.T) {
 	}
 	e.want(e.do("PUT", r.path("/revocations"), protocol.Revocations{Identity: r.id.Document(), Revocation: rev}, ""), 201, "")
 	if get(recKey) != nil {
-		t.Error("the revocation of the address left the box's record")
+		t.Error("the revocation of the address left the mailbox's record")
 	}
 	if revs = get(revsKey); revs == nil {
 		t.Fatal("the revocation of the address left no revocations item")
@@ -145,8 +145,8 @@ func TestTheRecordAndTheRevocationsAreTwoItems(t *testing.T) {
 	}
 }
 
-// A second process that holds a box learns from the stream what another
-// wrote: a revocation of the box's certificates, and the revocation of its
+// A second process that holds a mailbox learns from the stream what another
+// wrote: a revocation of the mailbox's certificates, and the revocation of its
 // address, each answered from its memory once it arrives. AWS only.
 func TestASecondProcessLearnsWhatIsRevoked(t *testing.T) {
 	t.Parallel()
@@ -177,7 +177,7 @@ func TestASecondProcessLearnsWhatIsRevoked(t *testing.T) {
 	}
 	e2.want(poll(certs)(), 200, "") // the second process holds it
 	e.want(e.do("PUT", certs.path("/revocations"), certs.certs(1), ""), 200, "")
-	within("the box's certificate revoked", poll(certs), 401, protocol.CodeCertificateRevoked)
+	within("the mailbox's certificate revoked", poll(certs), 401, protocol.CodeCertificateRevoked)
 
 	revoked := e.raw().register(protocol.MaxPrekeyLifetime)
 	e2.want(poll(revoked)(), 200, "")
@@ -190,29 +190,29 @@ func TestASecondProcessLearnsWhatIsRevoked(t *testing.T) {
 }
 
 // readsCounted is a backend that counts the reads of an address and of a
-// box's live mail: what a poll would make if it left the process.
+// mailbox's live messages: what a poll would make if it left the process.
 type readsCounted struct {
 	Backend
 	reads atomic.Int64
 }
 
-func (b *readsCounted) ReadAddress(ctx context.Context, a protocol.Address) (*Box, *Revocations, error) {
+func (b *readsCounted) ReadAddress(ctx context.Context, a protocol.Address) (*Mailbox, *Revocations, error) {
 	b.reads.Add(1)
 	return b.Backend.ReadAddress(ctx, a)
 }
 
-func (b *readsCounted) ReadLive(ctx context.Context, box protocol.Address) ([]Header, error) {
+func (b *readsCounted) ReadLive(ctx context.Context, mailbox protocol.Address) ([]Header, error) {
 	b.reads.Add(1)
-	return b.Backend.ReadLive(ctx, box)
+	return b.Backend.ReadLive(ctx, mailbox)
 }
 
 // A second process in the window a revocation of an address opens there
-// (dromas-dev/dromas-client#365, #505): it holds the box, its record cache
-// has lost the record, as --box-cache's LRU does under load, and its feed
+// (dromas-dev/dromas-client#365, #505): it holds the mailbox, its record cache
+// has lost the record, as --mailbox-cache's LRU does under load, and its feed
 // brings the image of the revocations item before the purge's deletion of
 // the record, two items whose changes DynamoDB Streams orders each alone.
 // In the window its poll is 410 revoked from memory, with no read, and
-// carries no record (revokedAt), and the read of the box is 410 with the
+// carries no record (revokedAt), and the read of the mailbox is 410 with the
 // record. Once the deletion comes, the poll reads the address and carries
 // the record too. Two memories over one in-memory backend, the second's
 // feed handed over by the test in that order.
@@ -220,10 +220,10 @@ func TestASecondProcessInARevocationsWindow(t *testing.T) {
 	t.Parallel()
 	clk := &clock{t: time.Now().UTC().Truncate(time.Second)}
 	b := newMemBackend(clk.Now)
-	first := newMemory(clk.Now, DefaultBoxCache, nil, nil)
+	first := newMemory(clk.Now, DefaultMailboxCache, nil, nil)
 	first.backend = b
 	counted := &readsCounted{Backend: b}
-	second := newMemory(clk.Now, DefaultBoxCache, nil, nil)
+	second := newMemory(clk.Now, DefaultMailboxCache, nil, nil)
 	second.backend = counted
 	var mu sync.Mutex
 	var feed []Change // the second's, not yet applied
@@ -262,8 +262,8 @@ func TestASecondProcessInARevocationsWindow(t *testing.T) {
 	a := r.id.Address()
 	deliver(func(Change) bool { return false })
 	poll := func() reply { return e2.do("GET", r.path("/messages"), nil, e2.passFor(r.work[1], a, e2.name())) }
-	e2.want(poll(), http.StatusOK, "")   // the second process holds the box
-	second.cache.write(a, evicted[*Box]) // and its record cache loses it
+	e2.want(poll(), http.StatusOK, "")       // the second process holds the mailbox
+	second.cache.write(a, evicted[*Mailbox]) // and its record cache loses it
 	sig, err := protocol.SignRevocation(r.signer, a)
 	if err != nil {
 		t.Fatal(err)

@@ -43,7 +43,7 @@ func TestServeAndAccountWriteTheSDKsLinesRedacted(t *testing.T) {
 		call func() error
 	}{
 		{"serve", func() error {
-			return serve([]string{"--boxes-table", "b", "--msgs-table", "m", "--accounts-table", "a", "--bucket", "bk", "--names", "x.example", "--listen", "127.0.0.1:0"})
+			return serve([]string{"--mailboxes-table", "b", "--messages-table", "m", "--accounts-table", "a", "--bucket", "bk", "--names", "x.example", "--listen", "127.0.0.1:0"})
 		}},
 		{"account create", func() error { return account("create", []string{"--accounts-table", "a"}) }},
 	} {

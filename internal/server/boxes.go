@@ -21,30 +21,30 @@ const registerLimit = 64 << 10
 // take as one.
 const hintDocument = "the identity document is \"dromas-v1\", LF, one SSH public key with no comment, LF: look for a comment, CRLF or a missing final newline"
 
-// register is PUT /v1/<address> (PROTOCOL.md §11.7). It is a call of a box that
+// register is PUT /v1/<address> (PROTOCOL.md §11.7). It is a call of a mailbox that
 // does not exist yet, so its address pays for it: its body is read only once
 // the call has spent one of its address's flood budget at the gate, as a
 // revocation's is.
 //
-// Registration never changes a box, so what is kept of the address is read
-// before any signature, and a box registered there, or an address revoked,
+// Registration never changes a mailbox, so what is kept of the address is read
+// before any signature, and a mailbox registered there, or an address revoked,
 // is answered from it, held in memory or read, by one path (registered),
 // spending none of the address's registrations (PROTOCOL.md §11.4, the order
 // of refusals; dromas-dev/dromas-client#410), but for one that found nothing
-// at its read and meets a box at its write (ErrExists), one an identical
+// at its read and meets a mailbox at its write (ErrExists), one an identical
 // registration made meanwhile among them: it kept its counts before its
 // signatures, and is answered as registered with them spent (registered's
 // bounded; dromas-dev/dromas-client#443). Memory answers with
 // nothing counted. A read is counted once, as what it turns out to be: the
 // registrations it would spend, the address's and its /48's, are reserved
-// before it, given back if it finds a box or a revocation, and kept if it
+// before it, given back if it finds a mailbox or a revocation, and kept if it
 // finds nothing, when they bound the statement's signatures and the pass
 // that follow. Where they are spent, the read is a lookup's, a miss of the
 // caller's address reserved for it (lookup): nothing found is refused for
 // the registrations, its miss kept, and a read the misses refuse is refused
 // for them.
 //
-// A registration is held to what is kept of the address, box or none: 410
+// A registration is held to what is kept of the address, mailbox or none: 410
 // while the address is revoked, and nothing under a certificate its identity
 // revoked.
 func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
@@ -70,12 +70,12 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 	case errors.Is(err, protocol.ErrIdentityFormat):
 		return failErr(protocol.CodeIdentityMismatch, hintDocument, err)
 	case errors.Is(err, protocol.ErrIdentityType), err == nil && !slices.Contains(s.identityTypes, id.Type()):
-		return fail(protocol.CodeUnsupportedKeyType, "make a box whose identity is an ssh-ed25519 key, as dromas init does unless told otherwise",
+		return fail(protocol.CodeUnsupportedKeyType, "make a mailbox whose identity is an ssh-ed25519 key, as dromas init does unless told otherwise",
 			"this server registers identities of these key types: %s", keyTypesValue(s.identityTypes))
 	case err != nil:
-		return failErr(protocol.CodeBadKey, "make a new identity: dromas init in a new box", err)
+		return failErr(protocol.CodeBadKey, "make a new identity: dromas init in a new mailbox", err)
 	}
-	// A box registered, or an address its identity revoked, is answered from
+	// A mailbox registered, or an address its identity revoked, is answered from
 	// what is kept of the address, whatever the statement and however many
 	// registrations the address has spent (PROTOCOL.md §11.4, the order of
 	// refusals): from memory, with nothing counted, or from one read.
@@ -85,9 +85,9 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 	}
 	// The read is counted as what it turns out to be: under the
 	// registrations it would spend, reserved before it, given back if it
-	// finds a box or a revocation and kept if it finds nothing (LIMITS.md
+	// finds a mailbox or a revocation and kept if it finds nothing (LIMITS.md
 	// rule 4). Where they are spent it is a lookup's, under a miss, and only
-	// a box or a revocation it finds answers: nothing found is refused for
+	// a mailbox or a revocation it finds answers: nothing found is refused for
 	// the registrations, and its miss is kept.
 	g, refused := s.reserveRegistration(r, "")
 	if refused != nil {
@@ -101,7 +101,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 		return refused
 	}
 	defer func() { g.release(s.now()) }() // settled below, but for a panic
-	cur, err = s.box(r.Context(), h)
+	cur, err = s.mailbox(r.Context(), h)
 	if err != nil {
 		return err
 	}
@@ -109,14 +109,14 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 		g.release(s.now())
 		return s.registered(w, r, id, cur, &req, false)
 	}
-	// A registration that would make a box: the counts kept here bound the
+	// A registration that would make a mailbox: the counts kept here bound the
 	// signatures and the pass that follow, which reserve no miss of their own.
 	g.keep()
 	p, cert, err := s.checkPrekey(id, req.Prekey, req.PrekeySignature)
 	if err != nil {
 		return err
 	}
-	if cur != nil { // an address with no box whose identity revoked certificates
+	if cur != nil { // an address with no mailbox whose identity revoked certificates
 		if listed, err := cur.listed(cert.Serial()); err != nil {
 			return err
 		} else if listed {
@@ -129,7 +129,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 	if err := s.checkPassBounded(r, h, string(id.PublicKey().Marshal()), certHash(cert), cert.Serial()); err != nil {
 		return err
 	}
-	// No box is registered here: an If-Match is false, and If-None-Match: *
+	// No mailbox is registered here: an If-Match is false, and If-None-Match: *
 	// holds (precondition). The write holds it, a record created only where
 	// the address has none: one registered meanwhile answers from its
 	// record, below, where If-None-Match: * is false.
@@ -137,7 +137,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	now := s.now()
-	b := &Box{
+	b := &Mailbox{
 		Addr:           h,
 		Identity:       req.Identity,
 		State:          Active,
@@ -150,23 +150,23 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 		Created:        now,
 		Expires:        expiry(p, cert),
 	}
-	if cur != nil { // an address whose identity revoked certificates: what it revoked is kept with the box
+	if cur != nil { // an address whose identity revoked certificates: what it revoked is kept with the mailbox
 		b.RevokedCerts, b.RevokedCertsSig = cur.RevokedCerts, cur.RevokedCertsSig
 	}
-	err = s.store.CreateBox(detached(r.Context()), b)
+	err = s.store.CreateMailbox(detached(r.Context()), b)
 	if err == nil {
 		writeJSON(w, http.StatusCreated, struct{}{})
 		return nil
 	}
 	// The address has a record, or may have one this write made, whose
-	// outcome is unknown: the record answers, as for a box registered
+	// outcome is unknown: the record answers, as for a mailbox registered
 	// before (dromas-dev/dromas-client#411 item 2), and no count of the
 	// client's retry depends on the write.
 	exists := errors.Is(err, ErrExists)
 	if !exists && !mayHaveApplied(err) {
 		return err
 	}
-	read, rerr := s.box(r.Context(), h)
+	read, rerr := s.mailbox(r.Context(), h)
 	switch {
 	case rerr != nil:
 		return rerr
@@ -175,39 +175,39 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 	case !exists:
 		return err // the record does not hold it: its client sends it again
 	}
-	busy := fail(protocol.CodeUnavailable, "retry", "this box is being registered") // a read that does not see the record yet
+	busy := fail(protocol.CodeUnavailable, "retry", "this mailbox is being registered") // a read that does not see the record yet
 	busy.retryAfter = time.Second
 	return busy
 }
 
 // statementRevoked is the answer to a prekey statement signed under a
-// certificate the box's identity revoked (PROTOCOL.md §10.2).
+// certificate the mailbox's identity revoked (PROTOCOL.md §10.2).
 func statementRevoked() *problem {
-	return fail(protocol.CodeCertificateRevoked, "certify a new working key at a higher serial: dromas prekey renew", "the statement is signed under a certificate this box's identity revoked")
+	return fail(protocol.CodeCertificateRevoked, "certify a new working key at a higher serial: dromas prekey renew", "the statement is signed under a certificate this mailbox's identity revoked")
 }
 
 // settled reports whether what is held of an address answers a registration
-// from itself: a box that is registered, or an address that is revoked.
-func settled(b *Box) bool { return b.open() || b != nil && b.State == Revoked }
+// from itself: a mailbox that is registered, or an address that is revoked.
+func settled(b *Mailbox) bool { return b.open() || b != nil && b.State == Revoked }
 
-// registered answers a registration of a box that is registered, or of an
+// registered answers a registration of a mailbox that is registered, or of an
 // address that is revoked, from its record: registration never changes it.
-// An identical retry is answered 200 once its pass, under the box's current
+// An identical retry is answered 200 once its pass, under the mailbox's current
 // certificate, is checked; nothing else is. A certificate the identity
-// revoked signs nothing this server takes, the box's current statement sent
+// revoked signs nothing this server takes, the mailbox's current statement sent
 // again included, so it is refused before the pass, as a prekey upload's
 // identical retry is (PROTOCOL.md §10.2).
 //
 // A registration answered from what is kept of its address, held in memory
 // or read, spends no registrations count, so the retry is a renewal's
 // identical retry in all but its route: a miss is reserved before its pass
-// (checkPass), and the box's calls are spent once it passes. bounded is true
-// for the one registration that meets a box at its write, registered by
+// (checkPass), and the mailbox's calls are spent once it passes. bounded is true
+// for the one registration that meets a mailbox at its write, registered by
 // another request meanwhile or by its own write whose outcome is unknown:
 // its registrations counts were taken, and they bound the pass's check
 // (checkPassBounded), which its own statement's pass has passed already
-// where the box is the one it sent.
-func (s *Server) registered(w http.ResponseWriter, r *http.Request, id *protocol.Identity, cur *Box, req *protocol.RegisterRequest, bounded bool) error {
+// where the mailbox is the one it sent.
+func (s *Server) registered(w http.ResponseWriter, r *http.Request, id *protocol.Identity, cur *Mailbox, req *protocol.RegisterRequest, bounded bool) error {
 	switch {
 	case cur.State == Revoked:
 		return revokedWith(cur)
@@ -228,7 +228,7 @@ func (s *Server) registered(w http.ResponseWriter, r *http.Request, id *protocol
 		if err := s.checkPass(r, cur.Addr, key, cur.Cert, cur.CertSerial, nil); err != nil {
 			return err
 		}
-		// The box's calls, with whatever its account lifts, read from the
+		// The mailbox's calls, with whatever its account lifts, read from the
 		// record this answers from: the address is read no second time.
 		lim, err := s.limitsFor(r.Context(), cur)
 		if err != nil {
@@ -245,12 +245,12 @@ func (s *Server) registered(w http.ResponseWriter, r *http.Request, id *protocol
 	return nil
 }
 
-// take makes p, under cert, box b's current prekey statement (PROTOCOL.md
-// §11.9): a key the box published before, its current one or a live retired
+// take makes p, under cert, mailbox b's current prekey statement (PROTOCOL.md
+// §11.9): a key the mailbox published before, its current one or a live retired
 // one, is refused; the statement it replaces retires while it is live, and
 // only the newest retired are kept. The record's expiry moves to when
 // nothing of the new statement is valid.
-func (s *Server) take(b *Box, statement, sig []byte, p *protocol.Prekey, cert *protocol.Certificate, senders []string, now time.Time) error {
+func (s *Server) take(b *Mailbox, statement, sig []byte, p *protocol.Prekey, cert *protocol.Certificate, senders []string, now time.Time) error {
 	keyHash := sha256.Sum256([]byte(p.Key))
 	retired := slices.DeleteFunc(b.Retired, func(x Retired) bool { return !now.Before(x.NotAfter) })
 	if keyHash == sha256.Sum256([]byte(b.Prekey.Key)) || slices.ContainsFunc(retired, func(x Retired) bool { return x.KeyHash == keyHash }) {
@@ -276,9 +276,9 @@ func (s *Server) take(b *Box, statement, sig []byte, p *protocol.Prekey, cert *p
 // expired and ending at most protocol.MaxPrekeyLifetime from now, which is an
 // hour past what a client asks for. It returns the certificate too.
 //
-// A certificate is taken only once it has begun by the clock of every box
-// this server takes, and so of every reader of the mail signed under it: a
-// box whose clock is less than PassLifetime behind this one (PROTOCOL.md §15.7).
+// A certificate is taken only once it has begun by the clock of every mailbox
+// this server takes, and so of every reader of the messages signed under it: a
+// mailbox whose clock is less than PassLifetime behind this one (PROTOCOL.md §15.7).
 // A client dates a certificate from MaxSkew before it makes it, so one made
 // by a clock this server takes a pass from has always begun that long.
 //
@@ -288,8 +288,8 @@ func (s *Server) take(b *Box, statement, sig []byte, p *protocol.Prekey, cert *p
 // signed by the same clock would be refused the same way.
 func (s *Server) checkPrekey(id *protocol.Identity, statement, sig []byte) (*protocol.Prekey, *protocol.Certificate, error) {
 	const (
-		check   = ": check it, then dromas init for a new box, dromas prekey renew for one in use"
-		early   = "a certificate starts an hour before it is made, and a server takes one once it has begun for every box it takes, 10 minutes before its own clock, so this machine's clock reads more than 50 minutes ahead of the server's" + check
+		check   = ": check it, then dromas init for a new mailbox, dromas prekey renew for one in use"
+		early   = "a certificate starts an hour before it is made, and a server takes one once it has begun for every mailbox it takes, 10 minutes before its own clock, so this machine's clock reads more than 50 minutes ahead of the server's" + check
 		tooLong = "a client signs a prekey for 33 days, so this machine's clock reads more than an hour ahead of the server's" + check
 	)
 	p, cert, err := protocol.VerifyPrekey(id, statement, sig, s.now())
@@ -317,23 +317,23 @@ func (s *Server) checkPrekey(id *protocol.Identity, statement, sig []byte) (*pro
 
 // prekey is PUT /v1/<address>/prekey (PROTOCOL.md §11.9). The authority is a
 // statement ordered after the current one, signed under a certificate of the
-// identity, with a pass under that same certificate: no pass under the box's
-// current one is needed, which is how a box that lost its working key comes
+// identity, with a pass under that same certificate: no pass under the mailbox's
+// current one is needed, which is how a mailbox that lost its working key comes
 // back.
 //
-// A box's statements are ordered by their certificate's serial first and by
+// A mailbox's statements are ordered by their certificate's serial first and by
 // their own serial second (PROTOCOL.md §5). So a prekey published at the
 // highest serial there is, by whoever took a working key, holds nothing: the
-// box's next certificate passes it.
+// mailbox's next certificate passes it.
 //
 // What could not be taken even if it verified is refused before any
 // signature is checked: the statement's place in that order is read from it
-// unverified (protocol.PrekeyOrder), and a statement the box holds already is
+// unverified (protocol.PrekeyOrder), and a statement the mailbox holds already is
 // answered from its record.
 //
 // The pass is read only after the body, so until then the call is its
 // address's: it spends the address's flood budget at the gate, whatever it
-// carries, as a registration and a revocation do, and none of the box's
+// carries, as a registration and a revocation do, and none of the mailbox's
 // budgets until its pass is checked.
 func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 	h, err := pathAddr(r)
@@ -353,7 +353,7 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 		return err
 	case b != nil && b.State == Revoked:
 		return revokedWith(b)
-	case !b.open(): // a box the server forgot comes back by a registration (PROTOCOL.md §12.4)
+	case !b.open(): // a mailbox the server forgot comes back by a registration (PROTOCOL.md §12.4)
 		return noSuchMailbox
 	}
 	id, err := protocol.ParseIdentity(b.Identity)
@@ -364,7 +364,7 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 	refusedRevoked := statementRevoked()
 	// An identical retry: it was verified when it was stored, so only its
 	// pass is checked, and nothing changes. A certificate the identity has
-	// revoked signs nothing this server takes, the box's current statement
+	// revoked signs nothing this server takes, the mailbox's current statement
 	// sent again included (PROTOCOL.md §10.2).
 	if bytes.Equal(req.Prekey, b.Statement) && bytes.Equal(req.PrekeySignature, b.Signature) {
 		if listed, err := b.listed(b.CertSerial); err != nil {
@@ -384,7 +384,7 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 		writeJSON(w, http.StatusOK, struct{}{})
 		return nil
 	}
-	// Where it would stand, read before anything is verified. The box moves
+	// Where it would stand, read before anything is verified. The mailbox moves
 	// to a later certificate, at any prekey serial, or stays under its
 	// current one at a higher serial: never back to an older certificate,
 	// never to another of the same serial, and never to one its identity
@@ -402,10 +402,10 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 		return refusedRevoked
 	}
 	if o.CertSerial < b.CertSerial || (o.CertSerial == b.CertSerial && o.Cert != b.Cert) {
-		return fail(protocol.CodeCertificateNotCurrent, "certify a new working key at a higher serial: dromas prekey renew", "the certificate's serial must be above %d, or the certificate be the box's current one", certificateSerialValue(b.CertSerial))
+		return fail(protocol.CodeCertificateNotCurrent, "certify a new working key at a higher serial: dromas prekey renew", "the certificate's serial must be above %d, or the certificate be the mailbox's current one", certificateSerialValue(b.CertSerial))
 	}
 	if o.CertSerial == b.CertSerial && o.Serial <= b.Prekey.Serial {
-		return fail(protocol.CodeConflict, "a newer prekey is already published: dromas prekey renew takes the next serial", "under the box's current certificate the serial must be above %d", prekeySerialValue(b.Prekey.Serial))
+		return fail(protocol.CodeConflict, "a newer prekey is already published: dromas prekey renew takes the next serial", "under the mailbox's current certificate the serial must be above %d", prekeySerialValue(b.Prekey.Serial))
 	}
 	m, err := s.miss(r)
 	if err != nil {
@@ -425,13 +425,13 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 	if err := s.checkPass(r, h, key, under, cert.Serial(), nil); err != nil {
 		return err
 	}
-	// A renewal under the box's current certificate counts against the
-	// box's renewals; one under a later certificate is its identity's act,
+	// A renewal under the mailbox's current certificate counts against the
+	// mailbox's renewals; one under a later certificate is its identity's act,
 	// counted apart, so whoever holds the current working key and spends the
 	// renewals does not hold back the identity's. The count is read with the
-	// box's calls, so a refusal of either gives the longer wait (longest).
-	// One while the box's current certificate is revoked spends none of the
-	// box's counts, its calls among them: it replaces what the identity
+	// mailbox's calls, so a refusal of either gives the longer wait (longest).
+	// One while the mailbox's current certificate is revoked spends none of the
+	// mailbox's counts, its calls among them: it replaces what the identity
 	// revoked, each raise of which is counted (revoke), and whoever held the
 	// taken working key may have spent the calls before the raise (#84). It
 	// was counted at the gate, against its address's flood budget, as every
@@ -478,10 +478,10 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 	if err := s.take(b, req.Prekey, req.PrekeySignature, p, cert, req.SenderKeyTypes, now); err != nil {
 		return err
 	}
-	if err := s.store.UpdateBox(detached(r.Context()), b); err != nil {
+	if err := s.store.UpdateMailbox(detached(r.Context()), b); err != nil {
 		stored = mayHaveApplied(err)
 		if errors.Is(err, ErrStale) {
-			return fail(protocol.CodeBoxChanged, "retry: dromas prekey renew", "the box changed during the request")
+			return fail(protocol.CodeMailboxChanged, "retry: dromas prekey renew", "the mailbox changed during the request")
 		}
 		return err
 	}
@@ -490,18 +490,18 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// getBox is GET /v1/<address>, the one read of a box: everything a sender
+// getMailbox is GET /v1/<address>, the one read of a mailbox: everything a sender
 // needs before it posts, which is the identity document, the current prekey
-// statement with its signature, the key types the box declared with it, and
+// statement with its signature, the key types the mailbox declared with it, and
 // the revocation of its certificates held (PROTOCOL.md §11.8). A revoked
 // address is 410 with its record, which proves itself: a client takes
 // "revoked" on nothing less, and needs no second call for it. An address
-// with no box is 404, whatever its identity revoked of its certificates.
+// with no mailbox is 404, whatever its identity revoked of its certificates.
 // It takes no pass: it is public, and the gate counts it by the address it
 // comes from, whatever Authorization it carries, which nothing here reads
 // (PROTOCOL.md §11.8, §11.5; dromas-dev/dromas-client#352). It is the one
 // answer of the API that is gzipped, to a request that takes it.
-func (s *Server) getBox(w http.ResponseWriter, r *http.Request) error {
+func (s *Server) getMailbox(w http.ResponseWriter, r *http.Request) error {
 	h, err := pathAddr(r)
 	if err != nil {
 		return err
@@ -518,7 +518,7 @@ func (s *Server) getBox(w http.ResponseWriter, r *http.Request) error {
 	if err := precondition(r, targetState{exists: true, hint: hintConditions, also: []string{"Vary", "Accept-Encoding"}}); err != nil {
 		return err
 	}
-	writeJSONCompressed(w, r, protocol.BoxResponse{
+	writeJSONCompressed(w, r, protocol.MailboxResponse{
 		Identity: b.Identity, Prekey: b.Statement, PrekeySignature: b.Signature, SenderKeyTypes: b.SenderKeyTypes,
 		RevokedCertificates: b.RevokedCerts, RevokedCertificatesSignature: b.RevokedCertsSig,
 	})
@@ -526,9 +526,9 @@ func (s *Server) getBox(w http.ResponseWriter, r *http.Request) error {
 }
 
 // getRevocations is GET /v1/<address>/revocations (PROTOCOL.md §11.15): the
-// record this server holds of the address, with a box here or none, or 404
-// not_revoked. A box learns the same of the boxes it writes to from their read
-// (getBox); this route is for its own, where this server holds no box for it.
+// record this server holds of the address, with a mailbox here or none, or 404
+// not_revoked. A mailbox learns the same of the mailboxes it writes to from their read
+// (getMailbox); this route is for its own, where this server holds no mailbox for it.
 // It takes no pass, as the PUT beside it takes none.
 func (s *Server) getRevocations(w http.ResponseWriter, r *http.Request) error {
 	h, err := pathAddr(r)
@@ -540,7 +540,7 @@ func (s *Server) getRevocations(w http.ResponseWriter, r *http.Request) error {
 	case err != nil:
 		return err
 	case !b.holdsRevocations():
-		return fail(protocol.CodeNotRevoked, "nothing to do: this server holds no revocation of that address. That is its word, and the box's owner may hold a record of one", "no revocation of this address is held here")
+		return fail(protocol.CodeNotRevoked, "nothing to do: this server holds no revocation of that address. That is its word, and the mailbox's owner may hold a record of one", "no revocation of this address is held here")
 	}
 	if err := precondition(r, targetState{exists: true, hint: hintConditions}); err != nil {
 		return err
@@ -559,19 +559,19 @@ const (
 // revoke is PUT /v1/<address>/revocations: the identity document with what
 // the identity itself has signed about the address. No pass: a working key
 // can be stolen without the identity and must not be able to end the address
-// or to revoke a certificate, and an owner who lost the box holds no working
+// or to revoke a certificate, and an owner who lost the mailbox holds no working
 // key at all. The signature is the whole authority, and it may have been made
 // long ago. So the call is its address's to pay for, as every call with no
 // pass is.
 //
-// What is revoked is kept with or without a box, in the address's
-// revocations item, for good: for a box that is registered, swept by the
+// What is revoked is kept with or without a mailbox, in the address's
+// revocations item, for good: for a mailbox that is registered, swept by the
 // TTL or never registered. Keeping it for an address this server
 // holds nothing of is a record kept for good, so that one is counted as a
 // registration is, against its caller's address.
 //
 // A revocation of the address (PROTOCOL.md §11.15): the address is revoked
-// for good, its box's mail and record are deleted, and the signature is kept
+// for good, its mailbox's messages and record are deleted, and the signature is kept
 // and served (revocations).
 //
 // A revocation of certificates (PROTOCOL.md §10.2): the address goes on.
@@ -579,13 +579,13 @@ const (
 // through a lower serial than the one held is refused, and the same one again
 // changes nothing. From then on no pass and no prekey statement under a
 // revoked certificate is taken, and nobody is told to encrypt to a prekey
-// under one. A raise of it is the identity's act, counted per box on its own
+// under one. A raise of it is the identity's act, counted per mailbox on its own
 // (Limits.CertificateRevocationsPerDay), so no renewal holds it back; the
 // renewal that replaces the certificate it revokes is then not counted
-// (prekey). The revocation of the address is counted against no box.
+// (prekey). The revocation of the address is counted against no mailbox.
 //
 // A body may carry both. What could change nothing is answered from the
-// record before any signature is checked: anything for a box already
+// record before any signature is checked: anything for a mailbox already
 // revoked, and a revocation of certificates through a serial no higher than
 // the one held. Both kinds of statement are public, and more than one set of
 // bytes verifies for each, so one sent back must cost no signature check.
@@ -620,7 +620,7 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	// A revoked address takes nothing more: it is ended, and that says which
-	// of its certificates still stand. Its box's mail and record are deleted
+	// of its certificates still stand. Its mailbox's messages and record are deleted
 	// again while memory shows them, as they are when the first delete
 	// failed: a revocation sent back must not draw a read of the messages
 	// table each time.
@@ -708,15 +708,15 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) error {
 				raise.release(s.now())
 			}
 			if errors.Is(err, ErrStale) {
-				return fail(protocol.CodeBoxChanged, "retry", "the box changed during the request")
+				return fail(protocol.CodeMailboxChanged, "retry", "the mailbox changed during the request")
 			}
 			return err
 		}
 		raise.keep()
 	}
-	// Once the address is revoked: mail that arrived around the write is
+	// Once the address is revoked: a message that arrived around the write is
 	// never served, this deletes it sooner than its expiry would, and then
-	// the box's record goes.
+	// the mailbox's record goes.
 	if req.Revocation != nil && b.hasRecord() {
 		if err := s.purge(detached(r.Context()), b); err != nil {
 			return err
@@ -726,16 +726,16 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// deleteHeld deletes what is left of revoked address b's box where memory
-// holds the address (Store.Held), while memory shows the box holding mail or
+// deleteHeld deletes what is left of revoked address b's mailbox where memory
+// holds the address (Store.Held), while memory shows the mailbox holding messages or
 // a record is left beside the revocation, by a delete that failed or a
 // registration that raced it: by the one purge of the address in flight
 // (purge). Its caller carries no pass, so elsewhere it
 // loads nothing and changes nothing, and what is left waits for its expiry,
 // served to nobody (ARCHITECTURE.md § Startup). The record stays there too:
-// a load reads an address's mail only while its record is left, so deleting
-// it would leave the mail where no process looks for it.
-func (s *Server) deleteHeld(ctx context.Context, b *Box) error {
+// a load reads an address's messages only while its record is left, so deleting
+// it would leave the messages where no process looks for them.
+func (s *Server) deleteHeld(ctx context.Context, b *Mailbox) error {
 	if _, held := s.store.Held(b.Addr); !held {
 		return nil
 	}
@@ -747,21 +747,21 @@ func (s *Server) deleteHeld(ctx context.Context, b *Box) error {
 	return s.purge(ctx, b)
 }
 
-// purge deletes what is left of revoked address b's box: its mail, then its
+// purge deletes what is left of revoked address b's mailbox: its messages, then its
 // record if one is left. One purge of an address is in flight at a time, on
 // a context apart from any one request, and a call that comes meanwhile
 // waits for it and gets its result, starting nothing
-// (dromas-dev/dromas-server#29): a revocation sent for a revoked box
+// (dromas-dev/dromas-server#29): a revocation sent for a revoked mailbox
 // carries no pass and costs no signature check, so anyone can send one, and
-// each would otherwise start a whole delete of the box's mail of its own.
-func (s *Server) purge(ctx context.Context, b *Box) error {
+// each would otherwise start a whole delete of the mailbox's messages of its own.
+func (s *Server) purge(ctx context.Context, b *Mailbox) error {
 	_, err, _ := s.purges.Do(string(b.Addr[:]), func() (any, error) {
 		ctx := context.WithoutCancel(ctx)
 		if err := s.store.DeleteMessages(ctx, b.Addr); err != nil {
 			return nil, err
 		}
 		if b.hasRecord() {
-			return nil, s.store.DeleteBox(ctx, b.Addr)
+			return nil, s.store.DeleteMailbox(ctx, b.Addr)
 		}
 		return nil, nil
 	})

@@ -10,8 +10,8 @@ import (
 
 // recCache is a bounded LRU of records, each at a version, and a record
 // never moves back to an older one. Two are kept: what is held of each
-// address, a box's record with its identity's revocations (ARCHITECTURE.md
-// § Memory, for sends and reads of a box), with the addresses a read found
+// address, a mailbox's record with its identity's revocations (ARCHITECTURE.md
+// § Memory, for sends and reads of a mailbox), with the addresses a read found
 // missing; and account records (for a sender's limits).
 //
 // What it holds never goes back to before a write this process has applied
@@ -80,13 +80,13 @@ func (c *recCache[K, V]) stepped(checked uint64) {
 // finds, since a write is counted once it has committed.
 type token uint64
 
-type boxCache = recCache[protocol.Address, *Box]
+type mailboxCache = recCache[protocol.Address, *Mailbox]
 
-// newBoxCache holds size addresses, and remembers as many missing. Its
+// newMailboxCache holds size addresses, and remembers as many missing. Its
 // writes are counted by the address's first byte.
-func newBoxCache(size int) *boxCache {
+func newMailboxCache(size int) *mailboxCache {
 	c := newRecCache(size, 256, func(a protocol.Address) int { return int(a[0]) },
-		func(b *Box) protocol.Address { return b.Addr }, versionOf, cloneBox)
+		func(b *Mailbox) protocol.Address { return b.Addr }, versionOf, cloneMailbox)
 	c.merge = mergeViews // revocations are never taken away, so neither copy's are lost
 	c.missing = newMissCache[protocol.Address](size)
 	return c
@@ -271,12 +271,12 @@ func (c *recCache[K, V]) missed(k K, tok token, now time.Time) {
 	c.missing.add(k, now)
 }
 
-// missTTL is how long a box the table did not hold is remembered as missing.
-// A write to the box, by this process or seen on the stream, ends it sooner.
+// missTTL is how long a mailbox the table did not hold is remembered as missing.
+// A write to the mailbox, by this process or seen on the stream, ends it sooner.
 const missTTL = 30 * time.Second
 
 // missCache remembers the keys a read found missing, briefly, so that naming
-// the same missing box again costs no read. At most max are held; over that,
+// the same missing mailbox again costs no read. At most max are held; over that,
 // the expired go, and if none has, all of them. It is its recCache's, used
 // under that cache's lock.
 type missCache[K comparable] struct {

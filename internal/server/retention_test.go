@@ -10,18 +10,18 @@ import (
 )
 
 // A message this server still serves is one its reader takes: each post is
-// dated afresh, and the server keeps mail the TTL less the hour after it
+// dated afresh, and the server keeps a message the TTL less the hour after it
 // received it, so a reader whose clock the server takes refuses none as
 // stale before its expires_at (PROTOCOL.md §12.2, §13). A message mailbox_full
 // held in its sender's outbox is the case the TTL's monthly promise is for.
-func TestMailIsTakenWhileTheServerServesIt(t *testing.T) {
+func TestAMessageIsTakenWhileTheServerServesIt(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	day := 24 * time.Hour
 	t.Run("held by mailbox_full, read every 30 days", func(t *testing.T) {
-		const boxCap = 3
+		const mailboxCap = 3
 		l := relaxed()
-		l.BoxCap = boxCap
+		l.MailboxCap = mailboxCap
 		e := newEnv(t, l)
 		off := time.Duration(0)
 		s, err := client.Init(ctx, t.TempDir(), e.skewed(&off), protocol.Classic)
@@ -34,7 +34,7 @@ func TestMailIsTakenWhileTheServerServesIt(t *testing.T) {
 		}
 		landAll(t, r)
 		held := 0
-		for range boxCap + 1 {
+		for range mailboxCap + 1 {
 			if _, err := s.Send(ctx, r.Address(), "a message"); codeOf(err) == protocol.CodeMailboxFull {
 				held++
 			}
@@ -43,7 +43,7 @@ func TestMailIsTakenWhileTheServerServesIt(t *testing.T) {
 			t.Fatalf("%d held by mailbox_full, want 1", held)
 		}
 		e.clock.Add(30 * day)
-		if got := len(receive(t, r).Delivered); got != boxCap {
+		if got := len(receive(t, r).Delivered); got != mailboxCap {
 			t.Fatalf("day 30: delivered %d", got)
 		}
 		sent, err := s.Flush(ctx)

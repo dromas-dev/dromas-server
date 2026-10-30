@@ -31,27 +31,27 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	// A refusal of the calls gives their wait alone. The sends a day are
-	// behind the dedupe (step 6): only it shows whether the call is new mail
+	// behind the dedupe (step 6): only it shows whether the call is a new message
 	// that spends them, and a retry spends none (PROTOCOL.md §11.5).
 	if lim, err := s.limitsOf(ctx, from); err != nil {
 		return err
 	} else if err := s.spendCall(from, lim); err != nil {
 		return err
 	}
-	// The pass showed the box exists, so reading its record is no guess at
+	// The pass showed the mailbox exists, so reading its record is no guess at
 	// an address: it is not a read lookup would count or refuse.
-	// It is held to what the pass's check held the box to (sender), since
-	// the box can be revoked, or its certificate revoked, between the two
+	// It is held to what the pass's check held the mailbox to (sender), since
+	// the mailbox can be revoked, or its certificate revoked, between the two
 	// reads.
-	sender, err := s.box(ctx, from)
+	sender, err := s.mailbox(ctx, from)
 	if err != nil {
 		return err
 	}
 	switch {
 	case sender != nil && sender.State == Revoked:
-		return fail(protocol.CodeSenderRevoked, "your box is revoked: make a new one, dromas init", "the sending box is revoked")
+		return fail(protocol.CodeSenderRevoked, "your mailbox is revoked: make a new one, dromas init", "the sending mailbox is revoked")
 	case !sender.open():
-		return fail(protocol.CodeUnknownSender, "register your own box first: dromas init", "the box the pass names is not registered")
+		return fail(protocol.CodeUnknownSender, "register your own mailbox first: dromas init", "the mailbox the pass names is not registered")
 	}
 	if listed, err := sender.listed(sender.CertSerial); err != nil {
 		return err
@@ -125,7 +125,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 	// 4. It is an age file: its stanzas read as a reader reads them.
 	stanzas, err := protocol.ReadStanzas(ciphertext)
 	if err != nil {
-		return fail(protocol.CodeNotAge, "encrypt with age to the box's prekey", "the ciphertext is not an age file")
+		return fail(protocol.CodeNotAge, "encrypt with age to the mailbox's prekey", "the ciphertext is not an age file")
 	}
 
 	// 5. The recipient is registered and active.
@@ -139,7 +139,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 	case !rcpt.open():
 		return noSuchMailbox
 	}
-	// The target is the box's mailbox, which exists, and carries no tag
+	// The target is the mailbox, which exists, and carries no tag
 	// (precondition): here, before the dedupe, since steps 6 to 9 are shared by
 	// the posts of the same bytes in flight at once, whatever conditions each
 	// carries. So a retry whose If-Match is false is 412, not the receipt
@@ -149,11 +149,11 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 
-	// 6 to 9, one call for the posts of this ciphertext to this box naming
+	// 6 to 9, one call for the posts of this ciphertext to this mailbox naming
 	// the same serials in flight at once, from any sender
 	// (dromas-dev/dromas-server#76, #16): one that arrives while the
 	// first is in them waits for it, and is answered as step 6 answers a
-	// post of bytes the box holds, or with the first's own refusal, which a
+	// post of bytes the mailbox holds, or with the first's own refusal, which a
 	// post from the same sender would meet as well. A refusal of another
 	// sender's post may be that sender's alone (its ACL entry, its sends, its
 	// key type), so a post handed one is made again, in a call of its own
@@ -193,7 +193,7 @@ type post struct {
 	ciphertext   []byte
 	stanzas      protocol.Stanzas
 	q            protocol.SendQuery
-	sender, rcpt *Box
+	sender, rcpt *Mailbox
 	lim          Limits
 	now          time.Time
 }
@@ -213,8 +213,8 @@ type posted struct {
 	from protocol.Address
 }
 
-// deliver is steps 6 to 9 of a send (send): the dedupe, whether the box
-// takes new mail, the counts, the write. It runs on a context apart from the
+// deliver is steps 6 to 9 of a send (send): the dedupe, whether the mailbox
+// takes new messages, the counts, the write. It runs on a context apart from the
 // request that leads it, and every post of its ciphertext waits on it, so no
 // request's end cuts a read of it short: each read is bounded by
 // storeTimeout (bounded), on any store, as a lookup's shared read is
@@ -224,11 +224,11 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 	from, to, msgID, rcpt, now, q := p.from, p.to, p.id, p.rcpt, p.now, p.q
 
 	// 6. Dedupe, while the message is live, before anything asks whether
-	// the box takes new mail: a post of bytes the box holds unacked, from any
+	// the mailbox takes new messages: a post of bytes the mailbox holds unacked, from any
 	// sender, gets the receipt held, whatever has changed since it was
-	// stored, a renewal of the box's prekey included. What those checks keep
-	// from the box is new mail, and that is none. Nothing is kept once a
-	// message is acked or expired, so the same bytes after that are new mail.
+	// stored, a renewal of the mailbox's prekey included. What those checks keep
+	// from the mailbox is a new message, and that is none. Nothing is kept once a
+	// message is acked or expired, so the same bytes after that are a new message.
 	read, cancel := bounded(ctx)
 	orig, err := s.store.Dedupe(read, to, msgID)
 	cancel()
@@ -238,40 +238,40 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 		return delivered{}, err
 	}
 
-	// 7. The box takes new mail on this prekey, and from this sender.
+	// 7. The mailbox takes new messages on this prekey, and from this sender.
 	if rcpt.Prekey.Expired(now) {
-		return delivered{}, fail(protocol.CodePrekeyExpired, "the box's owner must publish a new prekey (dromas prekey renew); retry later", "this box's prekey has expired")
+		return delivered{}, fail(protocol.CodePrekeyExpired, "the mailbox's owner must publish a new prekey (dromas prekey renew); retry later", "this mailbox's prekey has expired")
 	}
-	// A prekey under a certificate the box's identity has revoked is one
+	// A prekey under a certificate the mailbox's identity has revoked is one
 	// nobody may encrypt to. The cure is an expired prekey's: the owner
 	// publishes a new one, under a new certificate.
 	if listed, err := rcpt.listed(rcpt.CertSerial); err != nil {
 		return delivered{}, err
 	} else if listed {
-		return delivered{}, fail(protocol.CodePrekeyExpired, "the box's owner must publish a new prekey (dromas prekey renew); retry later", "this box's prekey is signed under a certificate its identity revoked")
+		return delivered{}, fail(protocol.CodePrekeyExpired, "the mailbox's owner must publish a new prekey (dromas prekey renew); retry later", "this mailbox's prekey is signed under a certificate its identity revoked")
 	}
-	// A box takes mail from a sender whose identity its client can verify:
+	// A mailbox takes messages from a sender whose identity its client can verify:
 	// one on an Ed25519 key always, and otherwise what it declared with its
-	// prekey. Refused here, the sender has an error and no receipt for mail
+	// prekey. Refused here, the sender has an error and no receipt for a message
 	// the recipient would have refused on reading it.
 	if t := identityType(p.sender.Identity); !protocol.AcceptsSender(rcpt.SenderKeyTypes, t) {
-		return delivered{}, fail(protocol.CodeSenderKeyType, "a box whose identity is an ssh-ed25519 key, as dromas init makes one, can write to any box",
-			"this box's client does not verify identities of your box's key type, %s", keyTypeValue(t))
+		return delivered{}, fail(protocol.CodeSenderKeyType, "a mailbox whose identity is an ssh-ed25519 key, as dromas init makes one, can write to any mailbox",
+			"this mailbox's client does not verify identities of your mailbox's key type, %s", keyTypeValue(t))
 	}
 	// A prekey is named by both serials: its own, and its certificate's.
 	if q.PrekeySerial != rcpt.Prekey.Serial || q.CertificateSerial != rcpt.CertSerial {
-		return delivered{}, fail(protocol.CodeStalePrekey, "a newer prekey exists: read GET /v1/<address> again and re-encrypt the same envelope (dromas does this)", "the box's current prekey is serial %d, under certificate %d", prekeySerialValue(rcpt.Prekey.Serial), certificateSerialValue(rcpt.CertSerial))
+		return delivered{}, fail(protocol.CodeStalePrekey, "a newer prekey exists: read GET /v1/<address> again and re-encrypt the same envelope (dromas does this)", "the mailbox's current prekey is serial %d, under certificate %d", prekeySerialValue(rcpt.Prekey.Serial), certificateSerialValue(rcpt.CertSerial))
 	}
 	if refused := checkStanzas(p.stanzas, rcpt); refused != nil {
 		return delivered{}, refused
 	}
 
-	// 8. First the box's ACL (PROTOCOL.md §11.14): deny, then allow. It is
+	// 8. First the mailbox's ACL (PROTOCOL.md §11.14): deny, then allow. It is
 	// read before any quota is taken, so a refused send spends none of them.
 	// One code and one wording whether the sender was denied or is not on an
 	// allow list, so a sender cannot tell which.
 	if !rcpt.ACL.Admits(from) {
-		return delivered{}, fail(protocol.CodeSenderNotAllowed, "nothing the sender can change: its client moves the message to outbox/failed/", "this box's ACL does not let your box send to it")
+		return delivered{}, fail(protocol.CodeSenderNotAllowed, "nothing the sender can change: its client moves the message to outbox/failed/", "this mailbox's ACL does not let your mailbox send to it")
 	}
 	// Then quotas, counted only for sends that carried their sender's pass,
 	// each taken before the write and given back unless the send is stored,
@@ -301,8 +301,8 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 		return delivered{}, refused
 	}
 	defer release()
-	// The box's own budget for new mail, from every sender together: what
-	// keeps one box from taking mail at any rate however many boxes send.
+	// The mailbox's own budget for new messages, from every sender together: what
+	// keeps one mailbox from taking messages at any rate however many mailboxes send.
 	read, cancel = bounded(ctx)
 	rlim, err := s.limitsFor(read, rcpt)
 	cancel()
@@ -312,7 +312,7 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 	if rlim.ReceiveBurst > 0 {
 		recv, ok, wait := s.receivesAt(rlim).reserve(ctx, to.String(), s.now)
 		if !ok {
-			busy := fail(protocol.CodeMailboxBusy, "the box takes only so much new mail at a time: post it again after Retry-After (dromas outbox flush does)", "the box has taken as much new mail as it takes for now")
+			busy := fail(protocol.CodeMailboxBusy, "the mailbox takes only so many new messages at a time: post it again after Retry-After (dromas outbox flush does)", "the mailbox has taken as many new messages as it takes for now")
 			busy.retryAfter = wait
 			return delivered{}, busy
 		}
@@ -341,13 +341,13 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 		return delivered{h: orig}, nil // a send of the same ciphertext from another process, or a stale dedupe read
 	}
 	stored = true
-	// The box's address may have been revoked since step 5 read it: then
+	// The mailbox's address may have been revoked since step 5 read it: then
 	// what this wrote is deleted, as the revocation deleted the rest, and the
-	// send is answered as the box now stands (dromas-dev/dromas-server#15).
+	// send is answered as the mailbox now stands (dromas-dev/dromas-server#15).
 	// One process has the change in memory at once; with more, this is to be
 	// a strongly consistent read (ARCHITECTURE.md, stage 2).
 	read, cancel = bounded(ctx)
-	cur, err := s.box(read, to)
+	cur, err := s.mailbox(read, to)
 	cancel()
 	if err != nil {
 		return delivered{}, err
@@ -364,26 +364,26 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 	return delivered{h: h, fresh: true}, nil
 }
 
-// inFlight is, for each box, the sends this process has let past the box
+// inFlight is, for each mailbox, the sends this process has let past the mailbox
 // cap and not yet stored, kept beside the store's count and read with it
 // under one lock, so sends in flight at once cannot all pass on the same
 // count (dromas-dev/dromas-server#4). It is this process's alone, as
 // every count is (LIMITS.md).
 type inFlight struct {
-	mu  sync.Mutex
-	box map[protocol.Address]int
+	mu      sync.Mutex
+	mailbox map[protocol.Address]int
 }
 
-// reserveCaps checks the box cap for one more message to box to, counting
+// reserveCaps checks the mailbox cap for one more message to mailbox to, counting
 // the sends in flight, and counts this one in. release takes it out once
 // the send is over: by then a stored message is in the store's count, so a
 // send checked between the two sees both and is refused one early, never
 // let past. A refusal is p.
 func (s *Server) reserveCaps(ctx context.Context, to protocol.Address) (release func(), p *problem, err error) {
-	if s.limits.BoxCap == 0 {
+	if s.limits.MailboxCap == 0 {
 		return func() {}, nil, nil
 	}
-	// Load the box first, so what is read under the lock is memory.
+	// Load the mailbox first, so what is read under the lock is memory.
 	if _, err := s.store.Count(ctx, to); err != nil {
 		return nil, nil, err
 	}
@@ -394,20 +394,20 @@ func (s *Server) reserveCaps(ctx context.Context, to protocol.Address) (release 
 	if err != nil {
 		return nil, nil, err
 	}
-	if n += f.box[to]; n >= s.limits.BoxCap {
-		p := fail(protocol.CodeMailboxFull, "the box is full: retry later", "the box holds %d messages", countValue(n))
+	if n += f.mailbox[to]; n >= s.limits.MailboxCap {
+		p := fail(protocol.CodeMailboxFull, "the mailbox is full: retry later", "the mailbox holds %d messages", countValue(n))
 		p.retryAfter = time.Duration(s.limits.PollAfter) * time.Second
 		return nil, p, nil
 	}
-	if f.box == nil {
-		f.box = map[protocol.Address]int{}
+	if f.mailbox == nil {
+		f.mailbox = map[protocol.Address]int{}
 	}
-	f.box[to]++
+	f.mailbox[to]++
 	return func() {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		if f.box[to]--; f.box[to] <= 0 {
-			delete(f.box, to)
+		if f.mailbox[to]--; f.mailbox[to] <= 0 {
+			delete(f.mailbox, to)
 		}
 	}, nil, nil
 }
@@ -425,7 +425,7 @@ func receipt(h *Header) protocol.Receipt {
 	return protocol.Receipt{ID: hexID(h.ID), ReceivedAt: formatTime(h.ReceivedAt), ExpiresAt: formatTime(h.ExpiresAt)}
 }
 
-// duplicate answers a send whose ciphertext the box holds unacked, from
+// duplicate answers a send whose ciphertext the mailbox holds unacked, from
 // whichever sender: the receipt held (PROTOCOL.md §11.10, step 6).
 func (s *Server) duplicate(w http.ResponseWriter, orig *Header) error {
 	writeJSON(w, http.StatusOK, receipt(orig))
@@ -440,18 +440,18 @@ func (s *Server) duplicate(w http.ResponseWriter, orig *Header) error {
 // is encrypted to cannot be checked, by design of native age. Each case has
 // its own hint, in this order: a stanza of another type, none native, more
 // than one, then the type.
-func checkStanzas(st protocol.Stanzas, b *Box) *problem {
+func checkStanzas(st protocol.Stanzas, b *Mailbox) *problem {
 	switch {
 	case st.Other:
-		return fail(protocol.CodeWrongRecipientType, "encrypt to the box's prekey", "the file has a stanza of a type no prekey has")
+		return fail(protocol.CodeWrongRecipientType, "encrypt to the mailbox's prekey", "the file has a stanza of a type no prekey has")
 	case len(st.Native) == 0:
-		return fail(protocol.CodeWrongRecipientType, "the file has no recipient: encrypt to the box's prekey", "the file has no native stanza, only grease")
+		return fail(protocol.CodeWrongRecipientType, "the file has no recipient: encrypt to the mailbox's prekey", "the file has no native stanza, only grease")
 	case len(st.Native) > 1:
 		return fail(protocol.CodeWrongRecipientType, "encrypt to one recipient only", "the file has more than one native stanza")
 	case st.Native[0] == b.Prekey.Type():
 		return nil
 	case b.Prekey.Type() == protocol.PostQuantum:
-		return fail(protocol.CodeWrongRecipientType, "this box needs age >= 1.3 or age-plugin-pq", "this box is post-quantum and the file is X25519 only")
+		return fail(protocol.CodeWrongRecipientType, "this mailbox needs age >= 1.3 or age-plugin-pq", "this mailbox is post-quantum and the file is X25519 only")
 	}
-	return fail(protocol.CodeWrongRecipientType, "this box is --no-pq (X25519 only): re-fetch its prekey", "this box is --no-pq (X25519 only) and the file is post-quantum")
+	return fail(protocol.CodeWrongRecipientType, "this mailbox is --no-pq (X25519 only): re-fetch its prekey", "this mailbox is --no-pq (X25519 only) and the file is post-quantum")
 }

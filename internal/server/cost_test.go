@@ -19,7 +19,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// Measurements for costing: what one box costs a process's memory,
+// Measurements for costing: what one mailbox costs a process's memory,
 // and how large the items the store writes are. Evidence, not a test: it
 // asserts nothing and is skipped unless DROMAS_COST=1.
 //
@@ -48,10 +48,10 @@ func costAddrs(n int) []protocol.Address {
 	return as
 }
 
-// costBox is a real box record: an identity, and a prekey statement signed
+// costMailbox is a real mailbox record: an identity, and a prekey statement signed
 // by a working key under its certificate, post-quantum or not, with n retired
 // prekeys. It returns the working key's signer too.
-func costBox(t *testing.T, pq bool, retired int) (*Box, ssh.Signer) {
+func costMailbox(t *testing.T, pq bool, retired int) (*Mailbox, ssh.Signer) {
 	t.Helper()
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	identity, _ := ssh.NewSignerFromKey(priv)
@@ -86,7 +86,7 @@ func costBox(t *testing.T, pq bool, retired int) (*Box, ssh.Signer) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := &Box{Addr: id.Address(), Identity: id.Document(), State: Active, Statement: p.Statement(), Signature: sig, Prekey: p,
+	b := &Mailbox{Addr: id.Address(), Identity: id.Document(), State: Active, Statement: p.Statement(), Signature: sig, Prekey: p,
 		CertSerial: cert.Serial(), Cert: certHash(cert), Rev: uint64(retired) + 2, Created: now}
 	for i := range retired {
 		b.Retired = append(b.Retired, Retired{Type: p.Type(), NotAfter: now.Add(time.Duration(i) * time.Hour), KeyHash: sha256.Sum256([]byte{byte(i)})})
@@ -94,8 +94,8 @@ func costBox(t *testing.T, pq bool, retired int) (*Box, ssh.Signer) {
 	return b, signer
 }
 
-// TestCostMemoryPerBox measures the heap each structure holds per box.
-func TestCostMemoryPerBox(t *testing.T) {
+// TestCostMemoryPerMailbox measures the heap each structure holds per mailbox.
+func TestCostMemoryPerMailbox(t *testing.T) {
 	t.Parallel()
 	costOnly(t)
 	const n = 200_000
@@ -103,7 +103,7 @@ func TestCostMemoryPerBox(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	// The index: a loaded box and its live messages' marks, grown by append
+	// The index: a loaded mailbox and its live messages' marks, grown by append
 	// as the load and the stream grow them.
 	for _, k := range []int{0, 1, 10, 100} {
 		before := heapNow()
@@ -113,22 +113,22 @@ func TestCostMemoryPerBox(t *testing.T) {
 			for i := range k {
 				marks = append(marks, mark{id: uint64(i), exp: 1 << 62})
 			}
-			_ = x.ensure(ctx, a, func() (boxRead, error) {
-				return boxRead{exists: true, st: Standing{State: Active, Key: string(bytes.Repeat([]byte{1}, 51)), Cert: a}, rev: 2, marks: marks}, nil
+			_ = x.ensure(ctx, a, func() (mailboxRead, error) {
+				return mailboxRead{exists: true, st: Standing{State: Active, Key: string(bytes.Repeat([]byte{1}, 51)), Cert: a}, rev: 2, marks: marks}, nil
 			})
 		}
-		t.Logf("index, %3d live messages: %6.0f B per loaded box", k, float64(heapNow()-before)/n)
+		t.Logf("index, %3d live messages: %6.0f B per loaded mailbox", k, float64(heapNow()-before)/n)
 		runtime.KeepAlive(x)
 	}
 
-	// The poll bucket: one map entry per box that has polled, until its
+	// The poll bucket: one map entry per mailbox that has polled, until its
 	// bucket is full again.
 	before := heapNow()
 	bs := newBuckets("test", 10, 50*time.Second)
 	for _, a := range addrs {
 		bs.take(a.String(), now)
 	}
-	t.Logf("poll bucket: %6.0f B per box that has polled", float64(heapNow()-before)/n)
+	t.Logf("poll bucket: %6.0f B per mailbox that has polled", float64(heapNow()-before)/n)
 	runtime.KeepAlive(bs)
 
 	// The sends a day: one bucket per sender that sent within a day.
@@ -140,33 +140,33 @@ func TestCostMemoryPerBox(t *testing.T) {
 	t.Logf("sends a day: %6.0f B per sender that sent within a day", float64(heapNow()-before)/n)
 	runtime.KeepAlive(d)
 
-	// The passes remembered: one entry per box that showed a pass which has
+	// The passes remembered: one entry per mailbox that showed a pass which has
 	// not run out.
 	before = heapNow()
 	ps := newPasses()
 	for _, a := range addrs {
 		ps.keep(a, seenPass{sum: a, cert: a, until: now.Add(protocol.PassLifetime)}, now)
 	}
-	t.Logf("pass remembered: %6.0f B per box that showed one", float64(heapNow()-before)/n)
+	t.Logf("pass remembered: %6.0f B per mailbox that showed one", float64(heapNow()-before)/n)
 	runtime.KeepAlive(ps)
 
 	// What a pass costs to check: the first time, a hash of the certificate
 	// it carries and two signature checks, the working key's and then the
 	// identity's; and every later call that carries it, a hash of the header
 	// and a lookup.
-	box, work := costBox(t, false, 0)
+	mailbox, work := costMailbox(t, false, 0)
 	store := NewMemStore(time.Now)
-	if err := store.CreateBox(ctx, box); err != nil {
+	if err := store.CreateMailbox(ctx, mailbox); err != nil {
 		t.Fatal(err)
 	}
 	srv := New(Config{Store: store, Limits: DefaultLimits()})
 	const name = "dromas.example"
-	auth, _, err := protocol.NewPass(work, box.Addr, name, time.Now())
+	auth, _, err := protocol.NewPass(work, mailbox.Addr, name, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	req, _ := http.NewRequest(http.MethodGet, "http://"+name+"/v1/"+box.Addr.String()+"/messages", nil)
-	req.SetPathValue("addr", box.Addr.String())
+	req, _ := http.NewRequest(http.MethodGet, "http://"+name+"/v1/"+mailbox.Addr.String()+"/messages", nil)
+	req.SetPathValue("addr", mailbox.Addr.String())
 	req.Header.Set("Authorization", auth)
 	const first = 2000
 	start := time.Now()
@@ -186,20 +186,20 @@ func TestCostMemoryPerBox(t *testing.T) {
 	}
 	t.Logf("a pass the server remembers: %.2f µs a call", float64(time.Since(start).Nanoseconds())/later/1000)
 
-	// What a pass that is not the box's costs to refuse. Under any other
-	// certificate: no signature check. Carrying the box's own certificate,
+	// What a pass that is not the mailbox's costs to refuse. Under any other
+	// certificate: no signature check. Carrying the mailbox's own certificate,
 	// which is public, with a signature that does not verify: one, the
 	// working key's. The identity's is reached only by a pass that is the
-	// box's.
-	_, otherWork := costBox(t, false, 0)
+	// mailbox's.
+	_, otherWork := costMailbox(t, false, 0)
 	notAfter := time.Now().UTC().Truncate(time.Second).Add(protocol.PassLifetime)
-	elsewhere, _, err := protocol.NewPass(otherWork, box.Addr, name, time.Now())
+	elsewhere, _, err := protocol.NewPass(otherWork, mailbox.Addr, name, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	for what, junk := range map[string]string{
-		"under another certificate":                             elsewhere,
-		"carrying the box's certificate, signed by another key": passCarrying(t, work.PublicKey(), otherWork, box.Addr, name, notAfter),
+		"under another certificate":                                 elsewhere,
+		"carrying the mailbox's certificate, signed by another key": passCarrying(t, work.PublicKey(), otherWork, mailbox.Addr, name, notAfter),
 	} {
 		req.Header.Set("Authorization", junk)
 		start = time.Now()
@@ -211,18 +211,18 @@ func TestCostMemoryPerBox(t *testing.T) {
 		t.Logf("a pass %s, refused: %.0f µs", what, float64(time.Since(start).Microseconds())/first)
 	}
 
-	// The box record cache: bounded (--box-cache, default 10,000).
+	// The mailbox record cache: bounded (--mailbox-cache, default 10,000).
 	for _, c := range []struct {
 		pq      bool
 		retired int
 	}{{true, 0}, {true, 10}, {false, 0}} {
 		const m = 10_000
-		b, _ := costBox(t, c.pq, c.retired)
+		b, _ := costMailbox(t, c.pq, c.retired)
 		before := heapNow()
-		cache := newBoxCache(m)
+		cache := newMailboxCache(m)
 		for _, a := range addrs[:m] {
 			// Its own bytes, as a record decoded from the table has.
-			x := cloneBox(b)
+			x := cloneMailbox(b)
 			x.Addr = a
 			x.Identity, x.Statement, x.Signature = bytes.Clone(b.Identity), bytes.Clone(b.Statement), bytes.Clone(b.Signature)
 			p := *b.Prekey
@@ -230,7 +230,7 @@ func TestCostMemoryPerBox(t *testing.T) {
 			x.Prekey = &p
 			cache.put(x)
 		}
-		t.Logf("box record cache, pq=%v, %2d retired: %6.0f B per record", c.pq, c.retired, float64(heapNow()-before)/m)
+		t.Logf("mailbox record cache, pq=%v, %2d retired: %6.0f B per record", c.pq, c.retired, float64(heapNow()-before)/m)
 		runtime.KeepAlive(cache)
 	}
 }
@@ -283,17 +283,17 @@ func TestCostItemSizes(t *testing.T) {
 		pq      bool
 		retired int
 	}{{true, 0}, {true, 1}, {true, 10}, {false, 0}, {false, 10}} {
-		b, _ := costBox(t, c.pq, c.retired)
-		n := itemSize(boxItem(b))
-		t.Logf("box record, pq=%v, %2d retired: %5d B = %d write units (identity %d, statement %d, signature %d)",
+		b, _ := costMailbox(t, c.pq, c.retired)
+		n := itemSize(mailboxItem(b))
+		t.Logf("mailbox record, pq=%v, %2d retired: %5d B = %d write units (identity %d, statement %d, signature %d)",
 			c.pq, c.retired, n, wcu(n), len(b.Identity), len(b.Statement), len(b.Signature))
 	}
 	// An ACL is part of the record, so every write of it costs its size.
 	for _, entries := range []int{1, 50, DefaultLimits().ACLEntries} {
-		b, _ := costBox(t, true, 10)
+		b, _ := costMailbox(t, true, 10)
 		b.ACL = &protocol.ACL{Allow: protocol.NewACLList(false, costAddrs(entries))}
-		n := itemSize(boxItem(b))
-		t.Logf("box record, pq, 10 retired, an ACL of %3d entries: %5d B = %d write units", entries, n, wcu(n))
+		n := itemSize(mailboxItem(b))
+		t.Logf("mailbox record, pq, 10 retired, an ACL of %3d entries: %5d B = %d write units", entries, n, wcu(n))
 	}
 
 	to := costAddrs(1)[0]

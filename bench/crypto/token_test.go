@@ -11,10 +11,10 @@ import (
 )
 
 var kServer = make([]byte, 32)
-var boxH = make([]byte, 32)
+var mailboxH = make([]byte, 32)
 
 func tokenMsg(epoch uint32) []byte {
-	m := append([]byte("dromas-token-v1"), boxH...)
+	m := append([]byte("dromas-token-v1"), mailboxH...)
 	return binary.BigEndian.AppendUint32(m, epoch)
 }
 
@@ -56,7 +56,7 @@ func BenchmarkTokenCheckRandomHash(b *testing.B) {
 	}
 }
 
-// Scale: an in-process map lookup of the box's cached {count, epoch}.
+// Scale: an in-process map lookup of the mailbox's cached {count, epoch}.
 func BenchmarkCacheMapLookup(b *testing.B) {
 	type entry struct{ count, epoch uint32 }
 	m := make(map[[32]byte]entry, 100000)

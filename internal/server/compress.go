@@ -12,16 +12,16 @@ import (
 )
 
 // Compression: gzip, where it saves bytes for little CPU, and nowhere else
-// (ARCHITECTURE.md § Request paths). A box's read is compressed per answer:
+// (ARCHITECTURE.md § Request paths). A mailbox's read is compressed per answer:
 // it is base64 in JSON, the one large answer clients ask for often, before
 // every post and for each sender in a drain. A site's pages are compressed
 // once, at start. Nothing else is: a poll is a 304 or a near-empty page, a
 // message's ciphertext does not compress, and a list puts what senders chose
-// beside the box's own values in one body, the shape of BREACH (RFC 7457
+// beside the mailbox's own values in one body, the shape of BREACH (RFC 7457
 // §2.6). A request that does not take gzip gets none.
 
 // answerWriters keep the gzip writers of answers: made once each and reused,
-// since a new one costs more than the coding of a box's read. Each codes by
+// since a new one costs more than the coding of a mailbox's read. Each codes by
 // Huffman alone, with no search for repeats: base64 holds almost none, and
 // on reads of 1.6 KB and 4.1 KB the search took 1.5 to 1.7 times as long for
 // 1.4 to 3.8% of an X25519 read and nothing of a post-quantum one.

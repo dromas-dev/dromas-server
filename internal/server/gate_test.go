@@ -91,19 +91,19 @@ func respelled(t *testing.T, pass string) string {
 // put on its router through one gate, and a request no route answers is
 // counted by the router's own (LIMITS.md, rule 1;
 // dromas-dev/dromas-client#269, dromas-dev/dromas-server#67, #69,
-// #74). So from an address past its flood budget, every route on a box in
+// #74). So from an address past its flood budget, every route on a mailbox in
 // every state (live, revoked, forgotten, its current certificate revoked,
 // and one the server holds nothing of), the link page, a site's page and a
 // request no route answers are refused 429 requests, whatever the call
 // carries, with nothing else done: no other count of any limit taken, no
-// pass parsed or checked, no box looked up, nothing of its body read before
+// pass parsed or checked, no mailbox looked up, nothing of its body read before
 // it was counted. What is read of the body after, the drain before its
 // answer (pacedBody.drain), is the connection's, as net/http's own drain
 // was (dromas-dev/dromas-client#413 item 3). The one call that
-// goes on is a box's: a pass this process has checked, of a box that is
-// live, to a route that takes that box's pass (a send takes any box's, a
-// call about a box only its own, and the read of a box none:
-// dromas-dev/dromas-client#352). Its answer moves a count of its box's,
+// goes on is a mailbox's: a pass this process has checked, of a mailbox that is
+// live, to a route that takes that mailbox's pass (a send takes any mailbox's, a
+// call about a mailbox only its own, and the read of a mailbox none:
+// dromas-dev/dromas-client#352). Its answer moves a count of its mailbox's,
 // whatever it is. A new route is held to this by being one of routes(), and
 // a new state by being one of these; and each route that answers GET is
 // held to it for HEAD too.
@@ -126,7 +126,7 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 		return fmt.Sprintf("10.%d.%d.%d", n/40000, n/200%200, n%200+1)
 	}
 	call := e.caller()
-	// checked is a box registered, a pass of it checked by this process, and
+	// checked is a mailbox registered, a pass of it checked by this process, and
 	// that pass.
 	checked := func() (*raw, string) {
 		r := e.raw()
@@ -138,8 +138,8 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 	}
 	live, livePass := checked()
 	other, otherPass := checked()
-	// A box whose pass was checked by a send to another box, which loads
-	// nothing into memory but its record: a box that sends and never polls.
+	// A mailbox whose pass was checked by a send to another mailbox, which loads
+	// nothing into memory but its record: a mailbox that sends and never polls.
 	// The send names no prekey, so it is refused once the pass is checked.
 	sender := e.raw()
 	sender.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
@@ -153,7 +153,7 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 	}
 	e.want(call(fresh(), "PUT", revoked.path("/revocations"), protocol.Revocations{Identity: revoked.id.Document(), Revocation: rev}, ""), http.StatusCreated, "")
 	forgotten, forgottenPass := checked()
-	if err := e.store.DeleteBox(t.Context(), forgotten.id.Address()); err != nil { // as the TTL deletes it
+	if err := e.store.DeleteMailbox(t.Context(), forgotten.id.Address()); err != nil { // as the TTL deletes it
 		t.Fatal(err)
 	}
 	listed, listedPass := checked()
@@ -164,7 +164,7 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 	type state struct {
 		name string
 		addr string
-		pass string // the box's own checked pass, if it has one
+		pass string // the mailbox's own checked pass, if it has one
 	}
 	states := []state{
 		{"live", live.id.Address().String(), livePass},
@@ -173,13 +173,13 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 		{"its certificate revoked", listed.id.Address().String(), listedPass},
 		{"held by nobody", nobody, ""},
 	}
-	// The passes of a live box, which make a call its box's where the
+	// The passes of a live mailbox, which make a call its mailbox's where the
 	// route takes them.
-	boxOf := map[string]string{livePass: live.id.Address().String(), otherPass: other.id.Address().String(), senderPass: sender.id.Address().String()}
+	mailboxOf := map[string]string{livePass: live.id.Address().String(), otherPass: other.id.Address().String(), senderPass: sender.id.Address().String()}
 	type target struct {
 		method, path string
 		pass         passRule
-		box          string // the box in the path
+		mailbox      string // the mailbox in the path
 		own          string // its own checked pass
 		direct       bool   // answered by the router or a site, which the API's description does not hold
 	}
@@ -206,14 +206,14 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 		values := []struct{ name, auth string }{
 			{"no pass", ""},
 			{"5,600 bytes of commas", "dromas-pass " + strings.Repeat(",", protocol.MaxPassAuthorization-len("dromas-pass "))},
-			{"a new pass of a live box", live.pass(1)},
-			{"a live box's checked pass, respelled", respelled(t, livePass)},
-			{"a live box's checked pass", livePass},
-			{"another live box's checked pass", otherPass},
-			{"the checked pass of a live box that never polled", senderPass},
+			{"a new pass of a live mailbox", live.pass(1)},
+			{"a live mailbox's checked pass, respelled", respelled(t, livePass)},
+			{"a live mailbox's checked pass", livePass},
+			{"another live mailbox's checked pass", otherPass},
+			{"the checked pass of a live mailbox that never polled", senderPass},
 		}
 		if tg.own != "" && tg.own != livePass {
-			values = append(values, struct{ name, auth string }{"the box's own checked pass", tg.own})
+			values = append(values, struct{ name, auth string }{"the mailbox's own checked pass", tg.own})
 		}
 		for _, v := range values {
 			ip := fresh()
@@ -239,9 +239,9 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 			}
 			got := reply{status: w.Code, header: w.Header(), body: w.Body.Bytes()}
 			what := fmt.Sprintf("%s %s with %s", tg.method, tg.path, v.name)
-			if box, ok := boxOf[v.auth]; ok && (tg.pass == passAnyBox || tg.pass == passPathBox && box == tg.box) {
+			if mailbox, ok := mailboxOf[v.auth]; ok && (tg.pass == passAnyMailbox || tg.pass == passPathMailbox && mailbox == tg.mailbox) {
 				if q, _ := got.quota(); q == protocol.QuotaRequests {
-					t.Errorf("%s: refused for the address's flood budget, though its box's pass was checked", what)
+					t.Errorf("%s: refused for the address's flood budget, though its mailbox's pass was checked", what)
 				}
 				if d := moved(limits, counts(t, reg, "dromas_server_limit_requests_total")); len(d) == 0 {
 					t.Errorf("%s: answered %d with no count taken", what, got.status)
@@ -289,16 +289,16 @@ func TestAServerNotReadyCountsFirst(t *testing.T) {
 // A pass this process has not checked is its address's call until it is: it
 // spends the address's flood budget before its signatures are checked, as
 // Let's Encrypt limits every endpoint per address in front of its check of
-// a request's signature. So a box that signs a new pass for every call has
+// a request's signature. So a mailbox that signs a new pass for every call has
 // at most that budget of them checked from one address
 // (dromas-dev/dromas-server#67), and a pass the process has checked
-// spends none of it: another box behind the same address goes on.
+// spends none of it: another mailbox behind the same address goes on.
 func TestANewPassSpendsItsAddresssFloodBudget(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	l.RequestBurst, l.RequestRefill = 20, time.Hour
 	e, m, _ := metered(t, l)
-	b, c := e.box(protocol.Classic), e.box(protocol.Classic)
+	b, c := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	call := e.caller()
 	kept := e.pass(c)
 	e.want(call("198.51.100.8", "GET", "/v1/"+c.Address().String()+"/messages", nil, kept), http.StatusOK, "")
@@ -329,14 +329,14 @@ func TestANewPassSpendsItsAddresssFloodBudget(t *testing.T) {
 
 	// A pass first shown in another form a server reads, the scheme in
 	// capitals, is checked in that form too: it goes on from that address.
-	d := e.box(protocol.Classic)
+	d := e.mailbox(protocol.Classic)
 	e.clock.Add(time.Second) // not the pass its registration showed
 	upper := strings.Replace(e.pass(d), "dromas-pass ", "DROMAS-PASS ", 1)
 	e.want(call("198.51.100.9", "GET", "/v1/"+d.Address().String()+"/messages", nil, upper), http.StatusOK, "")
 	e.want(call(ip, "GET", "/v1/"+d.Address().String()+"/messages", nil, upper), http.StatusOK, "")
 
 	// Two passes used in turn are each new when they come back: the gate
-	// forgets a box's pass once another is checked.
+	// forgets a mailbox's pass once another is checked.
 	first := e.pass(c)
 	e.clock.Add(time.Second)
 	second := e.pass(c)
@@ -362,7 +362,7 @@ func TestANewPassSpendsItsAddresssFloodBudget(t *testing.T) {
 func TestARespelledPassCostsNoSecondCheck(t *testing.T) {
 	t.Parallel()
 	e, m, _ := metered(t, relaxed())
-	b := e.box(protocol.Classic)
+	b := e.mailbox(protocol.Classic)
 	poll := func(auth string) reply { return e.do("GET", "/v1/"+b.Address().String()+"/messages", nil, auth) }
 	e.clock.Add(time.Second) // not the pass the registration showed
 	pass := e.pass(b)

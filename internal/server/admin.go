@@ -63,7 +63,7 @@ type Indebted struct {
 }
 
 // Top returns, for the limit named name, the n keys it holds deepest in debt
-// now, deepest first: which boxes or addresses spend it most. It reads memory
+// now, deepest first: which mailboxes or addresses spend it most. It reads memory
 // and keeps nothing (dromas-dev/dromas-server#59). ok is false for a
 // name that is no limit's.
 func (s *Server) Top(name string, n int) (top []Indebted, ok bool) {
@@ -75,7 +75,7 @@ func (s *Server) Top(name string, n int) (top []Indebted, ok bool) {
 		key string
 		in  time.Duration // until the key's bucket is full again
 	}
-	// A box that has just joined or left an account is in the buckets of
+	// A mailbox that has just joined or left an account is in the buckets of
 	// each refill: the deeper debt is its.
 	deepest := map[string]time.Duration{}
 	now := s.now()
@@ -113,7 +113,7 @@ const topDefault, topMost = 20, 1000
 //     cleared>","cleared":[<the limits that held anything of it>]}
 //     (ClearAddress);
 //   - GET /limits/top?limit=<name>&n=<count> answers {"limit":"<name>",
-//     "keys":[{"key":"<a box or an address>","full_in":<seconds>}]}, deepest
+//     "keys":[{"key":"<a mailbox or an address>","full_in":<seconds>}]}, deepest
 //     in debt first (Top).
 func (s *Server) AdminHandler() http.Handler {
 	mux := http.NewServeMux()

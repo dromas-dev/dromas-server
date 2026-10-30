@@ -44,26 +44,26 @@ func TestAFillAfterAWriteItDidNotSeeIsNotKept(t *testing.T) {
 	t.Parallel()
 	var a, other protocol.Address
 	a[0], other[0] = 1, 2
-	c := newBoxCache(10)
+	c := newMailboxCache(10)
 	tok := c.begin(a)
-	c.write(a, c.image(&Box{Addr: a, Rev: 3})) // rev 3's image, dropped: a is not held
-	c.fill(&Box{Addr: a, Rev: 2}, tok)
+	c.write(a, c.image(&Mailbox{Addr: a, Rev: 3})) // rev 3's image, dropped: a is not held
+	c.fill(&Mailbox{Addr: a, Rev: 2}, tok)
 	if b, ok := c.get(a); ok {
 		t.Fatalf("a copy at rev %d, read before a write it did not see, was kept", b.Rev)
 	}
-	c.fill(&Box{Addr: a, Rev: 2}, c.begin(a))
+	c.fill(&Mailbox{Addr: a, Rev: 2}, c.begin(a))
 	if b, ok := c.get(a); !ok || b.Rev != 2 {
 		t.Fatal("a copy read with no write since was not kept")
 	}
-	c.put(&Box{Addr: a, Rev: 3})
-	c.fill(&Box{Addr: a, Rev: 2}, tok)
+	c.put(&Mailbox{Addr: a, Rev: 3})
+	c.fill(&Mailbox{Addr: a, Rev: 2}, tok)
 	if b, ok := c.get(a); !ok || b.Rev != 3 {
 		t.Fatalf("a copy of an address held: %v, %v; want rev 3 held", b, ok)
 	}
 	c.evict(a)
 	tok = c.begin(a)
-	c.write(other, evicted[*Box])
-	c.fill(&Box{Addr: a, Rev: 3}, tok)
+	c.write(other, evicted[*Mailbox])
+	c.fill(&Mailbox{Addr: a, Rev: 3}, tok)
 	if _, ok := c.get(a); !ok {
 		t.Fatal("a write to another shard kept a copy out")
 	}
@@ -82,7 +82,7 @@ func TestAWriteAndAFillAreEachOneStepUnderTheLock(t *testing.T) {
 	a[0] = 7
 	var put []uint64 // the revs of the copies put
 	unlocked := 0    // steps taken without the cache's lock
-	var c *boxCache
+	var c *mailboxCache
 	held := func() bool {
 		if c.mu.TryLock() {
 			c.mu.Unlock()
@@ -91,16 +91,16 @@ func TestAWriteAndAFillAreEachOneStepUnderTheLock(t *testing.T) {
 		return true
 	}
 	c = newRecCache(10, 256, func(a protocol.Address) int { return int(a[0]) },
-		func(b *Box) protocol.Address { return b.Addr }, versionOf,
-		func(b *Box) *Box {
+		func(b *Mailbox) protocol.Address { return b.Addr }, versionOf,
+		func(b *Mailbox) *Mailbox {
 			if !held() {
 				unlocked++
 			}
 			put = append(put, b.Rev)
-			return cloneBox(b)
+			return cloneMailbox(b)
 		})
 	tok := c.begin(a)
-	c.write(a, func(cur *Box, isHeld, _ bool) (*Box, bool) {
+	c.write(a, func(cur *Mailbox, isHeld, _ bool) (*Mailbox, bool) {
 		if !held() {
 			unlocked++
 		}
@@ -109,11 +109,11 @@ func TestAWriteAndAFillAreEachOneStepUnderTheLock(t *testing.T) {
 		}
 		return cur, isHeld
 	})
-	c.fill(&Box{Addr: a, Rev: 1}, tok)
+	c.fill(&Mailbox{Addr: a, Rev: 1}, tok)
 	if len(put) > 0 {
 		t.Errorf("a fill whose token a write passed put its copy (revs %v), which a reader may be given", put)
 	}
-	c.fill(&Box{Addr: a, Rev: 1}, c.begin(a))
+	c.fill(&Mailbox{Addr: a, Rev: 1}, c.begin(a))
 	if len(put) != 1 {
 		t.Errorf("a fill whose token stands put %v; want its copy", put)
 	}
@@ -126,11 +126,11 @@ func TestAWriteAndAFillAreEachOneStepUnderTheLock(t *testing.T) {
 // without the revocation in the record cache (dromas-dev/dromas-server#41):
 // the revocation's image came while the cache did not hold the address, and
 // the registration's view is put after it. A registration with no write to
-// its address meanwhile is cached, so the box's first call reads nothing.
+// its address meanwhile is cached, so the mailbox's first call reads nothing.
 func TestARegistrationThatRacedARevocationIsNotCachedWithoutIt(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	s := NewDynamoStore(DynamoConfig{BoxCache: 10}) // never started: memory alone
+	s := NewDynamoStore(DynamoConfig{MailboxCache: 10}) // never started: memory alone
 	now := time.Now()
 	register := func(r *raw, during func()) {
 		a := r.id.Address()
@@ -138,14 +138,14 @@ func TestARegistrationThatRacedARevocationIsNotCachedWithoutIt(t *testing.T) {
 			s.cache.missed(a, s.cache.begin(a), now) // the registration's read finds nothing
 		}
 		during()
-		s.applyBox(&Box{Addr: a, Identity: r.id.Document(), State: Active, Rev: 1})
+		s.applyMailbox(&Mailbox{Addr: a, Identity: r.id.Document(), State: Active, Rev: 1})
 	}
 	raced, alone := e.raw(), e.raw()
 	register(raced, func() {
 		s.applyRevocations(raced.id.Address(), &Revocations{Identity: raced.id.Document(), Address: []byte("the identity's revocation")})
 	})
 	if b, ok := s.Known(raced.id.Address()); ok && b != nil && b.State != Revoked {
-		t.Errorf("after a registration that raced a revocation, memory holds the box %s, without the revocation", b.State)
+		t.Errorf("after a registration that raced a revocation, memory holds the mailbox %s, without the revocation", b.State)
 	}
 	register(alone, func() {})
 	if b, ok := s.Known(alone.id.Address()); !ok || b == nil || b.State != Active {
@@ -165,15 +165,15 @@ func TestMergedCopiesKeepEveryRevocation(t *testing.T) {
 	revocation := []byte("the identity's revocation")
 	bad := []byte("not a revocation of certificates\n")
 	low, high := r.certs(1), r.certs(5)
-	revoked := &Box{Addr: a, Identity: doc, State: Revoked, Rev: 1, Revocation: revocation}
-	badList := &Box{Addr: a, Identity: doc, State: Active, Rev: 2, RevokedCerts: bad, RevokedCertsSig: []byte("x")}
-	at := func(rev uint64, c protocol.Revocations) *Box {
-		return &Box{Addr: a, Identity: doc, State: Active, Rev: rev, RevokedCerts: c.RevokedCertificates, RevokedCertsSig: c.RevokedCertificatesSignature}
+	revoked := &Mailbox{Addr: a, Identity: doc, State: Revoked, Rev: 1, Revocation: revocation}
+	badList := &Mailbox{Addr: a, Identity: doc, State: Active, Rev: 2, RevokedCerts: bad, RevokedCertsSig: []byte("x")}
+	at := func(rev uint64, c protocol.Revocations) *Mailbox {
+		return &Mailbox{Addr: a, Identity: doc, State: Active, Rev: rev, RevokedCerts: c.RevokedCertificates, RevokedCertsSig: c.RevokedCertificatesSignature}
 	}
-	revokedBad := &Box{Addr: a, Identity: doc, State: Revoked, Rev: 1, Revocation: revocation, RevokedCerts: bad, RevokedCertsSig: []byte("x")}
+	revokedBad := &Mailbox{Addr: a, Identity: doc, State: Revoked, Rev: 1, Revocation: revocation, RevokedCerts: bad, RevokedCertsSig: []byte("x")}
 	for _, c := range []struct {
 		name     string
-		old, cur *Box
+		old, cur *Mailbox
 		revoked  bool
 		certs    []byte
 	}{
@@ -200,16 +200,16 @@ func TestMergedCopiesKeepEveryRevocation(t *testing.T) {
 			}
 		}
 	}
-	cache := newBoxCache(10)
+	cache := newMailboxCache(10)
 	cache.put(revoked)
 	cache.put(badList)
 	if b, _ := cache.get(a); b.State != Revoked {
-		t.Errorf("the cache, given the issue's two copies, holds the box %s", b.State)
+		t.Errorf("the cache, given the issue's two copies, holds the mailbox %s", b.State)
 	}
 }
 
 // cannedTables answers a store on DynamoDB from items held in the test, in
-// process: a Query of the boxes table with the address's items, one of the
+// process: a Query of the mailboxes table with the address's items, one of the
 // live index with none, a GetItem of the accounts table with the account's
 // record, and a PutItem with a failed condition, as a registration that
 // another made first meets. No AWS is called.
@@ -289,11 +289,11 @@ func (c *cannedTables) Do(r *http.Request) (*http.Response, error) {
 
 func (c *cannedTables) store() *Memory {
 	return NewDynamoStore(DynamoConfig{AWS: aws.Config{Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "x", ""),
-		HTTPClient: c, BaseEndpoint: aws.String("http://127.0.0.1:1")}, BoxesTable: "b", MsgsTable: "m", AccountsTable: "a", Bucket: "s", BoxCache: 10})
+		HTTPClient: c, BaseEndpoint: aws.String("http://127.0.0.1:1")}, MailboxesTable: "b", MessagesTable: "m", AccountsTable: "a", Bucket: "s", MailboxCache: 10})
 }
 
 // A write this process applies while a read is in flight keeps that read's
-// copy out of memory, a read of the address (Box), a box's load and an
+// copy out of memory, a read of the address (Mailbox), a mailbox's load and an
 // account's read alike: each takes its token before it reads. Control: a
 // read with no write during it is kept. In process over canned tables;
 // TestAnImageDuringAReadKeepsItsFillOut and
@@ -304,14 +304,14 @@ func TestAWriteDuringAReadKeepsItsFillOut(t *testing.T) {
 	ctx := t.Context()
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	a := r.id.Address()
-	rec, err := e.store.Box(ctx, a)
+	rec, err := e.store.Mailbox(ctx, a)
 	if err != nil {
 		t.Fatal(err)
 	}
-	newer := item(boxItem(rec))
+	newer := item(mailboxItem(rec))
 	newer["rev"] = num(rec.Rev + 1)
 	acc := &Account{ID: "an account", Rev: 1}
-	s := (&cannedTables{address: []map[string]types.AttributeValue{boxItem(rec)}, account: accountItem(acc)}).store()
+	s := (&cannedTables{address: []map[string]types.AttributeValue{mailboxItem(rec)}, account: accountItem(acc)}).store()
 	f := injectFaults(s)
 	for _, c := range []struct {
 		name, read string // the read of the backend, at whose answer the write lands
@@ -319,10 +319,10 @@ func TestAWriteDuringAReadKeepsItsFillOut(t *testing.T) {
 		write      func()
 		kept       func() bool
 	}{
-		{"a read of the address", "ReadAddress", func() error { _, err := s.Box(ctx, a); return err },
-			func() { s.applyBoxImage(newer) }, func() bool { _, ok := s.cache.get(a); return ok }},
-		{"the box's load", "ReadAddress", func() error { s.idx.forget(a); _, err := s.Count(ctx, a); return err },
-			func() { s.applyBoxImage(newer) }, func() bool { _, ok := s.cache.get(a); return ok }},
+		{"a read of the address", "ReadAddress", func() error { _, err := s.Mailbox(ctx, a); return err },
+			func() { s.applyMailboxImage(newer) }, func() bool { _, ok := s.cache.get(a); return ok }},
+		{"the mailbox's load", "ReadAddress", func() error { s.idx.forget(a); _, err := s.Count(ctx, a); return err },
+			func() { s.applyMailboxImage(newer) }, func() bool { _, ok := s.cache.get(a); return ok }},
 		{"an account's read", "Account", func() error { _, err := s.Account(ctx, acc.ID); return err },
 			func() { s.applyAccountRecord(accountChange(stypes.OperationTypeModify, acc.ID, 2)) }, func() bool { _, ok := s.accCache.get(acc.ID); return ok }},
 	} {
@@ -358,7 +358,7 @@ func TestARegistrationThatFindsARecordCountsIt(t *testing.T) {
 	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	a := r.id.Address()
-	rec, err := e.store.Box(t.Context(), a)
+	rec, err := e.store.Mailbox(t.Context(), a)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +368,7 @@ func TestARegistrationThatFindsARecordCountsIt(t *testing.T) {
 	if _, ok := s.Known(a); !ok {
 		t.Fatal("control: the miss is not remembered")
 	}
-	if err := s.CreateBox(t.Context(), cloneBox(rec)); !errors.Is(err, ErrExists) {
+	if err := s.CreateMailbox(t.Context(), cloneMailbox(rec)); !errors.Is(err, ErrExists) {
 		t.Fatalf("a registration whose condition failed: %v", err)
 	}
 	if b, ok := s.Known(a); ok {
@@ -380,7 +380,7 @@ func TestARegistrationThatFindsARecordCountsIt(t *testing.T) {
 	}
 }
 
-// The stream's image of a box's record, and its record of a change to an
+// The stream's image of a mailbox's record, and its record of a change to an
 // account or of an account's removal, are counted when they are applied, so
 // a fill whose read began before one keeps its copy out
 // (dromas-dev/dromas-server#97): memory alone, nothing read.
@@ -389,16 +389,16 @@ func TestTheStreamsChangesAreCounted(t *testing.T) {
 	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	a := r.id.Address()
-	rec, err := e.store.Box(t.Context(), a)
+	rec, err := e.store.Mailbox(t.Context(), a)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := NewDynamoStore(DynamoConfig{BoxCache: 10})
+	s := NewDynamoStore(DynamoConfig{MailboxCache: 10})
 
 	tok := s.cache.begin(a)
-	next := cloneBox(rec)
+	next := cloneMailbox(rec)
 	next.Rev++
-	s.applyBoxImage(item(boxItem(next)))
+	s.applyMailboxImage(item(mailboxItem(next)))
 	s.cache.fill(rec, tok)
 	if _, ok := s.cache.get(a); ok {
 		t.Error("a read begun before a record's image is kept: the image is not counted")
@@ -424,9 +424,9 @@ func TestTheStreamsChangesAreCounted(t *testing.T) {
 
 // On DynamoDB: an image the stream brings while a read of the address is in
 // flight is not lost to that read's fill, neither a read of what is held of
-// the address (Box) nor a box's load (dromas-dev/dromas-server#12): the
+// the address (Mailbox) nor a mailbox's load (dromas-dev/dromas-server#12): the
 // image of a newer record, or of a revocation of the address's certificates,
-// each through applyBoxImage, which counts it (#97).
+// each through applyMailboxImage, which counts it (#97).
 func TestAnImageDuringAReadKeepsItsFillOut(t *testing.T) {
 	t.Parallel()
 	e, s := dynamoEnv(t)
@@ -434,11 +434,11 @@ func TestAnImageDuringAReadKeepsItsFillOut(t *testing.T) {
 	ctx := context.Background()
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	a := r.id.Address()
-	rec, err := s.Box(ctx, a)
+	rec, err := s.Mailbox(ctx, a)
 	if err != nil {
 		t.Fatal(err)
 	}
-	newer := item(boxItem(rec))
+	newer := item(mailboxItem(rec))
 	newer["rev"] = num(rec.Rev + 1)
 	certs := r.certs(1)
 	revoked := item(revocationsKey(a))
@@ -447,22 +447,22 @@ func TestAnImageDuringAReadKeepsItsFillOut(t *testing.T) {
 	for _, im := range []struct {
 		name   string
 		it     item
-		before func(b *Box) bool // the copy is from before the image
+		before func(b *Mailbox) bool // the copy is from before the image
 	}{
-		{"a newer record", newer, func(b *Box) bool { return b.Rev <= rec.Rev }},
-		{"a revocation of its certificates", revoked, func(b *Box) bool { return len(b.RevokedCerts) == 0 }},
+		{"a newer record", newer, func(b *Mailbox) bool { return b.Rev <= rec.Rev }},
+		{"a revocation of its certificates", revoked, func(b *Mailbox) bool { return len(b.RevokedCerts) == 0 }},
 	} {
 		for _, c := range []struct {
 			name string
 			read func() error
 		}{
-			{"a read of the address", func() error { _, err := s.Box(ctx, a); return err }},
-			{"the box's load", func() error { s.idx.forget(a); _, err := s.Count(ctx, a); return err }},
+			{"a read of the address", func() error { _, err := s.Mailbox(ctx, a); return err }},
+			{"the mailbox's load", func() error { s.idx.forget(a); _, err := s.Count(ctx, a); return err }},
 		} {
 			s.cache.evict(a)
 			f.read = func(method string) {
 				if method == "ReadAddress" {
-					s.applyBoxImage(im.it)
+					s.applyMailboxImage(im.it)
 				}
 			}
 			err := c.read()
@@ -476,12 +476,12 @@ func TestAnImageDuringAReadKeepsItsFillOut(t *testing.T) {
 		}
 	}
 	// A read with no write during it is kept. The stream's echo of the
-	// box's own registration, or of another test's write to its shard, can
+	// mailbox's own registration, or of another test's write to its shard, can
 	// land during one and rightly keep it out, so a few are allowed.
 	kept := false
 	for range 20 {
 		s.cache.evict(a)
-		if _, err := s.Box(ctx, a); err != nil {
+		if _, err := s.Mailbox(ctx, a); err != nil {
 			t.Fatal(err)
 		}
 		if _, kept = s.cache.get(a); kept {
@@ -496,7 +496,7 @@ func TestAnImageDuringAReadKeepsItsFillOut(t *testing.T) {
 
 // On DynamoDB: an account's read during which this process saw a change to
 // an account, through applyAccountRecord, which counts it (#97), keeps its
-// copy out of the account cache, as a box's does.
+// copy out of the account cache, as a mailbox's does.
 func TestAnAccountChangeDuringItsReadKeepsTheFillOut(t *testing.T) {
 	t.Parallel()
 	e, s := dynamoEnv(t)
@@ -581,27 +581,27 @@ func TestEveryOrderOfAFillAndAWrite(t *testing.T) {
 	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	a := r.id.Address()
-	older, err := e.store.Box(t.Context(), a) // the record a read began before the write finds
+	older, err := e.store.Mailbox(t.Context(), a) // the record a read began before the write finds
 	if err != nil {
 		t.Fatal(err)
 	}
 	if older.Rev != 1 {
 		t.Fatalf("control: the record is at rev %d", older.Rev)
 	}
-	newer := cloneBox(older) // the record the write makes
+	newer := cloneMailbox(older) // the record the write makes
 	newer.Rev = 2
 	revocation := &Revocations{Identity: older.Identity, Address: []byte("the identity's revocation")}
 	const id = "an account"
 
 	// A read of the address begun before the write, whose copy is v, fills
-	// the cache once it has read (Memory.Box, readBox).
-	read := func(s *Memory, v *Box) []func() {
+	// the cache once it has read (Memory.Mailbox, readMailbox).
+	read := func(s *Memory, v *Mailbox) []func() {
 		tok := s.cache.begin(a)
 		return []func(){func() { s.cache.fill(v, tok) }}
 	}
-	// applyBox, this process's write of a record whose view, b, it read
+	// applyMailbox, this process's write of a record whose view, b, it read
 	// before the write.
-	applyBox := func(s *Memory, b *Box) []func() { return []func(){func() { s.applyBox(b) }} }
+	applyMailbox := func(s *Memory, b *Mailbox) []func() { return []func(){func() { s.applyMailbox(b) }} }
 	revoke := func(s *Memory) func() { return func() { s.applyRevocations(a, revocation) } }
 	accountRead := func(s *Memory) []func() {
 		tok := s.accCache.begin(id)
@@ -609,7 +609,7 @@ func TestEveryOrderOfAFillAndAWrite(t *testing.T) {
 	}
 	// What memory answers of the address with no read, as a lookup and a
 	// send's check of its recipient ask it.
-	known := func(s *Memory) (*Box, bool) { return s.Known(a) }
+	known := func(s *Memory) (*Mailbox, bool) { return s.Known(a) }
 	withoutTheRevocation := func(s *Memory) bool { b, ok := known(s); return ok && (b == nil || b.State != Revoked) }
 	withoutTheRecord := func(s *Memory) bool { b, ok := known(s); return ok && (b == nil || b.Rev < 2) }
 
@@ -622,8 +622,8 @@ func TestEveryOrderOfAFillAndAWrite(t *testing.T) {
 		mk    func(s *Memory) actors
 		stale func(s *Memory) bool // memory answers without the write
 	}{
-		{"a read's fill and applyBox of this process's write", func(s *Memory) actors {
-			w := applyBox(s, newer)
+		{"a read's fill and applyMailbox of this process's write", func(s *Memory) actors {
+			w := applyMailbox(s, newer)
 			return actors{read(s, older), w, len(w)}
 		}, withoutTheRecord},
 		{"a read's fill and a revocation of the address", func(s *Memory) actors {
@@ -636,18 +636,18 @@ func TestEveryOrderOfAFillAndAWrite(t *testing.T) {
 			return actors{read(s, older), []func(){func() { s.forget(a) }}, 1}
 		}, func(s *Memory) bool { b, ok := known(s); return ok && b != nil && b.hasRecord() }},
 		{"a read's fill and the stream's image of a newer record", func(s *Memory) actors {
-			return actors{read(s, older), []func(){func() { s.applyBoxImage(item(boxItem(newer))) }}, 1}
+			return actors{read(s, older), []func(){func() { s.applyMailboxImage(item(mailboxItem(newer))) }}, 1}
 		}, withoutTheRecord},
 		{"a read that found nothing and a revocation of the address", func(s *Memory) actors {
 			tok := s.cache.begin(a)
 			return actors{[]func(){func() { s.cache.missed(a, tok, s.now()) }}, []func(){revoke(s)}, 1}
 		}, func(s *Memory) bool { b, ok := known(s); return ok && b == nil }},
-		{"a registration's applyBox and a revocation of the address", func(s *Memory) actors {
+		{"a registration's applyMailbox and a revocation of the address", func(s *Memory) actors {
 			s.cache.missed(a, s.cache.begin(a), s.now()) // the registration's read finds nothing
-			return actors{applyBox(s, older), []func(){revoke(s)}, 1}
+			return actors{applyMailbox(s, older), []func(){revoke(s)}, 1}
 		}, withoutTheRevocation},
-		{"applyBox of a write whose view predates a revocation the cache did not hold", func(s *Memory) actors {
-			return actors{applyBox(s, newer), []func(){revoke(s)}, 1}
+		{"applyMailbox of a write whose view predates a revocation the cache did not hold", func(s *Memory) actors {
+			return actors{applyMailbox(s, newer), []func(){revoke(s)}, 1}
 		}, withoutTheRevocation},
 		{"an account's read and the stream's change to it", func(s *Memory) actors {
 			return actors{accountRead(s), []func(){func() { s.applyAccountRecord(accountChange(stypes.OperationTypeModify, id, 2)) }}, 1}
@@ -657,11 +657,11 @@ func TestEveryOrderOfAFillAndAWrite(t *testing.T) {
 		}, func(s *Memory) bool { _, ok := s.accCache.get(id); return ok }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			first := c.mk(NewDynamoStore(DynamoConfig{BoxCache: 10}))
+			first := c.mk(NewDynamoStore(DynamoConfig{MailboxCache: 10}))
 			n, kept, shown := 0, 0, 0
 			orders(len(first.fill), len(first.write), func(order []int) {
 				n++
-				s := NewDynamoStore(DynamoConfig{BoxCache: 10})
+				s := NewDynamoStore(DynamoConfig{MailboxCache: 10})
 				x := c.mk(s)
 				i, j, window := 0, 0, false
 				for _, who := range order {
@@ -700,18 +700,18 @@ func TestEveryOrderOfAFillAndAWrite(t *testing.T) {
 type heldRead struct {
 	*Memory
 	mu      sync.Mutex
-	table   *Box
+	table   *Mailbox
 	reads   int
 	release chan struct{}
 }
 
-func (s *heldRead) set(b *Box) {
+func (s *heldRead) set(b *Mailbox) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.table = b
 }
 
-func (s *heldRead) Box(context.Context, protocol.Address) (*Box, error) {
+func (s *heldRead) Mailbox(context.Context, protocol.Address) (*Mailbox, error) {
 	s.mu.Lock()
 	b := s.table
 	s.reads++
@@ -723,7 +723,7 @@ func (s *heldRead) Box(context.Context, protocol.Address) (*Box, error) {
 	if b == nil {
 		return nil, ErrNotFound
 	}
-	return cloneBox(b), nil
+	return cloneMailbox(b), nil
 }
 
 // A lookup that comes once this process has applied a revocation of the
@@ -738,7 +738,7 @@ func TestALookupJoinedToAReadBegunBeforeARevocationReadsAgain(t *testing.T) {
 	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	a := r.id.Address()
-	rec, err := e.store.Box(t.Context(), a)
+	rec, err := e.store.Mailbox(t.Context(), a)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -754,10 +754,10 @@ func TestALookupJoinedToAReadBegunBeforeARevocationReadsAgain(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				s := &heldRead{Memory: NewDynamoStore(DynamoConfig{BoxCache: 10}), table: rec, release: make(chan struct{})}
+				s := &heldRead{Memory: NewDynamoStore(DynamoConfig{MailboxCache: 10}), table: rec, release: make(chan struct{})}
 				srv := New(Config{Store: s, Limits: relaxed()})
-				lookup := func() chan *Box {
-					got := make(chan *Box, 1)
+				lookup := func() chan *Mailbox {
+					got := make(chan *Mailbox, 1)
 					go func() {
 						b, err := srv.lookup(httptest.NewRequest(http.MethodGet, r.path(""), nil), a)
 						if err != nil {
@@ -772,7 +772,7 @@ func TestALookupJoinedToAReadBegunBeforeARevocationReadsAgain(t *testing.T) {
 				revoke := func() {
 					s.set(view(a, nil, revocation))   // the table: the revocation kept, the record deleted
 					s.applyRevocations(a, revocation) // as Revoke applies it
-					s.forget(a)                       // as the purge's DeleteBox does
+					s.forget(a)                       // as the purge's DeleteMailbox does
 				}
 				if c.revokedFirst {
 					revoke()
@@ -789,9 +789,9 @@ func TestALookupJoinedToAReadBegunBeforeARevocationReadsAgain(t *testing.T) {
 				b := <-second
 				switch {
 				case b == nil:
-					t.Errorf("the second lookup found nothing; want the box %s", c.state)
+					t.Errorf("the second lookup found nothing; want the mailbox %s", c.state)
 				case b.State != c.state:
-					t.Errorf("the second lookup was answered the box %s; want %s", b.State, c.state)
+					t.Errorf("the second lookup was answered the mailbox %s; want %s", b.State, c.state)
 				}
 				if s.reads != c.reads {
 					t.Errorf("%d reads of the address; want %d", s.reads, c.reads)
@@ -801,36 +801,36 @@ func TestALookupJoinedToAReadBegunBeforeARevocationReadsAgain(t *testing.T) {
 	}
 }
 
-// A box registered again once the TTL took its record starts at rev 1 again,
+// A mailbox registered again once the TTL took its record starts at rev 1 again,
 // and its record is newer than the removed one whatever their revs: a
-// record's place in its address's history is when its box registered, then
+// record's place in its address's history is when its mailbox registered, then
 // its rev. So a read of the address begun before the removal, whose copy of
 // the removed record (rev 5) lands once the new registration is held, puts
 // nothing of it over the new one, and the new record's next image (rev 2) is
-// taken; and an index that held the removed box takes the registration's
+// taken; and an index that held the removed mailbox takes the registration's
 // standing (dromas-dev/dromas-client#407 item 2). Memory alone.
 func TestARegistrationAfterTheTTLsRemovalIsNewerThanTheRemovedRecord(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	a := r.id.Address()
-	rec, err := e.store.Box(t.Context(), a)
+	rec, err := e.store.Mailbox(t.Context(), a)
 	if err != nil {
 		t.Fatal(err)
 	}
-	old := cloneBox(rec) // the record the TTL takes: registered 40 days before, renewed since
+	old := cloneMailbox(rec) // the record the TTL takes: registered 40 days before, renewed since
 	old.Rev, old.CertSerial, old.Created = 5, 3, rec.Created.Add(-40*24*time.Hour)
-	fresh := cloneBox(rec) // the identity's registration once the TTL took it
+	fresh := cloneMailbox(rec) // the identity's registration once the TTL took it
 	fresh.Rev, fresh.CertSerial = 1, 4
-	next := cloneBox(fresh) // the new box renews, and the stream brings it
+	next := cloneMailbox(fresh) // the new mailbox renews, and the stream brings it
 	next.Rev, next.CertSerial = 2, 5
 
 	t.Run("a read begun before the removal", func(t *testing.T) {
-		s := NewDynamoStore(DynamoConfig{BoxCache: 10})
+		s := NewDynamoStore(DynamoConfig{MailboxCache: 10})
 		tok := s.cache.begin(a)                      // a read of the address begins, and will find old
 		s.forget(a)                                  // the stream's removal of old, by the TTL
 		s.cache.missed(a, s.cache.begin(a), s.now()) // the registration's read finds nothing
-		s.applyBox(fresh)                            // its CreateBox, at rev 1
+		s.applyMailbox(fresh)                        // its CreateMailbox, at rev 1
 		if b, ok := s.Known(a); !ok || b == nil || b.CertSerial != fresh.CertSerial {
 			t.Fatalf("control: memory holds %s, not the new registration", standsAt(b))
 		}
@@ -838,31 +838,31 @@ func TestARegistrationAfterTheTTLsRemovalIsNewerThanTheRemovedRecord(t *testing.
 		if b, ok := s.Known(a); !ok || b == nil || b.CertSerial != fresh.CertSerial {
 			t.Errorf("memory answers %s in place of the new registration (rev 1, certificate serial %d): the removed record is rev 5, serial %d", standsAt(b), fresh.CertSerial, old.CertSerial)
 		}
-		s.applyBoxImage(item(boxItem(next)))
+		s.applyMailboxImage(item(mailboxItem(next)))
 		if b, ok := s.Known(a); !ok || b == nil || b.CertSerial != next.CertSerial {
-			t.Errorf("after the new box's image at rev 2 memory answers %s; want certificate serial %d", standsAt(b), next.CertSerial)
+			t.Errorf("after the new mailbox's image at rev 2 memory answers %s; want certificate serial %d", standsAt(b), next.CertSerial)
 		}
 	})
-	t.Run("an index that held the removed box", func(t *testing.T) {
-		s := NewDynamoStore(DynamoConfig{BoxCache: 10})
+	t.Run("an index that held the removed mailbox", func(t *testing.T) {
+		s := NewDynamoStore(DynamoConfig{MailboxCache: 10})
 		st, _, err := old.standing()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := s.idx.ensure(t.Context(), a, func() (boxRead, error) {
-			return boxRead{exists: true, st: st, created: ms(old.Created), rev: old.Rev}, nil
+		if err := s.idx.ensure(t.Context(), a, func() (mailboxRead, error) {
+			return mailboxRead{exists: true, st: st, created: ms(old.Created), rev: old.Rev}, nil
 		}); err != nil {
 			t.Fatal(err)
 		}
-		s.applyBox(fresh) // the registration, before the stream's removal of old arrives
+		s.applyMailbox(fresh) // the registration, before the stream's removal of old arrives
 		if st, ok := s.Held(a); !ok || st.CertSerial != fresh.CertSerial {
-			t.Errorf("the index holds the box at certificate serial %d (%v) after its registration at serial %d: the removed record's standing", st.CertSerial, ok, fresh.CertSerial)
+			t.Errorf("the index holds the mailbox at certificate serial %d (%v) after its registration at serial %d: the removed record's standing", st.CertSerial, ok, fresh.CertSerial)
 		}
 	})
 }
 
 // standsAt is a record's rev and certificate serial, or that there is none.
-func standsAt(b *Box) string {
+func standsAt(b *Mailbox) string {
 	if b == nil {
 		return "no record"
 	}
@@ -879,7 +879,7 @@ func TestAFillAndAMissAreEachOneStepUnderTheLock(t *testing.T) {
 	t.Parallel()
 	var a, other protocol.Address
 	a[0], other[0] = 7, 8
-	c := newBoxCache(10)
+	c := newMailboxCache(10)
 	steps := 0
 	c.between = func(checked uint64) {
 		steps++
@@ -890,7 +890,7 @@ func TestAFillAndAMissAreEachOneStepUnderTheLock(t *testing.T) {
 			t.Errorf("between a check and its put the cache's lock was let go and taken again (%d takings since the check)", c.mu.n-checked)
 		}
 	}
-	c.fill(&Box{Addr: a, Rev: 1}, c.begin(a))
+	c.fill(&Mailbox{Addr: a, Rev: 1}, c.begin(a))
 	c.missed(other, c.begin(other), time.Now())
 	if steps != 2 {
 		t.Fatalf("control: the hook ran %d times for a fill and a miss whose tokens stand, want 2", steps)

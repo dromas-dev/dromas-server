@@ -140,16 +140,16 @@ func (e *env) adoptKey(t *testing.T, account string, uses int, ttl time.Duration
 	return key
 }
 
-func (e *env) accountOf(b *client.Box) string {
+func (e *env) accountOf(b *client.Mailbox) string {
 	e.t.Helper()
-	r, err := e.store.Box(context.Background(), b.Address())
+	r, err := e.store.Mailbox(context.Background(), b.Address())
 	if err != nil {
 		e.t.Fatal(err)
 	}
 	return r.Account
 }
 
-func adopt(t *testing.T, b *client.Box, key string) string {
+func adopt(t *testing.T, b *client.Mailbox, key string) string {
 	t.Helper()
 	acc, err := b.Adopt(context.Background(), key)
 	if err != nil {
@@ -167,7 +167,7 @@ func TestAccounts(t *testing.T) {
 	t.Run("an unmetered account lifts the daily limit and the cap", func(t *testing.T) {
 		e := newEnv(t, l)
 		acc, key := accountEnv(t, e, true, 1)
-		a, b, c := e.box(protocol.Classic), e.box(protocol.Classic), e.box(protocol.Classic)
+		a, b, c := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 		if got := adopt(t, a, key); got != acc.ID || e.accountOf(a) != acc.ID {
 			t.Fatalf("adopted into %q, the record says %q", got, e.accountOf(a))
 		}
@@ -178,7 +178,7 @@ func TestAccounts(t *testing.T) {
 		if _, err := a.Send(ctx, b.Address(), strings.Repeat("x", 20000)); !tooLarge(err, 16384) {
 			t.Fatalf("over the largest cap: %v", err)
 		}
-		// A box in no account has the server's limits.
+		// A mailbox in no account has the server's limits.
 		send(t, c, b, "1")
 		if _, err := c.Send(ctx, b.Address(), strings.Repeat("x", 5000)); !tooLarge(err, 4096) {
 			t.Fatalf("over the cap: %v", err)
@@ -212,7 +212,7 @@ func TestAccounts(t *testing.T) {
 	t.Run("a metered account has the free limits until credit exists", func(t *testing.T) {
 		e := newEnv(t, l)
 		_, key := accountEnv(t, e, false, 1)
-		a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+		a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 		adopt(t, a, key)
 		send(t, a, b, "1")
 		send(t, a, b, "2")
@@ -225,7 +225,7 @@ func TestAccounts(t *testing.T) {
 		e := newEnv(t, l)
 		acc, key := accountEnv(t, e, true, 2)
 		other, _ := accountEnv(t, e, true, 1)
-		a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+		a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 		unstored, _, _ := NewAdoptKey(acc.ID)
 		raw, _ := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(key, adoptPrefix))
 		moved := adoptPrefix + base64.RawURLEncoding.EncodeToString(append([]byte(other.ID), raw[len(acc.ID):]...)) // its secret, naming another account
@@ -243,20 +243,20 @@ func TestAccounts(t *testing.T) {
 			}
 		}
 		if e.accountOf(a) != "" {
-			t.Fatal("a refused key adopted the box")
+			t.Fatal("a refused key adopted the mailbox")
 		}
-		// Adopting into the account the box is already in spends no use,
+		// Adopting into the account the mailbox is already in spends no use,
 		// and a key that was never stored is refused there too.
 		adopt(t, a, key)
 		adopt(t, a, key)
 		if _, err := a.Adopt(ctx, unstored); codeOf(err) != protocol.CodeAdoptKeyRefused {
-			t.Fatalf("a key never stored, naming the box's own account: %v", err)
+			t.Fatalf("a key never stored, naming the mailbox's own account: %v", err)
 		}
 		adopt(t, b, key)
-		if _, err := e.box(protocol.Classic).Adopt(ctx, key); codeOf(err) != protocol.CodeAdoptKeyRefused {
-			t.Fatalf("a third box on a two-use key: %v", err)
+		if _, err := e.mailbox(protocol.Classic).Adopt(ctx, key); codeOf(err) != protocol.CodeAdoptKeyRefused {
+			t.Fatalf("a third mailbox on a two-use key: %v", err)
 		}
-		// The key is spent, and a box already in its account is still
+		// The key is spent, and a mailbox already in its account is still
 		// answered 200: a retry whose answer was lost.
 		if got := adopt(t, a, key); got != acc.ID {
 			t.Fatalf("a retry adopted into %q", got)
@@ -267,12 +267,12 @@ func TestAccounts(t *testing.T) {
 		e := newEnv(t, l)
 		first, key1 := accountEnv(t, e, false, 1)
 		second, key2 := accountEnv(t, e, true, 1)
-		a := e.box(protocol.Classic)
+		a := e.mailbox(protocol.Classic)
 		adopt(t, a, key1)
 		if got := adopt(t, a, key2); got != second.ID || e.accountOf(a) != second.ID {
 			t.Fatalf("moved to %q", e.accountOf(a))
 		}
-		if s, ok := onDynamo(e.store); ok { // the index of each account's boxes follows the box record
+		if s, ok := onDynamo(e.store); ok { // the index of each account's mailboxes follows the mailbox record
 			s.lists(t, first.ID, a.Address(), false)
 			s.lists(t, second.ID, a.Address(), true)
 			if err := a.Leave(ctx); err != nil {
@@ -305,31 +305,31 @@ func TestAccounts(t *testing.T) {
 	})
 }
 
-// A box revoked while it is in an account leaves it: an account lists no
-// boxes, a box's membership is its record's, and the revocation deletes the
+// A mailbox revoked while it is in an account leaves it: an account lists no
+// mailboxes, a mailbox's membership is its record's, and the revocation deletes the
 // record (purge; dromas-dev/dromas-client#434 item 1). Then the account
-// routes answer 410 revoked, with the box's pass or none.
-func TestARevokedBoxLeavesItsAccount(t *testing.T) {
+// routes answer 410 revoked, with the mailbox's pass or none.
+func TestARevokedMailboxLeavesItsAccount(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	acc, key := accountEnv(t, e, true, 2)
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	if got := adopt(t, a, key); got != acc.ID || e.accountOf(a) != acc.ID {
 		t.Fatalf("adopted into %q, the record says %q", got, e.accountOf(a))
 	}
-	send(t, b, a, "waiting in A's box when it is revoked")
+	send(t, b, a, "waiting in A's mailbox when it is revoked")
 	pass := e.pass(a)
 	e.want(e.do("PUT", revocationPath(a.Address()), record(t, a), ""), http.StatusCreated, "")
 	if got := e.accountOf(a); got != "" {
-		t.Fatalf("a revoked box is still in the account %q", got)
+		t.Fatalf("a revoked mailbox is still in the account %q", got)
 	}
-	account := boxPath(a.Address()) + "/account"
+	account := mailboxPath(a.Address()) + "/account"
 	for what, p := range map[string]string{"with its pass": pass, "with no pass": ""} {
 		if got := e.do(http.MethodPut, account, protocol.AdoptRequest{Key: key}, p); got.status != http.StatusGone || got.code() != protocol.CodeRevoked {
-			t.Errorf("PUT …/account of a revoked box, %s: %d %s, want 410 revoked", what, got.status, got.code())
+			t.Errorf("PUT …/account of a revoked mailbox, %s: %d %s, want 410 revoked", what, got.status, got.code())
 		}
 		if got := e.do(http.MethodDelete, account, nil, p); got.status != http.StatusGone || got.code() != protocol.CodeRevoked {
-			t.Errorf("DELETE …/account of a revoked box, %s: %d %s, want 410 revoked", what, got.status, got.code())
+			t.Errorf("DELETE …/account of a revoked mailbox, %s: %d %s, want 410 revoked", what, got.status, got.code())
 		}
 	}
 }
@@ -341,22 +341,22 @@ func TestAdoptAndLeaveNameTheRecord(t *testing.T) {
 	e := newEnv(t, relaxed())
 	acc, key := accountEnv(t, e, true, 1)
 	_, id, _ := parseAdopt(key)
-	a := e.box(protocol.Classic)
-	old, err := e.store.Box(ctx, a.Address())
+	a := e.mailbox(protocol.Classic)
+	old, err := e.store.Mailbox(ctx, a.Address())
 	if err != nil {
 		t.Fatal(err)
 	}
-	cur := cloneBox(old)
-	if err := e.store.UpdateBox(ctx, cur); err != nil {
+	cur := cloneMailbox(old)
+	if err := e.store.UpdateMailbox(ctx, cur); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.store.Adopt(ctx, cloneBox(old), acc.ID, id); !errors.Is(err, ErrStale) {
+	if err := e.store.Adopt(ctx, cloneMailbox(old), acc.ID, id); !errors.Is(err, ErrStale) {
 		t.Fatalf("adopt over an old record: %v", err)
 	}
 	if err := e.store.Adopt(ctx, cur, acc.ID, id); err != nil || cur.Account != acc.ID {
 		t.Fatalf("adopt: %v", err)
 	}
-	stale := cloneBox(cur)
+	stale := cloneMailbox(cur)
 	stale.Rev--
 	if err := e.store.Leave(ctx, stale); !errors.Is(err, ErrStale) {
 		t.Fatalf("leave over an old record: %v", err)
@@ -369,22 +369,22 @@ func TestAdoptAndLeaveNameTheRecord(t *testing.T) {
 // staleStore loses every race to adopt or leave.
 type staleStore struct{ Store }
 
-func (staleStore) Adopt(context.Context, *Box, string, [32]byte) error { return ErrStale }
-func (staleStore) Leave(context.Context, *Box) error                   { return ErrStale }
+func (staleStore) Adopt(context.Context, *Mailbox, string, [32]byte) error { return ErrStale }
+func (staleStore) Leave(context.Context, *Mailbox) error                   { return ErrStale }
 
-// adoptCounting counts the store's adopts: each writes the box's record.
+// adoptCounting counts the store's adopts: each writes the mailbox's record.
 type adoptCounting struct {
 	Store
 	n atomic.Int32
 }
 
-func (s *adoptCounting) Adopt(ctx context.Context, b *Box, account string, key [32]byte) error {
+func (s *adoptCounting) Adopt(ctx context.Context, b *Mailbox, account string, key [32]byte) error {
 	s.n.Add(1)
 	return s.Store.Adopt(ctx, b, account, key)
 }
 
 // A key that is not this server's, or is spent or expired, is refused after
-// a read of its item, and never reaches the write of the box's record.
+// a read of its item, and never reaches the write of the mailbox's record.
 func TestARefusedKeyWritesNothing(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -394,7 +394,7 @@ func TestARefusedKeyWritesNothing(t *testing.T) {
 	cs := &adoptCounting{Store: e.store}
 	h := New(Config{Store: cs, Limits: l, Now: e.clock.Now}).Handler()
 	e.setMiddle(func(w http.ResponseWriter, r *http.Request, _ http.Handler) { h.ServeHTTP(w, r) })
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	adopt(t, a, key)
 	unstored, _, _ := NewAdoptKey(acc.ID)
 	expiring := e.adoptKey(t, acc.ID, 1, time.Minute)
@@ -405,7 +405,7 @@ func TestARefusedKeyWritesNothing(t *testing.T) {
 		}
 	}
 	if n := cs.n.Load(); n != 1 {
-		t.Fatalf("%d writes of a box's record, for one adopt", n)
+		t.Fatalf("%d writes of a mailbox's record, for one adopt", n)
 	}
 }
 
@@ -414,15 +414,15 @@ func TestAdoptRaceIsAConflict(t *testing.T) {
 	l := relaxed()
 	e := newEnv(t, l)
 	acc, key := accountEnv(t, e, true, 2)
-	a := e.box(protocol.Classic)
+	a := e.mailbox(protocol.Classic)
 	adopt(t, a, e.adoptKey(t, acc.ID, 1, time.Hour))
 	stale := New(Config{Store: staleStore{e.store}, Limits: l, Now: e.clock.Now}).Handler()
 	e.setMiddle(func(w http.ResponseWriter, r *http.Request, _ http.Handler) { stale.ServeHTTP(w, r) })
-	b := e.box(protocol.Classic)
-	if _, err := b.Adopt(context.Background(), key); codeOf(err) != protocol.CodeBoxChanged {
+	b := e.mailbox(protocol.Classic)
+	if _, err := b.Adopt(context.Background(), key); codeOf(err) != protocol.CodeMailboxChanged {
 		t.Fatalf("adopt: %v", err)
 	}
-	if err := a.Leave(context.Background()); codeOf(err) != protocol.CodeBoxChanged {
+	if err := a.Leave(context.Background()); codeOf(err) != protocol.CodeMailboxChanged {
 		t.Fatalf("leave: %v", err)
 	}
 }
@@ -451,7 +451,7 @@ func (d *cannedDynamo) Do(r *http.Request) (*http.Response, error) {
 
 func (d *cannedDynamo) store(logged *bytes.Buffer) *Memory {
 	return NewDynamoStore(DynamoConfig{AWS: aws.Config{Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "x", ""),
-		HTTPClient: d, BaseEndpoint: aws.String("http://127.0.0.1:1")}, BoxesTable: "b", MsgsTable: "m", AccountsTable: "a", Bucket: "s", Log: log.New(logged, "", 0)})
+		HTTPClient: d, BaseEndpoint: aws.String("http://127.0.0.1:1")}, MailboxesTable: "b", MessagesTable: "m", AccountsTable: "a", Bucket: "s", Log: log.New(logged, "", 0)})
 }
 
 // cancelled is a TransactWriteItems cancelled for these reasons, one an item.
@@ -469,15 +469,15 @@ type dynamoAdopt struct {
 	d *Memory
 }
 
-func (s dynamoAdopt) Adopt(ctx context.Context, b *Box, account string, key [32]byte) error {
+func (s dynamoAdopt) Adopt(ctx context.Context, b *Mailbox, account string, key [32]byte) error {
 	return s.d.Adopt(ctx, b, account, key)
 }
 
-// An adopt that meets another transaction on the box's record or the key's
+// An adopt that meets another transaction on the mailbox's record or the key's
 // item, as two adopts with one multi-use key do, is cancelled for a
 // TransactionConflict, which the SDK does not retry. It applied nothing, so
 // the store sends it again, by a new call, up to four calls in all; one
-// that meets another every time is ErrStale, and the adopt 409 box_changed.
+// that meets another every time is ErrStale, and the adopt 409 mailbox_changed.
 // A failed condition still wins, whichever item conflicted.
 func TestAnAdoptThatMeetsAnotherIsSentAgain(t *testing.T) {
 	t.Parallel()
@@ -485,7 +485,7 @@ func TestAnAdoptThatMeetsAnotherIsSentAgain(t *testing.T) {
 	e := newEnv(t, relaxed())
 	acc, key := accountEnv(t, e, true, 5)
 	_, hash, _ := parseAdopt(key)
-	a := e.box(protocol.Classic)
+	a := e.mailbox(protocol.Classic)
 	conflict := cancelled("None", "TransactionConflict")
 	for _, c := range []struct {
 		name    string
@@ -499,9 +499,9 @@ func TestAnAdoptThatMeetsAnotherIsSentAgain(t *testing.T) {
 		{"a conflict every time", []string{conflict}, 4, ErrStale}, // the SDK's own tries for DynamoDB
 		{"a key that is spent", []string{cancelled("None", "ConditionalCheckFailed")}, 1, ErrKeyRefused},
 		{"a key that is spent, beside a conflict", []string{cancelled("TransactionConflict", "ConditionalCheckFailed")}, 1, ErrKeyRefused},
-		{"a box that moved on", []string{conflict, cancelled("ConditionalCheckFailed", "None")}, 2, ErrStale},
+		{"a mailbox that moved on", []string{conflict, cancelled("ConditionalCheckFailed", "None")}, 2, ErrStale},
 	} {
-		b, err := e.store.Box(ctx, a.Address())
+		b, err := e.store.Mailbox(ctx, a.Address())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -515,14 +515,14 @@ func TestAnAdoptThatMeetsAnotherIsSentAgain(t *testing.T) {
 		}
 	}
 
-	// Through the handler: a conflict that lasts is 409 box_changed, which a
+	// Through the handler: a conflict that lasts is 409 mailbox_changed, which a
 	// client sends again as it is, and nothing is logged as an internal error.
 	var logged bytes.Buffer
 	srv := New(Config{Store: dynamoAdopt{e.store, (&cannedDynamo{answers: []string{conflict}}).store(&logged)}, Limits: relaxed(), Now: e.clock.Now, Log: log.New(&logged, "", 0)}).Handler()
 	e.setMiddle(func(w http.ResponseWriter, r *http.Request, _ http.Handler) { srv.ServeHTTP(w, r) })
 	defer e.setMiddle(nil)
-	if _, err := e.box(protocol.Classic).Adopt(ctx, key); codeOf(err) != protocol.CodeBoxChanged {
-		t.Errorf("an adopt that met another every time: %v, want box_changed", err)
+	if _, err := e.mailbox(protocol.Classic).Adopt(ctx, key); codeOf(err) != protocol.CodeMailboxChanged {
+		t.Errorf("an adopt that met another every time: %v, want mailbox_changed", err)
 	}
 	if strings.Contains(logged.String(), "internal error") {
 		t.Errorf("an adopt that met another is logged as an internal error: %s", logged.String())
@@ -550,7 +550,7 @@ func (d *timedDynamo) Do(r *http.Request) (*http.Response, error) {
 
 func (d *timedDynamo) store(logged *bytes.Buffer) *Memory {
 	return NewDynamoStore(DynamoConfig{AWS: aws.Config{Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "x", ""),
-		HTTPClient: d, BaseEndpoint: aws.String("http://127.0.0.1:1")}, BoxesTable: "b", MsgsTable: "m", AccountsTable: "a", Bucket: "s", Log: log.New(logged, "", 0)})
+		HTTPClient: d, BaseEndpoint: aws.String("http://127.0.0.1:1")}, MailboxesTable: "b", MessagesTable: "m", AccountsTable: "a", Bucket: "s", Log: log.New(logged, "", 0)})
 }
 
 // An adopt that meets another pauses before each try after its first, for a
@@ -563,7 +563,7 @@ func TestAnAdoptPausesBetweenItsTries(t *testing.T) {
 	e := newEnv(t, relaxed())
 	acc, key := accountEnv(t, e, true, 5)
 	_, hash, _ := parseAdopt(key)
-	b, err := e.store.Box(ctx, e.box(protocol.Classic).Address())
+	b, err := e.store.Mailbox(ctx, e.mailbox(protocol.Classic).Address())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -611,23 +611,23 @@ func TestAnAdoptPausesBetweenItsTries(t *testing.T) {
 	})
 }
 
-// A write of the box's record alone that meets a transaction on it is
+// A write of the mailbox's record alone that meets a transaction on it is
 // refused with a TransactionConflictException, which the SDK does not retry:
 // the record changes if that transaction commits, so it is ErrStale, as a
-// failed condition is, and a client sends it again (409 box_changed).
+// failed condition is, and a client sends it again (409 mailbox_changed).
 func TestARecordWriteThatMeetsATransactionIsStale(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
-	a := e.box(protocol.Classic)
-	b, err := e.store.Box(ctx, a.Address())
+	a := e.mailbox(protocol.Classic)
+	b, err := e.store.Mailbox(ctx, a.Address())
 	if err != nil {
 		t.Fatal(err)
 	}
 	conflict := `{"__type":"com.amazonaws.dynamodb.v20120810#TransactionConflictException","message":"Transaction is ongoing for the item"}`
 	for name, write := range map[string]func(*Memory) error{
-		"UpdateBox": func(s *Memory) error { return s.UpdateBox(ctx, cloneBox(b)) },
-		"Leave":     func(s *Memory) error { return s.Leave(ctx, cloneBox(b)) },
+		"UpdateMailbox": func(s *Memory) error { return s.UpdateMailbox(ctx, cloneMailbox(b)) },
+		"Leave":         func(s *Memory) error { return s.Leave(ctx, cloneMailbox(b)) },
 	} {
 		var logged bytes.Buffer
 		d := &cannedDynamo{answers: []string{conflict}}
@@ -641,7 +641,7 @@ func TestARecordWriteThatMeetsATransactionIsStale(t *testing.T) {
 }
 
 // A change to an account reaches memory by the accounts stream: an operator
-// makes a metered account unmetered by hand, then deletes it, and its box
+// makes a metered account unmetered by hand, then deletes it, and its mailbox
 // has the free limits again.
 func TestAccountChangesReachMemory(t *testing.T) {
 	t.Parallel()
@@ -654,7 +654,7 @@ func TestAccountChangesReachMemory(t *testing.T) {
 	e := newEnv(t, l)
 	s := e.store.(*Memory)
 	acc, key := accountEnv(t, e, false, 1)
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	adopt(t, a, key)
 	send(t, a, b, "1")
 	if _, err := a.Send(ctx, b.Address(), "2"); !limitedBy(err, protocol.QuotaSends) {
@@ -704,7 +704,7 @@ func TestLargeReadsTakeTurns(t *testing.T) {
 	l.MaxSize, l.AccountMaxSize = 16<<10, 64<<10 // bodies read at once up to 16 KiB, at most 64 KiB
 	e := newEnv(t, l)
 	_, key := accountEnv(t, e, true, 1)
-	lifted, free, to := e.box(protocol.Classic), e.box(protocol.Classic), e.box(protocol.Classic)
+	lifted, free, to := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	adopt(t, lifted, key)
 	post := func(pass string, size int, wait time.Duration) (int, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), wait)
@@ -760,7 +760,7 @@ func TestAStalledBodyGivesTheLargeReadBack(t *testing.T) {
 	m := NewMetrics(prometheus.NewRegistry())
 	e := newEnv(t, l, func(c *Config) { c.Metrics = m })
 	_, key := accountEnv(t, e, true, 1)
-	lifted, to := e.box(protocol.Classic), e.box(protocol.Classic)
+	lifted, to := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	adopt(t, lifted, key)
 	addr := strings.TrimPrefix(e.srv.URL, "http://")
 	conn, err := net.Dial("tcp", addr)
@@ -816,7 +816,7 @@ func TestAWaitForTheLargeReadIsBounded(t *testing.T) {
 	m := NewMetrics(prometheus.NewRegistry())
 	e := newEnv(t, l, func(c *Config) { c.Metrics = m })
 	_, key := accountEnv(t, e, true, 1)
-	lifted, to := e.box(protocol.Classic), e.box(protocol.Classic)
+	lifted, to := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	adopt(t, lifted, key)
 	e.server.largeRead <- struct{}{} // another large send is being read
 	defer func() { <-e.server.largeRead }()

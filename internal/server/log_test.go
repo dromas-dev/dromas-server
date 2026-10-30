@@ -23,27 +23,27 @@ import (
 	"github.com/dromas-dev/dromas-client/protocol"
 )
 
-// errorWithURL is the test store, but a read of box's record fails with the
-// text of an S3 transport error: the request's URL, which names the box and
+// errorWithURL is the test store, but a read of mailbox's record fails with the
+// text of an S3 transport error: the request's URL, which names the mailbox and
 // a message id.
 type errorWithURL struct {
 	Store
-	box protocol.Address
-	id  string
+	mailbox protocol.Address
+	id      string
 }
 
-func (s errorWithURL) Known(a protocol.Address) (*Box, bool) {
-	if a == s.box {
+func (s errorWithURL) Known(a protocol.Address) (*Mailbox, bool) {
+	if a == s.mailbox {
 		return nil, false
 	}
 	return s.Store.Known(a)
 }
 
-func (s errorWithURL) Box(ctx context.Context, a protocol.Address) (*Box, error) {
-	if a == s.box {
+func (s errorWithURL) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error) {
+	if a == s.mailbox {
 		return nil, fmt.Errorf(`operation error S3: PutObject, request send failed, Put "http://127.0.0.1:1/bucket/%s/%s?x-id=PutObject": dial tcp 127.0.0.1:1: connect: connection refused`, a, s.id)
 	}
-	return s.Store.Box(ctx, a)
+	return s.Store.Mailbox(ctx, a)
 }
 
 // deadS3 is the test store, but a send is stored by a store on DynamoDB whose S3
@@ -54,15 +54,15 @@ type deadS3 struct {
 	d *Memory
 }
 
-func (s deadS3) PutMessage(ctx context.Context, box protocol.Address, h *Header, body []byte) (*Header, error) {
-	return s.d.PutMessage(ctx, box, h, body)
+func (s deadS3) PutMessage(ctx context.Context, mailbox protocol.Address, h *Header, body []byte) (*Header, error) {
+	return s.d.PutMessage(ctx, mailbox, h, body)
 }
 
 // No line the server logs carries an address or a message id
 // (dromas-dev/dromas-server#9, SECURITY.md): not a store's
 // error, whose text holds a request's URL, not a real S3 client's, and not
 // a path that holds one inside a longer segment or in capitals. A line
-// about the box names it by the name redact gives it, so the store's error
+// about the mailbox names it by the name redact gives it, so the store's error
 // and the access line of its read match; a path's segment that is not the
 // address is named as a whole (loggedPath), the address inside it unseen.
 func TestNoLogLineCarriesAnAddress(t *testing.T) {
@@ -78,16 +78,16 @@ func TestNoLogLineCarriesAnAddress(t *testing.T) {
 	}
 	name := string(redact([]byte(a.String())))
 	if lines := strings.Count(logged.String(), name); strings.Contains(strings.ToLower(logged.String()), a.String()) || strings.Contains(strings.ToLower(logged.String()), id) || lines != 2 {
-		t.Errorf("the log names the box %d times, and holds it or the id in the clear:\n%s", lines, logged.String())
+		t.Errorf("the log names the mailbox %d times, and holds it or the id in the clear:\n%s", lines, logged.String())
 	}
 
 	// A real S3 client's error, its URL as it writes it.
 	var sdk bytes.Buffer
 	d := NewDynamoStore(DynamoConfig{AWS: aws.Config{Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("k", "s", ""),
-		BaseEndpoint: aws.String("http://127.0.0.1:1"), RetryMaxAttempts: 1}, BoxesTable: "b", MsgsTable: "m", AccountsTable: "a", Bucket: "bucket", Log: log.New(&sdk, "", 0)})
+		BaseEndpoint: aws.String("http://127.0.0.1:1"), RetryMaxAttempts: 1}, MailboxesTable: "b", MessagesTable: "m", AccountsTable: "a", Bucket: "bucket", Log: log.New(&sdk, "", 0)})
 	logged.Reset()
 	e := newEnv(t, relaxed(), func(c *Config) { c.Store, c.Log = deadS3{c.Store, d}, log.New(&logged, "", 0) })
-	from, to := e.box(protocol.Classic), e.box(protocol.Classic)
+	from, to := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	if _, err := from.Send(context.Background(), to.Address(), "never stored"); err == nil {
 		t.Fatal("a send stored through a closed port")
 	}
@@ -158,14 +158,14 @@ func TestTheAccessLogWritesWhatTheRoutersMatched(t *testing.T) {
 	}
 	var a protocol.Address
 	a[0] = 1
-	box := logName([]byte(a.String()))
+	mailbox := logName([]byte(a.String()))
 	id := strings.Repeat("ab", 32)
 	forged := "/v1/x%0A2026/10/13%2012:00:00%20store%20throttled:%20boom%0D%00%1B[2J%E2%80%AE"
 	for _, c := range []struct{ method, path, want string }{
 		{"GET", forged, fmt.Sprintf("GET (a path of %d bytes) 404 ", len(forged))},
-		{"GET", "/v1/" + a.String() + "/messages/" + id, "GET /v1/" + box + "/messages/" + logName([]byte(id)) + " "},
-		{"GET", "/v1/" + a.String()[:20] + "%" + fmt.Sprintf("%02x", a.String()[20]) + a.String()[21:] + "/messages", "GET /v1/" + box + "/messages "},
-		{"GET", "/v1/" + strings.ToUpper(a.String()) + "/acl", "GET /v1/" + box + "/acl "},
+		{"GET", "/v1/" + a.String() + "/messages/" + id, "GET /v1/" + mailbox + "/messages/" + logName([]byte(id)) + " "},
+		{"GET", "/v1/" + a.String()[:20] + "%" + fmt.Sprintf("%02x", a.String()[20]) + a.String()[21:] + "/messages", "GET /v1/" + mailbox + "/messages "},
+		{"GET", "/v1/" + strings.ToUpper(a.String()) + "/acl", "GET /v1/" + mailbox + "/acl "},
 		{"GET", "/v1/%2e%2e/x", "GET (a path of 12 bytes) 404 "},
 		{"GET", "/v1/x%2Fy", "GET /v1/" + logName([]byte("x/y")) + " "},
 		{"GET", "/v1/%41", "GET /v1/" + logName([]byte("A")) + " "},
@@ -183,7 +183,7 @@ func TestTheAccessLogWritesWhatTheRoutersMatched(t *testing.T) {
 		{a.String()[:32] + "." + a.String()[32:], "/v1/x", "(a method of 65 bytes) (a path of 5 bytes) 405 "},
 		{a.String()[:32] + "_" + a.String()[32:], "/v1/x", "(a method of 65 bytes) (a path of 5 bytes) 405 "},
 		{a.String()[:63], "/v1/x", "(a method of 63 bytes) (a path of 5 bytes) 405 "},
-		{box, "/v1/x", "(a method of 17 bytes) (a path of 5 bytes) 405 "},
+		{mailbox, "/v1/x", "(a method of 17 bytes) (a path of 5 bytes) 405 "},
 		{"get", "/v1/x", "(a method of 3 bytes) (a path of 5 bytes) 405 "},
 	} {
 		if got := request(c.method, c.path); !strings.HasPrefix(got, c.want) {

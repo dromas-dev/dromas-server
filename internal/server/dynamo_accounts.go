@@ -15,9 +15,9 @@ import (
 // The accounts table (PROTOCOL.md §11.16): account is the account id's
 // bytes; sk 0x00 is the account's record and 0x04 ‖ SHA-256 of the key an
 // adopt key's state.
-// Which boxes an account holds is the box records' to say: each names its
-// account, and the boxes table's sparse index on it lists an account's
-// boxes, so a box that leaves, or that DynamoDB's TTL takes, leaves nothing
+// Which mailboxes an account holds is the mailbox records' to say: each names its
+// account, and the mailboxes table's sparse index on it lists an account's
+// mailboxes, so a mailbox that leaves, or that DynamoDB's TTL takes, leaves nothing
 // behind here.
 const (
 	skAccount  byte = 0x00
@@ -131,12 +131,12 @@ func (s *dynamoBackend) AdoptKey(ctx context.Context, account string, hash [32]b
 	return &AdoptKey{Account: account, Hash: hash, Uses: int(uses), Expires: fromMs(exp)}, nil //nolint:gosec // uses are a count we wrote
 }
 
-// boxRevCheck is the update of a box record at b.Rev that bumps it.
-func boxRevCheck(b *Box, expr string, names map[string]string, values map[string]types.AttributeValue) *types.Update {
+// mailboxRevCheck is the update of a mailbox record at b.Rev that bumps it.
+func mailboxRevCheck(b *Mailbox, expr string, names map[string]string, values map[string]types.AttributeValue) *types.Update {
 	names["#rev"] = "rev"
 	values[":old"], values[":new"] = num(b.Rev), num(b.Rev+1)
 	return &types.Update{
-		Key:                       boxKey(b.Addr),
+		Key:                       mailboxKey(b.Addr),
 		UpdateExpression:          aws.String(expr),
 		ConditionExpression:       aws.String("#rev = :old"),
 		ExpressionAttributeNames:  names,
@@ -144,11 +144,11 @@ func boxRevCheck(b *Box, expr string, names map[string]string, values map[string
 	}
 }
 
-// Adopt implements Backend: in one transaction, the box record names the
+// Adopt implements Backend: in one transaction, the mailbox record names the
 // account, and the key loses a use.
-func (s *dynamoBackend) Adopt(ctx context.Context, b *Box, account string, key [32]byte) error {
-	upd := boxRevCheck(b, "SET #acct = :acct, #rev = :new", map[string]string{"#acct": "account"}, map[string]types.AttributeValue{":acct": bin([]byte(account))})
-	upd.TableName = &s.boxes
+func (s *dynamoBackend) Adopt(ctx context.Context, b *Mailbox, account string, key [32]byte) error {
+	upd := mailboxRevCheck(b, "SET #acct = :acct, #rev = :new", map[string]string{"#acct": "account"}, map[string]types.AttributeValue{":acct": bin([]byte(account))})
+	upd.TableName = &s.mailboxes
 	items := []types.TransactWriteItem{
 		{Update: upd},
 		{Update: &types.Update{
@@ -163,12 +163,12 @@ func (s *dynamoBackend) Adopt(ctx context.Context, b *Box, account string, key [
 	return s.transact(ctx, items, map[int]error{0: ErrStale, 1: ErrKeyRefused})
 }
 
-// Leave implements Backend: the box record names no account.
-func (s *dynamoBackend) Leave(ctx context.Context, b *Box) error {
-	upd := boxRevCheck(b, "REMOVE #acct SET #rev = :new", map[string]string{"#acct": "account"}, map[string]types.AttributeValue{})
+// Leave implements Backend: the mailbox record names no account.
+func (s *dynamoBackend) Leave(ctx context.Context, b *Mailbox) error {
+	upd := mailboxRevCheck(b, "REMOVE #acct SET #rev = :new", map[string]string{"#acct": "account"}, map[string]types.AttributeValue{})
 	n := new(note)
 	_, err := s.db.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName:                 &s.boxes,
+		TableName:                 &s.mailboxes,
 		Key:                       upd.Key,
 		UpdateExpression:          upd.UpdateExpression,
 		ConditionExpression:       upd.ConditionExpression,

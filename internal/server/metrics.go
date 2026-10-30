@@ -23,7 +23,7 @@ import (
 // failure beside its attempts. They are served on a listener of their own
 // (dromas-server serve --metrics-listen), never the API's.
 //
-// No label is a value a caller chooses: no address, IP, box, message id,
+// No label is a value a caller chooses: no address, IP, mailbox, message id,
 // cursor or path as sent, each of which would be a series per caller and is
 // what the logs leave out. Every label is from a set this code defines: a
 // route is the router's pattern, a code the protocol's, a limit the name a
@@ -72,7 +72,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		latency: prometheus.NewHistogramVec(prometheus.HistogramOpts{Namespace: ns, Name: "request_duration_seconds",
 			Help: "How long a request took to answer, by route.", Buckets: seconds}, []string{"route"}),
 		limits: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "limit_requests_total",
-			Help: "Each take of a limit, by its name (a rate_limited's quota_id, or the code of its own), whom it counts (box or ip) and the decision (allowed or denied)."}, []string{"limit", "subject", "decision"}),
+			Help: "Each take of a limit, by its name (a rate_limited's quota_id, or the code of its own), whom it counts (mailbox or ip) and the decision (allowed or denied)."}, []string{"limit", "subject", "decision"}),
 		passes: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "passes_total",
 			Help: "Passes, by outcome: remembered (taken from memory), checked (verified), refused (with its code)."}, []string{"outcome", "code"}),
 		fetches: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "fetches_total",
@@ -84,7 +84,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		storeTime: prometheus.NewHistogramVec(prometheus.HistogramOpts{Namespace: ns, Name: "store_call_duration_seconds",
 			Help: "How long a call to AWS took, its retries included, by service and operation.", Buckets: seconds}, []string{"service", "operation"}),
 		caches: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "cache_events_total",
-			Help: "The record caches, by cache (boxes, accounts, missing) and event (hit, miss, eviction)."}, []string{"cache", "event"}),
+			Help: "The record caches, by cache (mailboxes, accounts, missing) and event (hit, miss, eviction)."}, []string{"cache", "event"}),
 		largeRead: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "large_reads_total",
 			Help: "Sends past the free size, by how their wait for the one large read ended: taken, timed_out, or gone (the caller left)."}, []string{"outcome"}),
 		cut: prometheus.NewCounter(prometheus.CounterOpts{Namespace: ns, Name: "bodies_cut_total",
@@ -94,11 +94,11 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		streamAge: prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: ns, Name: "stream_record_age_seconds",
 			Help: "How old the last record applied from each table's stream was when it was applied: how far behind memory follows."}, []string{"table"}),
 		collections: prometheus.NewHistogram(prometheus.HistogramOpts{Namespace: ns, Name: "item_collection_estimate_bytes",
-			Help: "After each message written, the upper bound of DynamoDB's estimate of its box's item collection, the box's items and their LSI entries, at 2^30 bytes a GB: past 10 GB, the box takes no more mail.", Buckets: gigabytes}),
+			Help: "After each message written, the upper bound of DynamoDB's estimate of its mailbox's item collection, the mailbox's items and their LSI entries, at 2^30 bytes a GB: past 10 GB, the mailbox takes no more messages.", Buckets: gigabytes}),
 		holds: prometheus.NewGauge(prometheus.GaugeOpts{Namespace: ns, Name: "lists_held",
 			Help: "Lists held for a change now (PROTOCOL.md §11.11)."}),
 		held: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "held_lists_total",
-			Help: "Held lists, each once by how it ended: changed (the box changed, or a message in it expired), waited (its wait passed), gone (the caller left), stopped (the server stopped), or refused (past --max-held-lists)."}, []string{"outcome"}),
+			Help: "Held lists, each once by how it ended: changed (the mailbox changed, or a message in it expired), waited (its wait passed), gone (the caller left), stopped (the server stopped), or refused (past --max-held-lists)."}, []string{"outcome"}),
 	}
 	reg.MustRegister(m.requests, m.latency, m.limits, m.passes, m.fetches, m.lists, m.store, m.storeTime, m.caches, m.largeRead, m.cut, m.conns, m.streamAge, m.collections, m.holds, m.held)
 	return m
@@ -117,7 +117,7 @@ func (m *Metrics) watch(s *Server) {
 	}
 	// A second server on one registry, in a test, counts on the first's keys.
 	_ = m.reg.Register(keyCounts{s: s, desc: prometheus.NewDesc("dromas_server_limit_keys",
-		"Keys each limit holds now: the boxes or addresses whose bucket is not full, by the limit's name.", []string{"limit"}, nil)})
+		"Keys each limit holds now: the mailboxes or addresses whose bucket is not full, by the limit's name.", []string{"limit"}, nil)})
 }
 
 // keyCounts reports how many keys each of a server's limits holds, read at
@@ -167,12 +167,12 @@ func (m *Metrics) limit(name string, ok bool) {
 }
 
 // subjectOf is whom the limit named name counts: a quota's subject, and the
-// box for a limit with a code of its own.
+// mailbox for a limit with a code of its own.
 func subjectOf(name string) protocol.Subject {
 	if s := protocol.Quota(name).Subject(); s != "" {
 		return s
 	}
-	return protocol.SubjectBox
+	return protocol.SubjectMailbox
 }
 
 // pass counts a pass taken from memory (remembered), or checked, with err

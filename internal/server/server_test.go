@@ -30,7 +30,7 @@ import (
 )
 
 // The server's answers, checked over raw HTTP, against the status map
-// (PROTOCOL.md §11.3) and the box states (§11.6).
+// (PROTOCOL.md §11.3) and the mailbox states (§11.6).
 
 type reply struct {
 	status int
@@ -52,7 +52,7 @@ func tooLarge(err error, limit uint64) bool {
 	return ok && e.Problem.Code == protocol.CodeTooLarge && e.Problem.Limit != nil && *e.Problem.Limit == limit
 }
 
-// clockGap is how far the box's clock read from the date on the server's
+// clockGap is how far the mailbox's clock read from the date on the server's
 // answer, when err is a refusal the client read one on.
 func clockGap(err error) time.Duration {
 	if e, ok := errors.AsType[*client.APIError](err); ok && !e.Dated.IsZero() && !e.Read.IsZero() {
@@ -192,7 +192,7 @@ func (e *env) wantNotCurrent(r reply, n uint64) {
 // name is the name the tests call the server by: the host of its URL.
 func (e *env) name() string { return strings.TrimPrefix(e.srv.URL, "http://") }
 
-// passFor is a pass of box a for the server called name, signed at the
+// passFor is a pass of mailbox a for the server called name, signed at the
 // test's clock by signer: a working key under its certificate.
 func (e *env) passFor(signer ssh.Signer, a protocol.Address, name string) string {
 	e.t.Helper()
@@ -203,25 +203,25 @@ func (e *env) passFor(signer ssh.Signer, a protocol.Address, name string) string
 	return auth
 }
 
-// numbers returns the serials a box stands at in the store: its prekey's and
+// numbers returns the serials a mailbox stands at in the store: its prekey's and
 // its certificate's. A client takes them from its clock, so a test reads
 // them and never assumes one.
 func (e *env) numbers(a protocol.Address) (prekey, cert uint64) {
 	e.t.Helper()
-	b, err := e.store.Box(context.Background(), a)
+	b, err := e.store.Mailbox(context.Background(), a)
 	if err != nil || b == nil {
-		e.t.Fatalf("the box's record: %v", err)
+		e.t.Fatalf("the mailbox's record: %v", err)
 	}
 	return b.Prekey.Serial, b.CertSerial
 }
 
-// worker loads the working key of a client's box, under its certificate:
+// worker loads the working key of a client's mailbox, under its certificate:
 // the one made with the prekey it published last.
-func worker(t *testing.T, b *client.Box) ssh.Signer {
+func worker(t *testing.T, b *client.Mailbox) ssh.Signer {
 	t.Helper()
 	st, err := b.Status(t.Context())
 	if err != nil || st.PrekeySerial == 0 {
-		t.Fatalf("the box's status: %+v, %v", st, err)
+		t.Fatalf("the mailbox's status: %+v, %v", st, err)
 	}
 	stem := filepath.Join(b.Dir(), "work", strconv.FormatUint(st.PrekeySerial, 10))
 	k, err := os.ReadFile(stem)
@@ -247,13 +247,13 @@ func worker(t *testing.T, b *client.Box) ssh.Signer {
 	return s
 }
 
-// pass is a new pass of a client's box, as the box would sign it now.
-func (e *env) pass(b *client.Box) string {
+// pass is a new pass of a client's mailbox, as the mailbox would sign it now.
+func (e *env) pass(b *client.Mailbox) string {
 	e.t.Helper()
 	return e.passFor(worker(e.t, b), b.Address(), e.name())
 }
 
-// raw is a box built by hand, for requests the client would never make. Each
+// raw is a mailbox built by hand, for requests the client would never make. Each
 // prekey statement is signed by a working key, under a certificate, and both
 // are kept by the number they were made under.
 type raw struct {
@@ -281,7 +281,7 @@ func (e *env) raw() *raw {
 func (r *raw) path(rest string) string { return "/v1/" + r.id.Address().String() + rest }
 
 // certify makes a new working key and its certificate, of the given serial,
-// replacing any the box holds at that serial.
+// replacing any the mailbox holds at that serial.
 func (r *raw) certify(serial uint64) ssh.Signer {
 	r.e.t.Helper()
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
@@ -334,7 +334,7 @@ func (r *raw) pass(serial uint64) string {
 	return r.e.passFor(r.work[serial], r.id.Address(), r.e.name())
 }
 
-// register registers the box with a new prekey 1, valid for d.
+// register registers the mailbox with a new prekey 1, valid for d.
 func (r *raw) register(d time.Duration) *raw {
 	r.e.t.Helper()
 	r.prekey(1, r.e.clock.Now().Add(d), nil)
@@ -357,7 +357,7 @@ func TestASignatureIsBounded(t *testing.T) {
 	r.prekey(1, now.Add(protocol.PrekeyLifetime), nil)
 	r.sig[1] = pad(r.sig[1], protocol.MaxSignature)
 	e.want(e.do("PUT", r.path(""), r.registration(1), r.pass(1)), 201, "")
-	var got protocol.BoxResponse
+	var got protocol.MailboxResponse
 	if err := json.Unmarshal(e.do("GET", r.path(""), nil, "").body, &got); err != nil || !bytes.Equal(got.PrekeySignature, r.sig[1]) {
 		t.Errorf("the signature is not served as it was sent: %v", err)
 	}
@@ -448,7 +448,7 @@ func TestRegistration(t *testing.T) {
 	expired.prekey(1, now, nil)
 	e.want(e.do("PUT", expired.path(""), expired.registration(1), expired.pass(1)), 400, protocol.CodePrekeyTime)
 
-	// The pass: there must be one, this box's, for this server, not run out,
+	// The pass: there must be one, this mailbox's, for this server, not run out,
 	// and under the certificate the statement is signed under. A statement
 	// that leaked registers nothing for whoever found it.
 	e.want(e.do("PUT", r.path(""), reg, ""), 401, protocol.CodeUnauthorized)
@@ -464,8 +464,8 @@ func TestRegistration(t *testing.T) {
 	tooFar := r.pass(1)
 	e.clock.Add(-protocol.MaxPassLifetime)
 	e.want(e.do("PUT", r.path(""), reg, tooFar), 401, protocol.CodePassExpired)
-	if _, err := e.store.Box(context.Background(), r.id.Address()); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("a refused registration left a box: %v", err)
+	if _, err := e.store.Mailbox(context.Background(), r.id.Address()); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a refused registration left a mailbox: %v", err)
 	}
 
 	// Registered: 201, then an identical retry is 200, and anything else is
@@ -485,15 +485,15 @@ func TestRegistration(t *testing.T) {
 	r2.prekey(1, now.Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", r.path(""), r2.registration(1), r2.pass(1)), 409, protocol.CodeConflict)
 
-	// In use at once: it takes mail, and its owner's calls are served.
-	a := e.box(protocol.Classic)
+	// In use at once: it takes messages, and its owner's calls are served.
+	a := e.mailbox(protocol.Classic)
 	if _, err := a.Send(context.Background(), r.id.Address(), "at once"); err != nil {
-		t.Fatalf("send to a box just registered: %v", err)
+		t.Fatalf("send to a mailbox just registered: %v", err)
 	}
 	list := e.do("GET", r.path("/messages"), nil, pass)
 	e.want(list, 200, "")
 	if !bytes.Contains(list.body, []byte(`"count":1`)) {
-		t.Fatalf("the new box's list: %s", list.body)
+		t.Fatalf("the new mailbox's list: %s", list.body)
 	}
 
 	// The registration limit, per IP.
@@ -510,19 +510,19 @@ func TestRegistration(t *testing.T) {
 	}
 }
 
-// A registration of a registered box, or of a revoked address, is answered
+// A registration of a registered mailbox, or of a revoked address, is answered
 // from what is held of it before anything below is checked (PROTOCOL.md §11.7
-// step 5), whether this process's memory holds the box or it reads the
+// step 5), whether this process's memory holds the mailbox or it reads the
 // record, under the count of registrations (dromas-dev/dromas-server#94):
 // another statement is 409 whatever pass it carries and however it is
-// signed, the box's current statement under its revoked current certificate
+// signed, the mailbox's current statement under its revoked current certificate
 // is certificate_revoked with no pass read, and a revoked address is 410.
-// Control: an address with no box has its statement and its pass read.
-func TestARegistrationOfARegisteredBoxIsAnsweredFromItsRecordFirst(t *testing.T) {
+// Control: an address with no mailbox has its statement and its pass read.
+func TestARegistrationOfARegisteredMailboxIsAnsweredFromItsRecordFirst(t *testing.T) {
 	t.Parallel()
 	for name, with := range map[string][]func(*Config){
-		"a box this process holds":         nil,
-		"a box this process does not hold": {func(c *Config) { c.Store = unknownStore{c.Store} }},
+		"a mailbox this process holds":         nil,
+		"a mailbox this process does not hold": {func(c *Config) { c.Store = unknownStore{c.Store} }},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := newEnv(t, relaxed(), with...)
@@ -562,26 +562,26 @@ func TestARegistrationOfARegisteredBoxIsAnsweredFromItsRecordFirst(t *testing.T)
 	}
 }
 
-// boxReads counts the reads of address a's record.
-type boxReads struct {
+// mailboxReads counts the reads of address a's record.
+type mailboxReads struct {
 	Store
 	a protocol.Address
 	n atomic.Int32
 }
 
-func (s *boxReads) Box(ctx context.Context, a protocol.Address) (*Box, error) {
+func (s *mailboxReads) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error) {
 	if a == s.a {
 		s.n.Add(1)
 	}
-	return s.Store.Box(ctx, a)
+	return s.Store.Mailbox(ctx, a)
 }
 
-// readOnce is an env with limits l whose memory holds no box, and a call of
+// readOnce is an env with limits l whose memory holds no mailbox, and a call of
 // it that wants a registration answered with status and code, and its
 // address read once.
 func readOnce(t *testing.T, l Limits) (*env, func(what string, r *raw, req protocol.RegisterRequest, pass string, status int, code protocol.Code)) {
 	t.Helper()
-	reads := &boxReads{}
+	reads := &mailboxReads{}
 	e := newEnv(t, l, func(c *Config) { reads.Store, c.Store = c.Store, unknownStore{reads} })
 	return e, func(what string, r *raw, req protocol.RegisterRequest, pass string, status int, code protocol.Code) {
 		t.Helper()
@@ -596,8 +596,8 @@ func readOnce(t *testing.T, l Limits) (*env, func(what string, r *raw, req proto
 
 // A registration that memory cannot answer reads what is kept of its address
 // once, under the registrations it would spend, reserved before the read, and
-// no more: one that makes a box, one of an address whose identity revoked
-// certificates before it had a box, and one answered from a registered box's
+// no more: one that makes a mailbox, one of an address whose identity revoked
+// certificates before it had a mailbox, and one answered from a registered mailbox's
 // record (register; dromas-dev/dromas-server#94,
 // dromas-dev/dromas-client#410).
 func TestARegistrationReadsItsAddressOnce(t *testing.T) {
@@ -605,10 +605,10 @@ func TestARegistrationReadsItsAddressOnce(t *testing.T) {
 	e, once := readOnce(t, relaxed())
 	r := e.raw()
 	r.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
-	once("a new box", r, r.registration(1), r.pass(1), 201, "")
-	once("a registered box, its statement again", r, r.registration(1), r.pass(1), 200, "")
+	once("a new mailbox", r, r.registration(1), r.pass(1), 201, "")
+	once("a registered mailbox, its statement again", r, r.registration(1), r.pass(1), 200, "")
 	r.prekey(2, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
-	once("a registered box, another statement", r, r.registration(2), r.pass(2), 409, protocol.CodeConflict)
+	once("a registered mailbox, another statement", r, r.registration(2), r.pass(2), 409, protocol.CodeConflict)
 
 	m := e.raw()
 	e.want(e.do("PUT", m.path("/revocations"), m.certs(2), ""), 200, "")
@@ -618,7 +618,7 @@ func TestARegistrationReadsItsAddressOnce(t *testing.T) {
 
 // So it is where its address's registrations are spent, when the read is a
 // lookup's, under a miss (register; dromas-dev/dromas-client#450 item 3):
-// the box's identical retry, another statement, and a registration of a new
+// the mailbox's identical retry, another statement, and a registration of a new
 // address, refused for the registrations, each read the address once.
 func TestARegistrationReadsItsAddressOnceWithItsRegistrationsSpent(t *testing.T) {
 	t.Parallel()
@@ -627,10 +627,10 @@ func TestARegistrationReadsItsAddressOnceWithItsRegistrationsSpent(t *testing.T)
 	e, once := readOnce(t, l)
 	r := e.raw()
 	r.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
-	once("a new box, the address's one registration", r, r.registration(1), r.pass(1), 201, "")
-	once("a registered box, its statement again", r, r.registration(1), r.pass(1), 200, "")
+	once("a new mailbox, the address's one registration", r, r.registration(1), r.pass(1), 201, "")
+	once("a registered mailbox, its statement again", r, r.registration(1), r.pass(1), 200, "")
 	r.prekey(2, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
-	once("a registered box, another statement", r, r.registration(2), r.pass(2), 409, protocol.CodeConflict)
+	once("a registered mailbox, another statement", r, r.registration(2), r.pass(2), 409, protocol.CodeConflict)
 	n := e.raw()
 	n.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	once("a new address", n, n.registration(1), n.pass(1), 429, protocol.CodeRateLimited)
@@ -657,13 +657,13 @@ func TestOwnerCalls(t *testing.T) {
 	e.want(e.do("GET", r.path("/messages"), nil, flip(pass)), 401, protocol.CodeUnauthorized)
 	e.want(e.do("GET", r.path("/messages"), nil, pass), 200, "")
 	e.want(e.do("GET", r.path("/messages"), nil, flip(pass)), 401, protocol.CodeUnauthorized)
-	// Another box's pass is not this box's, and neither is this box's pass
+	// Another mailbox's pass is not this mailbox's, and neither is this mailbox's pass
 	// made for another server.
 	o := e.raw().register(time.Hour)
 	e.want(e.do("GET", r.path("/messages"), nil, o.pass(1)), 401, protocol.CodeUnauthorized)
 	e.want(e.do("GET", r.path("/messages"), nil, e.passFor(r.work[1], r.id.Address(), "another.example")), 401, protocol.CodeUnauthorized)
 	// A working key the identity certified, which the server never saw a
-	// prekey under, is not the box's current one.
+	// prekey under, is not the mailbox's current one.
 	e.want(e.do("GET", r.path("/messages"), nil, e.passFor(r.certify(2), r.id.Address(), e.name())), 401, protocol.CodeCertificateNotCurrent)
 
 	empty := e.do("GET", r.path("/messages"), nil, pass)
@@ -684,7 +684,7 @@ func TestOwnerCalls(t *testing.T) {
 	}
 
 	// A pass is taken until it runs out, and not a second longer, whether or
-	// not the server has taken it before; then the box signs another.
+	// not the server has taken it before; then the mailbox signs another.
 	e.clock.Add(protocol.PassLifetime - time.Second)
 	e.want(e.do("GET", r.path("/messages"), nil, pass), 200, "")
 	e.clock.Add(time.Second)
@@ -700,7 +700,7 @@ func TestOwnerCalls(t *testing.T) {
 	e.want(e.do("GET", r.path("/messages"), nil, ahead), 200, "")
 }
 
-// An address in a path is 64 lowercase hex characters, so a box has one URL:
+// An address in a path is 64 lowercase hex characters, so a mailbox has one URL:
 // the same address in uppercase is no address, on every route that names
 // one, whoever calls (PROTOCOL.md §2.2).
 func TestAnAddressInAPathIsLowercase(t *testing.T) {
@@ -788,12 +788,12 @@ func TestACursorIsReadBeforeThePass(t *testing.T) {
 
 // A call with two Authorization lines carries no pass, whatever each holds:
 // which of them is the pass is not the server's to choose. It is refused as
-// a call that carries no pass is. The read of a box reads none, so it is
+// a call that carries no pass is. The read of a mailbox reads none, so it is
 // answered with two as with none (dromas-dev/dromas-client#352).
 func TestTwoAuthorizationLinesAreNoPass(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	pass := e.pass(b)
 	twice := func(method, path string, body []byte, lines ...string) reply {
 		t.Helper()
@@ -825,7 +825,7 @@ func TestTwoAuthorizationLinesAreNoPass(t *testing.T) {
 	e.want(e.do("GET", messages, nil, pass), 200, "")
 }
 
-// A pass is made for one server, by the name the box calls it. A server
+// A pass is made for one server, by the name the mailbox calls it. A server
 // takes one only on a request that calls it by a name of its own: the name
 // is not sent with the pass, so checked against whatever name a request
 // gives, a pass made for another server would pass here.
@@ -852,7 +852,7 @@ func TestAPassIsForOneServer(t *testing.T) {
 	e.want(e.doAs("mail.example:8443", "GET", r.path("/messages"), nil, e.passFor(r.work[1], r.id.Address(), "mail.example:8443")), 200, "")
 	e.want(e.doAs("mail.example", "GET", r.path("/messages"), nil, theirs), 401, protocol.CodeUnauthorized)
 	// A pass the server has taken is taken again only as that pass: the
-	// same box's pass for another server stays refused.
+	// same mailbox's pass for another server stays refused.
 	e.want(e.doAs("mail.example", "GET", r.path("/messages"), nil, ours), 200, "")
 	e.want(e.doAs("another.example", "GET", r.path("/messages"), nil, theirs), 401, protocol.CodeUnauthorized)
 }
@@ -860,7 +860,7 @@ func TestAPassIsForOneServer(t *testing.T) {
 // The server writes the Host a request names as an origin is written, as a
 // client writes the server's name in its pass (PROTOCOL.md §8): its port as
 // a number, and none at all for 443 or 80, whichever scheme the client
-// called it by, which TLS ending in front of the server hides. So a box whose
+// called it by, which TLS ending in front of the server hides. So a mailbox whose
 // URL is https://mail.example:443 signs its pass for mail.example, and its
 // call names mail.example:443. Each pass here is a new one, a second later:
 // one the server has taken is taken again without its name being read.
@@ -909,15 +909,15 @@ func TestPrekeyRenewal(t *testing.T) {
 	r.prekey(2, now.Add(time.Hour), r.keys[1])
 	e.want(put(2, 2), 400, protocol.CodePrekeyNotNew) // the same key again
 	r.prekey(2, now.Add(time.Hour), nil)
-	// A good statement with no pass, with a pass under the box's current
-	// certificate and not its own, and with another box's pass.
+	// A good statement with no pass, with a pass under the mailbox's current
+	// certificate and not its own, and with another mailbox's pass.
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(2), ""), 401, protocol.CodeUnauthorized)
 	e.wantNotCurrent(put(2, 1), 2) // the statement's certificate, which an upload's pass is under
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(2), unknown.pass(2)), 401, protocol.CodeUnauthorized)
 	old := r.pass(1)
 	e.want(e.do("GET", r.path("/messages"), nil, old), 200, "")
 	e.want(put(2, 2), 200, "")
-	// The box is now known by certificate 2: the pass under 1, taken a moment
+	// The mailbox is now known by certificate 2: the pass under 1, taken a moment
 	// ago, is refused, and so is a statement under 1.
 	e.wantNotCurrent(e.do("GET", r.path("/messages"), nil, old), 2)
 	e.want(e.do("GET", r.path("/messages"), nil, r.pass(2)), 200, "")
@@ -936,7 +936,7 @@ func TestPrekeyRenewal(t *testing.T) {
 
 	r.prekey(4, now.Add(time.Hour), r.keys[1])
 	e.want(put(4, 4), 400, protocol.CodePrekeyNotNew) // a live retired key
-	// Under the box's current certificate the serial must rise.
+	// Under the mailbox's current certificate the serial must rise.
 	r.prekeyUnder(current, 3, now.Add(2*time.Hour), nil)
 	e.want(put(3, 2), 409, protocol.CodeConflict)
 	r.prekeyUnder(current, 1, now.Add(2*time.Hour), nil)
@@ -950,15 +950,15 @@ func TestPrekeyRenewal(t *testing.T) {
 	e.clock.Add(protocol.MaxPrekeyLifetime)
 	r.prekeyUnder(current, 5, e.clock.Now().Add(time.Hour), nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(5), ""), 400, protocol.CodePrekeyTime)
-	// The box cannot poll under an ended certificate either, and comes back
+	// The mailbox cannot poll under an ended certificate either, and comes back
 	// with a prekey under a new one.
 	e.want(e.do("GET", r.path("/messages"), nil, r.pass(2)), 401, protocol.CodePassExpired)
 	r.prekey(5, e.clock.Now().Add(time.Hour), nil)
 	e.want(put(5, 5), 200, "")
 	e.want(e.do("GET", r.path("/messages"), nil, r.pass(5)), 200, "")
 
-	// A box's statements are ordered by certificate first. A later
-	// certificate passes any serial under an earlier one: the box moves to
+	// A mailbox's statements are ordered by certificate first. A later
+	// certificate passes any serial under an earlier one: the mailbox moves to
 	// certificate 6 at prekey serial 1, below the 5 it stood at, and the
 	// serial rises from there. An earlier certificate is refused whatever
 	// serial comes under it.
@@ -978,9 +978,9 @@ func TestSendPipeline(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
-	a, b := e.box(protocol.Classic), e.box(protocol.PostQuantum)
-	bBox, _ := e.store.Box(ctx, b.Address())
-	pqRecipient, _ := bBox.Prekey.Recipient()
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.PostQuantum)
+	bMailbox, _ := e.store.Mailbox(ctx, b.Address())
+	pqRecipient, _ := bMailbox.Prekey.Recipient()
 
 	// seal encrypts to the given recipients. What is inside is the
 	// recipient's to judge: the server sees an age file and a pass.
@@ -1008,7 +1008,7 @@ func TestSendPipeline(t *testing.T) {
 
 	// Then the address, then the query: the two serials, each once and
 	// written as a statement writes one, and nothing else. What is wrong is
-	// named in member. The sender is the box the pass names, so the query
+	// named in member. The sender is the mailbox the pass names, so the query
 	// names none.
 	e.want(e.do("POST", "/v1/nope/messages?x=1", ok.ciphertext, pass), 400, protocol.CodeBadAddress)
 	e.want(e.do("POST", "/v1/"+strings.ToUpper(b.Address().String())+"/messages", ok, pass), 400, protocol.CodeBadAddress)
@@ -1059,7 +1059,7 @@ func TestSendPipeline(t *testing.T) {
 	big := relaxed()
 	big.MaxSize = 100
 	small := newEnv(t, big)
-	sa, sb := small.box(protocol.Classic), small.box(protocol.Classic)
+	sa, sb := small.mailbox(protocol.Classic), small.mailbox(protocol.Classic)
 	if _, err := sa.Send(ctx, sb.Address(), strings.Repeat("x", 200)); codeOf(err) != protocol.CodeTooLarge {
 		t.Fatalf("send over the cap: %v", err)
 	}
@@ -1090,12 +1090,12 @@ func TestSendPipeline(t *testing.T) {
 	_ = resp.Body.Close()
 	tooLarge(reply{status: resp.StatusCode, header: resp.Header, body: body})
 
-	// A pass that names no box here, and a recipient that is none.
+	// A pass that names no mailbox here, and a recipient that is none.
 	unregistered := e.raw()
 	unregistered.prekey(1, e.clock.Now().Add(time.Hour), nil)
 	e.want(e.do("POST", to+"/messages", ok, unregistered.pass(1)), 403, protocol.CodeUnknownSender)
 	e.want(e.do("POST", "/v1/"+unregistered.id.Address().String()+"/messages", ok, pass), 404, protocol.CodeNoSuchMailbox)
-	// A pass that is not the box's it names: under a certificate the server
+	// A pass that is not the mailbox's it names: under a certificate the server
 	// never saw, and with its signature changed.
 	other := e.raw()
 	other.signer, other.id = signer(t, a), a.Identity()
@@ -1107,7 +1107,7 @@ func TestSendPipeline(t *testing.T) {
 
 	// A registered sender the server has since forgotten.
 	c := e.raw().register(time.Hour)
-	if err := e.store.DeleteBox(t.Context(), c.id.Address()); err != nil { // as the TTL deletes it
+	if err := e.store.DeleteMailbox(t.Context(), c.id.Address()); err != nil { // as the TTL deletes it
 		t.Fatal(err)
 	}
 	e.want(e.do("POST", to+"/messages", ok, c.pass(1)), 403, protocol.CodeUnknownSender)
@@ -1119,10 +1119,10 @@ func TestSendPipeline(t *testing.T) {
 	if !bytes.Equal(first.body, retry.body) {
 		t.Fatalf("a retry's receipt %s is not the original %s", retry.body, first.body)
 	}
-	// The same ciphertext under another box's pass: the receipt held, as
-	// for any post of bytes the box holds unacked (PROTOCOL.md §11.10 step
+	// The same ciphertext under another mailbox's pass: the receipt held, as
+	// for any post of bytes the mailbox holds unacked (PROTOCOL.md §11.10 step
 	// 6), and nothing new stored.
-	d := e.box(protocol.Classic)
+	d := e.mailbox(protocol.Classic)
 	again := e.do("POST", to+"/messages", ok, e.pass(d))
 	e.want(again, 200, "")
 	if !bytes.Equal(first.body, again.body) {
@@ -1149,13 +1149,13 @@ func TestSendPipeline(t *testing.T) {
 	}
 
 	// Revoked addresses, A a sender and F a recipient, each kept as the route
-	// keeps it: by its identity's own signature, with the box's record left
+	// keeps it: by its identity's own signature, with the mailbox's record left
 	// in place, which the revocation answers for. The route itself is
 	// TestRevocation.
-	f := e.box(protocol.Classic)
-	for _, box := range []*client.Box{a, f} {
-		rv := record(t, box)
-		if err := e.store.Revoke(ctx, box.Address(), &Revocations{Identity: rv.Identity, Address: rv.Revocation}, ExpectAnything); err != nil {
+	f := e.mailbox(protocol.Classic)
+	for _, mailbox := range []*client.Mailbox{a, f} {
+		rv := record(t, mailbox)
+		if err := e.store.Revoke(ctx, mailbox.Address(), &Revocations{Identity: rv.Identity, Address: rv.Revocation}, ExpectAnything); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1180,9 +1180,9 @@ func TestGreaseIsIgnored(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
-	bBox, _ := e.store.Box(ctx, b.Address())
-	rcpt, _ := bBox.Prekey.Recipient()
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	bMailbox, _ := e.store.Mailbox(ctx, b.Address())
+	rcpt, _ := bMailbox.Prekey.Recipient()
 	var ct bytes.Buffer
 	w, err := age.Encrypt(&ct, rcpt, greaseRecipient{})
 	if err != nil {
@@ -1208,7 +1208,7 @@ func TestAFileWithNoNativeStanzaIsNotSaidToHaveTwo(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := checkStanzas(st, nil)
-	if p == nil || strings.Contains(p.detail, "more than one") || p.hint == "encrypt to one recipient only" || p.hint != "the file has no recipient: encrypt to the box's prekey" {
+	if p == nil || strings.Contains(p.detail, "more than one") || p.hint == "encrypt to one recipient only" || p.hint != "the file has no recipient: encrypt to the mailbox's prekey" {
 		t.Fatalf("%d native stanza(s): %+v", len(st.Native), p)
 	}
 }
@@ -1220,7 +1220,7 @@ func (otherRecipient) Wrap([]byte) ([]*age.Stanza, error) {
 	return []*age.Stanza{{Type: "x-other", Body: []byte("junk")}}, nil
 }
 
-// A send whose stanzas a box does not take is refused wrong_recipient_type
+// A send whose stanzas a mailbox does not take is refused wrong_recipient_type
 // with the hint of its case, in PROTOCOL.md §11.10 step 7's order: a stanza
 // of another type first, whatever else the file holds; then no native
 // stanza; then more than one; then a native stanza of the other type.
@@ -1228,10 +1228,10 @@ func TestEachWrongRecipientTypeIsToldItsOwnCase(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
-	a, classic, pq := e.box(protocol.Classic), e.box(protocol.Classic), e.box(protocol.PostQuantum)
-	own := func(b *client.Box) age.Recipient {
-		box, _ := e.store.Box(ctx, b.Address())
-		r, err := box.Prekey.Recipient()
+	a, classic, pq := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic), e.mailbox(protocol.PostQuantum)
+	own := func(b *client.Mailbox) age.Recipient {
+		mailbox, _ := e.store.Mailbox(ctx, b.Address())
+		r, err := mailbox.Prekey.Recipient()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1239,22 +1239,22 @@ func TestEachWrongRecipientTypeIsToldItsOwnCase(t *testing.T) {
 	}
 	stranger, _ := age.GenerateX25519Identity()
 	hybrid, _ := age.GenerateHybridIdentity()
-	const another, none, two = "encrypt to the box's prekey", "the file has no recipient: encrypt to the box's prekey", "encrypt to one recipient only"
+	const another, none, two = "encrypt to the mailbox's prekey", "the file has no recipient: encrypt to the mailbox's prekey", "encrypt to one recipient only"
 	for _, c := range []struct {
 		name string
-		to   *client.Box
+		to   *client.Mailbox
 		rs   []age.Recipient
 		hint string
 	}{
-		{"a stanza of another type beside the box's own", classic, []age.Recipient{own(classic), otherRecipient{}}, another},
+		{"a stanza of another type beside the mailbox's own", classic, []age.Recipient{own(classic), otherRecipient{}}, another},
 		{"a stanza of another type alone", classic, []age.Recipient{otherRecipient{}}, another},
 		{"a stanza of another type and two native", classic, []age.Recipient{own(classic), stranger.Recipient(), otherRecipient{}}, another},
 		{"a stanza of another type and grease", classic, []age.Recipient{greaseRecipient{}, otherRecipient{}}, another},
 		{"grease alone", classic, []age.Recipient{greaseRecipient{}}, none},
 		{"two native", classic, []age.Recipient{own(classic), stranger.Recipient()}, two},
 		{"two native beside grease", classic, []age.Recipient{greaseRecipient{}, stranger.Recipient(), own(classic)}, two},
-		{"a post-quantum stanza to a --no-pq box", classic, []age.Recipient{hybrid.Recipient()}, "this box is --no-pq (X25519 only): re-fetch its prekey"},
-		{"an X25519 stanza to a post-quantum box", pq, []age.Recipient{stranger.Recipient()}, "this box needs age >= 1.3 or age-plugin-pq"},
+		{"a post-quantum stanza to a --no-pq mailbox", classic, []age.Recipient{hybrid.Recipient()}, "this mailbox is --no-pq (X25519 only): re-fetch its prekey"},
+		{"an X25519 stanza to a post-quantum mailbox", pq, []age.Recipient{stranger.Recipient()}, "this mailbox needs age >= 1.3 or age-plugin-pq"},
 	} {
 		var ct bytes.Buffer
 		w, err := age.Encrypt(&ct, c.rs...)
@@ -1276,7 +1276,7 @@ func TestPerIPLimits(t *testing.T) {
 	l := relaxed()
 	l.SendsPerMinutePerIP = 1
 	e := newEnv(t, l)
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	send(t, a, b, "1")
 	_, err := a.Send(context.Background(), b.Address(), "2")
 	var ae *client.APIError
@@ -1371,16 +1371,16 @@ func TestTheClientIsTheLastForwardedAddress(t *testing.T) {
 	}
 }
 
-// A send must name the box's current prekey serial, so after a renewal
-// (here one that switches type) no mail reaches the retired key: a send
+// A send must name the mailbox's current prekey serial, so after a renewal
+// (here one that switches type) no message reaches the retired key: a send
 // naming its serial is stale, and one naming the current serial but sealed
-// to the retired key's type is refused. The box may then delete the key.
+// to the retired key's type is refused. The mailbox may then delete the key.
 func TestSendNamesTheCurrentPrekey(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
-	a, b := e.box(protocol.Classic), e.box(protocol.Classic)
-	old, _ := e.store.Box(ctx, b.Address())
+	a, b := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
+	old, _ := e.store.Mailbox(ctx, b.Address())
 	oldRecipient, _ := old.Prekey.Recipient()
 	e.clock.Add(20 * 24 * time.Hour) // a renewal well before not_after
 	if p, err := b.Rekey(ctx, protocol.PostQuantum); err != nil || p.Type() != protocol.PostQuantum {
@@ -1404,10 +1404,10 @@ func TestSendNamesTheCurrentPrekey(t *testing.T) {
 	}
 }
 
-// A box renews its prekey RenewalsPerDay times at once, then is told to wait
+// A mailbox renews its prekey RenewalsPerDay times at once, then is told to wait
 // for the next, which comes back a day divided by that number later; an identical retry of the current statement
 // is not a renewal. Its record keeps only the RetiredKept newest retired
-// prekeys, so a box that renews often cannot grow it.
+// prekeys, so a mailbox that renews often cannot grow it.
 func TestRenewalLimits(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
@@ -1418,7 +1418,7 @@ func TestRenewalLimits(t *testing.T) {
 	l.RenewalsPerDay, l.CertificatesPerDay, l.RetiredKept = 3, 3, 2
 	e := newEnv(t, l)
 	ctx := context.Background()
-	b := e.box(protocol.Classic)
+	b := e.mailbox(protocol.Classic)
 	var renewed []*protocol.Prekey
 	for i := range 3 {
 		p, err := b.Rekey(ctx, "")
@@ -1432,7 +1432,7 @@ func TestRenewalLimits(t *testing.T) {
 	if !limitedBy(err, protocol.QuotaCertificates) || !errors.As(err, &ae) || ae.RetryAfter != 8*time.Hour || ae.Problem.Limit == nil || *ae.Problem.Limit != 3 {
 		t.Fatalf("a fourth renewal at once, of three a day: %v", err)
 	}
-	cur, _ := e.store.Box(ctx, b.Address())
+	cur, _ := e.store.Mailbox(ctx, b.Address())
 	e.want(e.do("PUT", "/v1/"+b.Address().String()+"/prekey", protocol.PrekeyRequest{Prekey: cur.Statement, PrekeySignature: cur.Signature}, e.pass(b)), 200, "")
 	if len(cur.Retired) != 2 {
 		t.Fatalf("the record keeps %d retired prekeys, want 2", len(cur.Retired))

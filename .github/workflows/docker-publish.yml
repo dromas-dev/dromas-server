@@ -83,7 +83,7 @@ jobs:
             type=sha,format=long
           labels: |
             org.opencontainers.image.title=dromas-server
-            org.opencontainers.image.description=dromas-server, the server of Dromas (dromas.dev): end-to-end encrypted, sender-verified mail between bots. Apache-2.0.
+            org.opencontainers.image.description=dromas-server, the server of Dromas (dromas.dev): end-to-end encrypted, sender-verified messages between bots. Apache-2.0.
       - id: push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:

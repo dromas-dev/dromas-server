@@ -13,13 +13,13 @@ import (
 )
 
 // index is what a process holds in memory so that a poll never leaves it
-// (ARCHITECTURE.md § Memory): for each box this
+// (ARCHITECTURE.md § Memory): for each mailbox this
 // process has used, its standing and one mark per live message.
 //
-// A box is loaded on its first use (ensure), from the tables, and kept
+// A mailbox is loaded on its first use (ensure), from the tables, and kept
 // current after that by this process's own writes and by the streams. A
-// change to a box memory does not hold is dropped, since its first use reads
-// it; a change that arrives while the box loads waits, and is applied after
+// change to a mailbox memory does not hold is dropped, since its first use reads
+// it; a change that arrives while the mailbox loads waits, and is applied after
 // the load, in order. Applying a change twice, or late, is harmless:
 // messages are a set keyed by (id, expiry), a count is the size of the set,
 // and a standing only moves to a newer record (version). A deletion, which
@@ -31,10 +31,10 @@ type index struct {
 }
 
 type indexShard struct {
-	mu    sync.Mutex
-	boxes map[protocol.Address]*boxMem
-	// wake holds, for each box a list is held on, the channel closed at
-	// the box's next change (changed).
+	mu        sync.Mutex
+	mailboxes map[protocol.Address]*mailboxMem
+	// wake holds, for each mailbox a list is held on, the channel closed at
+	// the mailbox's next change (changed).
 	wake map[protocol.Address]chan struct{}
 }
 
@@ -53,20 +53,20 @@ type mark struct {
 	n   uint8  // fetches of it this process has served, to 255: a second one is a repeat
 }
 
-// boxMem is one box in memory.
-type boxMem struct {
-	loading *boxLoad // set while the box's first load is in flight
-	exists  bool     // the box has a record
-	st      Standing // its record's, with Listed unset: standing judges it
-	// The record's version: when its box registered, in unix ms, and its
+// mailboxMem is one mailbox in memory.
+type mailboxMem struct {
+	loading *mailboxLoad // set while the mailbox's first load is in flight
+	exists  bool         // the mailbox has a record
+	st      Standing     // its record's, with Listed unset: standing judges it
+	// The record's version: when its mailbox registered, in unix ms, and its
 	// rev.
 	created, rev uint64
 	// What its identity revoked, from its revocations item: the address,
 	// and certificates through a serial (0: none). Neither is taken away.
 	revoked bool
 	through uint64
-	// stale is set when the record was deleted while the box loaded: the
-	// load may have read it before, so the box is dropped after it.
+	// stale is set when the record was deleted while the mailbox loaded: the
+	// load may have read it before, so the mailbox is dropped after it.
 	stale bool
 	marks []mark
 	// tombs are messages this process removed whose removal the stream has
@@ -75,18 +75,18 @@ type boxMem struct {
 	tombs []mark
 }
 
-// boxLoad is a box's first load: the changes that arrive meanwhile, and its
+// mailboxLoad is a mailbox's first load: the changes that arrive meanwhile, and its
 // outcome for the callers waiting on it.
-type boxLoad struct {
-	queued []func(*boxMem)
+type mailboxLoad struct {
+	queued []func(*mailboxMem)
 	done   chan struct{}
 	err    error
 }
 
-// boxRead is what a load reads of a box: whether it has a record, its
+// mailboxRead is what a load reads of a mailbox: whether it has a record, its
 // standing at its version (created, rev), what its identity revoked, and
 // its live messages.
-type boxRead struct {
+type mailboxRead struct {
 	exists  bool
 	st      Standing
 	created uint64
@@ -102,7 +102,7 @@ func newIndex() *index {
 	x := &index{}
 	_, _ = rand.Read(x.key[:])
 	for i := range x.shards {
-		x.shards[i].boxes = map[protocol.Address]*boxMem{}
+		x.shards[i].mailboxes = map[protocol.Address]*mailboxMem{}
 		x.shards[i].wake = map[protocol.Address]chan struct{}{}
 	}
 	return x
@@ -127,13 +127,13 @@ func (x *index) newMark(id [32]byte, exp uint64) mark {
 	return mark{tag: x.tagOf(id), id: prefix8(id[:]), exp: exp}
 }
 
-// ensure loads box a unless memory holds it. read runs once however many
-// callers ask at the same time; if it fails, the box stays unloaded and the
+// ensure loads mailbox a unless memory holds it. read runs once however many
+// callers ask at the same time; if it fails, the mailbox stays unloaded and the
 // next caller reads again.
-func (x *index) ensure(ctx context.Context, a protocol.Address, read func() (boxRead, error)) error {
+func (x *index) ensure(ctx context.Context, a protocol.Address, read func() (mailboxRead, error)) error {
 	sh := x.shard(a)
 	sh.mu.Lock()
-	if m := sh.boxes[a]; m != nil {
+	if m := sh.mailboxes[a]; m != nil {
 		l := m.loading
 		sh.mu.Unlock()
 		if l == nil {
@@ -146,15 +146,15 @@ func (x *index) ensure(ctx context.Context, a protocol.Address, read func() (box
 			return ctx.Err()
 		}
 	}
-	l := &boxLoad{done: make(chan struct{})}
-	m := &boxMem{loading: l}
-	sh.boxes[a] = m
+	l := &mailboxLoad{done: make(chan struct{})}
+	m := &mailboxMem{loading: l}
+	sh.mailboxes[a] = m
 	sh.mu.Unlock()
 
 	r, err := read()
 	sh.mu.Lock()
 	if err != nil {
-		delete(sh.boxes, a) // and its queued changes: the next read sees them
+		delete(sh.mailboxes, a) // and its queued changes: the next read sees them
 	} else {
 		m.exists, m.st, m.created, m.rev, m.marks = r.exists, r.st, r.created, r.rev, r.marks
 		m.revoked, m.through = r.revoked, r.through
@@ -163,7 +163,7 @@ func (x *index) ensure(ctx context.Context, a protocol.Address, read func() (box
 		}
 		m.loading = nil
 		if m.stale {
-			delete(sh.boxes, a) // its callers go on with what they waited for; the next use reads it again
+			delete(sh.mailboxes, a) // its callers go on with what they waited for; the next use reads it again
 		}
 	}
 	l.err = err
@@ -172,16 +172,16 @@ func (x *index) ensure(ctx context.Context, a protocol.Address, read func() (box
 	return err
 }
 
-// apply runs op on box a: now if memory holds it, after its load if it is
-// loading, and not at all if memory does not hold it. Every change to a box
+// apply runs op on mailbox a: now if memory holds it, after its load if it is
+// loading, and not at all if memory does not hold it. Every change to a mailbox
 // passes here, a write of this process's and one from the streams, so here
 // every list held on it is woken (changed).
-func (x *index) apply(a protocol.Address, op func(*boxMem)) {
+func (x *index) apply(a protocol.Address, op func(*mailboxMem)) {
 	sh := x.shard(a)
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
 	defer sh.woke(a)
-	switch m := sh.boxes[a]; {
+	switch m := sh.mailboxes[a]; {
 	case m == nil:
 	case m.loading != nil:
 		m.loading.queued = append(m.loading.queued, op)
@@ -190,8 +190,8 @@ func (x *index) apply(a protocol.Address, op func(*boxMem)) {
 	}
 }
 
-// changed returns a channel closed at box a's next change in memory: a
-// list held on it waits on it, taken before it reads the box, so no change
+// changed returns a channel closed at mailbox a's next change in memory: a
+// list held on it waits on it, taken before it reads the mailbox, so no change
 // is missed between the two (PROTOCOL.md §11.11).
 func (x *index) changed(a protocol.Address) <-chan struct{} {
 	sh := x.shard(a)
@@ -205,7 +205,7 @@ func (x *index) changed(a protocol.Address) <-chan struct{} {
 	return c
 }
 
-// woke wakes every list held on box a. The shard's lock is held.
+// woke wakes every list held on mailbox a. The shard's lock is held.
 func (sh *indexShard) woke(a protocol.Address) {
 	if c := sh.wake[a]; c != nil {
 		close(c)
@@ -213,9 +213,9 @@ func (sh *indexShard) woke(a protocol.Address) {
 	}
 }
 
-// held returns box a if memory holds it, loaded.
-func (sh *indexShard) held(a protocol.Address) *boxMem {
-	if m := sh.boxes[a]; m != nil && m.loading == nil {
+// held returns mailbox a if memory holds it, loaded.
+func (sh *indexShard) held(a protocol.Address) *mailboxMem {
+	if m := sh.mailboxes[a]; m != nil && m.loading == nil {
 		return m
 	}
 	return nil
@@ -223,7 +223,7 @@ func (sh *indexShard) held(a protocol.Address) *boxMem {
 
 // prune drops marks and tombs that have expired at now (unix ms): a message
 // is live while now < its expiry.
-func (m *boxMem) prune(now uint64) {
+func (m *mailboxMem) prune(now uint64) {
 	m.marks = slices.DeleteFunc(m.marks, func(k mark) bool { return k.exp <= now })
 	m.tombs = slices.DeleteFunc(m.tombs, func(k mark) bool { return k.exp <= now })
 }
@@ -232,8 +232,8 @@ func same(a, b mark) bool { return a.tag == b.tag && a.exp == b.exp }
 
 // insert adds a live message, from this process's write or the stream. A
 // message with a tomb stays removed.
-func (x *index) insert(box protocol.Address, k mark, now uint64) {
-	x.apply(box, func(m *boxMem) {
+func (x *index) insert(mailbox protocol.Address, k mark, now uint64) {
+	x.apply(mailbox, func(m *mailboxMem) {
 		if k.exp <= now {
 			return
 		}
@@ -248,8 +248,8 @@ func (x *index) insert(box protocol.Address, k mark, now uint64) {
 
 // remove removes a message. A removal by this process leaves a tomb until
 // the stream echoes it (echo true) or the message would have expired.
-func (x *index) remove(box protocol.Address, tag, exp, now uint64, echo bool) {
-	x.apply(box, func(m *boxMem) {
+func (x *index) remove(mailbox protocol.Address, tag, exp, now uint64, echo bool) {
+	x.apply(mailbox, func(m *mailboxMem) {
 		m.prune(now)
 		k := mark{tag: tag, exp: exp}
 		m.marks = slices.DeleteFunc(m.marks, func(t mark) bool { return same(t, k) })
@@ -264,19 +264,19 @@ func (x *index) remove(box protocol.Address, tag, exp, now uint64, echo bool) {
 
 // deleted removes a message whose item the stream says was deleted, which
 // names its id and not its expiry: of the marks and tombs of its tag, the one
-// of the earliest expiry. A box holds one item of an id at a time, and the
+// of the earliest expiry. A mailbox holds one item of an id at a time, and the
 // stream brings an item's changes in order, so that is the message whose item
 // went; a tomb is this process's own removal of it, echoed. It reads wrong
 // where this process holds a later message of the same bytes when the
-// deletion arrives, one it stored or one its load of the box read, after an
+// deletion arrives, one it stored or one its load of the mailbox read, after an
 // ack or the expiry of the first (dromas-dev/dromas-client#548 items 9,
-// 10): a mark it takes leaves the box counted one short, and a list held on
+// 10): a mark it takes leaves the mailbox counted one short, and a list held on
 // it answered an empty page, until the stream's insert of that message
 // brings the mark back; a tomb it takes, of the later message this process
 // acked, lets that insert count a message that is gone, until its own
 // deletion arrives.
-func (x *index) deleted(box protocol.Address, tag, now uint64) {
-	x.apply(box, func(m *boxMem) {
+func (x *index) deleted(mailbox protocol.Address, tag, now uint64) {
+	x.apply(mailbox, func(m *mailboxMem) {
 		m.prune(now)
 		first := func(ks []mark) int {
 			i := -1
@@ -297,12 +297,12 @@ func (x *index) deleted(box protocol.Address, tag, now uint64) {
 	})
 }
 
-// count returns the number of live messages in a box.
-func (x *index) count(box protocol.Address, now uint64) int {
-	sh := x.shard(box)
+// count returns the number of live messages in a mailbox.
+func (x *index) count(mailbox protocol.Address, now uint64) int {
+	sh := x.shard(mailbox)
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
-	m := sh.held(box)
+	m := sh.held(mailbox)
 	if m == nil {
 		return 0
 	}
@@ -310,15 +310,15 @@ func (x *index) count(box protocol.Address, now uint64) int {
 	return len(m.marks)
 }
 
-// nextExpiry returns the earliest expiry (unix ms) of a box's marks, or 0
-// for a box with none or not loaded. It prunes nothing: a mark that expired
-// since the box was last read is a change its reader has not seen, so its
+// nextExpiry returns the earliest expiry (unix ms) of a mailbox's marks, or 0
+// for a mailbox with none or not loaded. It prunes nothing: a mark that expired
+// since the mailbox was last read is a change its reader has not seen, so its
 // expiry, now past, is returned.
-func (x *index) nextExpiry(box protocol.Address) uint64 {
-	sh := x.shard(box)
+func (x *index) nextExpiry(mailbox protocol.Address) uint64 {
+	sh := x.shard(mailbox)
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
-	m := sh.held(box)
+	m := sh.held(mailbox)
 	if m == nil {
 		return 0
 	}
@@ -331,13 +331,13 @@ func (x *index) nextExpiry(box protocol.Address) uint64 {
 	return first
 }
 
-// after returns how many live messages a box holds past a list position: the
+// after returns how many live messages a mailbox holds past a list position: the
 // list is oldest first, by receipt time (so by expiry) and then id.
-func (x *index) after(box protocol.Address, exp, id, now uint64) (n int) {
-	sh := x.shard(box)
+func (x *index) after(mailbox protocol.Address, exp, id, now uint64) (n int) {
+	sh := x.shard(mailbox)
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
-	m := sh.held(box)
+	m := sh.held(mailbox)
 	if m == nil {
 		return 0
 	}
@@ -350,12 +350,12 @@ func (x *index) after(box protocol.Address, exp, id, now uint64) (n int) {
 	return n
 }
 
-// holds reports whether a box holds a live message of this tag.
-func (x *index) holds(box protocol.Address, tag, now uint64) bool {
-	sh := x.shard(box)
+// holds reports whether a mailbox holds a live message of this tag.
+func (x *index) holds(mailbox protocol.Address, tag, now uint64) bool {
+	sh := x.shard(mailbox)
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
-	m := sh.held(box)
+	m := sh.held(mailbox)
 	if m == nil {
 		return false
 	}
@@ -365,11 +365,11 @@ func (x *index) holds(box protocol.Address, tag, now uint64) bool {
 
 // fetched is holds for a fetch: it also reports whether this process has
 // served the message before, and counts this serving.
-func (x *index) fetched(box protocol.Address, tag, now uint64) (held, again bool) {
-	sh := x.shard(box)
+func (x *index) fetched(mailbox protocol.Address, tag, now uint64) (held, again bool) {
+	sh := x.shard(mailbox)
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
-	m := sh.held(box)
+	m := sh.held(mailbox)
 	if m == nil {
 		return false, false
 	}
@@ -386,10 +386,10 @@ func (x *index) fetched(box protocol.Address, tag, now uint64) (held, again bool
 	return false, false
 }
 
-// setStanding records a box's standing, of a record at version v, unless
+// setStanding records a mailbox's standing, of a record at version v, unless
 // memory holds a newer record's.
 func (x *index) setStanding(a protocol.Address, st Standing, v version) {
-	x.apply(a, func(m *boxMem) {
+	x.apply(a, func(m *mailboxMem) {
 		if (version{m.created, m.rev}).after(v) {
 			return
 		}
@@ -400,29 +400,29 @@ func (x *index) setStanding(a protocol.Address, st Standing, v version) {
 // setRevocations records what an address's identity revoked, adding to
 // what memory holds: nothing it revoked is taken away.
 func (x *index) setRevocations(a protocol.Address, revoked bool, through uint64) {
-	x.apply(a, func(m *boxMem) {
+	x.apply(a, func(m *mailboxMem) {
 		m.revoked = m.revoked || revoked
 		m.through = max(m.through, through)
 	})
 }
 
-// forget drops box a from memory, whose record was deleted: its next use
+// forget drops mailbox a from memory, whose record was deleted: its next use
 // reads it again. One loading is dropped once its load is done.
 func (x *index) forget(a protocol.Address) {
 	sh := x.shard(a)
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
 	defer sh.woke(a)
-	switch m := sh.boxes[a]; {
+	switch m := sh.mailboxes[a]; {
 	case m == nil:
 	case m.loading != nil:
 		m.stale = true
 	default:
-		delete(sh.boxes, a)
+		delete(sh.mailboxes, a)
 	}
 }
 
-// standing returns a loaded box's standing, and whether it has one: a
+// standing returns a loaded mailbox's standing, and whether it has one: a
 // revoked address has, whether or not a record is left, and an address with
 // no record has none.
 func (x *index) standing(a protocol.Address) (Standing, bool) {

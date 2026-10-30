@@ -33,7 +33,7 @@ func ciphertextTo(t *testing.T, r *raw) []byte {
 	return ct.Bytes()
 }
 
-// holding is a box holding one message, and the message's path.
+// holding is a mailbox holding one message, and the message's path.
 func holding(e *env) (*raw, string) {
 	e.t.Helper()
 	from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
@@ -82,15 +82,15 @@ func TestEveryRouteEvaluatesItsPreconditions(t *testing.T) {
 		// route did nothing.
 		unchanged func(e *env, c call)
 	}{
-		{name: "the read of a box", exists: true, ok: 200, setup: func(e *env) call {
+		{name: "the read of a mailbox", exists: true, ok: 200, setup: func(e *env) call {
 			r := e.raw().register(protocol.MaxPrekeyLifetime)
 			return call{"GET", r.path(""), nil, ""}
 		}},
-		{name: "a registration, of a box registered: its identical retry", exists: true, ok: 200, setup: func(e *env) call {
+		{name: "a registration, of a mailbox registered: its identical retry", exists: true, ok: 200, setup: func(e *env) call {
 			r := e.raw().register(protocol.MaxPrekeyLifetime)
 			return call{"PUT", r.path(""), r.registration(1), r.pass(1)}
 		}},
-		{name: "a registration, of a box not registered", exists: false, ok: 201, setup: func(e *env) call {
+		{name: "a registration, of a mailbox not registered", exists: false, ok: 201, setup: func(e *env) call {
 			r := e.raw()
 			r.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 			return call{"PUT", r.path(""), r.registration(1), r.pass(1)}
@@ -107,7 +107,7 @@ func TestEveryRouteEvaluatesItsPreconditions(t *testing.T) {
 			return call{"PUT", r.path("/prekey"), r.upload(2), r.pass(2)}
 		}, unchanged: func(e *env, c call) {
 			if _, cert := e.numbers(addressAt(e.t, c.path)); cert != 1 {
-				e.t.Fatalf("the box moved to certificate %d", cert)
+				e.t.Fatalf("the mailbox moved to certificate %d", cert)
 			}
 		}},
 		{name: "the read of the revocations held", exists: true, ok: 200, setup: func(e *env) call {
@@ -149,30 +149,30 @@ func TestEveryRouteEvaluatesItsPreconditions(t *testing.T) {
 			e.want(e.do("PUT", r.path("/acl"), open, r.pass(1)), http.StatusOK, "")
 			return call{"GET", r.path("/acl"), nil, r.pass(1)}
 		}},
-		{name: "an adopt, of a box in an account", exists: true, ok: 200, setup: func(e *env) call {
+		{name: "an adopt, of a mailbox in an account", exists: true, ok: 200, setup: func(e *env) call {
 			r := e.raw().register(protocol.MaxPrekeyLifetime)
 			key := inAccount(e, r, 1)
 			return call{"PUT", r.path("/account"), protocol.AdoptRequest{Key: key}, r.pass(1)}
 		}},
-		{name: "an adopt, of a box in none", exists: false, ok: 200, setup: func(e *env) call {
+		{name: "an adopt, of a mailbox in none", exists: false, ok: 200, setup: func(e *env) call {
 			r := e.raw().register(protocol.MaxPrekeyLifetime)
 			_, key := accountEnv(e.t, e, false, 1)
 			return call{"PUT", r.path("/account"), protocol.AdoptRequest{Key: key}, r.pass(1)}
 		}, unchanged: func(e *env, c call) {
 			if a := accountAt(e, c.path); a != "" {
-				e.t.Fatalf("the box joined account %s", a)
+				e.t.Fatalf("the mailbox joined account %s", a)
 			}
 		}},
-		{name: "a leave, of a box in an account", exists: true, ok: 204, setup: func(e *env) call {
+		{name: "a leave, of a mailbox in an account", exists: true, ok: 204, setup: func(e *env) call {
 			r := e.raw().register(protocol.MaxPrekeyLifetime)
 			inAccount(e, r, 0)
 			return call{"DELETE", r.path("/account"), nil, r.pass(1)}
 		}, unchanged: func(e *env, c call) {
 			if accountAt(e, c.path) == "" {
-				e.t.Fatal("the box left its account")
+				e.t.Fatal("the mailbox left its account")
 			}
 		}},
-		{name: "a leave, of a box in none", exists: false, ok: 204, setup: func(e *env) call {
+		{name: "a leave, of a mailbox in none", exists: false, ok: 204, setup: func(e *env) call {
 			r := e.raw().register(protocol.MaxPrekeyLifetime)
 			return call{"DELETE", r.path("/account"), nil, r.pass(1)}
 		}},
@@ -181,7 +181,7 @@ func TestEveryRouteEvaluatesItsPreconditions(t *testing.T) {
 			return call{"POST", to.path("/messages"), sealedTo(1, 1, ciphertextTo(e.t, to)), from.pass(1)}
 		}, unchanged: func(e *env, c call) {
 			if n, err := e.store.Count(e.t.Context(), addressAt(e.t, c.path)); err != nil || n != 0 {
-				e.t.Fatalf("the box holds %d: %v", n, err)
+				e.t.Fatalf("the mailbox holds %d: %v", n, err)
 			}
 		}},
 		{name: "a list", exists: true, ok: 200, setup: func(e *env) call {
@@ -192,7 +192,7 @@ func TestEveryRouteEvaluatesItsPreconditions(t *testing.T) {
 			to, path := holding(e)
 			return call{"GET", path, nil, to.pass(1)}
 		}, unchanged: func(e *env, c call) {
-			// The one token of new mail taken out is still there: the fetch
+			// The one token of new messages taken out is still there: the fetch
 			// was not counted.
 			e.want(e.do("GET", c.path, nil, c.pass), http.StatusOK, "")
 		}},
@@ -241,12 +241,12 @@ func TestEveryRouteEvaluatesItsPreconditions(t *testing.T) {
 	}
 }
 
-// accountAt is the account of the box whose path p is.
+// accountAt is the account of the mailbox whose path p is.
 func accountAt(e *env, p string) string {
 	e.t.Helper()
-	b, err := e.store.Box(e.t.Context(), addressAt(e.t, p))
+	b, err := e.store.Mailbox(e.t.Context(), addressAt(e.t, p))
 	if err != nil || b == nil {
-		e.t.Fatalf("the box at %s: %v", p, err)
+		e.t.Fatalf("the mailbox at %s: %v", p, err)
 	}
 	return b.Account
 }
@@ -262,7 +262,7 @@ func addressAt(t *testing.T, p string) protocol.Address {
 }
 
 // A precondition is ignored where the answer without it would not be 2xx or
-// 412 (RFC 9110 §13.2.1): a call refused for its pass, of a box that does
+// 412 (RFC 9110 §13.2.1): a call refused for its pass, of a mailbox that does
 // not exist, or with a body its route refuses before it reads its target,
 // is answered as it is without one, a false If-Match or If-None-Match: *
 // among them.
@@ -286,10 +286,10 @@ func TestAPreconditionIsIgnoredWhereTheAnswerWouldBeARefusal(t *testing.T) {
 		code   protocol.Code
 	}{
 		{"the ACL with no pass", call{"GET", r.path("/acl"), nil, ""}, 401, protocol.CodeUnauthorized},
-		{"the ACL with another box's pass", call{"PUT", r.path("/acl"), aclOf([]string{"*"}, []string{}), other.pass(1)}, 401, protocol.CodeUnauthorized},
+		{"the ACL with another mailbox's pass", call{"PUT", r.path("/acl"), aclOf([]string{"*"}, []string{}), other.pass(1)}, 401, protocol.CodeUnauthorized},
 		{"a send with no pass", call{"POST", r.path("/messages"), sealedTo(1, 1, ciphertextTo(t, r)), ""}, 401, protocol.CodeUnauthorized},
-		{"the read of no box", call{"GET", nobody.path(""), nil, ""}, 404, protocol.CodeNoSuchMailbox},
-		{"a renewal of no box", call{"PUT", nobody.path("/prekey"), nobody.upload(1), nobody.pass(1)}, 404, protocol.CodeNoSuchMailbox},
+		{"the read of no mailbox", call{"GET", nobody.path(""), nil, ""}, 404, protocol.CodeNoSuchMailbox},
+		{"a renewal of no mailbox", call{"PUT", nobody.path("/prekey"), nobody.upload(1), nobody.pass(1)}, 404, protocol.CodeNoSuchMailbox},
 		{"the revocations of an address with none", call{"GET", r.path("/revocations"), nil, ""}, 404, protocol.CodeNotRevoked},
 		{"a revocation of a revoked address", call{"PUT", gone.path("/revocations"), gone.certs(1), ""}, 410, protocol.CodeRevoked},
 		{"a registration whose body is not JSON", call{"PUT", nobody.path(""), []byte(`not json`), nobody.pass(1)}, 400, protocol.CodeBadRequest},
