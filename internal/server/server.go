@@ -713,14 +713,14 @@ func (p *pacedWriter) Write(b []byte) (int, error) {
 // Unwrap lets http.ResponseController reach the connection.
 func (p *pacedWriter) Unwrap() http.ResponseWriter { return p.ResponseWriter }
 
-// pathAddr reads the address in the URL path, 64 characters of unpadded
-// base64url: one mailbox has one URL, so any other form, base64's own
-// alphabet among them, is no address. Then it holds the query to params, the parameters the call takes
+// pathAddr reads the address in the URL path, 77 characters of lowercase
+// base32: one mailbox has one URL, so any other form, uppercase among them, is
+// no address. Then it holds the query to params, the parameters the call takes
 // (queryOf).
 func pathAddr(r *http.Request, params ...string) (protocol.Address, error) {
 	a, err := protocol.ParseAddress(r.PathValue("addr"))
 	if err != nil {
-		return a, fail(protocol.CodeBadAddress, "an address is 64 characters of unpadded base64url", "the path does not name an address")
+		return a, fail(protocol.CodeBadAddress, "an address is 77 characters of lowercase base32", "the path does not name an address")
 	}
 	if _, err := queryOf(r, params...); err != nil {
 		return a, err
@@ -1157,26 +1157,25 @@ func pathID(r *http.Request) ([32]byte, error) {
 	return id, err
 }
 
-// nameRun is a run of 64 or more characters of base64url's alphabet: every
-// address, and every message id, whose hex is of that alphabet too, wherever
-// a log line holds one.
-var nameRun = regexp.MustCompile(`[A-Za-z0-9_-]{64,}`)
+// nameRun is a run of 64 or more letters and digits, in either case: every
+// address (77 of lowercase base32) and message id (64 hex), wherever a log
+// line holds one.
+var nameRun = regexp.MustCompile(`[0-9A-Za-z]{64,}`)
 
-// redact replaces each run of 64 or more characters of base64url's alphabet
-// in a log line with "#" and the first 16 hex characters of the SHA-256 of
-// the run, a name only someone already holding the run can match: no log
-// line carries an address or a message id, in a path, a store's error or
+// redact replaces each run of 64 or more letters and digits in a log line with
+// "#" and the first 16 hex characters of the SHA-256 of the run in lower
+// case, a name only someone already holding the run can match: no log line
+// carries an address or a message id, in a path, a store's error or
 // anywhere else (dromas-dev/dromas-server#9).
 func redact(line []byte) []byte {
 	return nameRun.ReplaceAllFunc(line, func(run []byte) []byte { return []byte(logName(run)) })
 }
 
 // logName is the name a log gives a value it never writes: "#" and the first
-// 16 hex characters of the SHA-256 of the value, the name redact gives a run.
-// The value is hashed as it is: a letter of an address in the other case is
-// another address.
+// 16 hex characters of the SHA-256 of the value in lower case, the name
+// redact gives a run.
 func logName(v []byte) string {
-	h := sha256.Sum256(v)
+	h := sha256.Sum256([]byte(protocol.LowerASCII(string(v))))
 	return "#" + hex.EncodeToString(h[:8])
 }
 

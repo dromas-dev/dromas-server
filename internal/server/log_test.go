@@ -61,7 +61,7 @@ func (s deadS3) PutMessage(ctx context.Context, mailbox protocol.Address, h *Hea
 // No line the server logs carries an address or a message id
 // (dromas-dev/dromas-server#9, SECURITY.md): not a store's
 // error, whose text holds a request's URL, not a real S3 client's, and not
-// a path that holds one inside a longer segment. A line
+// a path that holds one inside a longer segment or in capitals. A line
 // about the mailbox names it by the name redact gives it, so the store's error
 // and the access line of its read match; a path's segment that is not the
 // address is named as a whole (loggedPath), the address inside it unseen.
@@ -73,11 +73,11 @@ func TestNoLogLineCarriesAnAddress(t *testing.T) {
 	id := strings.Repeat("ef", 32)
 	s := New(Config{Store: errorWithURL{NewMemStore(time.Now), a, id}, Limits: relaxed(), Now: time.Now, Log: log.New(&logged, "", 0)})
 	h := apitest.Handler(t, s.Handler())
-	for _, p := range []string{"/v1/" + a.String(), "/v1/" + a.String() + "x", "/v1/x" + a.String()} { // the last two runs of 65, each named as one
+	for _, p := range []string{"/v1/" + a.String(), "/v1/" + a.String() + "x", "/v1/x" + strings.ToUpper(a.String())} {
 		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, p, nil))
 	}
 	name := string(redact([]byte(a.String())))
-	if lines := strings.Count(logged.String(), name); strings.Contains(logged.String(), a.String()) || strings.Contains(strings.ToLower(logged.String()), id) || lines != 2 {
+	if lines := strings.Count(logged.String(), name); strings.Contains(strings.ToLower(logged.String()), a.String()) || strings.Contains(strings.ToLower(logged.String()), id) || lines != 2 {
 		t.Errorf("the log names the mailbox %d times, and holds it or the id in the clear:\n%s", lines, logged.String())
 	}
 
@@ -165,7 +165,7 @@ func TestTheAccessLogWritesWhatTheRoutersMatched(t *testing.T) {
 		{"GET", forged, fmt.Sprintf("GET (a path of %d bytes) 404 ", len(forged))},
 		{"GET", "/v1/" + a.String() + "/messages/" + id, "GET /v1/" + mailbox + "/messages/" + logName([]byte(id)) + " "},
 		{"GET", "/v1/" + a.String()[:20] + "%" + fmt.Sprintf("%02x", a.String()[20]) + a.String()[21:] + "/messages", "GET /v1/" + mailbox + "/messages "},
-		{"GET", "/v1/" + strings.ToUpper(a.String()) + "/acl", "GET /v1/" + logName([]byte(strings.ToUpper(a.String()))) + "/acl "}, // another address, so another name
+		{"GET", "/v1/" + strings.ToUpper(a.String()) + "/acl", "GET /v1/" + mailbox + "/acl "},
 		{"GET", "/v1/%2e%2e/x", "GET (a path of 12 bytes) 404 "},
 		{"GET", "/v1/x%2Fy", "GET /v1/" + logName([]byte("x/y")) + " "},
 		{"GET", "/v1/%41", "GET /v1/" + logName([]byte("A")) + " "},
@@ -180,9 +180,9 @@ func TestTheAccessLogWritesWhatTheRoutersMatched(t *testing.T) {
 		{"UPDATEREDIRECTREFS", "/v1/x", "(a method of 18 bytes) (a path of 5 bytes) 405 "},
 		{strings.Repeat("ABCDEF", 11), "/v1/x", "(a method of 66 bytes) (a path of 5 bytes) 405 "},
 		{strings.Repeat("FACADE", 11) + "-" + strings.Repeat("DECADE", 11), "/v1/x", "(a method of 133 bytes) (a path of 5 bytes) 405 "},
-		{a.String()[:32] + "-" + a.String()[32:], "/v1/x", "(a method of 65 bytes) (a path of 5 bytes) 405 "},
-		{a.String()[:32] + "." + a.String()[32:], "/v1/x", "(a method of 65 bytes) (a path of 5 bytes) 405 "},
-		{a.String()[:32] + "_" + a.String()[32:], "/v1/x", "(a method of 65 bytes) (a path of 5 bytes) 405 "},
+		{a.String()[:32] + "-" + a.String()[32:], "/v1/x", fmt.Sprintf("(a method of %d bytes) (a path of 5 bytes) 405 ", protocol.AddressLen+1)},
+		{a.String()[:32] + "." + a.String()[32:], "/v1/x", fmt.Sprintf("(a method of %d bytes) (a path of 5 bytes) 405 ", protocol.AddressLen+1)},
+		{a.String()[:32] + "_" + a.String()[32:], "/v1/x", fmt.Sprintf("(a method of %d bytes) (a path of 5 bytes) 405 ", protocol.AddressLen+1)},
 		{a.String()[:63], "/v1/x", "(a method of 63 bytes) (a path of 5 bytes) 405 "},
 		{mailbox, "/v1/x", "(a method of 17 bytes) (a path of 5 bytes) 405 "},
 		{"get", "/v1/x", "(a method of 3 bytes) (a path of 5 bytes) 405 "},

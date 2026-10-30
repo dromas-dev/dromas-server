@@ -69,7 +69,7 @@ func TestACLRoute(t *testing.T) {
 	b, other := e.mailbox(protocol.Classic), e.mailbox(protocol.Classic)
 	path := "/v1/" + b.Address().String() + "/acl"
 	pass := e.pass(b)
-	x, y := other.Address().String(), strings.Repeat("ab", 32)
+	x, y := other.Address().String(), strings.Repeat("ab", 38)+"a"
 	const open = `{"allow":["*"],"deny":[]}`
 
 	// The mailbox's own pass, and only that.
@@ -86,13 +86,13 @@ func TestACLRoute(t *testing.T) {
 	}
 
 	for name, body := range map[string]any{
-		"no allow list":     []byte(`{"deny":[]}`),
-		"allow null":        []byte(`{"allow":null}`),
-		"a version":         []byte(`{"version":1,"allow":["*"]}`),
-		"a base64 entry":    aclOf([]string{"+" + y[1:]}, nil), // base64's alphabet, not base64url's
-		"a partial pattern": aclOf([]string{"*" + y[1:]}, nil),
-		"a member it lacks": []byte(`{"allow":["*"],"block":[]}`),
-		"not JSON":          []byte(`allow everyone`),
+		"no allow list":      []byte(`{"deny":[]}`),
+		"allow null":         []byte(`{"allow":null}`),
+		"a version":          []byte(`{"version":1,"allow":["*"]}`),
+		"an uppercase entry": aclOf([]string{strings.ToUpper(y)}, nil),
+		"a partial pattern":  aclOf([]string{"*" + y[1:]}, nil),
+		"a member it lacks":  []byte(`{"allow":["*"],"block":[]}`),
+		"not JSON":           []byte(`allow everyone`),
 	} {
 		if r := e.do("PUT", path, body, pass); r.status != 400 || r.code() != protocol.CodeBadRequest {
 			t.Errorf("%s: %d %s, want 400 %s: %s", name, r.status, r.code(), protocol.CodeBadRequest, r.body)
@@ -120,7 +120,12 @@ func TestACLRoute(t *testing.T) {
 	// no tag; a GET then answers the tag of that form.
 	put := e.do("PUT", path, aclOf([]string{y, x, y}, []string{}), pass)
 	e.want(put, 200, "")
-	lo, hi := min(x, y), max(x, y)
+	xa, _ := protocol.ParseAddress(x)
+	ya, _ := protocol.ParseAddress(y)
+	lo, hi := x, y // in the order of their 48 bytes, which their text's is not
+	if bytes.Compare(xa[:], ya[:]) > 0 {
+		lo, hi = y, x
+	}
 	want := `{"allow":["` + lo + `","` + hi + `"],"deny":[]}`
 	if string(bytes.TrimSpace(put.body)) != want || put.header.Values("ETag") != nil {
 		t.Fatalf("PUT answered %s with ETag %q, want %s and none", put.body, put.header.Values("ETag"), want)

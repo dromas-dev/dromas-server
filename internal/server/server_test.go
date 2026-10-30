@@ -699,31 +699,30 @@ func TestOwnerCalls(t *testing.T) {
 	e.want(e.do("GET", r.path("/messages"), nil, ahead), 200, "")
 }
 
-// An address in a path is 64 characters of unpadded base64url, so a mailbox
-// has one URL: the same address in base64's alphabet is no address, on every
-// route that names one, whoever calls, and with a letter in the other case it
-// is another address (PROTOCOL.md §2.2, §4.2).
-func TestAnAddressInAPathIsBase64url(t *testing.T) {
+// An address in a path is 77 characters of lowercase base32, so a mailbox has one URL:
+// the same address in uppercase is no address, on every route that names
+// one, whoever calls (PROTOCOL.md §2.2).
+func TestAnAddressInAPathIsLowercase(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	pass := r.pass(1)
-	addr := r.id.Address().String()
-	std := "/v1/+" + addr[1:] // + is base64's 62nd character, - is base64url's
+	upper := "/v1/" + strings.ToUpper(r.id.Address().String())
+	lower := r.id.Address().String()
+	i := strings.IndexAny(lower, "abcdef") // one letter in uppercase
+	mixed := "/v1/" + lower[:i] + strings.ToUpper(lower[i:i+1]) + lower[i+1:]
 	for _, c := range []struct{ method, path, pass string }{
-		{"GET", std, ""},
-		{"GET", std + "/messages", pass},
-		{"GET", std + "/messages/" + strings.Repeat("a", 64), pass},
-		{"DELETE", std + "/messages/" + strings.Repeat("a", 64), pass},
-		{"GET", std + "/acl", pass},
-		{"DELETE", std + "/account", pass},
+		{"GET", upper, ""},
+		{"GET", mixed, ""},
+		{"GET", upper + "/messages", pass},
+		{"GET", upper + "/messages/" + strings.Repeat("a", 64), pass},
+		{"DELETE", upper + "/messages/" + strings.Repeat("a", 64), pass},
+		{"GET", upper + "/acl", pass},
+		{"DELETE", upper + "/account", pass},
 	} {
 		e.want(e.do(c.method, c.path, nil, c.pass), 400, protocol.CodeBadAddress)
 	}
-	e.want(e.do("PUT", std+"/prekey", r.upload(1), pass), 400, protocol.CodeBadAddress)
-	i := strings.IndexAny(addr, "abcdefghijklmnopqrstuvwxyz")
-	other := addr[:i] + strings.ToUpper(addr[i:i+1]) + addr[i+1:]
-	e.want(e.do("GET", "/v1/"+other, nil, ""), 404, protocol.CodeNoSuchMailbox)
+	e.want(e.do("PUT", upper+"/prekey", r.upload(1), pass), 400, protocol.CodeBadAddress)
 	e.want(e.do("GET", r.path(""), nil, ""), 200, "")
 	e.want(e.do("GET", r.path("/messages"), nil, pass), 200, "")
 }
@@ -1011,7 +1010,7 @@ func TestSendPipeline(t *testing.T) {
 	// named in member. The sender is the mailbox the pass names, so the query
 	// names none.
 	e.want(e.do("POST", "/v1/nope/messages?x=1", ok.ciphertext, pass), 400, protocol.CodeBadAddress)
-	e.want(e.do("POST", "/v1/+"+b.Address().String()[1:]+"/messages", ok, pass), 400, protocol.CodeBadAddress)
+	e.want(e.do("POST", "/v1/"+strings.ToUpper(b.Address().String())+"/messages", ok, pass), 400, protocol.CodeBadAddress)
 	serials := ok.Encode()
 	for query, member := range map[string]string{
 		"":                                                    protocol.PrekeySerialParam,
