@@ -66,7 +66,8 @@ type Limits struct {
 	// headers, that the server reads (http.Server.MaxHeaderBytes): what the
 	// longest call needs, a pass of protocol.MaxPassAuthorization bytes
 	// with the request line and the other headers a client and a proxy in
-	// front of it send, and no more (decided: 8 KiB, least need).
+	// front of it send, and no more (decided: least need). Its default
+	// follows the longest pass (headBytes).
 	// A head is read before any count, since the address a call is counted
 	// by may be one of its headers (LIMITS.md, rule 1).
 	HeadBytes int
@@ -105,7 +106,7 @@ func DefaultLimits() Limits {
 		ACLEntries:                   500,
 		BodyTimeout:                  20 * time.Second,
 		BodyMinRate:                  500,
-		HeadBytes:                    8 << 10,
+		HeadBytes:                    headBytes(),
 		HeadTimeout:                  10 * time.Second,
 	}
 }
@@ -398,4 +399,18 @@ func hostAddr(host string) (netip.Addr, bool) {
 		return netip.Addr{}, false
 	}
 	return ip.Unmap().WithZone(""), true
+}
+
+// headBytes is the head the longest call needs: a pass as long as one can be,
+// with 2 KiB for its request line and the other headers a client and a proxy
+// in front of it send, rounded up to a power of two. A pass is as long as
+// the largest signature bound of any identity key type the client defines,
+// so a type with a larger bound raises it with the client release that
+// defines that type.
+func headBytes() int {
+	n := 1 << 10
+	for n < protocol.MaxPassAuthorization+2<<10 {
+		n <<= 1
+	}
+	return n
 }
