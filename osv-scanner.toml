@@ -1,0 +1,6 @@
+# OSV-Scanner's configuration, read beside go.mod by OSV-Scanner and by
+# OpenSSF Scorecard's Vulnerabilities check, which runs it.
+
+[[IgnoredVulns]]
+id = "GO-2026-5932"
+reason = "Matches every version of golang.org/x/crypto, by import path, with no fixed version. This module imports none of the golang.org/x/crypto/openpgp packages it names, only golang.org/x/crypto/ssh; govulncheck, which checks the packages imported and the symbols called, reports nothing reachable."
