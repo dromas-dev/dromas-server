@@ -647,14 +647,14 @@ func TestARegistrationOfARegisteredMailboxIsAnsweredFromItsRecordFirst(t *testin
 			c := e.raw()
 			c.prekey(5, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 			c.certify(1)
-			e.want(e.do("PUT", c.path(""), c.registration(5), c.pass(1)), 401, protocol.CodeCertificateNotCurrent)
+			e.want(e.do("PUT", c.path(""), c.registration(5), e.passFor(c.work[1], c.id.Address(), e.name())), 401, protocol.CodeCertificateNotCurrent)
 			bad := c.registration(5)
 			bad.PrekeySignature = c.sig[1]
 			e.want(e.do("PUT", c.path(""), bad, c.pass(5)), 400, protocol.CodeBadKey)
 
 			r := at3(e)
 			r.prekey(5, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
-			for what, pass := range map[string]string{"no pass": "", "a pass under certificate 1": r.pass(1), "a pass under its certificate": r.pass(5)} {
+			for what, pass := range map[string]string{"no pass": "", "a pass under certificate 2": r.pass(2), "a pass under its certificate": r.pass(5)} {
 				if got := e.do("PUT", r.path(""), r.registration(5), pass); got.status != 409 || got.code() != protocol.CodeConflict {
 					t.Errorf("another statement, %s: %d %s, want 409 conflict", what, got.status, got.body)
 				}

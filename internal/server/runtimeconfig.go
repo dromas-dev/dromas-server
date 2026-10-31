@@ -127,24 +127,28 @@ const versionPolicyFile = "version-policy"
 // l among it, held to the document's form (protocol.ServerDocument.Check).
 // Its errors name a member at most, never a value.
 func ParseVersionPolicy(b []byte, l Limits) (protocol.ServerDocument, error) {
-	var d protocol.ServerDocument
-	if err := protocol.UnmarshalRequest(b, &d); err != nil {
+	var p versionPolicy
+	if err := protocol.UnmarshalRequest(b, &p); err != nil {
 		if m := protocol.Member(err); m != "" {
 			return protocol.ServerDocument{}, fmt.Errorf("its member %q is not one a version policy takes, or not of its form", m)
 		}
 		return protocol.ServerDocument{}, errors.New("it is not a JSON object of a version policy's form")
 	}
-	if d.Capabilities != nil {
-		return protocol.ServerDocument{}, errors.New(`its member "capabilities" is the server's own, not a version policy's`)
-	}
-	if d.MaxCertificateLifetime != 0 {
-		return protocol.ServerDocument{}, errors.New(`its member "max_certificate_lifetime" is the server's own setting (--max-certificate-lifetime), not a version policy's`)
-	}
-	d = policyOf(d, l)
+	d := policyOf(protocol.ServerDocument{MinVersion: p.MinVersion, LatestVersion: p.LatestVersion, Deprecations: p.Deprecations, Sunsets: p.Sunsets}, l)
 	if err := d.Check(); err != nil {
 		return protocol.ServerDocument{}, fmt.Errorf("its member %q breaks the server's document (PROTOCOL.md §11.17, §11.18)", protocol.Member(err))
 	}
 	return d, nil
+}
+
+// versionPolicy is a version policy file: the server's document but for
+// the members that are the server's own, its capabilities and the longest
+// certificate it takes, which a file naming either is refused for.
+type versionPolicy struct {
+	MinVersion    string               `json:"min_version,omitempty"`
+	LatestVersion string               `json:"latest_version,omitempty"`
+	Deprecations  []protocol.Scheduled `json:"deprecations"`
+	Sunsets       []protocol.Scheduled `json:"sunsets"`
 }
 
 // ReadVersionPolicy reads the version policy file at path, to

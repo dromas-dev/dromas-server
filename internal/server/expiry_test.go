@@ -37,29 +37,50 @@ func (e *env) stands(a protocol.Address) (*Mailbox, *protocol.Certificate) {
 }
 
 // A mailbox's record may go once nothing of the mailbox is valid any more
-// (PROTOCOL.md §13): a registration and every renewal set its expiry to the
-// later of its certificate's end and its prekey's last message.
+// (PROTOCOL.md §13): the later of its prekey's last message and the latest
+// end of any certificate it took, kept as one date that every registration
+// and renewal raises and none lowers.
 func TestARecordExpiresWhenNothingOfTheMailboxIsValid(t *testing.T) {
 	t.Parallel()
-	e := newEnv(t, relaxed())
+	l := relaxed()
+	l.MaxCertificateLifetime = 100 * 24 * time.Hour // past a prekey's last message
+	e := newEnv(t, l)
 	now := e.clock.Now()
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	b, cert := e.stands(r.id.Address())
-	if want := b.Prekey.NotAfter.Add(protocol.TTL); !b.Expires.Equal(want) || !want.After(cert.NotAfter()) {
-		t.Fatalf("a registration's record expires %v, want its prekey's last message, %v, which is after its certificate's end %v", b.Expires, want, cert.NotAfter())
+	first := b.Prekey.NotAfter.Add(protocol.TTL)
+	if !b.Expires.Equal(first) || cert != nil {
+		t.Fatalf("an identity-mode registration's record expires %v, want its prekey's last message, %v", b.Expires, first)
 	}
-	// A prekey that ends early leaves the certificate's end the later.
+	// A prekey that ends early lowers nothing.
 	r.prekey(2, now.Add(time.Hour), nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(2), r.pass(2)), 200, "")
-	b, cert = e.stands(r.id.Address())
-	if !b.Expires.Equal(cert.NotAfter()) || !cert.NotAfter().After(b.Prekey.NotAfter.Add(protocol.TTL)) {
-		t.Fatalf("a renewal's record expires %v, want its certificate's end, %v", b.Expires, cert.NotAfter())
+	if b, _ = e.stands(r.id.Address()); !b.Expires.Equal(first) {
+		t.Fatalf("a renewal with an earlier prekey moves the record's expiry from %v to %v", first, b.Expires)
 	}
-	// A renewal for the full lifetime moves it back to its prekey's last message.
-	r.prekey(3, now.Add(protocol.MaxPrekeyLifetime), nil)
+	// A certificate that ends later raises it to its end.
+	r.trip()
+	r.prekeyUnder(r.certifyFor(2, l.MaxCertificateLifetime), 3, now.Add(time.Hour), nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(3), r.pass(3)), 200, "")
-	if b, _ = e.stands(r.id.Address()); !b.Expires.Equal(b.Prekey.NotAfter.Add(protocol.TTL)) {
-		t.Fatalf("a renewal for the full lifetime leaves the record expiring %v, want %v", b.Expires, b.Prekey.NotAfter.Add(protocol.TTL))
+	b, cert = e.stands(r.id.Address())
+	long := cert.NotAfter()
+	if !b.Expires.Equal(long) || !long.After(first) {
+		t.Fatalf("a renewal under a certificate ending %v leaves the record expiring %v", long, b.Expires)
+	}
+	// A shorter certificate after it, with a prekey for the full lifetime,
+	// keeps the longer one's end: a working key it certified may still
+	// register.
+	r.prekeyUnder(r.certifyFor(3, l.MaxCertificateLifetime/2), 4, now.Add(protocol.MaxPrekeyLifetime), nil)
+	e.want(e.do("PUT", r.path("/prekey"), r.upload(4), r.pass(4)), 200, "")
+	if b, _ = e.stands(r.id.Address()); !b.Expires.Equal(long) {
+		t.Fatalf("a renewal under a shorter certificate moves the record's expiry from %v to %v", long, b.Expires)
+	}
+	// A prekey whose last message comes later raises it again.
+	e.clock.Add(60 * 24 * time.Hour)
+	r.prekeyUnder(r.work[3], 5, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+	e.want(e.do("PUT", r.path("/prekey"), r.upload(5), r.pass(5)), 200, "")
+	if b, _ = e.stands(r.id.Address()); !b.Expires.Equal(b.Prekey.NotAfter.Add(protocol.TTL)) || !b.Expires.After(long) {
+		t.Fatalf("a renewal whose prekey's last message is %v leaves the record expiring %v", b.Prekey.NotAfter.Add(protocol.TTL), b.Expires)
 	}
 }
 

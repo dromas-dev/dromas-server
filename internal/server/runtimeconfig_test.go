@@ -257,7 +257,7 @@ func TestTheLargestPolicyFits(t *testing.T) {
 	t.Parallel()
 	n := "18446744073709551615"
 	v := n + "." + n + "." + n
-	d := protocol.ServerDocument{MinVersion: v, LatestVersion: v}
+	d := versionPolicy{MinVersion: v, LatestVersion: v}
 	for range protocol.MaxDeprecations {
 		d.Deprecations = append(d.Deprecations, protocol.Scheduled{Version: v, At: "2027-01-01T00:00:00Z"})
 	}
