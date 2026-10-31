@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -1002,81 +1003,101 @@ func TestPrekeyRenewal(t *testing.T) {
 	e := newEnv(t, relaxed())
 	now := e.clock.Now()
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
-	put := func(serial, under uint64) reply {
-		return e.do("PUT", r.path("/prekey"), r.upload(serial), r.pass(under))
+	put := func(serial, by uint64) reply {
+		return e.do("PUT", r.path("/prekey"), r.upload(serial), r.pass(by))
 	}
+	poll := func(pass string) reply { return e.do("GET", r.path("/messages"), nil, pass) }
+	identityPass := func() string { return e.passFor(r.signer, r.id.Address(), e.name()) }
 
 	unknown := e.raw()
 	unknown.prekey(2, now.Add(time.Hour), nil)
 	e.want(e.do("PUT", unknown.path("/prekey"), unknown.upload(2), unknown.pass(2)), 404, protocol.CodeNoSuchMailbox)
 
+	// In identity mode the identity signs every statement and every pass.
 	e.want(put(1, 1), 200, "") // an identical retry of the current statement
 	r.prekey(2, now.Add(time.Hour), r.keys[1])
 	e.want(put(2, 2), 400, protocol.CodePrekeyNotNew) // the same key again
 	r.prekey(2, now.Add(time.Hour), nil)
-	// A good statement with no pass, with a pass under the mailbox's current
-	// certificate and not its own, and with another mailbox's pass.
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(2), ""), 401, protocol.CodeUnauthorized)
-	e.wantNotCurrent(put(2, 1), 2) // the statement's certificate, which an upload's pass is under
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(2), unknown.pass(2)), 401, protocol.CodeUnauthorized)
-	old := r.pass(1)
-	e.want(e.do("GET", r.path("/messages"), nil, old), 200, "")
 	e.want(put(2, 2), 200, "")
-	// The mailbox is now known by certificate 2: the pass under 1, taken a moment
-	// ago, is refused, and so is a statement under 1.
-	e.wantNotCurrent(e.do("GET", r.path("/messages"), nil, old), 2)
-	e.want(e.do("GET", r.path("/messages"), nil, r.pass(2)), 200, "")
-	r.prekeyUnder(r.work[1], 3, now.Add(time.Hour), nil)
-	e.want(put(3, 1), 401, protocol.CodeCertificateNotCurrent)
-	// Another certificate of the current serial is not the current one.
-	current := r.work[2]
-	r.prekey(3, now.Add(time.Hour), nil)
-	r.prekeyUnder(r.certify(2), 3, now.Add(time.Hour), nil)
-	e.want(put(3, 2), 401, protocol.CodeCertificateNotCurrent)
-	// A higher serial under the current certificate is taken.
-	r.work[2] = current
-	r.prekeyUnder(current, 3, now.Add(time.Hour), nil)
-	e.want(put(3, 2), 200, "")
-	e.want(e.do("GET", r.path("/messages"), nil, r.pass(2)), 200, "")
+	r.prekey(1, now.Add(2*time.Hour), nil)
+	e.want(put(1, 1), 409, protocol.CodeConflict) // under the same signer the serial must rise
+	// A certificate takes nothing from an address in identity mode: its
+	// statement is identity_mode, and a pass under it is not the identity's,
+	// which certificate_not_current says naming no certificate.
+	r.prekeyUnder(r.certify(5), 3, now.Add(time.Hour), nil)
+	e.want(put(3, 3), 409, protocol.CodeIdentityMode)
+	e.wantNotCurrent(poll(r.pass(3)), 0)
+	e.want(poll(identityPass()), 200, "")
 
-	r.prekey(4, now.Add(time.Hour), r.keys[1])
+	// The trip: from it on, the identity's statements and passes are
+	// refused, as is a certificate at or below it.
+	r.trip()
+	e.want(poll(identityPass()), 401, protocol.CodeCertificateRevoked)
+	r.prekeyUnder(r.signer, 3, now.Add(time.Hour), nil)
+	e.want(put(3, 3), 401, protocol.CodeCertificateRevoked)
+	r.prekeyUnder(r.certify(tripAt), 3, now.Add(time.Hour), nil)
+	e.want(put(3, 3), 401, protocol.CodeCertificateRevoked)
+	// A certificate above it passes the identity's statement at any serial.
+	r.prekeyUnder(r.certify(2), 1, now.Add(time.Hour), nil)
+	e.want(put(1, 1), 200, "")
+	old := r.pass(1)
+	e.want(poll(old), 200, "")
+	e.want(poll(identityPass()), 401, protocol.CodeCertificateRevoked)
+
+	// A statement under the next certificate, with a pass under the
+	// mailbox's current certificate and not its own.
+	r.prekeyUnder(r.certify(3), 2, now.Add(time.Hour), nil)
+	e.wantNotCurrent(e.do("PUT", r.path("/prekey"), r.upload(2), old), 3) // the statement's certificate, which an upload's pass is under
+	e.want(put(2, 2), 200, "")
+	// The mailbox is now known by certificate 3: the pass under 2, taken a
+	// moment ago, is refused, and so is a statement under 2.
+	e.wantNotCurrent(poll(old), 3)
+	e.want(poll(r.pass(2)), 200, "")
+	r.prekeyUnder(r.work[2], 9, now.Add(time.Hour), nil)
+	e.want(put(9, 9), 401, protocol.CodeCertificateNotCurrent)
+	// Another certificate of the current serial is not the current one.
+	current := r.work[3]
+	r.prekeyUnder(r.certify(3), 3, now.Add(time.Hour), nil)
+	e.want(put(3, 3), 401, protocol.CodeCertificateNotCurrent)
+	// A higher serial under the current certificate is taken.
+	r.work[3] = current
+	r.prekeyUnder(current, 3, now.Add(time.Hour), nil)
+	e.want(put(3, 3), 200, "")
+	e.want(poll(r.pass(3)), 200, "")
+	r.prekeyUnder(current, 4, now.Add(time.Hour), r.keys[2])
 	e.want(put(4, 4), 400, protocol.CodePrekeyNotNew) // a live retired key
 	// Under the mailbox's current certificate the serial must rise.
 	r.prekeyUnder(current, 3, now.Add(2*time.Hour), nil)
-	e.want(put(3, 2), 409, protocol.CodeConflict)
-	r.prekeyUnder(current, 1, now.Add(2*time.Hour), nil)
-	e.want(put(1, 2), 409, protocol.CodeConflict)
+	e.want(put(3, 3), 409, protocol.CodeConflict)
 
-	// A statement must not outlive the certificate it is signed under, and
-	// a certificate that has ended signs nothing.
-	e.clock.Add(protocol.CertificateLifetime - protocol.MaxPrekeyLifetime + time.Hour)
-	r.prekeyUnder(current, 5, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
-	e.want(put(5, 2), 400, protocol.CodeBadKey)
-	e.clock.Add(protocol.MaxPrekeyLifetime)
+	// A certificate that has ended signs nothing, exact at the server's
+	// clock: no statement and no pass.
+	e.clock.Add(DefaultLimits().MaxCertificateLifetime)
 	r.prekeyUnder(current, 5, e.clock.Now().Add(time.Hour), nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(5), ""), 400, protocol.CodePrekeyTime)
-	// The mailbox cannot poll under an ended certificate either, and comes back
-	// with a prekey under a new one.
-	e.want(e.do("GET", r.path("/messages"), nil, r.pass(2)), 401, protocol.CodePassExpired)
-	r.prekey(5, e.clock.Now().Add(time.Hour), nil)
+	e.want(poll(e.passFor(current, r.id.Address(), e.name())), 401, protocol.CodePassExpired)
+	// The mailbox comes back with a prekey under a new one.
+	r.prekeyUnder(r.certify(5), 5, e.clock.Now().Add(time.Hour), nil)
 	e.want(put(5, 5), 200, "")
-	e.want(e.do("GET", r.path("/messages"), nil, r.pass(5)), 200, "")
+	e.want(poll(r.pass(5)), 200, "")
 
-	// A mailbox's statements are ordered by certificate first. A later
-	// certificate passes any serial under an earlier one: the mailbox moves to
+	// A mailbox's statements are ordered by rank first. A later certificate
+	// passes any serial under an earlier one: the mailbox moves to
 	// certificate 6 at prekey serial 1, below the 5 it stood at, and the
 	// serial rises from there. An earlier certificate is refused whatever
 	// serial comes under it.
 	r.prekeyUnder(r.certify(6), 1, e.clock.Now().Add(time.Hour), nil)
-	e.want(put(1, 6), 200, "")
-	e.want(e.do("GET", r.path("/messages"), nil, r.pass(6)), 200, "")
-	e.want(e.do("GET", r.path("/messages"), nil, r.pass(5)), 401, protocol.CodeCertificateNotCurrent)
+	e.want(put(1, 1), 200, "")
+	e.want(poll(r.pass(1)), 200, "")
+	e.want(poll(r.pass(5)), 401, protocol.CodeCertificateNotCurrent)
 	r.prekeyUnder(r.work[6], 1, e.clock.Now().Add(2*time.Hour), nil)
-	e.want(put(1, 6), 409, protocol.CodeConflict)
+	e.want(put(1, 1), 409, protocol.CodeConflict)
 	r.prekeyUnder(r.work[5], 9, e.clock.Now().Add(time.Hour), nil)
-	e.want(put(9, 5), 401, protocol.CodeCertificateNotCurrent)
+	e.want(put(9, 9), 401, protocol.CodeCertificateNotCurrent)
 	r.prekeyUnder(r.work[6], 2, e.clock.Now().Add(time.Hour), nil)
-	e.want(put(2, 6), 200, "")
+	e.want(put(2, 2), 200, "")
 }
 
 func TestSendPipeline(t *testing.T) {
@@ -1107,30 +1128,29 @@ func TestSendPipeline(t *testing.T) {
 	// The pass comes first: with none, nothing of the request is judged,
 	// its query and its address included.
 	e.want(e.do("POST", to+"/messages", ok, ""), 401, protocol.CodeUnauthorized)
-	e.want(e.do("POST", to+"/messages?prekey_serial=0", ok.ciphertext, ""), 401, protocol.CodeUnauthorized)
+	e.want(e.do("POST", to+"/messages?statement=0", ok.ciphertext, ""), 401, protocol.CodeUnauthorized)
 	e.want(e.do("POST", "/v1/nope/messages", ok, ""), 401, protocol.CodeUnauthorized)
 
-	// Then the address, then the query: the two serials, each once and
-	// written as a statement writes one, and nothing else. What is wrong is
-	// named in member. The sender is the mailbox the pass names, so the query
-	// names none.
+	// Then the address, then the query: the statement's hash, once, 64
+	// lowercase hex digits, and nothing else. What is wrong is named in
+	// member. The sender is the mailbox the pass names, so the query names
+	// none.
 	e.want(e.do("POST", "/v1/nope/messages?x=1", ok.ciphertext, pass), 400, protocol.CodeBadAddress)
 	e.want(e.do("POST", "/v1/"+strings.ToUpper(b.Address().String())+"/messages", ok, pass), 400, protocol.CodeBadAddress)
 	serials := ok.Encode()
+	hash := ok.Statement
 	for query, member := range map[string]string{
-		"":                                                    protocol.PrekeySerialParam,
-		"certificate_serial=1":                                protocol.PrekeySerialParam,
-		"prekey_serial=1":                                     protocol.CertificateSerialParam,
-		"prekey_serial=0&certificate_serial=1":                protocol.PrekeySerialParam,
-		"prekey_serial=1&certificate_serial=0":                protocol.CertificateSerialParam,
-		"prekey_serial=01&certificate_serial=1":               protocol.PrekeySerialParam,
-		"prekey_serial=%2B1&certificate_serial=1":             protocol.PrekeySerialParam,
-		"prekey_serial=1.0&certificate_serial=1":              protocol.PrekeySerialParam,
-		"prekey_serial=9007199254740992&certificate_serial=1": protocol.PrekeySerialParam,
-		"prekey_serial=&certificate_serial=1":                 protocol.PrekeySerialParam,
-		serials + "&prekey_serial=1":                          protocol.PrekeySerialParam,
-		serials + "&from=" + a.Address().String():             "from",
-		serials + "&PREKEY_SERIAL=1":                          "PREKEY_SERIAL",
+		"":                                        protocol.StatementParam,
+		"statement=":                              protocol.StatementParam,
+		"statement=" + strings.ToUpper(hash):      protocol.StatementParam,
+		"statement=" + hash[:63]:                  protocol.StatementParam,
+		"statement=" + hash + "0":                 protocol.StatementParam,
+		"statement=" + hash[:63] + "g":            protocol.StatementParam,
+		"prekey_serial=1&certificate_serial=1":    "certificate_serial",
+		serials + "&prekey_serial=1":              "prekey_serial",
+		serials + "&" + serials:                   protocol.StatementParam,
+		serials + "&from=" + a.Address().String(): "from",
+		serials + "&STATEMENT=" + hash:            "STATEMENT",
 	} {
 		got := e.do("POST", to+"/messages?"+query, ok.ciphertext, pass)
 		var p protocol.Problem
@@ -1139,12 +1159,12 @@ func TestSendPipeline(t *testing.T) {
 			t.Errorf("?%s: %d %s, member %q; want 400 %s naming %s", query, got.status, p.Code, p.Member, protocol.CodeBadRequest, member)
 		}
 	}
-	e.want(e.do("POST", to+"/messages?prekey_serial=9007199254740991&certificate_serial=9007199254740991", ok.ciphertext, pass), 409, protocol.CodeStalePrekey)
+	e.want(e.do("POST", to+"/messages?statement="+strings.Repeat("0", 64), ok.ciphertext, pass), 409, protocol.CodeStalePrekey)
 
 	// The body is the ciphertext's bytes, whatever its Content-Type says. A
 	// body that is no age file, a JSON object of a send's fields among them, is
 	// refused as no age file.
-	j, _ := json.Marshal(map[string]any{"prekey_serial": ok.PrekeySerial, "certificate_serial": ok.CertificateSerial, "ciphertext": ok.ciphertext})
+	j, _ := json.Marshal(map[string]any{"statement": ok.Statement, "ciphertext": ok.ciphertext})
 	for name, body := range map[string][]byte{"no body": nil, "a JSON object": j, "text": []byte("not an age file")} {
 		if got := e.do("POST", to+"/messages?"+serials, body, pass); got.status != 400 || got.code() != protocol.CodeNotAge {
 			t.Errorf("%s: %d %s, want 400 %s", name, got.status, got.code(), protocol.CodeNotAge)
@@ -1153,12 +1173,22 @@ func TestSendPipeline(t *testing.T) {
 	e.want(e.do("POST", to+"/messages", seal(classic.Recipient()), pass), 400, protocol.CodeWrongRecipientType)
 	two, _ := age.GenerateHybridIdentity()
 	e.want(e.do("POST", to+"/messages", seal(pqRecipient, two.Recipient()), pass), 400, protocol.CodeWrongRecipientType)
-	stale := ok
-	stale.PrekeySerial = 9
-	e.want(e.do("POST", to+"/messages", stale, pass), 409, protocol.CodeStalePrekey)
-	staleCert := ok
-	staleCert.CertificateSerial = 9
-	e.want(e.do("POST", to+"/messages", staleCert, pass), 409, protocol.CodeStalePrekey)
+	// The statement's hash is the current one's: of its bytes as served,
+	// never of its signature, and of no other statement.
+	cur := mustMailbox(t, e, b.Address())
+	for name, named := range map[string][]byte{
+		"another statement":               append(slices.Clone(cur.Statement), 'x'),
+		"the statement's signature":       cur.Signature,
+		"the statement and its signature": append(slices.Clone(cur.Statement), cur.Signature...),
+	} {
+		stale := ok
+		stale.Statement = protocol.StatementHash(named)
+		got := e.do("POST", to+"/messages", stale, pass)
+		e.want(got, 409, protocol.CodeStalePrekey)
+		if p := got.problem(); p.PrekeySerial != nil || p.CertificateSerial != nil {
+			t.Errorf("%s: stale_prekey carries members: %s", name, got.body)
+		}
+	}
 
 	big := relaxed()
 	big.MaxSize = 100
