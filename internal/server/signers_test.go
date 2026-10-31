@@ -86,11 +86,14 @@ func TestAnIdentityStatementAfterACertificateIsRefused(t *testing.T) {
 // The identity's pass is always taken (PROTOCOL.md §8): with a certificate
 // current, at every call that takes the mailbox's pass and as a sender; and
 // with that certificate revoked, when no pass under any certificate is
-// taken, and a call with no pass, one that is not a pass and one under that
-// certificate are certificate_revoked.
+// taken, and a call with no pass, one that is not a pass and one under any
+// certificate are certificate_revoked, with no signature checked and so no
+// miss of the caller's address spent.
 func TestTheIdentitysPassIsAlwaysTaken(t *testing.T) {
 	t.Parallel()
-	e := newEnv(t, relaxed())
+	l := relaxed()
+	l.MissesPerMinute = DefaultLimits().MissesPerMinute
+	e := newEnv(t, l)
 	r, o := e.raw(), e.raw().register(protocol.MaxPrekeyLifetime)
 	serial := r.registerCertified(protocol.MaxPrekeyLifetime)
 	identity := func() string { return e.passFor(r.signer, r.id.Address(), e.name()) }
@@ -114,15 +117,22 @@ func TestTheIdentitysPassIsAlwaysTaken(t *testing.T) {
 	e.want(e.do("POST", o.path("/messages"), o.sealed(1, ciphertextTo(t, o)), identity()), http.StatusCreated, "")
 
 	e.want(e.do("PUT", r.path("/revocations"), r.certs(serial), ""), http.StatusOK, "")
+	misses := debts(e.server, e.clock.Now())[string(protocol.QuotaMisses)]
 	for _, c := range calls[:4] {
 		if got := e.do(c.method, r.path(c.path), c.body, identity()); got.status == http.StatusUnauthorized {
 			t.Errorf("%s %s by the identity, its certificate revoked: %d %s", c.method, c.path, got.status, got.body)
 		}
-		for name, pass := range map[string]string{"no pass": "", "not a pass": "Bearer " + strings.Repeat("a", 50), "the revoked certificate's": r.pass(serial)} {
+		for name, pass := range map[string]string{
+			"no pass": "", "not a pass": "Bearer " + strings.Repeat("a", 50), "the revoked certificate's": r.pass(serial),
+			"another certificate's, never on record": e.passFor(r.certify(serial+5), r.id.Address(), e.name()),
+		} {
 			if got := e.do(c.method, r.path(c.path), c.body, pass); got.status != http.StatusUnauthorized || got.code() != protocol.CodeCertificateRevoked {
 				t.Errorf("%s %s, %s, its certificate revoked: %d %s", c.method, c.path, name, got.status, got.body)
 			}
 		}
+	}
+	if spent := debts(e.server, e.clock.Now())[string(protocol.QuotaMisses)] - misses; spent != 0 {
+		t.Errorf("the refusals of passes at a mailbox whose certificate is revoked spent %d misses", spent)
 	}
 	e.want(e.do("POST", o.path("/messages"), o.sealed(1, ciphertextTo(t, o)), identity()), http.StatusCreated, "")
 	e.want(e.do("POST", o.path("/messages"), o.sealed(1, ciphertextTo(t, o)), r.pass(serial)), http.StatusUnauthorized, protocol.CodeCertificateRevoked)
