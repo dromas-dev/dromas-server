@@ -549,11 +549,6 @@ func (c *countingStore) Known(a protocol.Address) (*Mailbox, bool) { return c.s.
 
 func (c *countingStore) Begin(a protocol.Address) uint64 { return c.s.Begin(a) }
 
-func (c *countingStore) Reread(ctx context.Context, a protocol.Address) (*Mailbox, error) {
-	c.count()
-	return c.s.Reread(ctx, a)
-}
-
 func (c *countingStore) Count(ctx context.Context, mailbox protocol.Address) (int, error) {
 	return c.s.Count(ctx, mailbox)
 }

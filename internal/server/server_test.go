@@ -1039,7 +1039,7 @@ func TestPrekeyRenewal(t *testing.T) {
 	unknown.prekey(2, now.Add(time.Hour), nil)
 	e.want(e.do("PUT", unknown.path("/prekey"), unknown.upload(2), unknown.pass(2)), 404, protocol.CodeNoSuchMailbox)
 
-	// In identity mode the identity signs every statement and every pass.
+	// The identity signs the mailbox's statements to begin with.
 	e.want(put(1, 1), 200, "") // an identical retry of the current statement
 	r.prekey(2, now.Add(time.Hour), r.keys[1])
 	e.want(put(2, 2), 400, protocol.CodePrekeyNotNew) // the same key again
@@ -1049,28 +1049,23 @@ func TestPrekeyRenewal(t *testing.T) {
 	e.want(put(2, 2), 200, "")
 	r.prekey(1, now.Add(2*time.Hour), nil)
 	e.want(put(1, 1), 409, protocol.CodeConflict) // under the same signer the serial must rise
-	// A certificate takes nothing from an address in identity mode: its
-	// statement is identity_mode, and a pass under it is not the identity's,
-	// which certificate_not_current says naming no certificate.
-	r.prekeyUnder(r.certify(5), 3, now.Add(time.Hour), nil)
-	e.want(put(3, 3), 409, protocol.CodeIdentityMode)
-	e.wantNotCurrent(poll(r.pass(3)), 0)
+	// While the identity signs the current statement, a pass under a
+	// certificate is not current, and the refusal names no certificate.
+	e.wantNotCurrent(poll(e.passFor(r.certify(9), r.id.Address(), e.name())), 0)
 	e.want(poll(identityPass()), 200, "")
 
-	// The trip: from it on, the identity's statements and passes are
-	// refused, as is a certificate at or below it.
+	// A certificate passes the identity's statement at any prekey serial,
+	// with no revocation of certificates held: the mailbox's first.
 	r.certified()
-	e.want(poll(identityPass()), 401, protocol.CodeCertificateRevoked)
-	r.prekeyUnder(r.signer, 3, now.Add(time.Hour), nil)
-	e.want(put(3, 3), 401, protocol.CodeCertificateRevoked)
-	r.prekeyUnder(r.certify(tripAt), 3, now.Add(time.Hour), nil)
-	e.want(put(3, 3), 401, protocol.CodeCertificateRevoked)
-	// A certificate above it passes the identity's statement at any serial.
 	r.prekeyUnder(r.certify(2), 1, now.Add(time.Hour), nil)
 	e.want(put(1, 1), 200, "")
 	old := r.pass(1)
 	e.want(poll(old), 200, "")
-	e.want(poll(identityPass()), 401, protocol.CodeCertificateRevoked)
+	// The identity's pass is still taken; its statement now stands below the
+	// certificate's, and is refused, naming the certificate it must pass.
+	e.want(poll(identityPass()), 200, "")
+	r.prekeyUnder(r.signer, 3, now.Add(time.Hour), nil)
+	e.wantNotCurrent(put(3, 3), 2)
 
 	// A statement under the next certificate, with a pass under the
 	// mailbox's current certificate and not its own.
