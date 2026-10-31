@@ -330,8 +330,8 @@ func TestJunkRevocationsOfCertificatesAreLimited(t *testing.T) {
 	e.want(e.do("PUT", path, r.certs(1), ""), 200, "")
 }
 
-// The Go client against this server: a mailbox renews and revokes every
-// certificate before its new one. A message it sent under the old one is refused
+// The Go client against this server: a mailbox in working-key mode renews and
+// revokes every certificate before its new one. A message it sent under the old one is refused
 // by its reader, who is shown the revocation and checks it; a message under the new one
 // is delivered; and the mailbox, whose working key before the renewal is now
 // worth nothing here, goes on at its address.
@@ -339,7 +339,7 @@ func TestTheClientRevokesItsEarlierCertificates(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
-	a, b := e.mailbox(), e.mailbox()
+	a, b := e.workingMailbox(), e.mailbox()
 	send(t, a, b, "under A's first certificate")
 	taken, old := worker(t, a), e.pass(a)
 	_, first := e.numbers(a.Address())
@@ -376,13 +376,14 @@ func TestTheClientRevokesItsEarlierCertificates(t *testing.T) {
 }
 
 // A mailbox's statements are ordered by certificate first, so a prekey published
-// at the highest serial there is, with a working key someone took, does not
-// end the address: the mailbox's next renewal passes it, and its senders follow.
+// at the highest serial there is, with a working key someone took from a
+// mailbox in working-key mode, does not end the address: the mailbox's next
+// renewal passes it, and its senders follow.
 func TestAPrekeyAtTheHighestSerialDoesNotEndTheAddress(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
-	a, b := e.mailbox(), e.mailbox()
+	a, b := e.workingMailbox(), e.mailbox()
 	taken := worker(t, a)
 	_, first := e.numbers(a.Address())
 	key, _ := age.GenerateHybridIdentity()
@@ -499,9 +500,9 @@ func TestTheRemedyRenewsWhenATakerSpentTheDaysRenewals(t *testing.T) {
 	l.RenewalsPerDay = DefaultLimits().RenewalsPerDay
 	l.CertificatesPerDay = DefaultLimits().CertificatesPerDay
 	e := newEnv(t, l)
-	a := e.mailbox()
+	a := e.workingMailbox()
 	taken := worker(t, a)
-	_, inUse := e.numbers(a.Address())
+	serial, inUse := e.numbers(a.Address())
 	thief := func(serial uint64) reply {
 		key, err := age.GenerateHybridIdentity()
 		if err != nil {
@@ -515,14 +516,14 @@ func TestTheRemedyRenewsWhenATakerSpentTheDaysRenewals(t *testing.T) {
 		return e.do("PUT", "/v1/"+a.Address().String()+"/prekey", protocol.PrekeyRequest{Prekey: p.Statement(), PrekeySignature: sig}, e.passFor(taken, a.Address(), e.name()))
 	}
 	for i := range l.RenewalsPerDay {
-		e.want(thief(inUse+uint64(i)+1), 200, "")
+		e.want(thief(serial+uint64(i)+1), 200, "")
 	}
-	e.limited(thief(inUse+uint64(l.RenewalsPerDay)+1), protocol.QuotaRenewals) // the taker is out of renewals
+	e.limited(thief(serial+uint64(l.RenewalsPerDay)+1), protocol.QuotaRenewals) // the taker is out of renewals
 	r, err := a.RenewAndRevoke(ctx)
 	if err != nil || r == nil || r.NotRenewed != nil || r.Prekey == nil || r.Revoked == nil || !r.Revoked.Revokes(inUse) || r.Revoked.Revokes(r.Below) {
 		t.Fatalf("the owner's remedy after the taker's renewals: %+v, %v", r, err)
 	}
-	e.want(thief(inUse+100), 401, protocol.CodeCertificateRevoked)
+	e.want(thief(serial+100), 401, protocol.CodeCertificateRevoked)
 	if _, cert := e.numbers(a.Address()); cert != r.Below {
 		t.Fatalf("the mailbox stands at certificate %d, not the one the remedy made, %d", cert, r.Below)
 	}

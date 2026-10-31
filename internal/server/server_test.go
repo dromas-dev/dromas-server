@@ -242,18 +242,17 @@ func mustMailbox(t *testing.T, e *env, a protocol.Address) *Mailbox {
 }
 
 // worker loads the signer of a client's mailbox: in working-key mode its
-// working key under its certificate, the one made with the prekey it
-// published last, and in identity mode, where it has none, its identity.
+// working key under its current certificate, and in identity mode, where it
+// has none, its identity.
 func worker(t *testing.T, b *client.Mailbox) ssh.Signer {
 	t.Helper()
 	st, err := b.Status(t.Context())
 	if err != nil || st.PrekeySerial == 0 {
 		t.Fatalf("the mailbox's status: %+v, %v", st, err)
 	}
-	stem := filepath.Join(b.Dir(), "work", strconv.FormatUint(st.PrekeySerial, 10))
-	k, err := os.ReadFile(stem)
-	if errors.Is(err, os.ErrNotExist) {
-		if k, err = os.ReadFile(filepath.Join(b.Dir(), "identity")); err != nil {
+	if st.CertificateSerial == 0 { // identity mode
+		k, err := os.ReadFile(filepath.Join(b.Dir(), "identity"))
+		if err != nil {
 			t.Fatal(err)
 		}
 		s, err := ssh.ParsePrivateKey(k)
@@ -262,6 +261,8 @@ func worker(t *testing.T, b *client.Mailbox) ssh.Signer {
 		}
 		return s
 	}
+	stem := filepath.Join(b.Dir(), "work", strconv.FormatUint(st.CertificateSerial, 10))
+	k, err := os.ReadFile(stem)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1594,10 +1595,10 @@ func TestSendNamesTheCurrentPrekey(t *testing.T) {
 func TestRenewalLimits(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	// The Go client certifies a new working key with each prekey, so each of
-	// its renewals is its identity's act, counted under that limit: a
-	// renewal under the current certificate counts under the other
-	// (TestTheRemedyRenewsWhenATakerSpentTheDaysRenewals).
+	// The Go client's mailbox is in identity mode: each of its renewals is by
+	// its current signer, the identity, and counts under the renewals; a
+	// renewal under a later certificate counts under the certificates
+	// (TestTheIdentitysActsAreCountedApart).
 	l.RenewalsPerDay, l.CertificatesPerDay, l.RetiredKept = 3, 3, 2
 	e := newEnv(t, l)
 	ctx := context.Background()
@@ -1612,7 +1613,7 @@ func TestRenewalLimits(t *testing.T) {
 	}
 	_, err := b.Rekey(ctx)
 	var ae *client.APIError
-	if !limitedBy(err, protocol.QuotaCertificates) || !errors.As(err, &ae) || ae.RetryAfter != 8*time.Hour || ae.Problem.Limit == nil || *ae.Problem.Limit != 3 {
+	if !limitedBy(err, protocol.QuotaRenewals) || !errors.As(err, &ae) || ae.RetryAfter != 8*time.Hour || ae.Problem.Limit == nil || *ae.Problem.Limit != 3 {
 		t.Fatalf("a fourth renewal at once, of three a day: %v", err)
 	}
 	cur, _ := e.store.Mailbox(ctx, b.Address())
@@ -1626,7 +1627,7 @@ func TestRenewalLimits(t *testing.T) {
 		}
 	}
 	e.clock.Add(8*time.Hour - time.Second)
-	if _, err := b.Rekey(ctx); !limitedBy(err, protocol.QuotaCertificates) {
+	if _, err := b.Rekey(ctx); !limitedBy(err, protocol.QuotaRenewals) {
 		t.Fatalf("a renewal a second before the next comes back: %v", err)
 	}
 	e.clock.Add(time.Second)

@@ -75,7 +75,7 @@ func TestRevocation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
-	a, b, c := e.mailbox(), e.mailbox(), e.mailbox()
+	a, b, c := e.workingMailbox(), e.mailbox(), e.mailbox() // A in working-key mode, so that it has a working key to try
 	send(t, b, a, "waiting in A's mailbox when it is revoked")
 	send(t, a, b, "sent by A before it was revoked")
 	passA := e.pass(a)
