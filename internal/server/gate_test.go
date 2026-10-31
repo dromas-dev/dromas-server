@@ -156,8 +156,14 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 	if err := e.store.DeleteMailbox(t.Context(), forgotten.id.Address()); err != nil { // as the TTL deletes it
 		t.Fatal(err)
 	}
-	listed, listedPass := checked()
-	e.want(call(fresh(), "PUT", listed.path("/revocations"), listed.certs(1), ""), http.StatusOK, "")
+	// A mailbox under a certificate, its pass checked, then that certificate
+	// revoked: no pass under it is the mailbox's.
+	listed := e.raw().certified()
+	listed.prekey(2, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+	e.want(call(fresh(), "PUT", listed.path(""), listed.registration(2), listed.pass(2)), http.StatusCreated, "")
+	listedPass := listed.pass(2)
+	e.want(call(fresh(), "GET", listed.path("/messages"), nil, listedPass), http.StatusOK, "")
+	e.want(call(fresh(), "PUT", listed.path("/revocations"), listed.certs(2), ""), http.StatusOK, "")
 	e.clock.Add(time.Second)
 	nobody := strings.Repeat("ab", 38) + "a" // an address the server holds nothing of
 

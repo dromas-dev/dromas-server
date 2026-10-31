@@ -627,13 +627,14 @@ func TestARevocationWhoseAnswerWasLostIsInTheNextPassCheck(t *testing.T) {
 			f.dynamo = tb.answer
 			s := fakeStore(t, f)
 			e := newEnv(t, relaxed(), func(cfg *Config) { cfg.Store, cfg.Ready = s, nil })
-			r := e.raw().register(protocol.MaxPrekeyLifetime)
+			r := e.raw()
+			n := r.registerCertified(protocol.MaxPrekeyLifetime)
 			a := r.id.Address()
-			e.want(e.do("GET", r.path("/messages"), nil, r.pass(1)), http.StatusOK, "")
+			e.want(e.do("GET", r.path("/messages"), nil, r.pass(n)), http.StatusOK, "")
 			if _, held := s.Held(a); !held {
 				t.Fatal("the mailbox is not loaded")
 			}
-			rv := r.certs(1)
+			rv := r.certs(n)
 			list, err := protocol.ParseRevokedCertificates(rv.RevokedCertificates)
 			if err != nil {
 				t.Fatal(err)
@@ -654,10 +655,10 @@ func TestARevocationWhoseAnswerWasLostIsInTheNextPassCheck(t *testing.T) {
 			}
 			err = s.Revoke(context.WithoutCancel(t.Context()), a, &Revocations{Identity: rv.Identity, Certs: rv.RevokedCertificates, CertsSig: rv.RevokedCertificatesSignature, Through: list.Through}, ExpectAnything)
 			_, held := s.Held(a)
-			got := e.do("GET", r.path("/messages"), nil, r.pass(1))
-			t.Logf("the raise: %v (mayHaveApplied %v); the index holds the mailbox %v; then a pass under certificate 1: %d %s", err, mayHaveApplied(err), held, got.status, got.code())
+			got := e.do("GET", r.path("/messages"), nil, r.pass(n))
+			t.Logf("the raise: %v (mayHaveApplied %v); the index holds the mailbox %v; then a pass under certificate %d: %d %s", err, mayHaveApplied(err), held, n, got.status, got.code())
 			if got.status != c.status || got.code() != c.code {
-				t.Errorf("a pass under certificate 1 after the raise: %d %s; want %d %s", got.status, got.code(), c.status, c.code)
+				t.Errorf("a pass under certificate %d after the raise: %d %s; want %d %s", n, got.status, got.code(), c.status, c.code)
 			}
 		})
 	}

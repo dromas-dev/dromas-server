@@ -158,8 +158,8 @@ func TestAMailboxWhoseClockGoesBackFetchesNothing(t *testing.T) {
 	}
 	// Control: at that clock the message would be refused, so the stop above is
 	// what kept it: it is dated more than MaxSkew ahead of the reader's clock,
-	// and a certificate it is signed under, where the sender is in
-	// working-key mode, has not begun.
+	// and a certificate it is signed under, where the sender signs under
+	// one, has not begun.
 	if fast-off <= protocol.MaxSkew {
 		t.Fatalf("the sender's clock is %v ahead of the reader's, within the %v a reader takes: the test does not reach the case", fast-off, protocol.MaxSkew)
 	}

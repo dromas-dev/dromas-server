@@ -42,7 +42,7 @@ func (e *env) rawP256() *raw {
 }
 
 // A mailbox whose identity is of the optional type registers, proves itself with
-// a pass, makes the trip and moves to a certificate, as a mailbox on an
+// a pass, and moves to a certificate, as a mailbox on an
 // Ed25519 key does: the server checks the identity's signature when a
 // certificate is put on record, and a pass against that certificate after.
 func TestAMailboxOfTheOptionalKeyType(t *testing.T) {
@@ -62,12 +62,12 @@ func TestAMailboxOfTheOptionalKeyType(t *testing.T) {
 	e.want(e.do("GET", p.path("/messages"), nil, q.pass(1)), 401, protocol.CodeUnauthorized)
 	e.want(e.do("GET", p.path("/messages"), nil, e.passFor(ed.by[1], p.id.Address(), e.name())), 401, protocol.CodeCertificateNotCurrent)
 
-	// The trip, then a certificate, by a prekey published under it: the
-	// identity's passes stop.
+	// A certificate, by a prekey published under it: its passes are taken,
+	// and the identity's still are.
 	p.certified()
 	p.prekey(2, now.Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", p.path("/prekey"), p.upload(2), p.pass(2)), 200, "")
-	e.want(e.do("GET", p.path("/messages"), nil, p.pass(1)), 401, protocol.CodeCertificateRevoked)
+	e.want(e.do("GET", p.path("/messages"), nil, p.pass(1)), 200, "")
 	e.want(e.do("GET", p.path("/messages"), nil, p.pass(2)), 200, "")
 
 	// A certificate another P-256 key signed for this address is no
@@ -122,7 +122,7 @@ func TestAPassThatCarriesAnotherMailboxsCertificate(t *testing.T) {
 			notAfter := e.clock.Now().Add(protocol.PassLifetime)
 			pass := passCarrying(t, victim.by[serial].PublicKey(), thief.by[1], a, e.name(), notAfter)
 			if _, err := protocol.ParsePass(pass); err != nil {
-				t.Fatalf("%s, working-key mode %v: the forged pass does not parse: %v", name, working, err)
+				t.Fatalf("%s, under a certificate %v: the forged pass does not parse: %v", name, working, err)
 			}
 			e.want(e.do("GET", victim.path("/messages"), nil, pass), 401, protocol.CodeUnauthorized)
 			// Control: the victim's own pass, by the same signer, is taken.
@@ -187,7 +187,7 @@ func TestACertificateOnRecordThatTheIdentityDidNotSign(t *testing.T) {
 		// sign, is no longer under the one on record.
 		e.wantNotCurrent(e.do("GET", victim.path("/messages"), nil, victim.pass(serial)), b.Rank)
 	}
-	// In identity mode the signer on record is the identity's key: a record
+	// Where the identity signs the current statement, the signer on record is its key: a record
 	// that holds the hash of another bare key gives no pass by that key, and
 	// the refusal names no certificate.
 	victim := e.raw().register(protocol.MaxPrekeyLifetime)
@@ -204,10 +204,12 @@ func TestACertificateOnRecordThatTheIdentityDidNotSign(t *testing.T) {
 	if p, err := protocol.ParsePass(pass); err != nil {
 		t.Fatal(err)
 	} else if _, err := p.VerifyUnder(b.Signer, e.name(), now); err != nil {
-		t.Errorf("identity mode: control: the hash or the signature refused it: %v", err)
+		t.Errorf("the identity on record: control: the hash or the signature refused it: %v", err)
 	}
 	e.wantNotCurrent(e.do("GET", victim.path("/messages"), nil, pass), 0)
-	e.wantNotCurrent(e.do("GET", victim.path("/messages"), nil, victim.pass(1)), 0)
+	// The identity's own pass is held to the identity's key, never to the
+	// signer on record, and is taken.
+	e.want(e.do("GET", victim.path("/messages"), nil, victim.pass(1)), 200, "")
 }
 
 // A pass the server remembers is taken until it runs out, and never past the

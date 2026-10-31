@@ -464,37 +464,29 @@ func TestAFloorNoHigherIsAnsweredWithoutACheck(t *testing.T) {
 }
 
 // The identity's acts are counted per mailbox, each kind on its own, so neither
-// holds back the other: its new certificates (Limits.CertificatesPerDay) and
-// its raises of the revocation of certificates
-// (Limits.CertificateRevocationsPerDay), the trip among them. A renewal while
-// the revocation held covers the mailbox's current signer is not counted: it
-// replaces what a counted raise revoked, the identity's own statement after
-// the trip among it. The revocation of the address is counted against no
-// mailbox, so nothing keeps an owner from ending a mailbox.
+// holds back the other: its new certificates (Limits.CertificatesPerDay), the
+// mailbox's first among them, a renewal by a later signer than the identity,
+// and its raises of the revocation of certificates
+// (Limits.CertificateRevocationsPerDay). A renewal while the revocation held
+// covers the mailbox's current certificate is not counted: it replaces what
+// a counted raise revoked. The revocation of the address is counted against
+// no mailbox, so nothing keeps an owner from ending a mailbox.
 func TestTheIdentitysActsAreCountedApart(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	l.CertificatesPerDay, l.CertificateRevocationsPerDay = 1, 1
 	e := newEnv(t, l)
-	r := e.raw().register(protocol.MaxPrekeyLifetime)
+	r := e.raw().register(protocol.MaxPrekeyLifetime).certified()
 	until := e.clock.Now().Add(protocol.PrekeyLifetime)
-	e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), http.StatusOK, "") // the trip, the day's one raise
-	e.limited(e.do("PUT", r.path("/revocations"), r.certs(2), ""), protocol.QuotaCertificateRevocations)
 	r.prekey(5, until, nil)
-	e.want(e.do("PUT", r.path("/prekey"), r.upload(5), r.pass(5)), http.StatusOK, "") // replaces the identity, which the trip covers
+	e.want(e.do("PUT", r.path("/prekey"), r.upload(5), r.pass(5)), http.StatusOK, "") // the mailbox's first certificate, the day's one
 	r.prekey(6, until, nil)
-	e.want(e.do("PUT", r.path("/prekey"), r.upload(6), r.pass(6)), http.StatusOK, "") // the day's one certificate
-	r.prekey(7, until, nil)
-	e.limited(e.do("PUT", r.path("/prekey"), r.upload(7), r.pass(7)), protocol.QuotaCertificates)
-	e.clock.Add(24 * time.Hour)
-	e.want(e.do("PUT", r.path("/prekey"), r.upload(7), r.pass(7)), http.StatusOK, "") // the next day's one certificate
+	e.limited(e.do("PUT", r.path("/prekey"), r.upload(6), r.pass(6)), protocol.QuotaCertificates)
+	e.want(e.do("PUT", r.path("/revocations"), r.certs(5), ""), http.StatusOK, "") // the day's one raise, which no certificate spent
+	e.limited(e.do("PUT", r.path("/revocations"), r.certs(7), ""), protocol.QuotaCertificateRevocations)
+	e.want(e.do("PUT", r.path("/prekey"), r.upload(6), r.pass(6)), http.StatusOK, "") // replaces certificate 5, which is revoked
 	r.prekey(8, until, nil)
-	e.limited(e.do("PUT", r.path("/prekey"), r.upload(8), r.pass(8)), protocol.QuotaCertificates)
-	e.want(e.do("PUT", r.path("/revocations"), r.certs(7), ""), http.StatusOK, "") // the day's one raise, which no certificate spent
-	e.limited(e.do("PUT", r.path("/revocations"), r.certs(9), ""), protocol.QuotaCertificateRevocations)
-	e.want(e.do("PUT", r.path("/prekey"), r.upload(8), r.pass(8)), http.StatusOK, "") // replaces certificate 7, which is revoked
-	r.prekey(10, until, nil)
-	e.limited(e.do("PUT", r.path("/prekey"), r.upload(10), r.pass(10)), protocol.QuotaCertificates) // 8 is not revoked
+	e.limited(e.do("PUT", r.path("/prekey"), r.upload(8), r.pass(8)), protocol.QuotaCertificates) // 6 is not revoked
 	rev, err := protocol.SignRevocation(r.signer, r.id.Address())
 	if err != nil {
 		t.Fatal(err)
@@ -514,7 +506,7 @@ func TestATakerCannotHoldTheRemedyBack(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	l.CallBurst, l.CallRefill = DefaultLimits().CallBurst, DefaultLimits().CallRefill
-	l.CertificatesPerDay, l.CertificateRevocationsPerDay = 1, 2 // the trip, and the raise
+	l.CertificatesPerDay, l.CertificateRevocationsPerDay = 1, 1
 	e := newEnv(t, l)
 	r := e.raw()
 	r.registerCertified(protocol.MaxPrekeyLifetime)

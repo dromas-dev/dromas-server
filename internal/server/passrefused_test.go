@@ -43,7 +43,7 @@ type unknownStore struct{ Store }
 
 func (unknownStore) Known(protocol.Address) (*Mailbox, bool) { return nil, false }
 
-// at3 is a raw mailbox in working-key mode, registered at prekey 2 under
+// at3 is a raw mailbox under certificates, registered at prekey 2 under
 // certificate 2, then renewed to prekey 3 under certificate 3: its current
 // certificate is 3, and work[2] is a certificate of its identity that was its
 // current one before.
@@ -61,7 +61,7 @@ func at3(e *env) *raw {
 
 // otherPasses are passes of r under certificates of its identity other than
 // serial n: one below it that r stood at (2), one never on record below it,
-// at or below the trip (1), and one never on record above it (n+1).
+// below it (1), and one never on record above it (n+1).
 func otherPasses(r *raw, n uint64) map[string]string {
 	return map[string]string{
 		"under certificate 2, the mailbox's before":  r.e.passFor(r.work[2], r.id.Address(), r.e.name()),

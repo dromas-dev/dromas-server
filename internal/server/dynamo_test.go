@@ -658,7 +658,7 @@ func TestPollStaysInMemory(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
-	b, c := e.mailbox(), e.workingMailbox() // c renews under a new certificate
+	b, c := e.mailbox(), e.certifiedMailbox() // c renews under a new certificate
 	cs := &countingStore{s: e.store}
 	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: cs, Limits: relaxed(), Now: e.clock.Now}).Handler()))
 	defer srv.Close()

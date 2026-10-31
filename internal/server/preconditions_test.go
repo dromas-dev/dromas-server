@@ -430,10 +430,11 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 				return call{"PUT", r.path("/prekey"), r.upload(2), r.pass(2)}, ""
 			}},
 			{"a renewal that replaces a revoked certificate", true, none, func(e *env) (call, string) {
-				r := live(e)
-				e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), http.StatusOK, "")
-				r.prekey(2, e.clock.Now().Add(protocol.PrekeyLifetime), nil)
-				return call{"PUT", r.path("/prekey"), r.upload(2), r.pass(2)}, ""
+				r := e.raw()
+				n := r.registerCertified(protocol.MaxPrekeyLifetime)
+				e.want(e.do("PUT", r.path("/revocations"), r.certs(n), ""), http.StatusOK, "")
+				r.prekey(n+1, e.clock.Now().Add(protocol.PrekeyLifetime), nil)
+				return call{"PUT", r.path("/prekey"), r.upload(n + 1), r.pass(n + 1)}, ""
 			}},
 		},
 		"PUT /v1/{addr}/revocations": {

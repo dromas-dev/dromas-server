@@ -617,8 +617,8 @@ func TestASenderChangedBetweenItsPassAndItsRecordIsRefused(t *testing.T) {
 		}},
 		{"its current certificate revoked", http.StatusUnauthorized, protocol.CodeCertificateRevoked, func(s *changedBetween, from *raw) func(context.Context) error {
 			return func(ctx context.Context) error {
-				rc := from.certs(1)
-				return s.Store.Revoke(ctx, from.id.Address(), &Revocations{Identity: from.id.Document(), Certs: rc.RevokedCertificates, CertsSig: rc.RevokedCertificatesSignature, Through: 1}, ExpectAnything)
+				rc := from.certs(2)
+				return s.Store.Revoke(ctx, from.id.Address(), &Revocations{Identity: from.id.Document(), Certs: rc.RevokedCertificates, CertsSig: rc.RevokedCertificatesSignature, Through: 2}, ExpectAnything)
 			}
 		}},
 		{"forgotten", http.StatusForbidden, protocol.CodeUnknownSender, func(s *changedBetween, from *raw) func(context.Context) error {
@@ -628,8 +628,8 @@ func TestASenderChangedBetweenItsPassAndItsRecordIsRefused(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			s := &changedBetween{}
 			e := newEnv(t, relaxed(), func(cfg *Config) { s.Store, cfg.Store = cfg.Store, s })
-			to, from := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
-			pass := from.pass(1)
+			to, from := e.raw().register(protocol.MaxPrekeyLifetime), e.raw()
+			pass := from.pass(from.registerCertified(protocol.MaxPrekeyLifetime)) // under certificate 2
 			s.a, s.change = from.id.Address(), c.change(s, from)
 			r := e.do("POST", to.path("/messages"), to.sealed(1, sealFor(t, to, 1)), pass)
 			n, _ := e.store.Count(context.Background(), to.id.Address())

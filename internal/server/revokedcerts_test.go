@@ -333,7 +333,7 @@ func TestJunkRevocationsOfCertificatesAreLimited(t *testing.T) {
 	e.want(e.do("PUT", path, r.certs(1), ""), 200, "")
 }
 
-// The Go client against this server: a mailbox in working-key mode renews and
+// The Go client against this server: a mailbox under a certificate renews and
 // revokes every certificate before its new one. A message it sent under the old one is refused
 // by its reader, who is shown the revocation and checks it; a message under the new one
 // is delivered; and the mailbox, whose working key before the renewal is now
@@ -342,7 +342,7 @@ func TestTheClientRevokesItsEarlierCertificates(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
-	a, b := e.workingMailbox(), e.mailbox()
+	a, b := e.certifiedMailbox(), e.mailbox()
 	send(t, a, b, "under A's first certificate")
 	taken, old := worker(t, a), e.pass(a)
 	_, first := e.numbers(a.Address())
@@ -380,13 +380,13 @@ func TestTheClientRevokesItsEarlierCertificates(t *testing.T) {
 
 // A mailbox's statements are ordered by certificate first, so a prekey published
 // at the highest serial there is, with a working key someone took from a
-// mailbox in working-key mode, does not end the address: the mailbox's next
+// mailbox under a certificate, does not end the address: the mailbox's next
 // renewal passes it, and its senders follow.
 func TestAPrekeyAtTheHighestSerialDoesNotEndTheAddress(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
-	a, b := e.workingMailbox(), e.mailbox()
+	a, b := e.certifiedMailbox(), e.mailbox()
 	taken := worker(t, a)
 	_, first := e.numbers(a.Address())
 	key, _ := age.GenerateHybridIdentity()
@@ -503,7 +503,7 @@ func TestTheRemedyRenewsWhenATakerSpentTheDaysRenewals(t *testing.T) {
 	l.RenewalsPerDay = DefaultLimits().RenewalsPerDay
 	l.CertificatesPerDay = DefaultLimits().CertificatesPerDay
 	e := newEnv(t, l)
-	a := e.workingMailbox()
+	a := e.certifiedMailbox()
 	taken := worker(t, a)
 	serial, inUse := e.numbers(a.Address())
 	thief := func(serial uint64) reply {

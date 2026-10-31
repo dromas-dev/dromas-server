@@ -79,9 +79,12 @@ func TestEveryCallAboutAMailboxAnswersItsStateBeforeItsPass(t *testing.T) {
 		}
 		e.want(e.do("PUT", r.path("/revocations"), protocol.Revocations{Identity: r.id.Document(), Revocation: rev}, ""), http.StatusCreated, "")
 	})
-	listed, listedPass := made(func(r *raw) {
-		e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), http.StatusOK, "")
-	})
+	// A mailbox under certificate 1, its pass checked, then that certificate
+	// revoked.
+	listed := e.raw().certified().register(protocol.MaxPrekeyLifetime)
+	listedPass := listed.pass(1)
+	e.want(e.do("GET", listed.path("/messages"), nil, listedPass), http.StatusOK, "")
+	e.want(e.do("PUT", listed.path("/revocations"), listed.certs(1), ""), http.StatusOK, "")
 	states := []struct {
 		name string
 		r    *raw

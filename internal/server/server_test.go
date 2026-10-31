@@ -187,7 +187,7 @@ func (e *env) wantNotCurrent(r reply, n uint64) {
 	e.want(r, http.StatusUnauthorized, protocol.CodeCertificateNotCurrent)
 	switch p := r.problem(); {
 	case n == 0 && p.CertificateSerial != nil:
-		e.t.Fatalf("certificate_not_current names certificate %d of a mailbox in identity mode: %s", *p.CertificateSerial, r.body)
+		e.t.Fatalf("certificate_not_current names certificate %d of a mailbox its identity signs for: %s", *p.CertificateSerial, r.body)
 	case n != 0 && (p.CertificateSerial == nil || *p.CertificateSerial != n):
 		e.t.Fatalf("certificate_not_current names certificate %v, want %d: %s", p.CertificateSerial, n, r.body)
 	}
@@ -241,8 +241,8 @@ func mustMailbox(t *testing.T, e *env, a protocol.Address) *Mailbox {
 	return b
 }
 
-// worker loads the signer of a client's mailbox: in working-key mode its
-// working key under its current certificate, and in identity mode, where it
+// worker loads the signer of a client's mailbox: under a certificate its
+// working key under its current certificate, and otherwise, where it
 // has none, its identity.
 func worker(t *testing.T, b *client.Mailbox) ssh.Signer {
 	t.Helper()
@@ -250,7 +250,7 @@ func worker(t *testing.T, b *client.Mailbox) ssh.Signer {
 	if err != nil || st.PrekeySerial == 0 {
 		t.Fatalf("the mailbox's status: %+v, %v", st, err)
 	}
-	if st.CertificateSerial == 0 { // identity mode
+	if st.CertificateSerial == 0 { // its identity signs
 		k, err := os.ReadFile(filepath.Join(b.Dir(), "identity"))
 		if err != nil {
 			t.Fatal(err)
@@ -1581,7 +1581,7 @@ func TestSendNamesTheCurrentPrekey(t *testing.T) {
 func TestRenewalLimits(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	// The Go client's mailbox is in identity mode: each of its renewals is by
+	// The Go client's mailbox is signed for by its identity: each of its renewals is by
 	// its current signer, the identity, and counts under the renewals; a
 	// renewal under a later certificate counts under the certificates
 	// (TestTheIdentitysActsAreCountedApart).
