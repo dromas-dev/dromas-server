@@ -272,13 +272,23 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, sign
 		sum = one
 	}
 	defer func() { s.metrics.pass(false, err) }()
+	// Where the signer is revoked, what is plainly not the identity's pass is
+	// answered so before any count (PROTOCOL.md §11.4 rule 1): another
+	// mailbox's, and the pass under the revoked certificate this process
+	// took before.
+	if listed && (p.Address != a || s.passes.has(a, sum, signer, now) || s.passes.has(a, raw, signer, now)) {
+		return listedCertificate()
+	}
+	// cheap is a refusal made with no signature checked, which gives back the
+	// count reserved for one.
+	cheap := false
 	if count {
 		var m *reservation
 		if m, err = s.miss(r); err != nil {
 			return err
 		}
 		defer func() {
-			if err != nil {
+			if err != nil && !cheap {
 				m.keep()
 			} else {
 				m.release(s.now())
@@ -320,6 +330,7 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, sign
 	}
 	switch {
 	case errors.Is(err, protocol.ErrCertificate):
+		cheap = listed
 		return otherSigner(rank, listed)
 	case errors.Is(err, protocol.ErrCertificateNotBegun):
 		return fail(protocol.CodePassExpired, "a certificate starts an hour before it is made: check this machine's clock, then dromas prekey renew", "the certificate the pass is signed under has not begun")
