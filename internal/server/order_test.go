@@ -318,27 +318,29 @@ func TestARetryIsAnsweredFromWhatIsKeptWhateverItWouldMakeNew(t *testing.T) {
 			// A renewal under the mailbox's current certificate spends its
 			// renewals, and one under a later certificate its certificates:
 			// with both spent, one of each, and the retry repeats the later.
-			r := e.raw().register(protocol.MaxPrekeyLifetime)
+			r := e.raw()
+			base := r.registerWorking(protocol.MaxPrekeyLifetime)
 			until := e.clock.Now().Add(protocol.PrekeyLifetime)
 			var first reply
-			var last, under uint64 // the statement the retry repeats, and its certificate
+			var last uint64 // the statement the retry repeats
+			later := false
 			if slices.Contains(spent, string(protocol.QuotaRenewals)) {
-				last, under = 2, 1
-				r.prekeyUnder(r.by[1], last, until, nil)
-				first = call(ip, "PUT", r.path("/prekey"), r.upload(last), r.pass(under))
+				last = base + 1
+				r.prekeyUnder(r.by[base], last, until, nil)
+				first = call(ip, "PUT", r.path("/prekey"), r.upload(last), r.pass(last))
 			}
 			if slices.Contains(spent, string(protocol.QuotaCertificates)) && first.status < 300 {
-				last, under = 3, 3
+				last, later = base+2, true
 				r.prekey(last, until, nil)
-				first = call(ip, "PUT", r.path("/prekey"), r.upload(last), r.pass(under))
+				first = call(ip, "PUT", r.path("/prekey"), r.upload(last), r.pass(last))
 			}
-			retries := []retried{{"its identical retry", func() reply { return call(ip, "PUT", r.path("/prekey"), r.upload(last), r.pass(under)) }, emptyOK}}
-			if under == 3 { // the control: a later certificate again
-				r.prekey(5, until, nil)
-				return first, retries, func() reply { return call(ip, "PUT", r.path("/prekey"), r.upload(5), r.pass(5)) }
+			retries := []retried{{"its identical retry", func() reply { return call(ip, "PUT", r.path("/prekey"), r.upload(last), r.pass(last)) }, emptyOK}}
+			if later { // the control: a later certificate again
+				r.prekey(base+4, until, nil)
+				return first, retries, func() reply { return call(ip, "PUT", r.path("/prekey"), r.upload(base+4), r.pass(base+4)) }
 			}
-			r.prekeyUnder(r.by[1], 4, until, nil) // the control: a higher serial under the same certificate
-			return first, retries, func() reply { return call(ip, "PUT", r.path("/prekey"), r.upload(4), r.pass(1)) }
+			r.prekeyUnder(r.by[base], base+3, until, nil) // the control: a higher serial under the same certificate
+			return first, retries, func() reply { return call(ip, "PUT", r.path("/prekey"), r.upload(base+3), r.pass(base+3)) }
 		}},
 		{"send", map[string]func(*Limits){
 			string(protocol.QuotaSends):      func(l *Limits) { l.SendsPerDay = 1 },
