@@ -181,8 +181,10 @@ func TestRevocation(t *testing.T) {
 	if id, err := protocol.VerifyRevocation(a.Address(), got.Identity, got.Revocation); err != nil || id.Address() != a.Address() || !bytes.Equal(got.Revocation, rec.Revocation) {
 		t.Fatalf("what the server shows for a revoked mailbox does not verify: %v", err)
 	}
-	if written, members := recordOf(t, shown); len(members) != 3 || !bytes.HasPrefix(written, []byte(`{"type":"revocation_record",`)) {
-		t.Errorf("the record served has %d members, want its type first, then identity and revocation: %s", len(members), shown.body)
+	// A is in working-key mode, so the record carries its revocation of
+	// certificates, the trip, beside the revocation of the address.
+	if written, members := recordOf(t, shown); len(members) != 5 || !bytes.HasPrefix(written, []byte(`{"type":"revocation_record",`)) || !bytes.Equal(got.RevokedCertificates, trip.RevokedCertificates) {
+		t.Errorf("the record served has %d members, want its type first, then identity and revocation, then the revocation of certificates and its signature: %s", len(members), shown.body)
 	}
 
 	// The clients meet it and check it for themselves.
