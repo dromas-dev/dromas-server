@@ -253,15 +253,16 @@ func TestAStatementOutOfOrderIsRefusedBeforeItsSignature(t *testing.T) {
 	l := relaxed()
 	l.MissesPerMinute = 1
 	e := newEnv(t, l)
-	r := e.raw().register(protocol.MaxPrekeyLifetime)
+	r := e.raw()
+	n := r.registerCertified(protocol.MaxPrekeyLifetime)
 	key, _ := age.GenerateHybridIdentity()
-	stale := &protocol.Prekey{Address: r.id.Address(), Serial: 1, Key: key.Recipient().String(), NotAfter: e.clock.Now().Add(time.Hour)}
-	misSigned := protocol.PrekeyRequest{Prekey: stale.Statement(), PrekeySignature: r.sig[1]} // statement 1's signature, over other bytes
-	e.want(e.do("PUT", r.path("/prekey"), misSigned, r.pass(1)), http.StatusConflict, protocol.CodeConflict)
-	e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), http.StatusOK, "")
-	stale.Serial = 2
+	stale := &protocol.Prekey{Address: r.id.Address(), Serial: n, Key: key.Recipient().String(), NotAfter: e.clock.Now().Add(time.Hour)}
+	misSigned := protocol.PrekeyRequest{Prekey: stale.Statement(), PrekeySignature: r.sig[n]} // the current statement's signature, over other bytes
+	e.want(e.do("PUT", r.path("/prekey"), misSigned, r.pass(n)), http.StatusConflict, protocol.CodeConflict)
+	e.want(e.do("PUT", r.path("/revocations"), r.certs(n), ""), http.StatusOK, "")
+	stale.Serial = n + 1
 	misSigned.Prekey = stale.Statement()
-	got := e.do("PUT", r.path("/prekey"), misSigned, r.pass(1))
+	got := e.do("PUT", r.path("/prekey"), misSigned, r.pass(n))
 	e.want(got, http.StatusUnauthorized, protocol.CodeCertificateRevoked)
 	if !strings.Contains(string(got.body), "revoked") {
 		t.Fatalf("a statement under a revoked certificate: %s", got.body)

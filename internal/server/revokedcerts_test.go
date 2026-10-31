@@ -63,14 +63,15 @@ func TestAStoredListThatDoesNotParseIsAnError(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
-	r, other := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
+	r, other := e.raw(), e.raw().register(protocol.MaxPrekeyLifetime)
+	n := r.registerCertified(protocol.MaxPrekeyLifetime)
 	bad := []byte("not a revocation of certificates\n")
 	if err := e.store.Revoke(ctx, r.id.Address(), &Revocations{Identity: r.id.Document(), Certs: bad, CertsSig: []byte("x"), Through: 1}, ExpectAnything); err != nil {
 		t.Fatal(err)
 	}
 	for name, got := range map[string]reply{
-		"a list under the mailbox's certificate": e.do("GET", r.path("/messages"), nil, r.pass(1)),
-		"a send to the mailbox":                  e.sendTo(r, 1, other, 1),
+		"a list under the mailbox's certificate": e.do("GET", r.path("/messages"), nil, r.pass(n)),
+		"a send to the mailbox":                  e.sendTo(r, n, other, 1),
 		"a revocation of its certificates":       e.do("PUT", r.path("/revocations"), r.certs(1), ""),
 	} {
 		if got.status != 503 {
@@ -95,7 +96,7 @@ func TestRevokedCertificates(t *testing.T) {
 		return e.do("PUT", r.path("/prekey"), r.upload(serial), r.pass(under))
 	}
 	path := r.path("/revocations")
-	good := r.certs(1) // the trip, of a mailbox in identity mode
+	good := r.certs(1) // of a mailbox whose identity signs its statements
 	work := r.certify(2)
 
 	// What is not a revocation of this mailbox's certificates, each of it well
@@ -159,12 +160,12 @@ func TestRevokedCertificates(t *testing.T) {
 		members["revoked_certificates"] == nil || members["revoked_certificates_signature"] == nil {
 		t.Errorf("the mailbox is read with %d members, want its identity, prekey and signature, then the statement and its signature: %s", len(members), shown.body)
 	}
-	// It is the trip: the identity, which signs the mailbox's current
-	// statement, ranks 0, which it covers. The identity's pass is refused, and
-	// nobody is sent to its prekey, until the first statement under a
-	// certificate above it, which needs no pass by the identity.
-	e.want(e.do("GET", r.path("/messages"), nil, r.pass(1)), 401, protocol.CodeCertificateRevoked)
-	e.want(e.sendTo(r, 1, other, 1), 409, protocol.CodePrekeyExpired)
+	// It covers certificates only: the identity, which signs the mailbox's
+	// current statement, goes on, its pass taken and its prekey sent to; and
+	// a statement under a certificate above it is taken, which needs no pass
+	// by the identity.
+	e.want(e.do("GET", r.path("/messages"), nil, r.pass(1)), 200, "")
+	e.want(e.sendTo(r, 1, other, 1), 201, "")
 	r.prekeyUnder(work, 2, now.Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(put(2, 2), 200, "") // the mailbox stands at certificate 2, prekey 2
 	e.want(e.do("GET", r.path("/messages"), nil, r.pass(2)), 200, "")
@@ -175,10 +176,11 @@ func TestRevokedCertificates(t *testing.T) {
 	e.want(e.do("PUT", path, good, ""), 200, "")
 	e.want(e.do("GET", r.path("/messages"), nil, r.pass(2)), 200, "")
 
-	// One through the mailbox's current certificate. No pass of the mailbox is
+	// One through the mailbox's current certificate. No pass under it is
 	// taken, as an owner or as a sender, though the server took this very
-	// pass a moment ago; nobody is sent to its prekey; and nothing under that
-	// certificate is taken as a prekey, the current statement included.
+	// pass a moment ago, and only the identity's is; nobody is sent to its
+	// prekey; and nothing under that certificate is taken as a prekey, the
+	// current statement included.
 	seen := r.pass(2)
 	e.want(e.do("GET", r.path("/messages"), nil, seen), 200, "")
 	current := r.certs(2)
@@ -189,13 +191,14 @@ func TestRevokedCertificates(t *testing.T) {
 	e.want(e.do("GET", r.path("/messages"), nil, seen), 401, protocol.CodeCertificateRevoked)
 	e.want(e.do("GET", r.path("/messages"), nil, r.pass(2)), 401, protocol.CodeCertificateRevoked)
 	e.want(e.do("GET", r.path("/acl"), nil, r.pass(2)), 401, protocol.CodeCertificateRevoked)
+	e.want(e.do("GET", r.path("/acl"), nil, r.pass(1)), 200, "") // the identity's
 	e.want(e.sendTo(other, 1, r, 2), 401, protocol.CodeCertificateRevoked)
 	e.want(e.sendTo(r, 2, other, 1), 409, protocol.CodePrekeyExpired)
 	e.want(put(2, 2), 401, protocol.CodeCertificateRevoked)
 	r.prekeyUnder(r.work[2], 3, now.Add(time.Hour), nil)
 	e.want(put(3, 2), 401, protocol.CodeCertificateRevoked)
-	if n, _ := e.store.Count(ctx, r.id.Address()); n != 1 {
-		t.Errorf("the mailbox holds %d messages after its certificate was revoked, want the 1 it had", n)
+	if n, _ := e.store.Count(ctx, r.id.Address()); n != 2 {
+		t.Errorf("the mailbox holds %d messages after its certificate was revoked, want the 2 it had", n)
 	}
 	shown = e.do("GET", r.path(""), nil, "")
 	e.want(shown, 200, "")
