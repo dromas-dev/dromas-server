@@ -59,7 +59,7 @@ func TestARecordExpiresWhenNothingOfTheMailboxIsValid(t *testing.T) {
 		t.Fatalf("a renewal with an earlier prekey moves the record's expiry from %v to %v", first, b.Expires)
 	}
 	// A certificate that ends later raises it to its end.
-	r.trip()
+	r.certified()
 	r.prekeyUnder(r.certifyFor(2, l.MaxCertificateLifetime), 3, now.Add(time.Hour), nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(3), r.pass(3)), 200, "")
 	b, cert = e.stands(r.id.Address())

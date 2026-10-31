@@ -64,7 +64,7 @@ func TestAMailboxOfTheOptionalKeyType(t *testing.T) {
 
 	// The trip, then a certificate, by a prekey published under it: the
 	// identity's passes stop.
-	p.trip()
+	p.certified()
 	p.prekey(2, now.Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", p.path("/prekey"), p.upload(2), p.pass(2)), 200, "")
 	e.want(e.do("GET", p.path("/messages"), nil, p.pass(1)), 401, protocol.CodeCertificateRevoked)
@@ -113,7 +113,7 @@ func TestAPassThatCarriesAnotherMailboxsCertificate(t *testing.T) {
 			}
 			serial := uint64(1)
 			if working {
-				serial = victim.registerWorking(protocol.MaxPrekeyLifetime)
+				serial = victim.registerCertified(protocol.MaxPrekeyLifetime)
 			} else {
 				victim.register(protocol.MaxPrekeyLifetime)
 			}
@@ -142,7 +142,7 @@ func TestACertificateOnRecordThatTheIdentityDidNotSign(t *testing.T) {
 	ctx := context.Background()
 	now := e.clock.Now()
 	for name, victim := range map[string]*raw{"ssh-ed25519": e.raw(), "ecdsa-sha2-nistp256": e.rawP256()} {
-		serial := victim.registerWorking(protocol.MaxPrekeyLifetime)
+		serial := victim.registerCertified(protocol.MaxPrekeyLifetime)
 		a := victim.id.Address()
 		// A certificate for this address, in every rule, that another key signed.
 		_, wpriv, err := ed25519.GenerateKey(rand.Reader)
@@ -217,7 +217,7 @@ func TestARememberedPassEndsWithItsCertificate(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	now := e.clock.Now()
-	r := e.raw().trip()
+	r := e.raw().certified()
 	_, wpriv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)

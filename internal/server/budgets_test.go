@@ -516,7 +516,7 @@ func TestATakerCannotHoldTheRemedyBack(t *testing.T) {
 	l.CertificatesPerDay, l.CertificateRevocationsPerDay = 1, 2 // the trip, and the raise
 	e := newEnv(t, l)
 	r := e.raw()
-	r.registerWorking(protocol.MaxPrekeyLifetime)
+	r.registerCertified(protocol.MaxPrekeyLifetime)
 	until := e.clock.Now().Add(protocol.PrekeyLifetime)
 	r.prekey(1000, until, nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(1000), r.pass(1000)), http.StatusOK, "") // the day's one certificate

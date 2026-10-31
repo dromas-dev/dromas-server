@@ -53,10 +53,19 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 	case !sender.open():
 		return fail(protocol.CodeUnknownSender, "register your own mailbox first: dromas init", "the mailbox the pass names is not registered")
 	}
+	// Where its current certificate is revoked, only the identity's pass is
+	// taken (PROTOCOL.md §8): the pass is held to that again, a lookup in
+	// memory for the identity's pass the check above took.
 	if listed, err := sender.listed(sender.Rank); err != nil {
 		return err
 	} else if listed {
-		return listedCertificate()
+		key, err := identityWire(sender.Identity)
+		if err != nil {
+			return err
+		}
+		if err := s.checkPass(r, from, key, sender.Signer, sender.Rank, true, nil); err != nil {
+			return err
+		}
 	}
 	lim, err := s.limitsFor(ctx, sender)
 	if err != nil {

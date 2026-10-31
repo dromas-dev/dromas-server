@@ -291,27 +291,22 @@ func (e *env) pass(b *client.Mailbox) string {
 	return e.passFor(worker(e.t, b), b.Address(), e.name())
 }
 
-// raw is a mailbox built by hand, for requests the client would never make. It
-// is in identity mode, its identity signing its statements and passes,
-// until trip publishes its revocation of certificates through tripAt; from
-// then on each statement is signed by a working key under a certificate of
-// the statement's serial, and certificates and statements are kept by the
-// number they were made under.
+// raw is a mailbox built by hand, for requests the client would never make. Its
+// identity signs its statements, until certified; from then on each statement
+// is signed by a new working key under a certificate of the statement's
+// serial. Certificates and statements are kept by the number they were made
+// under.
 type raw struct {
-	e       *env
-	signer  ssh.Signer // the identity
-	id      *protocol.Identity
-	keys    map[uint64]*age.HybridIdentity
-	stmt    map[uint64][]byte
-	sig     map[uint64][]byte
-	by      map[uint64]ssh.Signer // the signer of each statement, by its serial
-	work    map[uint64]ssh.Signer // a working key under its certificate, by the certificate's serial
-	tripped bool
+	e                 *env
+	signer            ssh.Signer // the identity
+	id                *protocol.Identity
+	keys              map[uint64]*age.HybridIdentity
+	stmt              map[uint64][]byte
+	sig               map[uint64][]byte
+	by                map[uint64]ssh.Signer // the signer of each statement, by its serial
+	work              map[uint64]ssh.Signer // a working key under its certificate, by the certificate's serial
+	underCertificates bool
 }
-
-// tripAt is the serial a raw mailbox's trip revokes certificates through: a
-// mailbox in working-key mode signs under certificates above it.
-const tripAt = 1
 
 func (e *env) raw() *raw {
 	e.t.Helper()
@@ -352,25 +347,21 @@ func (r *raw) certifyFor(serial uint64, lifetime time.Duration) ssh.Signer {
 	return s
 }
 
-// trip publishes the mailbox's revocation of certificates through tripAt,
-// the trip to working-key mode, and signs every statement after it under a
-// certificate.
-func (r *raw) trip() *raw {
-	r.e.t.Helper()
-	if got := r.e.do("PUT", r.path("/revocations"), r.certs(tripAt), ""); got.status != 200 && got.status != 201 {
-		r.e.t.Fatalf("the trip: %d %s", got.status, got.body)
-	}
-	r.tripped = true
+// certified signs every statement the mailbox makes after it under a
+// certificate. It publishes nothing: a server takes a certificate above the
+// revocation of certificates it holds, every one where it holds none.
+func (r *raw) certified() *raw {
+	r.underCertificates = true
 	return r
 }
 
 // prekey makes statement serial, with a new key unless key is given: signed
-// by the identity in identity mode, and by a new working key under a new
-// certificate of the same serial once the mailbox has made its trip.
+// by the identity, or, once the mailbox is certified, by a new working key
+// under a new certificate of the same serial.
 func (r *raw) prekey(serial uint64, notAfter time.Time, key *age.HybridIdentity) {
 	r.e.t.Helper()
 	signer := r.signer
-	if r.tripped {
+	if r.underCertificates {
 		signer = r.certify(serial)
 	}
 	r.prekeyUnder(signer, serial, notAfter, key)
@@ -436,13 +427,13 @@ func (r *raw) registerAt(serial uint64, d time.Duration) *raw {
 	return r
 }
 
-// registerWorking makes the trip, then registers the mailbox in working-key
-// mode with a new prekey just above it, under the certificate of its serial,
-// valid for d. It returns the serial.
-func (r *raw) registerWorking(d time.Duration) uint64 {
+// registerCertified registers the mailbox with a new prekey 2, under a
+// certificate of serial 2, valid for d, and signs every statement after it
+// under a certificate. It returns the serial.
+func (r *raw) registerCertified(d time.Duration) uint64 {
 	r.e.t.Helper()
-	r.trip().registerAt(tripAt+1, d)
-	return tripAt + 1
+	r.certified().registerAt(2, d)
+	return 2
 }
 
 // A signature is at most protocol.MaxSignature bytes as it arrives (PROTOCOL.md
@@ -1068,7 +1059,7 @@ func TestPrekeyRenewal(t *testing.T) {
 
 	// The trip: from it on, the identity's statements and passes are
 	// refused, as is a certificate at or below it.
-	r.trip()
+	r.certified()
 	e.want(poll(identityPass()), 401, protocol.CodeCertificateRevoked)
 	r.prekeyUnder(r.signer, 3, now.Add(time.Hour), nil)
 	e.want(put(3, 3), 401, protocol.CodeCertificateRevoked)

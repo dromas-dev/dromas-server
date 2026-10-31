@@ -319,7 +319,7 @@ func TestARetryIsAnsweredFromWhatIsKeptWhateverItWouldMakeNew(t *testing.T) {
 			// renewals, and one under a later certificate its certificates:
 			// with both spent, one of each, and the retry repeats the later.
 			r := e.raw()
-			base := r.registerWorking(protocol.MaxPrekeyLifetime)
+			base := r.registerCertified(protocol.MaxPrekeyLifetime)
 			until := e.clock.Now().Add(protocol.PrekeyLifetime)
 			var first reply
 			var last uint64 // the statement the retry repeats

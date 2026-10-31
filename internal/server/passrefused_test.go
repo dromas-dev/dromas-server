@@ -50,7 +50,7 @@ func (unknownStore) Known(protocol.Address) (*Mailbox, bool) { return nil, false
 func at3(e *env) *raw {
 	e.t.Helper()
 	r := e.raw()
-	r.registerWorking(protocol.MaxPrekeyLifetime)
+	r.registerCertified(protocol.MaxPrekeyLifetime)
 	r.prekey(3, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(3), r.pass(3)), 200, "")
 	if _, c := e.numbers(r.id.Address()); c != 3 {
@@ -119,7 +119,7 @@ func (e *env) notCurrentNaming(r reply, n uint64) {
 func TestARegistrationOfANewMailboxNamesItsStatementsCertificate(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	r := e.raw().trip()
+	r := e.raw().certified()
 	r.prekey(5, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	r.certify(1)
 	for name, pass := range map[string]string{
@@ -362,7 +362,7 @@ func TestAPassOfTheFormTheModeRefuses(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	w, i, o := e.raw(), e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
-	ws := w.registerWorking(protocol.MaxPrekeyLifetime)
+	ws := w.registerCertified(protocol.MaxPrekeyLifetime)
 	byIdentity := e.passFor(w.signer, w.id.Address(), e.name())
 	underCert := e.passFor(i.certify(7), i.id.Address(), e.name())
 	calls := func(r *raw, serial uint64) map[string]func(pass string) reply {

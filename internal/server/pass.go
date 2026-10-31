@@ -199,7 +199,7 @@ func listedCertificate() *problem {
 // The hints of a 401: what a client does about it.
 const (
 	hintPass    = "send the mailbox's pass in Authorization, signed by its identity or the signer of its current prekey (dromas and dr_owner do this)" //nolint:gosec // a hint's words, not a credential
-	hintNewPass = "sign a new pass and retry once (dromas and dr_owner do this)"                                                       //nolint:gosec // a hint's words, not a credential
+	hintNewPass = "sign a new pass and retry once (dromas and dr_owner do this)"                                                                       //nolint:gosec // a hint's words, not a credential
 )
 
 // checkPass checks that the call carries the pass of mailbox a: made for this

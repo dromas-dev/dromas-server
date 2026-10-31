@@ -22,11 +22,11 @@ import (
 // revoked certificate, and sends nobody to a prekey under one.
 
 // certs is the revocation of r's certificates through a serial, signed by its
-// identity, in the record that carries it. Any one is the trip, so r signs
-// every statement after it under a certificate (raw.prekey).
+// identity, in the record that carries it; r signs every statement after it
+// under a certificate (raw.certified).
 func (r *raw) certs(through uint64) protocol.Revocations {
 	r.e.t.Helper()
-	r.tripped = true
+	r.underCertificates = true
 	l, err := protocol.NewRevokedCertificates(r.id.Address(), through)
 	if err != nil {
 		r.e.t.Fatal(err)
@@ -451,7 +451,7 @@ func TestTheStandingKnowsTheRevokedCertificates(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
 	r := e.raw()
-	r.registerWorking(protocol.MaxPrekeyLifetime)
+	r.registerCertified(protocol.MaxPrekeyLifetime)
 	r.prekey(3, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(3), r.pass(3)), 200, "") // the mailbox stands at certificate 3
 	if _, err := e.store.Count(ctx, r.id.Address()); err != nil {           // a process that has loaded it
