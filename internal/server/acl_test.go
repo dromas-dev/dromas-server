@@ -53,8 +53,7 @@ func (e *env) sealTo(to *client.Mailbox) sealed {
 	}
 	_, _ = io.WriteString(w, `{"v":1}`)
 	_ = w.Close()
-	serial, under := e.numbers(to.Address())
-	return sealedTo(serial, under, ct.Bytes())
+	return sealedTo(e.statement(to.Address()), ct.Bytes())
 }
 
 // A mailbox's ACL is the mailbox's own to read and replace, whole; one that is not

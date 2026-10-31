@@ -286,10 +286,10 @@ func (s *hangingDedupe) Mailbox(ctx context.Context, a protocol.Address) (*Mailb
 	return s.Store.Mailbox(ctx, a)
 }
 
-// postBytes posts ciphertext ct to url, prekey 1 under certificate 1, with pass,
+// postBytes posts ciphertext ct to url, which names its statement, with pass,
 // through c: its status, or 0 when the client gave up.
 func postBytes(c *http.Client, url string, ct []byte, pass string) int {
-	req, _ := http.NewRequest(http.MethodPost, url+"?"+protocol.SendQuery{PrekeySerial: 1, CertificateSerial: 1}.Encode(), bytes.NewReader(ct))
+	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(ct))
 	req.Header.Set("Content-Type", protocol.CiphertextContentType)
 	req.Header.Set("Authorization", pass)
 	resp, err := c.Do(req)
@@ -319,7 +319,7 @@ func TestAPostsSharedReadEndsAtItsBound(t *testing.T) {
 	h.id = sha256.Sum256(ct)
 	h.probe[0] = 5
 	pass := from.pass(1)
-	url := e.srv.URL + to.path("/messages")
+	url := e.srv.URL + to.path("/messages?") + to.sealed(1, nil).Encode()
 	impatient := &http.Client{Timeout: 300 * time.Millisecond}
 	t.Cleanup(sync.OnceFunc(func() { close(h.let) })) // or the server's Close waits on the handlers for ever
 
@@ -408,7 +408,7 @@ func TestAHeldReadGivesBackTheLargeRead(t *testing.T) {
 	send := func(body []byte, wait time.Duration) (int, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), wait)
 		defer cancel()
-		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, e.srv.URL+"/v1/"+to.Address().String()+"/messages?"+sealedTo(1, 1, nil).Encode(), bytes.NewReader(body))
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, e.srv.URL+"/v1/"+to.Address().String()+"/messages?"+sealedTo(e.statement(to.Address()), nil).Encode(), bytes.NewReader(body))
 		req.Header.Set("Content-Type", protocol.CiphertextContentType)
 		req.Header.Set("Authorization", e.pass(lifted))
 		resp, err := http.DefaultClient.Do(req)
@@ -502,7 +502,7 @@ func TestEveryReadOfASendsSharedCallIsBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.to, s.account = to.id.Address(), acc.ID
-	e.want(e.sendTo(to, 1, 1, from, 1), http.StatusCreated, "")
+	e.want(e.sendTo(to, 1, from, 1), http.StatusCreated, "")
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, read := range []string{"Dedupe", "Count", "Account", "Mailbox"} {

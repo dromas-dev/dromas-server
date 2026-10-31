@@ -63,11 +63,12 @@ type Config struct {
 	// (NewMetrics). None: nothing is counted.
 	Metrics *Metrics
 	// Policy is the server's version policy at start (PROTOCOL.md §11.17),
-	// which GET /v1/ answers and every request under /v1/ is held to
-	// (versioned), and which its file's Reloader replaces
-	// (Server.VersionPolicy); its caller holds it to
-	// protocol.ServerDocument.Check (ReadVersionPolicy). None: no floor, no
-	// deprecation, no sunset and no latest version.
+	// which GET /v1/ answers with the server's own members and every request
+	// under /v1/ is held to (versioned), and which its file's Reloader
+	// replaces (Server.VersionPolicy); its caller holds it to
+	// protocol.ServerDocument.Check (ReadVersionPolicy). Its
+	// max_certificate_lifetime is Limits'. None: no floor, no deprecation,
+	// no sunset and no latest version.
 	Policy protocol.ServerDocument
 }
 
@@ -99,7 +100,7 @@ type Server struct {
 	lifted    *buckets // per mailbox whose account lifts its new messages: at ReceiveCeiling
 	drained   *buckets // per mailbox: its first fetches of held messages
 	sends     *buckets // per sender, a number a day
-	renewals  *buckets // per mailbox, a number a day: renewals under its current certificate
+	renewals  *buckets // per mailbox, a number a day: renewals by its current signer
 	certs     *buckets // per mailbox, a number a day: renewals under a later certificate, which only its identity can make
 	raises    *buckets // per mailbox, a number a day: raises of its revocation of certificates, which only its identity can make
 	// inFlight counts the sends let past the mailbox cap and not yet stored, by
@@ -115,8 +116,9 @@ type Server struct {
 	// purges are the deletes of what is left of revoked mailboxes in flight, one
 	// per address (purge). Never DoChan (reads).
 	purges singleflight.Group
-	// posts are the posts of one ciphertext to one mailbox in flight at once,
-	// from any sender (send): one call, which the others wait for. Never
+	// posts are the posts of one ciphertext to one mailbox naming one
+	// statement, by its hash, in flight at once, from any sender (send): one
+	// call, which the others wait for. Never
 	// DoChan (reads).
 	posts singleflight.Group
 	// reads are the reads of mailbox records in flight (lookup), one per
@@ -168,7 +170,7 @@ func New(c Config) *Server {
 	if s.now == nil {
 		s.now = time.Now
 	}
-	policy := policyOf(c.Policy)
+	policy := policyOf(c.Policy, c.Limits)
 	s.policy.Store(&policy)
 	if len(s.identityTypes) == 0 {
 		s.identityTypes = protocol.IdentityTypes()
@@ -297,8 +299,8 @@ func (s *Server) gate(pass passRule, h http.Handler) http.Handler {
 // pass this process has checked, to a route that takes that mailbox's pass
 // (pass), and the mailbox is live in this process's memory (live). All this
 // reads is the Authorization line, its hash, and lookups in memory, which
-// cost what reading its bytes does. Whether the pass is under the mailbox's
-// current certificate, the route's own check of it says (checkPass).
+// cost what reading its bytes does. Whether the pass is by the mailbox's
+// current signer, the route's own check of it says (checkPass).
 func (s *Server) boxsCall(pass passRule, r *http.Request) bool {
 	if pass == passNone {
 		return false
@@ -312,7 +314,7 @@ func (s *Server) boxsCall(pass passRule, r *http.Request) bool {
 
 // live reports whether this process's memory holds mailbox a as live, with no
 // read of a store: loaded (Held), or its record in the cache (Known), and
-// active: not revoked, its current certificate not one its identity revoked.
+// active: not revoked, its current signer not one its identity revoked.
 // Memory is what the stream keeps current, so a change made through another
 // process counts as one made here. A mailbox memory does not hold is not live
 // here: its call spends its address's flood budget, and its route reads it.
@@ -324,7 +326,7 @@ func (s *Server) live(a protocol.Address) bool {
 	if !ok || b == nil || b.State != Active {
 		return false
 	}
-	listed, err := b.listed(b.CertSerial)
+	listed, err := b.listed(b.Rank)
 	return err == nil && !listed
 }
 

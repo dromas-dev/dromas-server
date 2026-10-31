@@ -61,7 +61,7 @@ func TestAListWhosePreconditionIsFalseTakesNoCursor(t *testing.T) {
 			e := newEnv(t, l)
 			from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 			for range pageSize + 1 {
-				e.want(e.do("POST", to.path("/messages"), sealedTo(1, 1, ciphertextTo(t, to)), from.pass(1)), http.StatusCreated, "")
+				e.want(e.do("POST", to.path("/messages"), to.sealed(1, ciphertextTo(t, to)), from.pass(1)), http.StatusCreated, "")
 			}
 			pass := to.pass(1)
 			first := e.do("GET", to.path("/messages"), nil, pass)
@@ -243,7 +243,7 @@ func TestASendsRetryWithAFalsePreconditionIs412(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
-	post := sealedTo(1, 1, ciphertextTo(t, to))
+	post := to.sealed(1, ciphertextTo(t, to))
 	e.want(e.do("POST", to.path("/messages"), post, from.pass(1)), http.StatusCreated, "")
 	for _, h := range [][2]string{{"If-Match", `"x"`}, {"If-None-Match", "*"}} {
 		if got := e.doWith("POST", to.path("/messages"), post, from.pass(1), h[0], h[1]); got.status != http.StatusPreconditionFailed {
@@ -514,11 +514,11 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 			{"a first post", true, map[string]int{string(protocol.QuotaCalls): 1, string(protocol.QuotaSendsBeforePass): 1}, func(e *env) (call, string) {
 				from, to := live(e), live(e)
 				warmed(e, from, from.pass(1))
-				return call{"POST", to.path("/messages"), sealedTo(1, 1, ciphertextTo(e.t, to)), from.pass(1)}, ""
+				return call{"POST", to.path("/messages"), to.sealed(1, ciphertextTo(e.t, to)), from.pass(1)}, ""
 			}},
 			{"a post of bytes the mailbox holds", true, map[string]int{string(protocol.QuotaCalls): 1, string(protocol.QuotaSendsBeforePass): 1}, func(e *env) (call, string) {
 				from, to := live(e), live(e)
-				post := sealedTo(1, 1, ciphertextTo(e.t, to))
+				post := to.sealed(1, ciphertextTo(e.t, to))
 				e.want(e.do("POST", to.path("/messages"), post, from.pass(1)), http.StatusCreated, "")
 				warmed(e, from, from.pass(1))
 				return call{"POST", to.path("/messages"), post, from.pass(1)}, ""
@@ -538,7 +538,7 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 			{"a page after the first, at the cursor the mailbox was handed", true, map[string]int{string(protocol.QuotaPolls): 1}, func(e *env) (call, string) {
 				from, to := live(e), live(e)
 				for range pageSize + 1 {
-					e.want(e.do("POST", to.path("/messages"), sealedTo(1, 1, ciphertextTo(e.t, to)), from.pass(1)), http.StatusCreated, "")
+					e.want(e.do("POST", to.path("/messages"), to.sealed(1, ciphertextTo(e.t, to)), from.pass(1)), http.StatusCreated, "")
 				}
 				warmed(e, to, to.pass(1))
 				var page protocol.MessageList
@@ -685,7 +685,7 @@ func drained(e *env, n int) (*raw, protocol.MessageList, string) {
 	e.t.Helper()
 	from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 	for range n {
-		e.want(e.do("POST", to.path("/messages"), sealedTo(1, 1, ciphertextTo(e.t, to)), from.pass(1)), http.StatusCreated, "")
+		e.want(e.do("POST", to.path("/messages"), to.sealed(1, ciphertextTo(e.t, to)), from.pass(1)), http.StatusCreated, "")
 	}
 	var page protocol.MessageList
 	if err := json.Unmarshal(e.do("GET", to.path("/messages"), nil, to.pass(1)).body, &page); err != nil || page.NextCursor == nil {

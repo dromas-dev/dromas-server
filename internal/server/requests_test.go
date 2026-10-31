@@ -94,7 +94,7 @@ func TestEveryStoreCallSendsAWSWhatItSentBefore(t *testing.T) {
 	rec := &Mailbox{
 		Addr: mailbox, Identity: []byte("an identity document"), State: Active,
 		Statement: []byte("a prekey statement"), Signature: []byte("its signature"),
-		CertSerial: 7, Cert: [32]byte{0xce, 5}, SenderKeyTypes: []string{"ssh-ed25519"},
+		Rank: 7, Signer: [32]byte{0xce, 5}, SenderKeyTypes: []string{"ssh-ed25519"},
 		Retired: []Retired{{Type: protocol.PostQuantum, NotAfter: now.Add(24 * time.Hour), KeyHash: [32]byte{0x4b, 6}}},
 		Rev:     3, Created: now.Add(-48 * time.Hour), Expires: now.Add(60 * 24 * time.Hour),
 		ACL: &protocol.ACL{Allow: protocol.ACLList{Any: true}, Deny: protocol.NewACLList(false, []protocol.Address{other})},
@@ -120,6 +120,7 @@ func TestEveryStoreCallSendsAWSWhatItSentBefore(t *testing.T) {
 			_ = s.Revoke(ctx, mailbox, &Revocations{Identity: rec.Identity, Address: []byte("a revocation")}, ExpectHeld)
 		}},
 		{"Mailbox", func() { _, _ = s.Mailbox(ctx, other) }},
+		{"Reread", func() { _, _ = s.Reread(ctx, other) }},
 		{"Count, the mailbox's load", func() { _, _ = s.Count(ctx, other) }},
 		{"Dedupe", func() { _, _ = s.Dedupe(ctx, mailbox, id) }},
 		{"PutMessage", func() { _, _ = s.PutMessage(ctx, mailbox, h, []byte("a ciphertext")) }},

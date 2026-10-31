@@ -58,16 +58,16 @@ func TestEvery410CarriesTheRecord(t *testing.T) {
 		return protocol.Revocations{Identity: b.id.Document(), Revocation: sig}
 	}
 	r, from := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
-	// r renews under certificate 2 and revokes certificate 1, so its record
-	// carries a revocation of certificates beside the revocation of the
-	// address.
+	// r makes the trip, revoking certificate 1, and renews under certificate
+	// 2, so its record carries a revocation of certificates beside the
+	// revocation of the address.
+	e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), http.StatusOK, "")
 	r.prekey(2, until, nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(2), r.pass(2)), http.StatusOK, "")
-	e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), http.StatusOK, "")
 	writing, release := make(chan struct{}), make(chan struct{})
 	hook.set(func() { close(writing); <-release })
 	sent := make(chan reply, 1)
-	go func() { sent <- e.sendTo(r, 2, 2, from, 1) }()
+	go func() { sent <- e.sendTo(r, 2, from, 1) }()
 	<-writing
 	e.want(e.do("PUT", r.path("/revocations"), revocation(r), ""), http.StatusCreated, "")
 	close(release)
@@ -100,7 +100,7 @@ func TestEvery410CarriesTheRecord(t *testing.T) {
 			"a registration":       e.do("PUT", c.mailbox.path(""), c.mailbox.registration(next), c.mailbox.pass(next)),
 			"a prekey upload":      e.do("PUT", c.mailbox.path("/prekey"), c.mailbox.upload(next), c.mailbox.pass(next)),
 			"the revocation again": e.do("PUT", c.mailbox.path("/revocations"), want, ""),
-			"a send":               e.sendTo(c.mailbox, c.under, c.under, from, 1),
+			"a send":               e.sendTo(c.mailbox, c.under, from, 1),
 			"a poll":               e.do("GET", c.mailbox.path("/messages"), nil, pass),
 			"a fetch":              e.do("GET", c.mailbox.path("/messages/"+id), nil, pass),
 			"an ack":               e.do("DELETE", c.mailbox.path("/messages/"+id), nil, pass),

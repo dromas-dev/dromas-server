@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -40,6 +41,7 @@ func versionsEnv(t *testing.T, l Limits, with ...func(*Config)) (*env, time.Time
 				{Version: "1.3", At: formatTime(start.Add(time.Hour))},
 				{Below: "1.4", At: formatTime(start.Add(2 * time.Hour))},
 			},
+			MaxCertificateLifetime: DefaultLimits().maxCertificate(),
 		}
 		if err := c.Policy.Check(); err != nil {
 			t.Fatal(err)
@@ -330,11 +332,15 @@ func TestTheDocumentIsThePolicy(t *testing.T) {
 			t.Errorf("HEAD, version %q: %d %v", v, h.StatusCode, h.Header)
 		}
 	}
-	// No policy: no floor, no latest version, and every list written.
-	bare := newEnv(t, relaxed())
+	// No policy: no floor, no latest version, and every list written; and
+	// the longest certificate the server takes, its setting, in seconds,
+	// whatever the policy (PROTOCOL.md §11.18).
+	l := relaxed()
+	l.MaxCertificateLifetime = 50*24*time.Hour + 1500*time.Millisecond // served in whole seconds
+	bare := newEnv(t, l)
 	got := bare.do("GET", protocol.DocumentPath, nil, "")
-	if got.status != http.StatusOK || strings.TrimSpace(string(got.body)) != `{"deprecations":[],"sunsets":[],"capabilities":[]}` {
-		t.Errorf("no policy: %d %s", got.status, got.body)
+	if want := fmt.Sprintf(`{"deprecations":[],"sunsets":[],"capabilities":[],"max_certificate_lifetime":%d}`, 50*24*3600+1); got.status != http.StatusOK || strings.TrimSpace(string(got.body)) != want {
+		t.Errorf("no policy: %d %s, want %s", got.status, got.body, want)
 	}
 	if got.header.Get(protocol.DeprecationHeader) != "" || got.header.Get(protocol.SunsetHeader) != "" {
 		t.Errorf("no policy: %v", got.header)

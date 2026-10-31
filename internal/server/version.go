@@ -18,9 +18,11 @@ const (
 	versionRetired    = "retired"
 )
 
-// policyOf is d as the server keeps and answers it: each list written, empty
-// or not (protocol.ServerDocument).
-func policyOf(d protocol.ServerDocument) protocol.ServerDocument {
+// policyOf is the server's document with the version policy d, as the
+// server keeps and answers it: each list written, empty or not, and the
+// longest certificate it takes, l's setting (protocol.ServerDocument).
+func policyOf(d protocol.ServerDocument, l Limits) protocol.ServerDocument {
+	d.MaxCertificateLifetime = l.maxCertificate()
 	if d.Deprecations == nil {
 		d.Deprecations = []protocol.Scheduled{}
 	}
@@ -80,9 +82,10 @@ func retiredVersion(floor string) *problem {
 		value{floor, func(p *protocol.Problem) { p.MinVersion = floor }})
 }
 
-// document answers GET /v1/, the server's document: its version policy and
-// the capabilities it serves, the same to every caller (PROTOCOL.md
-// §11.18). It reads nothing but the policy in force.
+// document answers GET /v1/, the server's document: its version policy, the
+// capabilities it serves and the longest certificate it takes, the same to
+// every caller (PROTOCOL.md §11.18). It reads nothing but the document in
+// force.
 func (s *Server) document(w http.ResponseWriter, _ *http.Request) error {
 	writeJSON(w, http.StatusOK, s.policy.Load())
 	return nil

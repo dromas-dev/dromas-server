@@ -83,12 +83,13 @@ func TestTheTwoClocksFurthestApart(t *testing.T) {
 	}
 }
 
-// Further off, the mailbox is refused: more than 50 minutes ahead, for its
-// certificate, before its pass is read, since that certificate would not have
-// begun for a reader 10 minutes slow, a clock this server takes. The date on
-// every answer is how the server says what its clock reads (the client's
-// words for it are the client's to test, and the server's are not shown:
-// PROTOCOL.md §11.3).
+// Further off, the mailbox is refused, each check exact at the server's
+// clock: more than 50 minutes ahead, for its pass, which a client makes for
+// ten minutes and a server takes up to an hour ahead; more than an hour
+// ahead, for its statement, which ends past the 33 days and the hour a
+// server takes, before its pass is read. The date on every answer is how the
+// server says what its clock reads (the client's words for it are the
+// client's to test, and the server's are not shown: PROTOCOL.md §11.3).
 // A mailbox that cannot register leaves nothing in the way of registering once
 // its clock is right.
 func TestAMailboxWhoseClockIsTooFarOffIsRefusedAndTold(t *testing.T) {
@@ -99,7 +100,7 @@ func TestAMailboxWhoseClockIsTooFarOffIsRefusedAndTold(t *testing.T) {
 		code protocol.Code
 	}{
 		{-11 * time.Minute, protocol.CodePassExpired},
-		{51 * time.Minute, protocol.CodePrekeyTime},
+		{51 * time.Minute, protocol.CodePassExpired},
 		{61 * time.Minute, protocol.CodePrekeyTime},
 	} {
 		e := newEnv(t, relaxed())
@@ -156,12 +157,17 @@ func TestAMailboxWhoseClockGoesBackFetchesNothing(t *testing.T) {
 		t.Fatalf("its clock set back 12 minutes: %+v, %v", res, err)
 	}
 	// Control: at that clock the message would be refused, so the stop above is
-	// what kept it. The certificate it is signed under has not begun.
+	// what kept it: it is dated more than MaxSkew ahead of the reader's clock,
+	// and a certificate it is signed under, where the sender is in
+	// working-key mode, has not begun.
+	if fast-off <= protocol.MaxSkew {
+		t.Fatalf("the sender's clock is %v ahead of the reader's, within the %v a reader takes: the test does not reach the case", fast-off, protocol.MaxSkew)
+	}
 	held, rerr := e.store.Mailbox(ctx, sender.Address())
 	if rerr != nil || held == nil {
 		t.Fatalf("the sender's record: %v", rerr)
 	}
-	if began, err := protocol.CertificateBegan(held.Signature); err != nil || !began.After(e.clock.Now().Add(off)) {
+	if began, err := protocol.CertificateBegan(held.Signature); err == nil && !began.After(e.clock.Now().Add(off)) {
 		t.Fatalf("the sender's certificate began %v, which is not after the reader's clock: the test does not reach the case", began)
 	}
 	off = 0

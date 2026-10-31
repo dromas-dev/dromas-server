@@ -13,6 +13,11 @@ package server
 // certificate_revoked from its record before any pass is checked, at every
 // call that takes a pass under that certificate, and the way back is an
 // upload under a later certificate, whose pass is read under that one.
+//
+// A pass of the form the address's mode refuses (PROTOCOL.md §5, §8): one
+// the identity signed, on an address in working-key mode, is
+// certificate_revoked; one under a certificate, on an address in identity
+// mode, is certificate_not_current with no certificate_serial.
 
 import (
 	"context"
@@ -38,12 +43,14 @@ type unknownStore struct{ Store }
 
 func (unknownStore) Known(protocol.Address) (*Mailbox, bool) { return nil, false }
 
-// at3 is a raw mailbox registered at prekey 1 under certificate 1, then renewed
-// to prekey 3 under certificate 3: its current certificate is 3, and work[1]
-// is a certificate of its identity that was its current one before.
+// at3 is a raw mailbox in working-key mode, registered at prekey 2 under
+// certificate 2, then renewed to prekey 3 under certificate 3: its current
+// certificate is 3, and work[2] is a certificate of its identity that was its
+// current one before.
 func at3(e *env) *raw {
 	e.t.Helper()
-	r := e.raw().register(protocol.MaxPrekeyLifetime)
+	r := e.raw()
+	r.registerWorking(protocol.MaxPrekeyLifetime)
 	r.prekey(3, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(3), r.pass(3)), 200, "")
 	if _, c := e.numbers(r.id.Address()); c != 3 {
@@ -53,12 +60,12 @@ func at3(e *env) *raw {
 }
 
 // otherPasses are passes of r under certificates of its identity other than
-// serial n: one below it that r stood at (1), one never on record below it
-// (2), and one never on record above it (n+1).
+// serial n: one below it that r stood at (2), one never on record below it,
+// at or below the trip (1), and one never on record above it (n+1).
 func otherPasses(r *raw, n uint64) map[string]string {
 	return map[string]string{
-		"under certificate 1, the mailbox's before":  r.e.passFor(r.work[1], r.id.Address(), r.e.name()),
-		"under certificate 2, never on record":       r.e.passFor(r.certify(2), r.id.Address(), r.e.name()),
+		"under certificate 2, the mailbox's before":  r.e.passFor(r.work[2], r.id.Address(), r.e.name()),
+		"under certificate 1, never on record":       r.e.passFor(r.certify(1), r.id.Address(), r.e.name()),
 		"under a certificate above, never on record": r.e.passFor(r.certify(n+1), r.id.Address(), r.e.name()),
 	}
 }
@@ -81,7 +88,7 @@ func forgeRecord(e *env, r *raw) string {
 		e.t.Fatal(err)
 	}
 	unix := uint64(e.clock.Now().Unix()) //nolint:gosec // a test clock
-	c := &ssh.Certificate{Key: work.PublicKey(), Serial: b.CertSerial, CertType: ssh.UserCert, KeyId: protocol.CertificateKeyID,
+	c := &ssh.Certificate{Key: work.PublicKey(), Serial: b.Rank, CertType: ssh.UserCert, KeyId: protocol.CertificateKeyID,
 		ValidPrincipals: []string{a.String()}, ValidAfter: unix - 60, ValidBefore: unix + 65*86400}
 	if err := c.SignCert(rand.Reader, e.raw().signer); err != nil {
 		e.t.Fatal(err)
@@ -90,7 +97,7 @@ func forgeRecord(e *env, r *raw) string {
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	b.Cert = sha256.Sum256(c.Marshal())
+	b.Signer = sha256.Sum256(c.Marshal())
 	if err := e.store.UpdateMailbox(ctx, b); err != nil {
 		e.t.Fatal(err)
 	}
@@ -112,12 +119,13 @@ func (e *env) notCurrentNaming(r reply, n uint64) {
 func TestARegistrationOfANewMailboxNamesItsStatementsCertificate(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	r := e.raw()
+	r := e.raw().trip()
 	r.prekey(5, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	r.certify(1)
 	for name, pass := range map[string]string{
-		"under certificate 1, below": r.pass(1),
-		"under certificate 6, above": e.passFor(r.certify(6), r.id.Address(), e.name()),
+		"under certificate 1, below":       r.pass(1),
+		"under certificate 6, above":       e.passFor(r.certify(6), r.id.Address(), e.name()),
+		"under certificate 5, another one": e.passFor(r.certify(5), r.id.Address(), e.name()),
 	} {
 		t.Logf("register %s", name)
 		e.notCurrentNaming(e.do("PUT", r.path(""), r.registration(5), pass), 5)
@@ -186,7 +194,7 @@ func TestAnUploadNamesItsStatementsCertificate(t *testing.T) {
 	r.prekey(5, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	for name, pass := range map[string]string{
 		"under certificate 3, the mailbox's current": r.pass(3),
-		"under certificate 1, the mailbox's before":  r.pass(1),
+		"under certificate 2, the mailbox's before":  r.pass(2),
 		"under certificate 4, never on record":       e.passFor(r.certify(4), r.id.Address(), e.name()),
 	} {
 		t.Logf("upload %s", name)
@@ -235,15 +243,15 @@ func TestASendNamesTheSendersCurrentCertificate(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	r, o := at3(e), e.raw().register(protocol.MaxPrekeyLifetime)
-	r.certify(2)
+	r.certify(1)
 	r.certify(4)
 	for _, under := range []uint64{1, 2, 4} {
 		t.Logf("send under certificate %d", under)
-		e.notCurrentNaming(e.sendTo(o, 1, 1, r, under), 3)
+		e.notCurrentNaming(e.sendTo(o, 1, r, under), 3)
 	}
-	e.want(e.sendTo(o, 1, 1, r, 3), 201, "")
+	e.want(e.sendTo(o, 1, r, 3), 201, "")
 	forged := forgeRecord(e, r)
-	got := e.do("POST", o.path("/messages"), sealedTo(1, 1, []byte("x")), forged)
+	got := e.do("POST", o.path("/messages"), o.sealed(1, []byte("x")), forged)
 	e.notCurrentNaming(got, 3)
 }
 
@@ -268,7 +276,8 @@ func TestARevokedCurrentCertificateIsAnsweredBeforeThePass(t *testing.T) {
 		"not a pass":                           "Bearer " + strings.Repeat("a", 50),
 		"under certificate 3, taken before":    seen,
 		"under certificate 3, new":             r.pass(3),
-		"under certificate 1, revoked too":     r.pass(1),
+		"under certificate 2, revoked too":     r.pass(2),
+		"by the identity, revoked too":         e.passFor(r.signer, r.id.Address(), e.name()),
 		"under certificate 5, never on record": later,
 	}
 	id := strings.Repeat("a", 64)
@@ -297,7 +306,7 @@ func TestARevokedCurrentCertificateIsAnsweredBeforeThePass(t *testing.T) {
 		if name == "no pass" || name == "not a pass" {
 			want = protocol.CodeUnauthorized
 		}
-		if got := e.do("POST", o.path("/messages"), sealedTo(1, 1, []byte("x")), pass); got.status != 401 || got.code() != want {
+		if got := e.do("POST", o.path("/messages"), o.sealed(1, []byte("x")), pass); got.status != 401 || got.code() != want {
 			t.Errorf("a send %s: %d %s, want %s", name, got.status, got.body, want)
 		}
 	}
@@ -341,4 +350,40 @@ func TestARegistrationUnderARevokedCertificateIsAnsweredBeforeThePass(t *testing
 	m.prekey(5, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", m.path(""), m.registration(5), ""), 401, protocol.CodeUnauthorized)
 	e.want(e.do("PUT", m.path(""), m.registration(5), m.pass(5)), 201, "")
+}
+
+// A pass of the form the address's mode refuses (PROTOCOL.md §5, §8). In
+// working-key mode the identity's pass is certificate_revoked, at every call
+// that takes the mailbox's pass: the trip covers the identity. In identity
+// mode a pass under a certificate is certificate_not_current, naming no
+// certificate, since the mailbox has none. Control: each mailbox's own pass
+// is taken at the same calls.
+func TestAPassOfTheFormTheModeRefuses(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, relaxed())
+	w, i, o := e.raw(), e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
+	ws := w.registerWorking(protocol.MaxPrekeyLifetime)
+	byIdentity := e.passFor(w.signer, w.id.Address(), e.name())
+	underCert := e.passFor(i.certify(7), i.id.Address(), e.name())
+	calls := func(r *raw, serial uint64) map[string]func(pass string) reply {
+		return map[string]func(pass string) reply{
+			"a poll":                    func(p string) reply { return e.do("GET", r.path("/messages"), nil, p) },
+			"an identical registration": func(p string) reply { return e.do("PUT", r.path(""), r.registration(serial), p) },
+			"an identical upload":       func(p string) reply { return e.do("PUT", r.path("/prekey"), r.upload(serial), p) },
+			"a send":                    func(p string) reply { return e.do("POST", o.path("/messages"), o.sealed(1, []byte("x")), p) },
+		}
+	}
+	for name, call := range calls(w, ws) {
+		e.want(call(byIdentity), 401, protocol.CodeCertificateRevoked)
+		if got := call(w.pass(ws)); got.status == 401 {
+			t.Errorf("control: %s by the working-key mailbox's own pass: %d %s", name, got.status, got.body)
+		}
+	}
+	for name, call := range calls(i, 1) {
+		t.Logf("%s under a certificate, in identity mode", name)
+		e.wantNotCurrent(call(underCert), 0)
+		if got := call(i.pass(1)); got.status == 401 {
+			t.Errorf("control: %s by the identity-mode mailbox's own pass: %d %s", name, got.status, got.body)
+		}
+	}
 }

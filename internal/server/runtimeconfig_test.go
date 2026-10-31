@@ -41,7 +41,7 @@ func newReloading(t *testing.T, text string) *reloading {
 	t.Helper()
 	r := &reloading{path: filepath.Join(t.TempDir(), "version-policy.json"), reg: prometheus.NewRegistry(), logged: &bytes.Buffer{}}
 	r.write(t, text)
-	d, read, err := ReadVersionPolicy(r.path)
+	d, read, err := ReadVersionPolicy(r.path, relaxed())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestARequestMeetsTheVersionPolicyInForce(t *testing.T) {
 	if err := os.WriteFile(path, []byte(policyText("1.2", "1.5.0")), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	d, read, err := ReadVersionPolicy(path)
+	d, read, err := ReadVersionPolicy(path, relaxed())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +257,7 @@ func TestTheLargestPolicyFits(t *testing.T) {
 	t.Parallel()
 	n := "18446744073709551615"
 	v := n + "." + n + "." + n
-	d := protocol.ServerDocument{MinVersion: v, LatestVersion: v}
+	d := versionPolicy{MinVersion: v, LatestVersion: v}
 	for range protocol.MaxDeprecations {
 		d.Deprecations = append(d.Deprecations, protocol.Scheduled{Version: v, At: "2027-01-01T00:00:00Z"})
 	}
@@ -271,14 +271,33 @@ func TestTheLargestPolicyFits(t *testing.T) {
 	if len(b) > MaxVersionPolicy-4<<10 {
 		t.Errorf("the largest policy, indented, is %d bytes: within 4 KiB of the bound, %d", len(b), MaxVersionPolicy)
 	}
-	if _, err := ParseVersionPolicy(b); err != nil {
+	if _, err := ParseVersionPolicy(b, relaxed()); err != nil {
 		t.Errorf("the largest policy: %v", err)
 	}
 	path := filepath.Join(t.TempDir(), "version-policy.json")
 	if err := os.WriteFile(path, append(b, bytes.Repeat([]byte(" "), MaxVersionPolicy+1-len(b))...), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := ReadVersionPolicy(path); err == nil {
+	if _, _, err := ReadVersionPolicy(path, relaxed()); err == nil {
 		t.Error("a file past the bound was read")
+	}
+}
+
+// A version policy file names none of the server's own members: its
+// capabilities, the code's, and the longest certificate it takes, its
+// setting (--max-certificate-lifetime). The document it is served in carries
+// the setting's (PROTOCOL.md §11.18).
+func TestAPolicyNamesNoMemberOfTheServersOwn(t *testing.T) {
+	t.Parallel()
+	l := relaxed()
+	for _, member := range []string{`"capabilities":[]`, `"max_certificate_lifetime":3891600`} {
+		b := []byte(`{"min_version":"1.2",` + member + `}`)
+		if _, err := ParseVersionPolicy(b, l); err == nil {
+			t.Errorf("a policy naming %s is taken", member)
+		}
+	}
+	d, err := ParseVersionPolicy([]byte(`{"min_version":"1.2"}`), l)
+	if err != nil || d.MaxCertificateLifetime != uint64(l.MaxCertificateLifetime/time.Second) {
+		t.Fatalf("the document of a policy: max_certificate_lifetime %d, %v; want %d", d.MaxCertificateLifetime, err, l.MaxCertificateLifetime/time.Second)
 	}
 }

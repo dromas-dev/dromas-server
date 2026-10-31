@@ -377,7 +377,7 @@ func TestTwoProcesses(t *testing.T) {
 	}
 	waitFor("the new certificate reaching the other process", func() bool {
 		st, ok := other.Held(b.Address())
-		return ok && st.Cert == rec.Cert
+		return ok && st.Signer == rec.Signer
 	})
 	if r := e2.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages", nil, old); r.code() != protocol.CodeCertificateNotCurrent {
 		t.Fatalf("the old pass on the other process: %d %s", r.status, r.body)
@@ -430,7 +430,7 @@ func TestRestartLoadsLazily(t *testing.T) {
 	if n, err := fresh.Count(ctx, c.Address()); n != 0 || err != nil {
 		t.Fatalf("rekeyed mailbox: %d %v", n, err)
 	}
-	if st, ok := fresh.Held(c.Address()); !ok || st.State != Active || st.Cert != renewed.Cert {
+	if st, ok := fresh.Held(c.Address()); !ok || st.State != Active || st.Signer != renewed.Signer {
 		t.Fatalf("rekeyed mailbox: %v %v", st, ok)
 	}
 	var nobody protocol.Address
@@ -549,6 +549,11 @@ func (c *countingStore) Known(a protocol.Address) (*Mailbox, bool) { return c.s.
 
 func (c *countingStore) Begin(a protocol.Address) uint64 { return c.s.Begin(a) }
 
+func (c *countingStore) Reread(ctx context.Context, a protocol.Address) (*Mailbox, error) {
+	c.count()
+	return c.s.Reread(ctx, a)
+}
+
 func (c *countingStore) Count(ctx context.Context, mailbox protocol.Address) (int, error) {
 	return c.s.Count(ctx, mailbox)
 }
@@ -658,7 +663,7 @@ func TestPollStaysInMemory(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
-	b, c := e.mailbox(), e.mailbox()
+	b, c := e.mailbox(), e.workingMailbox() // c renews under a new certificate
 	cs := &countingStore{s: e.store}
 	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: cs, Limits: relaxed(), Now: e.clock.Now}).Handler()))
 	defer srv.Close()
@@ -773,7 +778,7 @@ func TestTheRecordAndTheRevocationsAreMemorys(t *testing.T) {
 	var a protocol.Address
 	a[0] = 7
 	if err := s.idx.ensure(context.Background(), a, func() (mailboxRead, error) {
-		return mailboxRead{exists: true, st: Standing{State: Active, CertSerial: 5}, rev: 1}, nil
+		return mailboxRead{exists: true, st: Standing{State: Active, Rank: 5}, rev: 1}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -855,7 +860,7 @@ func TestARecordInAStateNotWrittenIsRefused(t *testing.T) {
 	}
 	read := func(rev uint64) func() (mailboxRead, error) {
 		return func() (mailboxRead, error) {
-			return mailboxRead{exists: true, st: Standing{State: Active, CertSerial: rec.CertSerial}, rev: rev}, nil
+			return mailboxRead{exists: true, st: Standing{State: Active, Rank: rec.Rank}, rev: rev}, nil
 		}
 	}
 	for _, im := range []struct {
@@ -969,16 +974,16 @@ func TestUpdateMailboxIsConditional(t *testing.T) {
 	b := e.mailbox()
 	first, _ := e.store.Mailbox(ctx, b.Address())
 	second, _ := e.store.Mailbox(ctx, b.Address())
-	first.CertSerial++
+	first.Rank++
 	if err := e.store.UpdateMailbox(ctx, first); err != nil {
 		t.Fatal(err)
 	}
-	second.CertSerial += 2
+	second.Rank += 2
 	if err := e.store.UpdateMailbox(ctx, second); !errors.Is(err, ErrStale) {
 		t.Fatalf("an update over a stale read: %v", err)
 	}
-	if got, _ := e.store.Mailbox(ctx, b.Address()); got.State != Active || got.CertSerial != first.CertSerial {
-		t.Fatalf("stored %v at certificate serial %d", got.State, got.CertSerial)
+	if got, _ := e.store.Mailbox(ctx, b.Address()); got.State != Active || got.Rank != first.Rank {
+		t.Fatalf("stored %v at certificate serial %d", got.State, got.Rank)
 	}
 }
 
@@ -992,8 +997,8 @@ func TestMailboxCache(t *testing.T) {
 	if b, _ := c.get(a1); b.Rev != 3 {
 		t.Fatalf("rev %d: an older record replaced a newer one", b.Rev)
 	}
-	c.write(a1, c.image(&Mailbox{Addr: a1, Rev: 3, CertSerial: 9}))
-	if b, _ := c.get(a1); b.CertSerial == 9 {
+	c.write(a1, c.image(&Mailbox{Addr: a1, Rev: 3, Rank: 9}))
+	if b, _ := c.get(a1); b.Rank == 9 {
 		t.Fatal("refreshed at the same rev")
 	}
 	c.write(a1, c.image(&Mailbox{Addr: a1, Rev: 4}))

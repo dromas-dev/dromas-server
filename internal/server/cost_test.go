@@ -61,7 +61,7 @@ func costMailbox(t *testing.T, retired int) (*Mailbox, ssh.Signer) {
 	}
 	_, wpriv, _ := ed25519.GenerateKey(rand.Reader)
 	work, _ := ssh.NewSignerFromKey(wpriv)
-	cert, err := protocol.NewCertificate(id, identity, work.PublicKey(), uint64(retired)+1, time.Now())
+	cert, err := protocol.NewCertificate(id, identity, work.PublicKey(), uint64(retired)+1, time.Now(), DefaultLimits().MaxCertificateLifetime)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func costMailbox(t *testing.T, retired int) (*Mailbox, ssh.Signer) {
 		t.Fatal(err)
 	}
 	b := &Mailbox{Addr: id.Address(), Identity: id.Document(), State: Active, Statement: p.Statement(), Signature: sig, Prekey: p,
-		CertSerial: cert.Serial(), Cert: certHash(cert), Rev: uint64(retired) + 2, Created: now}
+		Rank: cert.Serial(), Signer: sha256.Sum256(cert.Marshal()), Rev: uint64(retired) + 2, Created: now}
 	for i := range retired {
 		b.Retired = append(b.Retired, Retired{Type: p.Type(), NotAfter: now.Add(time.Duration(i) * time.Hour), KeyHash: sha256.Sum256([]byte{byte(i)})})
 	}
@@ -108,7 +108,7 @@ func TestCostMemoryPerMailbox(t *testing.T) {
 				marks = append(marks, mark{id: uint64(i), exp: 1 << 62})
 			}
 			_ = x.ensure(ctx, a, func() (mailboxRead, error) {
-				return mailboxRead{exists: true, st: Standing{State: Active, Key: string(bytes.Repeat([]byte{1}, 51)), Cert: [32]byte(a[:32])}, rev: 2, marks: marks}, nil
+				return mailboxRead{exists: true, st: Standing{State: Active, Key: string(bytes.Repeat([]byte{1}, 51)), Signer: [32]byte(a[:32])}, rev: 2, marks: marks}, nil
 			})
 		}
 		t.Logf("index, %3d live messages: %6.0f B per loaded mailbox", k, float64(heapNow()-before)/n)
@@ -139,7 +139,7 @@ func TestCostMemoryPerMailbox(t *testing.T) {
 	before = heapNow()
 	ps := newPasses()
 	for _, a := range addrs {
-		ps.keep(a, seenPass{sum: [32]byte(a[:32]), cert: [32]byte(a[:32]), until: now.Add(protocol.PassLifetime)}, now)
+		ps.keep(a, seenPass{sum: [32]byte(a[:32]), signer: [32]byte(a[:32]), until: now.Add(protocol.PassLifetime)}, now)
 	}
 	t.Logf("pass remembered: %6.0f B per mailbox that showed one", float64(heapNow()-before)/n)
 	runtime.KeepAlive(ps)

@@ -118,20 +118,20 @@ func TestAWriteOutlivesItsCallersHangUp(t *testing.T) {
 	}
 
 	from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
-	hangUp("POST", to.path("/messages?")+sealedTo(1, 1, nil).Encode(), protocol.CiphertextContentType, sealFor(t, to, 1), from.pass(1))
+	hangUp("POST", to.path("/messages?")+to.sealed(1, nil).Encode(), protocol.CiphertextContentType, sealFor(t, to, 1), from.pass(1))
 	if n, _ := e.store.Count(ctx0, to.id.Address()); n != 1 {
 		t.Fatalf("a send whose caller hung up mid-write: the mailbox holds %d messages", n)
 	}
-	e.want(e.sendTo(to, 1, 1, from, 1), http.StatusTooManyRequests, protocol.CodeRateLimited)
+	e.want(e.sendTo(to, 1, from, 1), http.StatusTooManyRequests, protocol.CodeRateLimited)
 
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
-	r.prekeyUnder(r.work[1], 2, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+	r.prekeyUnder(r.by[1], 2, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	up, _ := json.Marshal(r.upload(2))
 	hangUp("PUT", r.path("/prekey"), "application/json", up, r.pass(1))
 	if b, _ := e.store.Mailbox(ctx0, r.id.Address()); b.Prekey.Serial != 2 {
 		t.Fatalf("a renewal whose caller hung up mid-write: the mailbox is at prekey %d", b.Prekey.Serial)
 	}
-	r.prekeyUnder(r.work[1], 3, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+	r.prekeyUnder(r.by[1], 3, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(3), r.pass(1)), http.StatusTooManyRequests, protocol.CodeRateLimited)
 
 	// An ACL put whose caller hangs up while it is written still refuses
@@ -139,7 +139,7 @@ func TestAWriteOutlivesItsCallersHangUp(t *testing.T) {
 	denied := e.raw().register(protocol.MaxPrekeyLifetime)
 	acl, _ := json.Marshal(aclOf([]string{"*"}, []string{denied.id.Address().String()}))
 	hangUp("PUT", r.path("/acl"), "application/json", acl, r.pass(1))
-	e.want(e.sendTo(r, 2, 1, denied, 1), http.StatusForbidden, protocol.CodeSenderNotAllowed)
+	e.want(e.sendTo(r, 2, denied, 1), http.StatusForbidden, protocol.CodeSenderNotAllowed)
 }
 
 // heldPut runs a hook before the next PutMessage, once.
@@ -175,7 +175,7 @@ func TestAMessageSentAroundARevocationDoesNotOutliveIt(t *testing.T) {
 	s.put = func() { close(writing); <-release }
 	s.mu.Unlock()
 	sent := make(chan reply, 1)
-	go func() { sent <- e.sendTo(owner, 1, 1, from, 1) }()
+	go func() { sent <- e.sendTo(owner, 1, from, 1) }()
 	<-writing
 	sig, err := protocol.SignRevocation(owner.signer, owner.id.Address())
 	if err != nil {
@@ -269,11 +269,11 @@ func TestACountIsKeptWhenItsWriteMayHaveBeenApplied(t *testing.T) {
 			s.mu.Lock()
 			s.err = errs[i]
 			s.mu.Unlock()
-			e.want(e.sendTo(to, 1, 1, from, 1), http.StatusServiceUnavailable, protocol.CodeUnavailable)
+			e.want(e.sendTo(to, 1, from, 1), http.StatusServiceUnavailable, protocol.CodeUnavailable)
 			s.mu.Lock()
 			s.err = nil
 			s.mu.Unlock()
-			got := e.sendTo(to, 1, 1, from, 1)
+			got := e.sendTo(to, 1, from, 1)
 			t.Logf("the write's error: %v (%s); the next send %d %s", errs[i], faultOf(errs[i]), got.status, got.code())
 			if (got.status == http.StatusTooManyRequests) != c.kept {
 				t.Errorf("the next send %d %s; want the count kept %v", got.status, got.code(), c.kept)

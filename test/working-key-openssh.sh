@@ -1,6 +1,8 @@
 #!/bin/sh
-# working-key-openssh.sh — what stock ssh-keygen does with a certificate the identity signs for a working key
-# (dromas-client issue #30, where the results are). A measurement, not a test of our code: nothing of ours is run.
+# working-key-openssh.sh — what stock ssh-keygen does with the two forms of signer (PROTOCOL.md §5): the identity's own signature,
+# identity mode's, and a certificate the identity signs for a working key, working-key mode's; and with the two certificates the
+# protocol refuses whatever OpenSSH says, one of the identity's own key and one valid "forever" (dromas-client issues #30 and #579,
+# where the results are). A measurement, not a test of our code: nothing of ours is run.
 #   test/working-key-openssh.sh make  <dir>   make keys, certificates and signatures in <dir> (which must not exist)
 #   test/working-key-openssh.sh check <dir>   verify what is in <dir>, whichever OpenSSH made it
 # Each row is a verdict: "ok" it is the expected one, "!!!" it is not, neither when the row is a reading with no expectation.
@@ -62,7 +64,13 @@ if [ "$mode" = make ]; then
   mk wrongprin identity "$C" +33d 5 -O clear
   mk otherca   other    "$A" +33d 5 -O clear
   mk p256ca    p256     "$A" +33d 5 -O clear
-  for n in good defopts crit expired serial3 wrongprin otherca p256ca; do sgn $n; done
+  mk forever   identity "$A" always:forever 5 -O clear
+  # a certificate of the identity's own key: its bare signature wrapped in a certificate, which the protocol refuses
+  mkdir -p selfcert; cp identity selfcert/work; cp identity.pub selfcert/work.pub; chmod 600 selfcert/work
+  if ssh-keygen -q -s identity -I work -n "$A" -V +33d -z 7 -O clear selfcert/work.pub 2>selfcert/cert.err; then echo "cert selfcert: made"; else echo "cert selfcert: FAILED: $(head -1 selfcert/cert.err | cut -c1-120)"; fi
+  for n in good defopts crit expired serial3 wrongprin otherca p256ca forever selfcert; do sgn $n; done
+  # the identity's own signature, identity mode's
+  mkdir -p bare; ssh-keygen -Y sign -n "$ns" -f identity < m > bare/m.sig 2>/dev/null || : > bare/m.sig
   # signed with the private key's own path, the certificate lying beside it
   ssh-keygen -Y sign -n "$ns" -f good/work < m > good/m.sig.plain 2>/dev/null || : > good/m.sig.plain
   ssh-keygen -L -f good/work-cert.pub 2>&1 | sed -n '/Serial/p;/Valid/p;/Critical/,$p' | tr '\n' ' ' | cut -c1-200; echo
@@ -95,3 +103,7 @@ vfy "serial 5 with a KRL revoking serials 1-4"             Good    "$t/as.ca"   
 vfy "serial 3 with a KRL revoking serials 1-4"             refused "$t/as.ca"    "$A" "$ns" serial3/m.sig   m -r "$t/krl"
 vfy "serial 3 with no KRL"                                 Good    "$t/as.ca"    "$A" "$ns" serial3/m.sig   m
 vfy "plain P-256 key as the certifying identity"           Good    "$t/as.p256"  "$A" "$ns" p256ca/m.sig    m
+vfy "the identity's own signature, identity as an ordinary key" Good "$t/as.plain" "$A" "$ns" bare/m.sig     m
+vfy "the identity's own signature, identity as cert-authority"  refused "$t/as.ca" "$A" "$ns" bare/m.sig     m
+vfy "a certificate valid forever (the protocol refuses it)"     "?"   "$t/as.ca"    "$A" "$ns" forever/m.sig   m
+vfy "a certificate of the identity's own key (refused by the protocol)" "?" "$t/as.ca" "$A" "$ns" selfcert/m.sig m

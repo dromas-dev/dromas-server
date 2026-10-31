@@ -465,10 +465,11 @@ func TestAFloorNoHigherIsAnsweredWithoutACheck(t *testing.T) {
 // The identity's acts are counted per mailbox, each kind on its own, so neither
 // holds back the other: its new certificates (Limits.CertificatesPerDay) and
 // its raises of the revocation of certificates
-// (Limits.CertificateRevocationsPerDay). A renewal while the mailbox's current
-// certificate is revoked is not counted: it replaces what a counted raise
-// revoked. The revocation of the address is counted against no mailbox, so
-// nothing keeps an owner from ending a mailbox.
+// (Limits.CertificateRevocationsPerDay), the trip among them. A renewal while
+// the revocation held covers the mailbox's current signer is not counted: it
+// replaces what a counted raise revoked, the identity's own statement after
+// the trip among it. The revocation of the address is counted against no
+// mailbox, so nothing keeps an owner from ending a mailbox.
 func TestTheIdentitysActsAreCountedApart(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
@@ -476,15 +477,23 @@ func TestTheIdentitysActsAreCountedApart(t *testing.T) {
 	e := newEnv(t, l)
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	until := e.clock.Now().Add(protocol.PrekeyLifetime)
+	e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), http.StatusOK, "") // the trip, the day's one raise
+	e.limited(e.do("PUT", r.path("/revocations"), r.certs(2), ""), protocol.QuotaCertificateRevocations)
 	r.prekey(5, until, nil)
-	e.want(e.do("PUT", r.path("/prekey"), r.upload(5), r.pass(5)), http.StatusOK, "") // the day's one certificate
+	e.want(e.do("PUT", r.path("/prekey"), r.upload(5), r.pass(5)), http.StatusOK, "") // replaces the identity, which the trip covers
 	r.prekey(6, until, nil)
-	e.limited(e.do("PUT", r.path("/prekey"), r.upload(6), r.pass(6)), protocol.QuotaCertificates)
-	e.want(e.do("PUT", r.path("/revocations"), r.certs(5), ""), http.StatusOK, "") // the day's one raise, which no certificate spent
-	e.limited(e.do("PUT", r.path("/revocations"), r.certs(7), ""), protocol.QuotaCertificateRevocations)
-	e.want(e.do("PUT", r.path("/prekey"), r.upload(6), r.pass(6)), http.StatusOK, "") // replaces certificate 5, which is revoked
+	e.want(e.do("PUT", r.path("/prekey"), r.upload(6), r.pass(6)), http.StatusOK, "") // the day's one certificate
+	r.prekey(7, until, nil)
+	e.limited(e.do("PUT", r.path("/prekey"), r.upload(7), r.pass(7)), protocol.QuotaCertificates)
+	e.clock.Add(24 * time.Hour)
+	e.want(e.do("PUT", r.path("/prekey"), r.upload(7), r.pass(7)), http.StatusOK, "") // the next day's one certificate
 	r.prekey(8, until, nil)
-	e.limited(e.do("PUT", r.path("/prekey"), r.upload(8), r.pass(8)), protocol.QuotaCertificates) // 6 is not revoked
+	e.limited(e.do("PUT", r.path("/prekey"), r.upload(8), r.pass(8)), protocol.QuotaCertificates)
+	e.want(e.do("PUT", r.path("/revocations"), r.certs(7), ""), http.StatusOK, "") // the day's one raise, which no certificate spent
+	e.limited(e.do("PUT", r.path("/revocations"), r.certs(9), ""), protocol.QuotaCertificateRevocations)
+	e.want(e.do("PUT", r.path("/prekey"), r.upload(8), r.pass(8)), http.StatusOK, "") // replaces certificate 7, which is revoked
+	r.prekey(10, until, nil)
+	e.limited(e.do("PUT", r.path("/prekey"), r.upload(10), r.pass(10)), protocol.QuotaCertificates) // 8 is not revoked
 	rev, err := protocol.SignRevocation(r.signer, r.id.Address())
 	if err != nil {
 		t.Fatal(err)
@@ -504,9 +513,10 @@ func TestATakerCannotHoldTheRemedyBack(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	l.CallBurst, l.CallRefill = DefaultLimits().CallBurst, DefaultLimits().CallRefill
-	l.CertificatesPerDay, l.CertificateRevocationsPerDay = 1, 1
+	l.CertificatesPerDay, l.CertificateRevocationsPerDay = 1, 2 // the trip, and the raise
 	e := newEnv(t, l)
-	r := e.raw().register(protocol.MaxPrekeyLifetime)
+	r := e.raw()
+	r.registerWorking(protocol.MaxPrekeyLifetime)
 	until := e.clock.Now().Add(protocol.PrekeyLifetime)
 	r.prekey(1000, until, nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(1000), r.pass(1000)), http.StatusOK, "") // the day's one certificate
@@ -689,7 +699,7 @@ func concurrently(t *testing.T, e *env, l Limits, to *raw, froms []*raw, n int) 
 	}
 	var posts []post
 	for _, from := range froms {
-		pass := e2.passFor(from.work[1], from.id.Address(), e2.name())
+		pass := e2.passFor(from.by[1], from.id.Address(), e2.name())
 		for range n {
 			var ct bytes.Buffer
 			w, _ := age.Encrypt(&ct, to.keys[1].Recipient())
@@ -705,7 +715,7 @@ func concurrently(t *testing.T, e *env, l Limits, to *raw, froms []*raw, n int) 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			req, _ := http.NewRequest(http.MethodPost, srv.URL+to.path("/messages?")+sealedTo(1, 1, nil).Encode(), bytes.NewReader(p.body))
+			req, _ := http.NewRequest(http.MethodPost, srv.URL+to.path("/messages?")+to.sealed(1, nil).Encode(), bytes.NewReader(p.body))
 			req.Header.Set("Authorization", p.pass)
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
@@ -952,15 +962,15 @@ func TestAPanicSettlesItsReservations(t *testing.T) {
 		_ = resp.Body.Close()
 	}
 
-	call(http.MethodPut, victim.path(""), victim.registration(1), api.passFor(victim.work[1], victim.id.Address(), api.name()))
+	call(http.MethodPut, victim.path(""), victim.registration(1), api.passFor(victim.by[1], victim.id.Address(), api.name()))
 	if n := held(s.regs); n != 0 {
 		t.Errorf("after a panic in a registration's read: %d registration reservations held", n)
 	}
 
 	ct := ciphertextTo(t, owner)
-	e.want(e.do(http.MethodPost, owner.path("/messages"), sealedTo(1, 1, ct), victim.pass(1)), http.StatusCreated, "")
+	e.want(e.do(http.MethodPost, owner.path("/messages"), owner.sealed(1, ct), victim.pass(1)), http.StatusCreated, "")
 	id := sha256.Sum256(ct)
-	call(http.MethodGet, owner.path("/messages/"+hex.EncodeToString(id[:])), nil, api.passFor(owner.work[1], owner.id.Address(), api.name()))
+	call(http.MethodGet, owner.path("/messages/"+hex.EncodeToString(id[:])), nil, api.passFor(owner.by[1], owner.id.Address(), api.name()))
 	if n := held(s.drained); n != 0 {
 		t.Errorf("after a panic in a fetch: %d drain reservations held", n)
 	}

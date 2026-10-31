@@ -105,6 +105,18 @@ func receiveRate(l server.Limits) error {
 	return nil
 }
 
+// certificateLifetime refuses a longest certificate the server takes that is
+// not above protocol.TTL and protocol.MaxSkew together: a client signs no
+// message under a certificate with the TTL or less left, and dates one the
+// hour back, so a certificate no longer than that signs no message at all
+// (PROTOCOL.md §11.7, §11.18). serve checks it before anything starts.
+func certificateLifetime(l server.Limits) error {
+	if least := protocol.TTL + protocol.MaxSkew; l.MaxCertificateLifetime <= least {
+		return fmt.Errorf("--max-certificate-lifetime: %v is not above %v, the TTL and the hour a client dates a certificate back, so a certificate it takes would sign no message", l.MaxCertificateLifetime, least)
+	}
+	return nil
+}
+
 // aclEntries refuses a bound on an ACL's entries that is off or over the
 // protocol's, which a client refuses in an answer (PROTOCOL.md §11.14).
 // serve checks it before anything starts.
@@ -155,6 +167,7 @@ func serve(args []string) error {
 	fs.DurationVar(&l.CallRefill, "call-refill", l.CallRefill, "one more such call each")
 	fs.IntVar(&l.CertificatesPerDay, "certificates-per-day", l.CertificatesPerDay, "per mailbox a day, as --sends-per-day: renewals under a later certificate, but for one that replaces a revoked certificate (0: off)")
 	fs.IntVar(&l.CertificateRevocationsPerDay, "certificate-revocations-per-day", l.CertificateRevocationsPerDay, "per mailbox a day, as --sends-per-day: raises of its revocation of certificates (0: off)")
+	fs.DurationVar(&l.MaxCertificateLifetime, "max-certificate-lifetime", l.MaxCertificateLifetime, "the longest a certificate may run, valid-before less valid-after, when a mailbox's statement first takes it, in whole seconds, served as max_certificate_lifetime in GET /v1/; a renewal under the mailbox's current certificate is not held to it: above the message TTL and the hour together, or serve does not start")
 	fs.IntVar(&l.ACLEntries, "acl-entries", l.ACLEntries, "the most entries a mailbox's ACL holds, its two lists together: from 1 to the protocol's "+strconv.Itoa(protocol.MaxACLEntries)+", or serve does not start")
 	fs.DurationVar(&l.BodyTimeout, "body-timeout", l.BodyTimeout, "how long a request body, or each write of a response, may take before one more second for each --body-min-rate bytes of it moved; what a handler leaves of a body is read before the answer, to the deadline the handler's reads left, and the answer has this from then; also the longest wait for the one large read (0: off)")
 	fs.IntVar(&l.BodyMinRate, "body-min-rate", l.BodyMinRate, "bytes a second a body, or a write of a response, must keep up, as Apache's RequestReadTimeout MinRate; a write is credited in pieces of this many bytes, once each has gone (0: off)")
@@ -164,15 +177,18 @@ func serve(args []string) error {
 	idle := fs.Duration("idle-timeout", 75*time.Second, "how long an idle keep-alive connection stays open (nginx's default as a server): above the idle timeout of a proxy in front, which may otherwise reuse a connection this one has just closed")
 	metricsListen := fs.String("metrics-listen", "", "address to serve the operator's metrics on, at /metrics in Prometheus' text format: a listener of its own, never the API's (empty: none)")
 	siteBackend := fs.String("site-backend", "", "the URL of a deployment's own web server, http or https and a host alone, which every request outside /v1/ and /to/ is passed to, as a reverse proxy passes it (empty: none; those paths are 404)")
-	versionPolicy := fs.String("version-policy", "", "a file of the runtime-config directory (bind-mounted read-only as a directory, conventionally /config/), e.g. /config/version-policy.json: the version policy, a JSON object of GET /v1/'s form with no capabilities. Read at start, or serve does not start; read again on SIGHUP and once a minute, and put in force when it differs and holds its form (empty: no policy)")
+	versionPolicy := fs.String("version-policy", "", "a file of the runtime-config directory (bind-mounted read-only as a directory, conventionally /config/), e.g. /config/version-policy.json: the version policy, a JSON object of GET /v1/'s form with no capabilities and no max_certificate_lifetime, which are the server's own. Read at start, or serve does not start; read again on SIGHUP and once a minute, and put in force when it differs and holds its form (empty: no policy)")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := certificateLifetime(l); err != nil {
 		return err
 	}
 	var policy protocol.ServerDocument
 	var policyRead []byte
 	if *versionPolicy != "" {
 		var err error
-		if policy, policyRead, err = server.ReadVersionPolicy(*versionPolicy); err != nil {
+		if policy, policyRead, err = server.ReadVersionPolicy(*versionPolicy, l); err != nil {
 			return fmt.Errorf("--version-policy: %s: %w", *versionPolicy, err)
 		}
 	}

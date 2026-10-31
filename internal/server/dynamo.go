@@ -375,8 +375,8 @@ func mailboxState(b *Mailbox) map[string]types.AttributeValue {
 		"state":         str(string(b.State)),
 		"statement":     bin(b.Statement),
 		"statement_sig": bin(b.Signature),
-		"cert_serial":   num(b.CertSerial),
-		"cert":          bin(b.Cert[:]),
+		"rank":          num(b.Rank),
+		"signer":        bin(b.Signer[:]),
 		"retired":       &types.AttributeValueMemberL{Value: retired},
 		"rev":           num(b.Rev),
 	}
@@ -423,7 +423,7 @@ func decodeStanding(it item) (Standing, uint64, error) {
 	if err != nil {
 		return Standing{}, 0, fmt.Errorf("item: the stored identity: %w", err)
 	}
-	cert, err := it.hash("cert")
+	signer, err := it.hash("signer")
 	if err != nil {
 		return Standing{}, 0, err
 	}
@@ -431,11 +431,11 @@ func decodeStanding(it item) (Standing, uint64, error) {
 	if err != nil {
 		return Standing{}, 0, err
 	}
-	serial, err := it.uint("cert_serial")
+	rank, err := it.uint("rank")
 	if err != nil {
 		return Standing{}, 0, err
 	}
-	st := Standing{State: State(state), Key: key, Cert: cert, CertSerial: serial}
+	st := Standing{State: State(state), Key: key, Signer: signer, Rank: rank}
 	if _, ok := it["account"]; ok {
 		acc, err := it.bytes("account")
 		if err != nil {
@@ -473,7 +473,7 @@ func decodeMailbox(it item) (*Mailbox, error) {
 	if err != nil {
 		return nil, err
 	}
-	b := &Mailbox{Addr: a, State: st.State, Cert: st.Cert, CertSerial: st.CertSerial, Rev: rev}
+	b := &Mailbox{Addr: a, State: st.State, Signer: st.Signer, Rank: st.Rank, Rev: rev}
 	if b.Identity, err = it.bytes("identity"); err != nil {
 		return nil, err
 	}
