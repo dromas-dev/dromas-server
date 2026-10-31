@@ -19,6 +19,7 @@
 - **Here:** `dromas-server`'s code, its tests and its design docs (`README.md` has the table).
 - 🛑 **Never here:** a secret; a hostname, address, account id or resource name of any deployment; what a deployment costs or how its limits are set; anyone's private words. A deployment's notes belong to its operator.
 - 🛑 **No client code here, and the client imports nothing from here.** This repo imports the client's `protocol/` and `sshsig/`.
+- 🛑 **Never a bare "server" in a page here:** `dromas-server` is the process (and this repo), and the "server system" is the whole that answers at a server's name (the reverse proxy that terminates TLS, `dromas-server`, the stores), which `PROTOCOL.md` §2.3 calls a server. Code paths, Go identifiers and a site's web server keep their names.
 - **The specification is `PROTOCOL.md` in the client repo**, and every `PROTOCOL.md §N` here means that file. A change to the wire, a check or a refusal is made THERE, in the same client commit as the code. How `dromas-server` does it goes in `ARCHITECTURE.md`, and its limits in `LIMITS.md`.
 - 🛑 **A setting's VALUE goes in no doc:** name the flag (`dromas-server serve -h` reads it). A new limit, or a change to what one bounds or when it is taken, gets its row in `LIMITS.md` in the same commit.
 - **`SECURITY.md` is the one place for how to report a vulnerability and for each of `dromas-server`'s security claims beside what holds it;** a change to one edits its row in the same commit. The threat model is the client repo's `PROTOCOL.md` §15, Security considerations.
