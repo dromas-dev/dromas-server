@@ -83,12 +83,14 @@ func TestRevocation(t *testing.T) {
 	path := revocationPath(a.Address())
 	read := mailboxPath(a.Address())
 
-	// Nothing is held about a mailbox that is not revoked: its read is 200 and
-	// shows none. There is none of no mailbox.
+	// Nothing is held about a mailbox that is not revoked but its revocation
+	// of certificates, A's trip to working-key mode: its read is 200 and shows
+	// no revocation of the address. There is none of no mailbox.
 	unrevoked := e.do("GET", read, nil, "")
 	e.want(unrevoked, 200, "")
-	if got := held(t, unrevoked); got != nil {
-		t.Fatalf("a mailbox nobody revoked is read with a revocation: %s", unrevoked.body)
+	trip := held(t, unrevoked)
+	if trip == nil || len(trip.Revocation) != 0 || len(trip.RevokedCertificates) == 0 {
+		t.Fatalf("a mailbox in working-key mode nobody revoked is read with a revocation of the address, or without its trip: %s", unrevoked.body)
 	}
 	e.want(e.do("GET", mailboxPath(protocol.Address{1}), nil, ""), 404, protocol.CodeNoSuchMailbox)
 
@@ -142,7 +144,7 @@ func TestRevocation(t *testing.T) {
 	// After all of that the mailbox is as it was.
 	unrevoked = e.do("GET", read, nil, "")
 	e.want(unrevoked, 200, "")
-	if got := held(t, unrevoked); got != nil {
+	if got := held(t, unrevoked); got == nil || len(got.Revocation) != 0 || !bytes.Equal(got.RevokedCertificates, trip.RevokedCertificates) {
 		t.Fatalf("what was refused is shown: %s", unrevoked.body)
 	}
 	if n, _ := e.store.Count(ctx, a.Address()); n != 1 {
