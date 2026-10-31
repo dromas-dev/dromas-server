@@ -104,7 +104,7 @@ func TestTheFirstCertificateStatementAfterTheTrip(t *testing.T) {
 	// A registration at a process that has not seen the trip.
 	e, r, s = laggingEnv(t, relaxed())
 	r.trip()
-	if b, err := e.store.Mailbox(context.Background(), r.id.Address()); err == nil || b != nil {
+	if b, err := s.Mailbox(context.Background(), r.id.Address()); err == nil || b != nil {
 		t.Fatalf("control: the lagging memory shows the trip: %+v, %v", b, err)
 	}
 	r.prekey(2, until(e), nil)
@@ -265,9 +265,10 @@ func TestTheSanityRefusals(t *testing.T) {
 	r.prekeyUnder(r.certifyFor(2, 2*most), 1, e1.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	e1.want(e1.do("PUT", r.path(""), r.registration(1), r.pass(1)), http.StatusCreated, "")
 	r.prekeyUnder(r.work[2], 2, e1.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
-	e2.want(e2.do("PUT", r.path("/prekey"), r.upload(2), r.pass(2)), http.StatusOK, "")
+	at2 := func(serial uint64) string { return e2.passFor(r.by[serial], r.id.Address(), e2.name()) }
+	e2.want(e2.do("PUT", r.path("/prekey"), r.upload(2), at2(2)), http.StatusOK, "")
 	r.prekeyUnder(r.certifyFor(3, 2*most), 3, e1.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
-	e2.want(e2.do("PUT", r.path("/prekey"), r.upload(3), r.pass(3)), http.StatusBadRequest, protocol.CodeCertificateTooLong)
+	e2.want(e2.do("PUT", r.path("/prekey"), r.upload(3), at2(3)), http.StatusBadRequest, protocol.CodeCertificateTooLong)
 	r.prekey(3, e1.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
-	e2.want(e2.do("PUT", r.path("/prekey"), r.upload(3), r.pass(3)), http.StatusOK, "")
+	e2.want(e2.do("PUT", r.path("/prekey"), r.upload(3), at2(3)), http.StatusOK, "")
 }
