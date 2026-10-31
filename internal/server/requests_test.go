@@ -120,6 +120,7 @@ func TestEveryStoreCallSendsAWSWhatItSentBefore(t *testing.T) {
 			_ = s.Revoke(ctx, mailbox, &Revocations{Identity: rec.Identity, Address: []byte("a revocation")}, ExpectHeld)
 		}},
 		{"Mailbox", func() { _, _ = s.Mailbox(ctx, other) }},
+		{"Reread", func() { _, _ = s.Reread(ctx, other) }},
 		{"Count, the mailbox's load", func() { _, _ = s.Count(ctx, other) }},
 		{"Dedupe", func() { _, _ = s.Dedupe(ctx, mailbox, id) }},
 		{"PutMessage", func() { _, _ = s.PutMessage(ctx, mailbox, h, []byte("a ciphertext")) }},

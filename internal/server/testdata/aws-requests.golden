@@ -11,12 +11,6 @@ PutItem {
   "addr": {
    "B": "sAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
   },
-  "cert": {
-   "B": "zgUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-  },
-  "cert_serial": {
-   "N": "7"
-  },
   "created": {
    "N": "1792670400000"
   },
@@ -25,6 +19,9 @@ PutItem {
   },
   "identity": {
    "B": "YW4gaWRlbnRpdHkgZG9jdW1lbnQ="
+  },
+  "rank": {
+   "N": "7"
   },
   "retired": {
    "L": [
@@ -53,6 +50,9 @@ PutItem {
     }
    ]
   },
+  "signer": {
+   "B": "zgUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+  },
   "sk": {
    "B": "AA=="
   },
@@ -73,12 +73,12 @@ UpdateItem {
  "ConditionExpression": "#rev = :old",
  "ExpressionAttributeNames": {
   "#acl": "acl",
-  "#cert": "cert",
-  "#cert_serial": "cert_serial",
   "#expires_at": "expires_at",
+  "#rank": "rank",
   "#retired": "retired",
   "#rev": "rev",
   "#senders": "senders",
+  "#signer": "signer",
   "#state": "state",
   "#statement": "statement",
   "#statement_sig": "statement_sig"
@@ -87,17 +87,14 @@ UpdateItem {
   ":acl": {
    "B": "eyJhbGxvdyI6WyIqIl0sImRlbnkiOlsid2ViYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiXX0="
   },
-  ":cert": {
-   "B": "zgUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-  },
-  ":cert_serial": {
-   "N": "7"
-  },
   ":expires_at": {
    "N": "1798027200"
   },
   ":old": {
    "N": "3"
+  },
+  ":rank": {
+   "N": "7"
   },
   ":retired": {
    "L": [
@@ -126,6 +123,9 @@ UpdateItem {
     }
    ]
   },
+  ":signer": {
+   "B": "zgUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+  },
   ":state": {
    "S": "active"
   },
@@ -145,7 +145,7 @@ UpdateItem {
   }
  },
  "TableName": "mailboxes",
- "UpdateExpression": "SET #acl = :acl, #cert = :cert, #cert_serial = :cert_serial, #expires_at = :expires_at, #retired = :retired, #rev = :rev, #senders = :senders, #state = :state, #statement = :statement, #statement_sig = :statement_sig"
+ "UpdateExpression": "SET #acl = :acl, #expires_at = :expires_at, #rank = :rank, #retired = :retired, #rev = :rev, #senders = :senders, #signer = :signer, #state = :state, #statement = :statement, #statement_sig = :statement_sig"
 }
 ## Revoke, the address and certificates through 9
 UpdateItem {
@@ -275,6 +275,20 @@ UpdateItem {
  "UpdateExpression": "SET #i = if_not_exists(#i, :i), #r = if_not_exists(#r, :r)"
 }
 ## Mailbox
+Query {
+ "ConsistentRead": true,
+ "ExpressionAttributeNames": {
+  "#a": "addr"
+ },
+ "ExpressionAttributeValues": {
+  ":a": {
+   "B": "sQIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  }
+ },
+ "KeyConditionExpression": "#a = :a",
+ "TableName": "mailboxes"
+}
+## Reread
 Query {
  "ConsistentRead": true,
  "ExpressionAttributeNames": {
