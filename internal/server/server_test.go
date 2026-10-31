@@ -241,8 +241,9 @@ func mustMailbox(t *testing.T, e *env, a protocol.Address) *Mailbox {
 	return b
 }
 
-// worker loads the working key of a client's mailbox, under its certificate:
-// the one made with the prekey it published last.
+// worker loads the signer of a client's mailbox: in working-key mode its
+// working key under its certificate, the one made with the prekey it
+// published last, and in identity mode, where it has none, its identity.
 func worker(t *testing.T, b *client.Mailbox) ssh.Signer {
 	t.Helper()
 	st, err := b.Status(t.Context())
@@ -251,6 +252,16 @@ func worker(t *testing.T, b *client.Mailbox) ssh.Signer {
 	}
 	stem := filepath.Join(b.Dir(), "work", strconv.FormatUint(st.PrekeySerial, 10))
 	k, err := os.ReadFile(stem)
+	if errors.Is(err, os.ErrNotExist) {
+		if k, err = os.ReadFile(filepath.Join(b.Dir(), "identity")); err != nil {
+			t.Fatal(err)
+		}
+		s, err := ssh.ParsePrivateKey(k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
