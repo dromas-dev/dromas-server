@@ -288,20 +288,6 @@ Query {
  "KeyConditionExpression": "#a = :a",
  "TableName": "mailboxes"
 }
-## Reread
-Query {
- "ConsistentRead": true,
- "ExpressionAttributeNames": {
-  "#a": "addr"
- },
- "ExpressionAttributeValues": {
-  ":a": {
-   "B": "sQIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-  }
- },
- "KeyConditionExpression": "#a = :a",
- "TableName": "mailboxes"
-}
 ## Count, the mailbox's load
 Query {
  "ConsistentRead": true,
