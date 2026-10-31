@@ -346,7 +346,7 @@ func TestARetryIsAnsweredFromWhatIsKeptWhateverItWouldMakeNew(t *testing.T) {
 			string(protocol.CodeMailboxBusy): func(l *Limits) { l.ReceiveBurst, l.ReceiveRefill = 1, time.Hour },
 		}, func(e *env, call caller, _ []string) (reply, []retried, func() reply) {
 			from, to, other := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
-			post := sealedTo(1, 1, ciphertextTo(e.t, to))
+			post := to.sealed(1, ciphertextTo(e.t, to))
 			held := func(first, got reply) string {
 				if got.status != http.StatusOK || string(got.body) != string(first.body) {
 					return fmt.Sprintf("%d %s, want 200 and the first receipt %s", got.status, got.body, first.body)
@@ -359,7 +359,7 @@ func TestARetryIsAnsweredFromWhatIsKeptWhateverItWouldMakeNew(t *testing.T) {
 					{"the same ciphertext from another sender", func() reply { return e.do("POST", to.path("/messages"), post, other.pass(1)) }, held},
 				},
 				func() reply {
-					return e.do("POST", to.path("/messages"), sealedTo(1, 1, ciphertextTo(e.t, to)), from.pass(1))
+					return e.do("POST", to.path("/messages"), to.sealed(1, ciphertextTo(e.t, to)), from.pass(1))
 				}
 		}},
 		{"revocation", map[string]func(*Limits){

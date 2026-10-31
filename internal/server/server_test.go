@@ -103,9 +103,9 @@ type sealed struct {
 	ciphertext []byte
 }
 
-// sealedTo is a send of ciphertext to prekey serial under certificate under.
-func sealedTo(serial, under uint64, ciphertext []byte) sealed {
-	return sealed{protocol.SendQuery{PrekeySerial: serial, CertificateSerial: under}, ciphertext}
+// sealedTo is a send of ciphertext to the prekey statement statement.
+func sealedTo(statement, ciphertext []byte) sealed {
+	return sealed{protocol.SendQuery{Statement: protocol.StatementHash(statement)}, ciphertext}
 }
 
 // do calls the server. A body of []byte is sent as it is, a sealed as a
@@ -179,11 +179,15 @@ func (e *env) want(r reply, status int, code protocol.Code) {
 
 // wantNotCurrent is want of a pass refused as under another certificate than
 // the one the call takes a pass under, serial n, which the answer names
-// (dromas-dev/dromas-server#66).
+// (dromas-dev/dromas-server#66); n of 0 is the identity, and the answer
+// names no certificate.
 func (e *env) wantNotCurrent(r reply, n uint64) {
 	e.t.Helper()
 	e.want(r, http.StatusUnauthorized, protocol.CodeCertificateNotCurrent)
-	if p := r.problem(); p.CertificateSerial == nil || *p.CertificateSerial != n {
+	switch p := r.problem(); {
+	case n == 0 && p.CertificateSerial != nil:
+		e.t.Fatalf("certificate_not_current names certificate %d of a mailbox in identity mode: %s", *p.CertificateSerial, r.body)
+	case n != 0 && (p.CertificateSerial == nil || *p.CertificateSerial != n):
 		e.t.Fatalf("certificate_not_current names certificate %v, want %d: %s", p.CertificateSerial, n, r.body)
 	}
 }
@@ -192,7 +196,8 @@ func (e *env) wantNotCurrent(r reply, n uint64) {
 func (e *env) name() string { return strings.TrimPrefix(e.srv.URL, "http://") }
 
 // passFor is a pass of mailbox a for the server called name, signed at the
-// test's clock by signer: a working key under its certificate.
+// test's clock by signer: the identity, or a working key under its
+// certificate.
 func (e *env) passFor(signer ssh.Signer, a protocol.Address, name string) string {
 	e.t.Helper()
 	auth, _, err := protocol.NewPass(signer, a, name, e.clock.Now())
@@ -203,15 +208,36 @@ func (e *env) passFor(signer ssh.Signer, a protocol.Address, name string) string
 }
 
 // numbers returns the serials a mailbox stands at in the store: its prekey's and
-// its certificate's. A client takes them from its clock, so a test reads
-// them and never assumes one.
+// its signer's rank, 0 for the identity. A client takes them from its clock,
+// so a test reads them and never assumes one.
 func (e *env) numbers(a protocol.Address) (prekey, cert uint64) {
 	e.t.Helper()
 	b, err := e.store.Mailbox(context.Background(), a)
 	if err != nil || b == nil {
 		e.t.Fatalf("the mailbox's record: %v", err)
 	}
-	return b.Prekey.Serial, b.CertSerial
+	return b.Prekey.Serial, b.Rank
+}
+
+// statement returns the prekey statement a mailbox stands at in the store, as
+// a send names it.
+func (e *env) statement(a protocol.Address) []byte {
+	e.t.Helper()
+	b, err := e.store.Mailbox(context.Background(), a)
+	if err != nil || b == nil {
+		e.t.Fatalf("the mailbox's record: %v", err)
+	}
+	return b.Statement
+}
+
+// mustMailbox is what the store holds of address a.
+func mustMailbox(t *testing.T, e *env, a protocol.Address) *Mailbox {
+	t.Helper()
+	b, err := e.store.Mailbox(context.Background(), a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
 
 // worker loads the working key of a client's mailbox, under its certificate:
@@ -252,18 +278,27 @@ func (e *env) pass(b *client.Mailbox) string {
 	return e.passFor(worker(e.t, b), b.Address(), e.name())
 }
 
-// raw is a mailbox built by hand, for requests the client would never make. Each
-// prekey statement is signed by a working key, under a certificate, and both
-// are kept by the number they were made under.
+// raw is a mailbox built by hand, for requests the client would never make. It
+// is in identity mode, its identity signing its statements and passes,
+// until trip publishes its revocation of certificates through tripAt; from
+// then on each statement is signed by a working key under a certificate of
+// the statement's serial, and certificates and statements are kept by the
+// number they were made under.
 type raw struct {
-	e      *env
-	signer ssh.Signer // the identity
-	id     *protocol.Identity
-	keys   map[uint64]*age.HybridIdentity
-	stmt   map[uint64][]byte
-	sig    map[uint64][]byte
-	work   map[uint64]ssh.Signer // a working key under its certificate, by the certificate's serial
+	e       *env
+	signer  ssh.Signer // the identity
+	id      *protocol.Identity
+	keys    map[uint64]*age.HybridIdentity
+	stmt    map[uint64][]byte
+	sig     map[uint64][]byte
+	by      map[uint64]ssh.Signer // the signer of each statement, by its serial
+	work    map[uint64]ssh.Signer // a working key under its certificate, by the certificate's serial
+	tripped bool
 }
+
+// tripAt is the serial a raw mailbox's trip revokes certificates through: a
+// mailbox in working-key mode signs under certificates above it.
+const tripAt = 1
 
 func (e *env) raw() *raw {
 	e.t.Helper()
@@ -274,18 +309,25 @@ func (e *env) raw() *raw {
 		e.t.Fatal(err)
 	}
 	return &raw{e: e, signer: s, id: id, keys: map[uint64]*age.HybridIdentity{}, stmt: map[uint64][]byte{}, sig: map[uint64][]byte{},
-		work: map[uint64]ssh.Signer{}}
+		by: map[uint64]ssh.Signer{}, work: map[uint64]ssh.Signer{}}
 }
 
 func (r *raw) path(rest string) string { return "/v1/" + r.id.Address().String() + rest }
 
 // certify makes a new working key and its certificate, of the given serial,
-// replacing any the mailbox holds at that serial.
+// running the server's maximum, and replaces any the mailbox holds at that
+// serial.
 func (r *raw) certify(serial uint64) ssh.Signer {
+	r.e.t.Helper()
+	return r.certifyFor(serial, DefaultLimits().MaxCertificateLifetime)
+}
+
+// certifyFor is certify, of a certificate running lifetime.
+func (r *raw) certifyFor(serial uint64, lifetime time.Duration) ssh.Signer {
 	r.e.t.Helper()
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 	work, _ := ssh.NewSignerFromKey(priv)
-	cert, err := protocol.NewCertificate(r.id, r.signer, work.PublicKey(), serial, r.e.clock.Now())
+	cert, err := protocol.NewCertificate(r.id, r.signer, work.PublicKey(), serial, r.e.clock.Now(), lifetime)
 	if err != nil {
 		r.e.t.Fatal(err)
 	}
@@ -297,11 +339,28 @@ func (r *raw) certify(serial uint64) ssh.Signer {
 	return s
 }
 
-// prekey makes statement serial, with a new key unless key is given, signed
-// by a new working key under a new certificate of the same serial.
+// trip publishes the mailbox's revocation of certificates through tripAt,
+// the trip to working-key mode, and signs every statement after it under a
+// certificate.
+func (r *raw) trip() *raw {
+	r.e.t.Helper()
+	if got := r.e.do("PUT", r.path("/revocations"), r.certs(tripAt), ""); got.status != 200 && got.status != 201 {
+		r.e.t.Fatalf("the trip: %d %s", got.status, got.body)
+	}
+	r.tripped = true
+	return r
+}
+
+// prekey makes statement serial, with a new key unless key is given: signed
+// by the identity in identity mode, and by a new working key under a new
+// certificate of the same serial once the mailbox has made its trip.
 func (r *raw) prekey(serial uint64, notAfter time.Time, key *age.HybridIdentity) {
 	r.e.t.Helper()
-	r.prekeyUnder(r.certify(serial), serial, notAfter, key)
+	signer := r.signer
+	if r.tripped {
+		signer = r.certify(serial)
+	}
+	r.prekeyUnder(signer, serial, notAfter, key)
 }
 
 // prekeyUnder makes statement serial, signed by signer.
@@ -316,7 +375,7 @@ func (r *raw) prekeyUnder(signer ssh.Signer, serial uint64, notAfter time.Time, 
 	if err != nil {
 		r.e.t.Fatal(err)
 	}
-	r.stmt[serial], r.sig[serial] = p.Statement(), sig
+	r.stmt[serial], r.sig[serial], r.by[serial] = p.Statement(), sig, signer
 }
 
 func (r *raw) registration(serial uint64) protocol.RegisterRequest {
@@ -327,18 +386,38 @@ func (r *raw) upload(serial uint64) protocol.PrekeyRequest {
 	return protocol.PrekeyRequest{Prekey: r.stmt[serial], PrekeySignature: r.sig[serial]}
 }
 
-// pass is a new pass under the certificate of the given serial.
+// pass is a new pass by the signer of statement serial.
 func (r *raw) pass(serial uint64) string {
 	r.e.t.Helper()
-	return r.e.passFor(r.work[serial], r.id.Address(), r.e.name())
+	return r.e.passFor(r.by[serial], r.id.Address(), r.e.name())
+}
+
+// sealed is a send of ciphertext to statement serial.
+func (r *raw) sealed(serial uint64, ciphertext []byte) sealed {
+	return sealedTo(r.stmt[serial], ciphertext)
 }
 
 // register registers the mailbox with a new prekey 1, valid for d.
 func (r *raw) register(d time.Duration) *raw {
 	r.e.t.Helper()
-	r.prekey(1, r.e.clock.Now().Add(d), nil)
-	r.e.want(r.e.do("PUT", r.path(""), r.registration(1), r.pass(1)), 201, "")
+	return r.registerAt(1, d)
+}
+
+// registerAt registers the mailbox with a new prekey serial, valid for d.
+func (r *raw) registerAt(serial uint64, d time.Duration) *raw {
+	r.e.t.Helper()
+	r.prekey(serial, r.e.clock.Now().Add(d), nil)
+	r.e.want(r.e.do("PUT", r.path(""), r.registration(serial), r.pass(serial)), 201, "")
 	return r
+}
+
+// registerWorking makes the trip, then registers the mailbox in working-key
+// mode with a new prekey just above it, under the certificate of its serial,
+// valid for d. It returns the serial.
+func (r *raw) registerWorking(d time.Duration) uint64 {
+	r.e.t.Helper()
+	r.trip().registerAt(tripAt+1, d)
+	return tripAt + 1
 }
 
 // A signature is at most protocol.MaxSignature bytes as it arrives (PROTOCOL.md
@@ -1018,8 +1097,7 @@ func TestSendPipeline(t *testing.T) {
 		}
 		_, _ = io.WriteString(w, `{"v":1}`)
 		_ = w.Close()
-		serial, under := e.numbers(b.Address())
-		return sealedTo(serial, under, ct.Bytes())
+		return sealedTo(e.statement(b.Address()), ct.Bytes())
 	}
 	to := "/v1/" + b.Address().String()
 	ok := seal(pqRecipient)
@@ -1231,8 +1309,7 @@ func TestGreaseIsIgnored(t *testing.T) {
 	}
 	_, _ = io.WriteString(w, "x")
 	_ = w.Close()
-	serial, under := e.numbers(b.Address())
-	e.want(e.do("POST", "/v1/"+b.Address().String()+"/messages", sealedTo(serial, under, ct.Bytes()), e.pass(a)), 201, "")
+	e.want(e.do("POST", "/v1/"+b.Address().String()+"/messages", sealedTo(e.statement(b.Address()), ct.Bytes()), e.pass(a)), 201, "")
 }
 
 // A file whose one stanza is grease has no native stanza: it is not said to
@@ -1304,8 +1381,7 @@ func TestEachWrongRecipientTypeIsToldItsOwnCase(t *testing.T) {
 		}
 		_, _ = io.WriteString(w, "x")
 		_ = w.Close()
-		serial, under := e.numbers(b.Address())
-		got := e.do("POST", "/v1/"+b.Address().String()+"/messages", sealedTo(serial, under, ct.Bytes()), e.pass(a))
+		got := e.do("POST", "/v1/"+b.Address().String()+"/messages", sealedTo(e.statement(b.Address()), ct.Bytes()), e.pass(a))
 		if p := got.problem(); got.status != 400 || p.Code != protocol.CodeWrongRecipientType || p.Hint != c.hint {
 			t.Errorf("%s: %d %s, hint %q; want 400 %s, hint %q", c.name, got.status, p.Code, p.Hint, protocol.CodeWrongRecipientType, c.hint)
 		}
@@ -1412,9 +1488,10 @@ func TestTheClientIsTheLastForwardedAddress(t *testing.T) {
 	}
 }
 
-// A send must name the mailbox's current prekey serial, so after a renewal no
-// message is taken for the retired key: a send naming its serial is stale.
-// The mailbox may then delete the key.
+// A send must name the mailbox's current prekey statement, so after a renewal
+// no message is taken for the retired key: a send naming its statement is
+// stale, and the refusal carries no members. The mailbox may then delete the
+// key.
 func TestSendNamesTheCurrentPrekey(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
@@ -1426,16 +1503,20 @@ func TestSendNamesTheCurrentPrekey(t *testing.T) {
 	if _, err := b.Rekey(ctx); err != nil {
 		t.Fatalf("rekey: %v", err)
 	}
-	// sealOld seals to the retired key, naming serial.
-	sealOld := func(body string, serial uint64) sealed {
+	// sealOld seals to the retired key, naming its statement.
+	sealOld := func(body string) sealed {
 		var ct bytes.Buffer
 		w, _ := age.Encrypt(&ct, oldRecipient)
 		_, _ = io.WriteString(w, body)
 		_ = w.Close()
-		return sealedTo(serial, serial, ct.Bytes())
+		return sealedTo(old.Statement, ct.Bytes())
 	}
 	to := "/v1/" + b.Address().String()
-	e.want(e.do("POST", to+"/messages", sealOld("named the retired serial", old.Prekey.Serial), e.pass(a)), 409, protocol.CodeStalePrekey)
+	stale := e.do("POST", to+"/messages", sealOld("named the retired statement"), e.pass(a))
+	e.want(stale, 409, protocol.CodeStalePrekey)
+	if p := stale.problem(); p.PrekeySerial != nil || p.CertificateSerial != nil {
+		t.Errorf("stale_prekey carries members: %s", stale.body)
+	}
 	send(t, a, b, "after the renewal") // to the new key
 	if res := receive(t, b); len(res.Delivered) != 1 {
 		t.Fatalf("delivered %d, want 1", len(res.Delivered))

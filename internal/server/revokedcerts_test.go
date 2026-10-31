@@ -36,10 +36,9 @@ func (r *raw) certs(through uint64) protocol.Revocations {
 	return protocol.Revocations{Identity: r.id.Document(), RevokedCertificates: l.Statement(), RevokedCertificatesSignature: sig}
 }
 
-// sendTo posts an age file sealed to the prekey of to's given serial, naming
-// that serial and a certificate serial, with from's pass under its
-// certificate of the serial given.
-func (e *env) sendTo(to *raw, serial, under uint64, from *raw, fromUnder uint64) reply {
+// sendTo posts an age file sealed to to's statement of the given serial,
+// naming it, with a pass by the signer of from's statement fromSerial.
+func (e *env) sendTo(to *raw, serial uint64, from *raw, fromSerial uint64) reply {
 	e.t.Helper()
 	var ct bytes.Buffer
 	w, err := age.Encrypt(&ct, to.keys[serial].Recipient())
@@ -48,7 +47,7 @@ func (e *env) sendTo(to *raw, serial, under uint64, from *raw, fromUnder uint64)
 	}
 	_, _ = io.WriteString(w, `{"v":1}`)
 	_ = w.Close()
-	return e.do("POST", to.path("/messages"), sealedTo(serial, under, ct.Bytes()), from.pass(fromUnder))
+	return e.do("POST", to.path("/messages"), to.sealed(serial, ct.Bytes()), from.pass(fromSerial))
 }
 
 // A stored revocation of certificates that does not parse is an error
@@ -69,7 +68,7 @@ func TestAStoredListThatDoesNotParseIsAnError(t *testing.T) {
 	}
 	for name, got := range map[string]reply{
 		"a list under the mailbox's certificate": e.do("GET", r.path("/messages"), nil, r.pass(1)),
-		"a send to the mailbox":                  e.sendTo(r, 1, 1, other, 1),
+		"a send to the mailbox":                  e.sendTo(r, 1, other, 1),
 		"a revocation of its certificates":       e.do("PUT", r.path("/revocations"), r.certs(1), ""),
 	} {
 		if got.status != 503 {
@@ -160,8 +159,8 @@ func TestRevokedCertificates(t *testing.T) {
 		t.Errorf("the mailbox is read with %d members, want its identity, prekey and signature, then the statement and its signature: %s", len(members), shown.body)
 	}
 	e.want(e.do("GET", r.path("/messages"), nil, r.pass(2)), 200, "")
-	e.want(e.sendTo(other, 1, 1, r, 2), 201, "")
-	e.want(e.sendTo(r, 2, 2, other, 1), 201, "")
+	e.want(e.sendTo(other, 1, r, 2), 201, "")
+	e.want(e.sendTo(r, 2, other, 1), 201, "")
 
 	// The same one again changes nothing.
 	e.want(e.do("PUT", path, good, ""), 200, "")
@@ -181,8 +180,8 @@ func TestRevokedCertificates(t *testing.T) {
 	e.want(e.do("GET", r.path("/messages"), nil, seen), 401, protocol.CodeCertificateRevoked)
 	e.want(e.do("GET", r.path("/messages"), nil, r.pass(2)), 401, protocol.CodeCertificateRevoked)
 	e.want(e.do("GET", r.path("/acl"), nil, r.pass(2)), 401, protocol.CodeCertificateRevoked)
-	e.want(e.sendTo(other, 1, 1, r, 2), 401, protocol.CodeCertificateRevoked)
-	e.want(e.sendTo(r, 2, 2, other, 1), 409, protocol.CodePrekeyExpired)
+	e.want(e.sendTo(other, 1, r, 2), 401, protocol.CodeCertificateRevoked)
+	e.want(e.sendTo(r, 2, other, 1), 409, protocol.CodePrekeyExpired)
 	e.want(put(2, 2), 401, protocol.CodeCertificateRevoked)
 	r.prekeyUnder(r.work[2], 3, now.Add(time.Hour), nil)
 	e.want(put(3, 2), 401, protocol.CodeCertificateRevoked)
@@ -200,9 +199,9 @@ func TestRevokedCertificates(t *testing.T) {
 	r.prekey(3, now.Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(put(3, 3), 200, "")
 	e.want(e.do("GET", r.path("/messages"), nil, r.pass(3)), 200, "")
-	e.want(e.sendTo(r, 2, 2, other, 1), 409, protocol.CodeStalePrekey)
-	e.want(e.sendTo(r, 3, 3, other, 1), 201, "")
-	e.want(e.sendTo(other, 1, 1, r, 3), 201, "")
+	e.want(e.sendTo(r, 2, other, 1), 409, protocol.CodeStalePrekey)
+	e.want(e.sendTo(r, 3, other, 1), 201, "")
+	e.want(e.sendTo(other, 1, r, 3), 201, "")
 
 	// One may run through a serial no certificate has yet: none at or below
 	// it is then taken, and the next one above is.
@@ -389,8 +388,8 @@ func TestAPrekeyAtTheHighestSerialDoesNotEndTheAddress(t *testing.T) {
 		t.Fatalf("a renewal after a prekey at the highest serial: %v", err)
 	}
 	stored, err := e.store.Mailbox(ctx, a.Address())
-	if err != nil || stored.CertSerial <= first || stored.Prekey.Serial != stored.CertSerial || stored.Prekey.Serial >= protocol.MaxSerial {
-		t.Fatalf("the record after the renewal: certificate %d, prekey %d, %v", stored.CertSerial, stored.Prekey.Serial, err)
+	if err != nil || stored.Rank <= first || stored.Prekey.Serial != stored.Rank || stored.Prekey.Serial >= protocol.MaxSerial {
+		t.Fatalf("the record after the renewal: certificate %d, prekey %d, %v", stored.Rank, stored.Prekey.Serial, err)
 	}
 	send(t, b, a, "to the mailbox's own prekey again")
 	res := receive(t, a)

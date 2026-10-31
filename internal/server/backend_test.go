@@ -437,13 +437,13 @@ func backendWrites() map[string]backendWrite {
 		}},
 		"UpdateMailbox": {on: onMailbox, run: func(ctx context.Context, w *heldWorld) (*Header, error) {
 			b := cloneMailbox(w.rec)
-			b.CertSerial += 10
+			b.Rank += 10
 			return nil, w.s.UpdateMailbox(ctx, b)
 		}, refusals: []error{ErrStale}, applied: func(w *heldWorld) string {
-			if b := cached(w); b == nil || b.Rev != w.rec.Rev+1 || b.CertSerial != w.rec.CertSerial+10 {
+			if b := cached(w); b == nil || b.Rev != w.rec.Rev+1 || b.Rank != w.rec.Rank+10 {
 				return "the cache does not hold the record written"
 			}
-			if st, _ := w.s.Held(w.a); st.CertSerial != w.rec.CertSerial+10 {
+			if st, _ := w.s.Held(w.a); st.Rank != w.rec.Rank+10 {
 				return "the index does not hold the standing written"
 			}
 			return ""

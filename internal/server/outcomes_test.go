@@ -505,9 +505,9 @@ func TestASendWhoseWriteWasRetriedIsStored(t *testing.T) {
 			e := newEnv(t, l, func(cfg *Config) { s.Store, cfg.Store = cfg.Store, s })
 			from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 			s.armed.Store(true)
-			first := e.sendTo(to, 1, 1, from, 1)
+			first := e.sendTo(to, 1, from, 1)
 			n, _ := e.store.Count(t.Context(), to.id.Address())
-			next := e.sendTo(to, 1, 1, from, 1)
+			next := e.sendTo(to, 1, from, 1)
 			t.Logf("send %d %s, the mailbox holds %d; next send %d %s", first.status, first.code(), n, next.status, next.code())
 			if first.status != http.StatusCreated || next.status != http.StatusTooManyRequests {
 				t.Errorf("a stored send answered %d, and the next one %d: want 201, then 429", first.status, next.status)
@@ -525,7 +525,7 @@ func TestASendWhoseWriteWasRetriedIsStored(t *testing.T) {
 				e.want(e.do("PUT", owner.path("/revocations"), protocol.Revocations{Identity: owner.id.Document(), Revocation: sig}, ""), http.StatusCreated, "")
 			}
 			s.armed.Store(true)
-			got := e.sendTo(owner, 1, 1, from, 1)
+			got := e.sendTo(owner, 1, from, 1)
 			n, _ := e.store.Count(t.Context(), owner.id.Address())
 			t.Logf("a send that wrote after its recipient's revocation: %d %s; the revoked mailbox holds %d", got.status, got.code(), n)
 			if got.status != http.StatusGone || n != 0 {

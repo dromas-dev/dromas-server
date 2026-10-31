@@ -158,7 +158,7 @@ func TestAContinuationIsTheCursorHandedOutLast(t *testing.T) {
 	e := newEnv(t, l)
 	from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 	for range pageSize + 1 {
-		e.want(e.sendTo(to, 1, 1, from, 1), http.StatusCreated, "")
+		e.want(e.sendTo(to, 1, from, 1), http.StatusCreated, "")
 	}
 	pass := to.pass(1)
 	page := func(cursor string) reply {
@@ -409,7 +409,7 @@ func TestPassesAreRememberedUntilTheyRunOut(t *testing.T) {
 	if ps.has(a1, sum, cert, now) {
 		t.Fatal("a pass never shown is remembered")
 	}
-	ps.keep(a1, seenPass{sum: sum, cert: cert, until: now.Add(protocol.PassLifetime)}, now)
+	ps.keep(a1, seenPass{sum: sum, signer: cert, until: now.Add(protocol.PassLifetime)}, now)
 	if !ps.has(a1, sum, cert, now) || !ps.has(a1, sum, cert, now.Add(protocol.PassLifetime-time.Second)) {
 		t.Fatal("a pass that was checked is not remembered")
 	}
@@ -425,13 +425,13 @@ func TestPassesAreRememberedUntilTheyRunOut(t *testing.T) {
 	}
 	// A mailbox's next pass replaces its last.
 	next := [32]byte{3}
-	ps.keep(a1, seenPass{sum: next, cert: cert, until: now.Add(2 * protocol.PassLifetime)}, now)
+	ps.keep(a1, seenPass{sum: next, signer: cert, until: now.Add(2 * protocol.PassLifetime)}, now)
 	if ps.has(a1, sum, cert, now) || !ps.has(a1, next, cert, now) || len(ps.seen) != 1 {
 		t.Fatalf("after a second pass: %d held", len(ps.seen))
 	}
 	// Passes that have run out go when the next is kept after a sweep is due.
 	later := now.Add(protocol.MaxPassLifetime)
-	ps.keep(a2, seenPass{sum: sum, cert: cert, until: later.Add(protocol.PassLifetime)}, later)
+	ps.keep(a2, seenPass{sum: sum, signer: cert, until: later.Add(protocol.PassLifetime)}, later)
 	if len(ps.seen) != 1 || !ps.has(a2, sum, cert, later) {
 		t.Fatalf("%d held after a sweep, want only the pass still good", len(ps.seen))
 	}

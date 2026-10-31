@@ -45,7 +45,7 @@ func TestPostsOfTheSameBytesInFlightAreOneCall(t *testing.T) {
 		e := newEnv(t, l, func(cfg *Config) { cfg.Store = slowPut{cfg.Store, 40 * time.Millisecond} })
 		for i := range 5 {
 			to, from := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
-			e.want(e.sendTo(to, 1, 1, from, 1), http.StatusCreated, "") // one of each budget spent
+			e.want(e.sendTo(to, 1, from, 1), http.StatusCreated, "") // one of each budget spent
 			// The second post is from the same sender, and on odd trials
 			// from another.
 			second := from
@@ -56,9 +56,9 @@ func TestPostsOfTheSameBytesInFlightAreOneCall(t *testing.T) {
 			var r1, r2 reply
 			var wg sync.WaitGroup
 			wg.Add(2)
-			go func() { defer wg.Done(); r1 = e.do("POST", to.path("/messages"), sealedTo(1, 1, ct), from.pass(1)) }()
+			go func() { defer wg.Done(); r1 = e.do("POST", to.path("/messages"), to.sealed(1, ct), from.pass(1)) }()
 			time.Sleep(5 * time.Millisecond)
-			go func() { defer wg.Done(); r2 = e.do("POST", to.path("/messages"), sealedTo(1, 1, ct), second.pass(1)) }()
+			go func() { defer wg.Done(); r2 = e.do("POST", to.path("/messages"), to.sealed(1, ct), second.pass(1)) }()
 			wg.Wait()
 			if got := fmt.Sprint(r1.status, " ", r2.status); got != "201 200" && got != "200 201" {
 				t.Errorf("%s, trial %d: the same bytes posted twice at once answered %s %s, %s %s; want 201 and 200, whichever won", c.name, i, got, r1.code(), r2.code(), r2.body)
@@ -72,9 +72,9 @@ func TestPostsOfTheSameBytesInFlightAreOneCall(t *testing.T) {
 	var ra, rb reply
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); ra = e.do("POST", to.path("/messages"), sealedTo(1, 1, ct), a.pass(1)) }()
+	go func() { defer wg.Done(); ra = e.do("POST", to.path("/messages"), to.sealed(1, ct), a.pass(1)) }()
 	time.Sleep(5 * time.Millisecond)
-	go func() { defer wg.Done(); rb = e.do("POST", to.path("/messages"), sealedTo(1, 1, ct), b.pass(1)) }()
+	go func() { defer wg.Done(); rb = e.do("POST", to.path("/messages"), to.sealed(1, ct), b.pass(1)) }()
 	wg.Wait()
 	if got := fmt.Sprint(ra.status, " ", rb.status); got != "201 200" && got != "200 201" {
 		t.Errorf("the same bytes from two senders at once answered %s; want 201 and 200, whichever won", got)
@@ -90,17 +90,17 @@ func TestPostsOfTheSameBytesInFlightAreOneCall(t *testing.T) {
 	lead := &armedDedupe{leadDedupe: &leadDedupe{wait: time.Second, entered: make(chan struct{}), second: make(chan struct{}), read: make(chan struct{})}}
 	e = newEnv(t, l, func(cfg *Config) { lead.Store, cfg.Store = cfg.Store, lead })
 	to, spent, fresh := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
-	e.want(e.sendTo(to, 1, 1, spent, 1), http.StatusCreated, "")
+	e.want(e.sendTo(to, 1, spent, 1), http.StatusCreated, "")
 	lead.on.Store(true)
 	ct = sealFor(t, to, 1)
 	led := make(chan reply, 1)
-	go func() { led <- e.do("POST", to.path("/messages"), sealedTo(1, 1, ct), spent.pass(1)) }()
+	go func() { led <- e.do("POST", to.path("/messages"), to.sealed(1, ct), spent.pass(1)) }()
 	select {
 	case <-lead.entered:
 	case r := <-led:
 		t.Fatalf("the post at its limit was answered before its dedupe: %d %s", r.status, r.code())
 	}
-	rb = e.do("POST", to.path("/messages"), sealedTo(1, 1, ct), fresh.pass(1))
+	rb = e.do("POST", to.path("/messages"), to.sealed(1, ct), fresh.pass(1))
 	ra = <-led
 	if ra.status != http.StatusTooManyRequests || rb.status != http.StatusCreated {
 		t.Errorf("a sender at its limit and one with sends left posting the same bytes at once: %d %s and %d %s; want 429 and 201", ra.status, ra.code(), rb.status, rb.code())
@@ -138,7 +138,7 @@ func TestASenderRevokedDuringItsSendIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.a, s.rv = from.id.Address(), &Revocations{Identity: from.id.Document(), Address: sig}
-	e.want(e.sendTo(to, 1, 1, from, 1), http.StatusForbidden, protocol.CodeSenderRevoked)
+	e.want(e.sendTo(to, 1, from, 1), http.StatusForbidden, protocol.CodeSenderRevoked)
 	if n, _ := e.store.Count(context.Background(), to.id.Address()); n != 0 {
 		t.Errorf("the mailbox took %d messages from a sender revoked during its send", n)
 	}
@@ -360,9 +360,9 @@ func plainCall(method, url string, body []byte, ctype, pass string) rawAnswer {
 	return rawAnswer{status: resp.StatusCode, code: p.Code}
 }
 
-// rawPost is a post of ct to mailbox to, naming the serials given, with pass.
-func rawPost(e *env, to *raw, ct []byte, serial, under uint64, pass string) func() rawAnswer {
-	q := protocol.SendQuery{PrekeySerial: serial, CertificateSerial: under}
+// rawPost is a post of ct to mailbox to, naming the statement given, with pass.
+func rawPost(e *env, to *raw, ct, statement []byte, pass string) func() rawAnswer {
+	q := protocol.SendQuery{Statement: protocol.StatementHash(statement)}
 	url := e.srv.URL + to.path("/messages") + "?" + q.Encode()
 	return func() rawAnswer { return plainCall(http.MethodPost, url, ct, protocol.CiphertextContentType, pass) }
 }
@@ -441,19 +441,20 @@ func (s *armedDedupe) Dedupe(ctx context.Context, mailbox protocol.Address, id [
 	return s.leadDedupe.Dedupe(ctx, mailbox, id)
 }
 
-// Posts of the same bytes from one sender naming other serials are posts of
-// their own: the single flight's key holds the query (send). A post naming a
-// stale serial, which leads, is refused stale_prekey; one naming the current
-// serials, which comes while it is in flight, is stored, never handed the
-// stale one's refusal (dromas-dev/dromas-server#92).
-func TestAStaleSerialIsAPostOfItsOwn(t *testing.T) {
+// Posts of the same bytes from one sender naming other statements are posts
+// of their own: the single flight's key holds the query, the statement's hash
+// (send). A post naming a stale statement, which leads, is refused
+// stale_prekey; one naming the current statement, which comes while it is in
+// flight, is stored, never handed the stale one's refusal
+// (dromas-dev/dromas-server#92).
+func TestAStaleStatementIsAPostOfItsOwn(t *testing.T) {
 	t.Parallel()
 	s := &leadDedupe{wait: time.Second, entered: make(chan struct{}), second: make(chan struct{}), read: make(chan struct{})}
 	e := newEnv(t, relaxed(), func(cfg *Config) { s.Store, cfg.Store = cfg.Store, s })
 	to, from := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 	ct := sealFor(t, to, 1)
 	pass := from.pass(1)
-	stale, cur := rawPost(e, to, ct, 2, 1, pass), rawPost(e, to, ct, 1, 1, pass)
+	stale, cur := rawPost(e, to, ct, []byte("a statement the mailbox does not stand at"), pass), rawPost(e, to, ct, to.stmt[1], pass)
 	led := make(chan rawAnswer, 1)
 	go func() { led <- stale() }()
 	select {
@@ -554,12 +555,12 @@ func TestAPanicInEachSingleFlightEndsOnlyItsCalls(t *testing.T) {
 		}
 	}
 
-	post := rawPost(api, to, sealFor(t, to, 1), 1, 1, api.passFor(from.work[1], from.id.Address(), api.name()))
+	post := rawPost(api, to, sealFor(t, to, 1), to.stmt[1], api.passFor(from.by[1], from.id.Address(), api.name()))
 	run("posts", &p.put, post)
 	run("lookups", &p.read, func() rawAnswer { return plainCall(http.MethodGet, srv.URL+victim.path(""), nil, "", "") })
 
 	mailbox := api.raw().register(protocol.MaxPrekeyLifetime)
-	api.want(api.sendTo(mailbox, 1, 1, from, 1), http.StatusCreated, "")
+	api.want(api.sendTo(mailbox, 1, from, 1), http.StatusCreated, "")
 	sig, err := protocol.SignRevocation(mailbox.signer, mailbox.id.Address())
 	if err != nil {
 		t.Fatal(err)
@@ -630,7 +631,7 @@ func TestASenderChangedBetweenItsPassAndItsRecordIsRefused(t *testing.T) {
 			to, from := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 			pass := from.pass(1)
 			s.a, s.change = from.id.Address(), c.change(s, from)
-			r := e.do("POST", to.path("/messages"), sealedTo(1, 1, sealFor(t, to, 1)), pass)
+			r := e.do("POST", to.path("/messages"), to.sealed(1, sealFor(t, to, 1)), pass)
 			n, _ := e.store.Count(context.Background(), to.id.Address())
 			if !s.done.Load() || r.status != c.status || r.code() != c.code || n != 0 {
 				t.Errorf("a sender %s between its pass's check and its record's read: %d %s, %d stored (changed %v); want %d %s and none",

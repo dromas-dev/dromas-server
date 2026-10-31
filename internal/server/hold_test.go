@@ -59,7 +59,7 @@ func TestAHeldListIsAnsweredWhenAMessageArrives(t *testing.T) {
 		t.Fatalf("the held list was answered %d before anything changed", got.r.status)
 	default:
 	}
-	e.want(e.do("POST", to.path("/messages"), sealedTo(1, 1, ciphertextTo(t, to)), from.pass(1)), http.StatusCreated, "")
+	e.want(e.do("POST", to.path("/messages"), to.sealed(1, ciphertextTo(t, to)), from.pass(1)), http.StatusCreated, "")
 	got := <-c
 	e.want(got.r, http.StatusOK, "")
 	if got.took > 10*time.Second || got.r.header.Get("ETag") == tag {
@@ -176,7 +176,7 @@ func TestAHeldListIsAnsweredWhenAMessageExpires(t *testing.T) {
 	l.MaxWait = 4 * time.Second
 	e := newEnv(t, l)
 	from, to, _ := emptyTag(e)
-	e.want(e.do("POST", to.path("/messages"), sealedTo(1, 1, ciphertextTo(t, to)), from.pass(1)), http.StatusCreated, "")
+	e.want(e.do("POST", to.path("/messages"), to.sealed(1, ciphertextTo(t, to)), from.pass(1)), http.StatusCreated, "")
 	const left = 500 * time.Millisecond
 	e.clock.Add(protocol.Retention - left) // the message has half a second left
 	r := e.do("GET", to.path("/messages"), nil, to.pass(1))
@@ -223,7 +223,7 @@ func TestAHeldListIsAnsweredAPageThatHoldsWhatWokeIt(t *testing.T) {
 	from, to, tag := emptyTag(e)
 	c := heldList(e, to, tag, "wait=60")
 	holdingNow(t, e.server, 1)
-	e.want(e.do("POST", to.path("/messages"), sealedTo(1, 1, ciphertextTo(t, to)), from.pass(1)), http.StatusCreated, "")
+	e.want(e.do("POST", to.path("/messages"), to.sealed(1, ciphertextTo(t, to)), from.pass(1)), http.StatusCreated, "")
 	got := <-c
 	e.want(got.r, http.StatusOK, "")
 	var page protocol.MessageList

@@ -41,7 +41,7 @@ func newReloading(t *testing.T, text string) *reloading {
 	t.Helper()
 	r := &reloading{path: filepath.Join(t.TempDir(), "version-policy.json"), reg: prometheus.NewRegistry(), logged: &bytes.Buffer{}}
 	r.write(t, text)
-	d, read, err := ReadVersionPolicy(r.path)
+	d, read, err := ReadVersionPolicy(r.path, relaxed())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestARequestMeetsTheVersionPolicyInForce(t *testing.T) {
 	if err := os.WriteFile(path, []byte(policyText("1.2", "1.5.0")), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	d, read, err := ReadVersionPolicy(path)
+	d, read, err := ReadVersionPolicy(path, relaxed())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,14 +271,14 @@ func TestTheLargestPolicyFits(t *testing.T) {
 	if len(b) > MaxVersionPolicy-4<<10 {
 		t.Errorf("the largest policy, indented, is %d bytes: within 4 KiB of the bound, %d", len(b), MaxVersionPolicy)
 	}
-	if _, err := ParseVersionPolicy(b); err != nil {
+	if _, err := ParseVersionPolicy(b, relaxed()); err != nil {
 		t.Errorf("the largest policy: %v", err)
 	}
 	path := filepath.Join(t.TempDir(), "version-policy.json")
 	if err := os.WriteFile(path, append(b, bytes.Repeat([]byte(" "), MaxVersionPolicy+1-len(b))...), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := ReadVersionPolicy(path); err == nil {
+	if _, _, err := ReadVersionPolicy(path, relaxed()); err == nil {
 		t.Error("a file past the bound was read")
 	}
 }

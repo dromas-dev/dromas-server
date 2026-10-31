@@ -291,7 +291,7 @@ func TestALargeAnswerWrittenFirstGoesOutAfterTheDrainOfItsBody(t *testing.T) {
 	}
 	_, _ = w.Write(make([]byte, 32<<10))
 	_ = w.Close()
-	e.want(e.do(http.MethodPost, to.path("/messages"), sealedTo(1, 1, ct.Bytes()), from.pass(1)), http.StatusCreated, "")
+	e.want(e.do(http.MethodPost, to.path("/messages"), to.sealed(1, ct.Bytes()), from.pass(1)), http.StatusCreated, "")
 	id := sha256.Sum256(ct.Bytes())
 	l := pacedLimits()
 	reg := prometheus.NewRegistry()

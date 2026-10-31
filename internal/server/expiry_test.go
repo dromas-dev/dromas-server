@@ -18,7 +18,7 @@ import (
 )
 
 // stands reads a mailbox's record and the certificate its current statement is
-// signed under.
+// signed under, nil for the identity.
 func (e *env) stands(a protocol.Address) (*Mailbox, *protocol.Certificate) {
 	e.t.Helper()
 	b, err := e.store.Mailbox(context.Background(), a)
@@ -29,11 +29,11 @@ func (e *env) stands(a protocol.Address) (*Mailbox, *protocol.Certificate) {
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	_, cert, err := protocol.VerifyPrekeyRecord(id, b.Statement, b.Signature)
+	_, signer, err := protocol.VerifyPrekeyRecord(id, b.Statement, b.Signature)
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	return b, cert
+	return b, signer.Certificate()
 }
 
 // A mailbox's record may go once nothing of the mailbox is valid any more

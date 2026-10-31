@@ -80,7 +80,7 @@ func TestAFirstPageIsNotModifiedWhileUnchanged(t *testing.T) {
 		w, _ := age.Encrypt(&ct, to.keys[1].Recipient())
 		_, _ = io.WriteString(w, `{"v":1}`)
 		_ = w.Close()
-		e.want(e.do(http.MethodPost, to.path("/messages"), sealedTo(1, 1, ct.Bytes()), from.pass(1)), http.StatusCreated, "")
+		e.want(e.do(http.MethodPost, to.path("/messages"), to.sealed(1, ct.Bytes()), from.pass(1)), http.StatusCreated, "")
 	}
 	resp, body = poll("", emptyTag)
 	var list protocol.MessageList
@@ -121,7 +121,7 @@ func TestAPollsIfMatchIsEvaluatedFirst(t *testing.T) {
 	w, _ := age.Encrypt(&ct, to.keys[1].Recipient())
 	_, _ = io.WriteString(w, `{"v":1}`)
 	_ = w.Close()
-	e.want(e.do(http.MethodPost, to.path("/messages"), sealedTo(1, 1, ct.Bytes()), from.pass(1)), http.StatusCreated, "")
+	e.want(e.do(http.MethodPost, to.path("/messages"), to.sealed(1, ct.Bytes()), from.pass(1)), http.StatusCreated, "")
 	poll := func(e *env, query string, headers ...string) (int, string) {
 		t.Helper()
 		req, _ := http.NewRequest(http.MethodGet, e.srv.URL+to.path("/messages")+query, nil)

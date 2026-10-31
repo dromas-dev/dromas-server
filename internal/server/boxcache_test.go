@@ -819,11 +819,11 @@ func TestARegistrationAfterTheTTLsRemovalIsNewerThanTheRemovedRecord(t *testing.
 		t.Fatal(err)
 	}
 	old := cloneMailbox(rec) // the record the TTL takes: registered 40 days before, renewed since
-	old.Rev, old.CertSerial, old.Created = 5, 3, rec.Created.Add(-40*24*time.Hour)
+	old.Rev, old.Rank, old.Created = 5, 3, rec.Created.Add(-40*24*time.Hour)
 	fresh := cloneMailbox(rec) // the identity's registration once the TTL took it
-	fresh.Rev, fresh.CertSerial = 1, 4
+	fresh.Rev, fresh.Rank = 1, 4
 	next := cloneMailbox(fresh) // the new mailbox renews, and the stream brings it
-	next.Rev, next.CertSerial = 2, 5
+	next.Rev, next.Rank = 2, 5
 
 	t.Run("a read begun before the removal", func(t *testing.T) {
 		s := NewDynamoStore(DynamoConfig{MailboxCache: 10})
@@ -831,16 +831,16 @@ func TestARegistrationAfterTheTTLsRemovalIsNewerThanTheRemovedRecord(t *testing.
 		s.forget(a)                                  // the stream's removal of old, by the TTL
 		s.cache.missed(a, s.cache.begin(a), s.now()) // the registration's read finds nothing
 		s.applyMailbox(fresh)                        // its CreateMailbox, at rev 1
-		if b, ok := s.Known(a); !ok || b == nil || b.CertSerial != fresh.CertSerial {
+		if b, ok := s.Known(a); !ok || b == nil || b.Rank != fresh.Rank {
 			t.Fatalf("control: memory holds %s, not the new registration", standsAt(b))
 		}
 		s.cache.fill(old, tok) // the first read's fill lands
-		if b, ok := s.Known(a); !ok || b == nil || b.CertSerial != fresh.CertSerial {
-			t.Errorf("memory answers %s in place of the new registration (rev 1, certificate serial %d): the removed record is rev 5, serial %d", standsAt(b), fresh.CertSerial, old.CertSerial)
+		if b, ok := s.Known(a); !ok || b == nil || b.Rank != fresh.Rank {
+			t.Errorf("memory answers %s in place of the new registration (rev 1, certificate serial %d): the removed record is rev 5, serial %d", standsAt(b), fresh.Rank, old.Rank)
 		}
 		s.applyMailboxImage(item(mailboxItem(next)))
-		if b, ok := s.Known(a); !ok || b == nil || b.CertSerial != next.CertSerial {
-			t.Errorf("after the new mailbox's image at rev 2 memory answers %s; want certificate serial %d", standsAt(b), next.CertSerial)
+		if b, ok := s.Known(a); !ok || b == nil || b.Rank != next.Rank {
+			t.Errorf("after the new mailbox's image at rev 2 memory answers %s; want certificate serial %d", standsAt(b), next.Rank)
 		}
 	})
 	t.Run("an index that held the removed mailbox", func(t *testing.T) {
@@ -855,8 +855,8 @@ func TestARegistrationAfterTheTTLsRemovalIsNewerThanTheRemovedRecord(t *testing.
 			t.Fatal(err)
 		}
 		s.applyMailbox(fresh) // the registration, before the stream's removal of old arrives
-		if st, ok := s.Held(a); !ok || st.CertSerial != fresh.CertSerial {
-			t.Errorf("the index holds the mailbox at certificate serial %d (%v) after its registration at serial %d: the removed record's standing", st.CertSerial, ok, fresh.CertSerial)
+		if st, ok := s.Held(a); !ok || st.Rank != fresh.Rank {
+			t.Errorf("the index holds the mailbox at certificate serial %d (%v) after its registration at serial %d: the removed record's standing", st.Rank, ok, fresh.Rank)
 		}
 	})
 }
@@ -866,7 +866,7 @@ func standsAt(b *Mailbox) string {
 	if b == nil {
 		return "no record"
 	}
-	return fmt.Sprintf("rev %d, certificate serial %d", b.Rev, b.CertSerial)
+	return fmt.Sprintf("rev %d, certificate serial %d", b.Rev, b.Rank)
 }
 
 // A fill's check of its token and its put are one step under the cache's

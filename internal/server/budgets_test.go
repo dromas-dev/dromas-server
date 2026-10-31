@@ -705,7 +705,7 @@ func concurrently(t *testing.T, e *env, l Limits, to *raw, froms []*raw, n int) 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			req, _ := http.NewRequest(http.MethodPost, srv.URL+to.path("/messages?")+sealedTo(1, 1, nil).Encode(), bytes.NewReader(p.body))
+			req, _ := http.NewRequest(http.MethodPost, srv.URL+to.path("/messages?")+to.sealed(1, nil).Encode(), bytes.NewReader(p.body))
 			req.Header.Set("Authorization", p.pass)
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
@@ -958,7 +958,7 @@ func TestAPanicSettlesItsReservations(t *testing.T) {
 	}
 
 	ct := ciphertextTo(t, owner)
-	e.want(e.do(http.MethodPost, owner.path("/messages"), sealedTo(1, 1, ct), victim.pass(1)), http.StatusCreated, "")
+	e.want(e.do(http.MethodPost, owner.path("/messages"), owner.sealed(1, ct), victim.pass(1)), http.StatusCreated, "")
 	id := sha256.Sum256(ct)
 	call(http.MethodGet, owner.path("/messages/"+hex.EncodeToString(id[:])), nil, api.passFor(owner.work[1], owner.id.Address(), api.name()))
 	if n := held(s.drained); n != 0 {

@@ -55,7 +55,7 @@ func polledMailbox(tb testing.TB) (http.Handler, Store, protocol.Address, *fakeA
 	if err != nil {
 		tb.Fatal(err)
 	}
-	cert, err := protocol.NewCertificate(id, signer, work.PublicKey(), 1, now)
+	cert, err := protocol.NewCertificate(id, signer, work.PublicKey(), 1, now, DefaultLimits().MaxCertificateLifetime)
 	if err != nil {
 		tb.Fatal(err)
 	}

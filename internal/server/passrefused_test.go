@@ -81,7 +81,7 @@ func forgeRecord(e *env, r *raw) string {
 		e.t.Fatal(err)
 	}
 	unix := uint64(e.clock.Now().Unix()) //nolint:gosec // a test clock
-	c := &ssh.Certificate{Key: work.PublicKey(), Serial: b.CertSerial, CertType: ssh.UserCert, KeyId: protocol.CertificateKeyID,
+	c := &ssh.Certificate{Key: work.PublicKey(), Serial: b.Rank, CertType: ssh.UserCert, KeyId: protocol.CertificateKeyID,
 		ValidPrincipals: []string{a.String()}, ValidAfter: unix - 60, ValidBefore: unix + 65*86400}
 	if err := c.SignCert(rand.Reader, e.raw().signer); err != nil {
 		e.t.Fatal(err)
@@ -90,7 +90,7 @@ func forgeRecord(e *env, r *raw) string {
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	b.Cert = sha256.Sum256(c.Marshal())
+	b.Signer = sha256.Sum256(c.Marshal())
 	if err := e.store.UpdateMailbox(ctx, b); err != nil {
 		e.t.Fatal(err)
 	}
@@ -239,11 +239,11 @@ func TestASendNamesTheSendersCurrentCertificate(t *testing.T) {
 	r.certify(4)
 	for _, under := range []uint64{1, 2, 4} {
 		t.Logf("send under certificate %d", under)
-		e.notCurrentNaming(e.sendTo(o, 1, 1, r, under), 3)
+		e.notCurrentNaming(e.sendTo(o, 1, r, under), 3)
 	}
-	e.want(e.sendTo(o, 1, 1, r, 3), 201, "")
+	e.want(e.sendTo(o, 1, r, 3), 201, "")
 	forged := forgeRecord(e, r)
-	got := e.do("POST", o.path("/messages"), sealedTo(1, 1, []byte("x")), forged)
+	got := e.do("POST", o.path("/messages"), o.sealed(1, []byte("x")), forged)
 	e.notCurrentNaming(got, 3)
 }
 
@@ -297,7 +297,7 @@ func TestARevokedCurrentCertificateIsAnsweredBeforeThePass(t *testing.T) {
 		if name == "no pass" || name == "not a pass" {
 			want = protocol.CodeUnauthorized
 		}
-		if got := e.do("POST", o.path("/messages"), sealedTo(1, 1, []byte("x")), pass); got.status != 401 || got.code() != want {
+		if got := e.do("POST", o.path("/messages"), o.sealed(1, []byte("x")), pass); got.status != 401 || got.code() != want {
 			t.Errorf("a send %s: %d %s, want %s", name, got.status, got.body, want)
 		}
 	}

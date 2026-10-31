@@ -153,15 +153,15 @@ func TestIndex(t *testing.T) {
 	})
 
 	t.Run("standing only moves forward", func(t *testing.T) {
-		first, second := Standing{State: Active, Cert: [32]byte{1}}, Standing{State: Active, Cert: [32]byte{2}}
+		first, second := Standing{State: Active, Signer: [32]byte{1}}, Standing{State: Active, Signer: [32]byte{2}}
 		x := loaded(t, mailbox, mailboxRead{exists: true, st: first, rev: 1})
 		x.setStanding(mailbox, second, version{rev: 3})
 		x.setStanding(mailbox, first, version{rev: 1}) // a late image
 		if st, ok := x.standing(mailbox); !ok || st != second {
 			t.Fatalf("standing %v %v", st, ok)
 		}
-		x.setStanding(mailbox, Standing{State: Active, Cert: [32]byte{3}}, version{rev: 4})
-		if st, _ := x.standing(mailbox); st.Cert != [32]byte{3} {
+		x.setStanding(mailbox, Standing{State: Active, Signer: [32]byte{3}}, version{rev: 4})
+		if st, _ := x.standing(mailbox); st.Signer != [32]byte{3} {
 			t.Fatal("a later standing not kept")
 		}
 		x.forget(mailbox)
@@ -175,7 +175,7 @@ func TestIndex(t *testing.T) {
 	})
 
 	t.Run("revocations only add", func(t *testing.T) {
-		x := loaded(t, mailbox, mailboxRead{exists: true, st: Standing{State: Active, CertSerial: 5}, rev: 1})
+		x := loaded(t, mailbox, mailboxRead{exists: true, st: Standing{State: Active, Rank: 5}, rev: 1})
 		x.setRevocations(mailbox, false, 4)
 		if st, _ := x.standing(mailbox); st.Listed {
 			t.Fatal("certificates revoked through 4 listed the mailbox's 5")
@@ -185,12 +185,12 @@ func TestIndex(t *testing.T) {
 		if st, _ := x.standing(mailbox); !st.Listed {
 			t.Fatal("certificates revoked through 5 did not list the mailbox's 5")
 		}
-		x.setStanding(mailbox, Standing{State: Active, CertSerial: 6}, version{rev: 2}) // a renewal above them
+		x.setStanding(mailbox, Standing{State: Active, Rank: 6}, version{rev: 2}) // a renewal above them
 		if st, _ := x.standing(mailbox); st.Listed {
 			t.Fatal("a renewal above the revoked certificates is still listed")
 		}
 		x.setRevocations(mailbox, true, 0)
-		x.setStanding(mailbox, Standing{State: Active, CertSerial: 7}, version{rev: 3})
+		x.setStanding(mailbox, Standing{State: Active, Rank: 7}, version{rev: 3})
 		if st, ok := x.standing(mailbox); !ok || st.State != Revoked {
 			t.Fatalf("a revoked address: %+v %v", st, ok)
 		}
@@ -254,7 +254,7 @@ func TestIndexLoad(t *testing.T) {
 		}
 		x.remove(mailbox, k1.tag, k1.exp, now, true) // acked meanwhile
 		x.insert(mailbox, k2, now)                   // and a new message
-		x.setStanding(mailbox, Standing{State: Active, Cert: [32]byte{1}}, version{rev: 2})
+		x.setStanding(mailbox, Standing{State: Active, Signer: [32]byte{1}}, version{rev: 2})
 		close(release)
 		if err := <-done; err != nil {
 			t.Fatal(err)
@@ -262,7 +262,7 @@ func TestIndexLoad(t *testing.T) {
 		if n := x.count(mailbox, now); n != 1 || !x.holds(mailbox, k2.tag, now) {
 			t.Fatalf("count %d: the queued changes were not applied after the load", n)
 		}
-		if st, _ := x.standing(mailbox); st.Cert != [32]byte{1} {
+		if st, _ := x.standing(mailbox); st.Signer != [32]byte{1} {
 			t.Fatal("the queued standing was not applied")
 		}
 	})

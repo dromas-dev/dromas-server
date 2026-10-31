@@ -152,24 +152,24 @@ func TestACertificateOnRecordThatTheIdentityDidNotSign(t *testing.T) {
 		if err != nil || b == nil {
 			t.Fatalf("%s: the mailbox's record: %v", name, err)
 		}
-		b.Cert = sha256.Sum256(c.Marshal())
+		b.Signer = sha256.Sum256(c.Marshal())
 		if err := e.store.UpdateMailbox(ctx, b); err != nil {
 			t.Fatal(err)
 		}
 		pass := e.passFor(under, a, e.name())
-		e.wantNotCurrent(e.do("GET", victim.path("/messages"), nil, pass), b.CertSerial)
+		e.wantNotCurrent(e.do("GET", victim.path("/messages"), nil, pass), b.Rank)
 		// Control: the first two steps take it. It carries the certificate
 		// on record, and that certificate's working key signed it.
 		p, err := protocol.ParsePass(pass)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := p.VerifyUnder(b.Cert, e.name(), now); err != nil {
+		if _, err := p.VerifyUnder(b.Signer, e.name(), now); err != nil {
 			t.Errorf("%s: control: the hash or the working key's signature refused it, so the identity's was never reached: %v", name, err)
 		}
 		// And the mailbox's own pass, under the certificate its identity did
 		// sign, is no longer under the one on record.
-		e.wantNotCurrent(e.do("GET", victim.path("/messages"), nil, victim.pass(1)), b.CertSerial)
+		e.wantNotCurrent(e.do("GET", victim.path("/messages"), nil, victim.pass(1)), b.Rank)
 	}
 }
 
@@ -331,7 +331,7 @@ func TestTheSenderKeyTypesAMailboxDeclared(t *testing.T) {
 		}
 		_, _ = io.WriteString(w, `{"v":1}`)
 		_ = w.Close()
-		return e.do("POST", to.path("/messages"), sealedTo(serial, serial, ct.Bytes()), from.pass(1))
+		return e.do("POST", to.path("/messages"), to.sealed(serial, ct.Bytes()), from.pass(1))
 	}
 
 	nothing := declaring(nil)

@@ -301,7 +301,7 @@ func TestAccounts(t *testing.T) {
 		e.want(e.do(http.MethodDelete, r.path("/account"), nil, pass), 204, "")
 		// Over the sender's own cap, a send is refused before its body is
 		// read: here, before the server finds it is no age file.
-		e.want(e.do(http.MethodPost, r.path("/messages"), sealedTo(1, 1, make([]byte, 16384)), pass), 413, protocol.CodeTooLarge)
+		e.want(e.do(http.MethodPost, r.path("/messages"), r.sealed(1, make([]byte, 16384)), pass), 413, protocol.CodeTooLarge)
 	})
 }
 
@@ -709,7 +709,7 @@ func TestLargeReadsTakeTurns(t *testing.T) {
 	post := func(pass string, size int, wait time.Duration) (int, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), wait)
 		defer cancel()
-		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, e.srv.URL+"/v1/"+to.Address().String()+"/messages?"+sealedTo(1, 1, nil).Encode(), bytes.NewReader(make([]byte, size)))
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, e.srv.URL+"/v1/"+to.Address().String()+"/messages?"+sealedTo(e.statement(to.Address()), nil).Encode(), bytes.NewReader(make([]byte, size)))
 		if pass != "" {
 			req.Header.Set("Authorization", pass)
 		}
@@ -768,7 +768,7 @@ func TestAStalledBodyGivesTheLargeReadBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	query := sealedTo(1, 1, nil).Encode()
+	query := sealedTo(e.statement(to.Address()), nil).Encode()
 	_, _ = io.WriteString(conn, "POST /v1/"+to.Address().String()+"/messages?"+query+" HTTP/1.1\r\nHost: "+addr+"\r\nAuthorization: "+e.pass(lifted)+
 		"\r\nContent-Type: application/octet-stream\r\nContent-Length: 60000\r\n\r\n"+strings.Repeat("a", 30000)) // past the free size, then nothing
 	for wait := time.Now().Add(5 * time.Second); testutil.ToFloat64(m.largeRead.WithLabelValues("taken")) != 1; time.Sleep(time.Millisecond) {
@@ -822,7 +822,7 @@ func TestAWaitForTheLargeReadIsBounded(t *testing.T) {
 	defer func() { <-e.server.largeRead }()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, e.srv.URL+"/v1/"+to.Address().String()+"/messages?"+sealedTo(1, 1, nil).Encode(), bytes.NewReader(make([]byte, 30000)))
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, e.srv.URL+"/v1/"+to.Address().String()+"/messages?"+sealedTo(e.statement(to.Address()), nil).Encode(), bytes.NewReader(make([]byte, 30000)))
 	req.Header.Set("Authorization", e.pass(lifted))
 	start := time.Now()
 	resp, err := http.DefaultClient.Do(req)

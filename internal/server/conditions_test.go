@@ -38,7 +38,7 @@ func holding(e *env) (*raw, string) {
 	e.t.Helper()
 	from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 	ct := ciphertextTo(e.t, to)
-	e.want(e.do(http.MethodPost, to.path("/messages"), sealedTo(1, 1, ct), from.pass(1)), http.StatusCreated, "")
+	e.want(e.do(http.MethodPost, to.path("/messages"), to.sealed(1, ct), from.pass(1)), http.StatusCreated, "")
 	sum := sha256.Sum256(ct)
 	return to, to.path("/messages/" + hex.EncodeToString(sum[:]))
 }
@@ -178,7 +178,7 @@ func TestEveryRouteEvaluatesItsPreconditions(t *testing.T) {
 		}},
 		{name: "a send", exists: true, ok: 201, setup: func(e *env) call {
 			from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
-			return call{"POST", to.path("/messages"), sealedTo(1, 1, ciphertextTo(e.t, to)), from.pass(1)}
+			return call{"POST", to.path("/messages"), to.sealed(1, ciphertextTo(e.t, to)), from.pass(1)}
 		}, unchanged: func(e *env, c call) {
 			if n, err := e.store.Count(e.t.Context(), addressAt(e.t, c.path)); err != nil || n != 0 {
 				e.t.Fatalf("the mailbox holds %d: %v", n, err)
@@ -287,13 +287,13 @@ func TestAPreconditionIsIgnoredWhereTheAnswerWouldBeARefusal(t *testing.T) {
 	}{
 		{"the ACL with no pass", call{"GET", r.path("/acl"), nil, ""}, 401, protocol.CodeUnauthorized},
 		{"the ACL with another mailbox's pass", call{"PUT", r.path("/acl"), aclOf([]string{"*"}, []string{}), other.pass(1)}, 401, protocol.CodeUnauthorized},
-		{"a send with no pass", call{"POST", r.path("/messages"), sealedTo(1, 1, ciphertextTo(t, r)), ""}, 401, protocol.CodeUnauthorized},
+		{"a send with no pass", call{"POST", r.path("/messages"), r.sealed(1, ciphertextTo(t, r)), ""}, 401, protocol.CodeUnauthorized},
 		{"the read of no mailbox", call{"GET", nobody.path(""), nil, ""}, 404, protocol.CodeNoSuchMailbox},
 		{"a renewal of no mailbox", call{"PUT", nobody.path("/prekey"), nobody.upload(1), nobody.pass(1)}, 404, protocol.CodeNoSuchMailbox},
 		{"the revocations of an address with none", call{"GET", r.path("/revocations"), nil, ""}, 404, protocol.CodeNotRevoked},
 		{"a revocation of a revoked address", call{"PUT", gone.path("/revocations"), gone.certs(1), ""}, 410, protocol.CodeRevoked},
 		{"a registration whose body is not JSON", call{"PUT", nobody.path(""), []byte(`not json`), nobody.pass(1)}, 400, protocol.CodeBadRequest},
-		{"a send that is not an age file", call{"POST", r.path("/messages"), sealedTo(1, 1, []byte("not age")), other.pass(1)}, 400, protocol.CodeNotAge},
+		{"a send that is not an age file", call{"POST", r.path("/messages"), r.sealed(1, []byte("not age")), other.pass(1)}, 400, protocol.CodeNotAge},
 	} {
 		for _, h := range [][2]string{{"If-Match", `"x"`}, {"If-None-Match", "*"}} {
 			got := e.doWith(c.q.method, c.q.path, c.q.body, c.q.pass, h[0], h[1])
