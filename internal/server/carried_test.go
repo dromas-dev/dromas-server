@@ -58,12 +58,12 @@ func TestEvery410CarriesTheRecord(t *testing.T) {
 		return protocol.Revocations{Identity: b.id.Document(), Revocation: sig}
 	}
 	r, from := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
-	// r renews under certificate 2 and revokes certificate 1, so its record
-	// carries a revocation of certificates beside the revocation of the
-	// address.
+	// r makes the trip, revoking certificate 1, and renews under certificate
+	// 2, so its record carries a revocation of certificates beside the
+	// revocation of the address.
+	e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), http.StatusOK, "")
 	r.prekey(2, until, nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(2), r.pass(2)), http.StatusOK, "")
-	e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), http.StatusOK, "")
 	writing, release := make(chan struct{}), make(chan struct{})
 	hook.set(func() { close(writing); <-release })
 	sent := make(chan reply, 1)

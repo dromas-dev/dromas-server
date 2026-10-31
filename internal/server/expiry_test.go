@@ -77,7 +77,7 @@ func TestARecordExpiresWhenNothingOfTheMailboxIsValid(t *testing.T) {
 	}
 	// A prekey whose last message comes later raises it again.
 	e.clock.Add(60 * 24 * time.Hour)
-	r.prekeyUnder(r.work[3], 5, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+	r.prekeyUnder(r.certifyFor(4, l.MaxCertificateLifetime/2), 5, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(5), r.pass(5)), 200, "")
 	if b, _ = e.stands(r.id.Address()); !b.Expires.Equal(b.Prekey.NotAfter.Add(protocol.TTL)) || !b.Expires.After(long) {
 		t.Fatalf("a renewal whose prekey's last message is %v leaves the record expiring %v", b.Prekey.NotAfter.Add(protocol.TTL), b.Expires)

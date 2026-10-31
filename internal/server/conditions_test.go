@@ -106,8 +106,8 @@ func TestEveryRouteEvaluatesItsPreconditions(t *testing.T) {
 			r.prekey(2, e.clock.Now().Add(protocol.PrekeyLifetime), nil)
 			return call{"PUT", r.path("/prekey"), r.upload(2), r.pass(2)}
 		}, unchanged: func(e *env, c call) {
-			if _, cert := e.numbers(addressAt(e.t, c.path)); cert != 1 {
-				e.t.Fatalf("the mailbox moved to certificate %d", cert)
+			if serial, _ := e.numbers(addressAt(e.t, c.path)); serial != 1 {
+				e.t.Fatalf("the mailbox moved to prekey %d", serial)
 			}
 		}},
 		{name: "the read of the revocations held", exists: true, ok: 200, setup: func(e *env) call {
