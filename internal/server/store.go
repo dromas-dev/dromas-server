@@ -119,20 +119,15 @@ func (b *Mailbox) holdsRevocations() bool {
 }
 
 // listed reports whether the revocation of certificates on record covers a
-// signer of this rank (PROTOCOL.md §5): a certificate at or below it, or the
-// identity, rank 0, once one is held. A mailbox with none has revoked none.
+// signer of this rank (PROTOCOL.md §5): a certificate at or below it. It
+// covers certificates only: the identity, rank 0, is ended only by revoking
+// the address. A mailbox with none has revoked none.
 func (b *Mailbox) listed(rank uint64) (bool, error) {
-	if len(b.RevokedCerts) == 0 {
+	if rank == 0 || len(b.RevokedCerts) == 0 {
 		return false, nil
 	}
 	return listNames(b.RevokedCerts, rank)
 }
-
-// tripped reports whether what is held of an address carries a revocation of
-// its certificates: the trip, which puts the address in working-key mode for
-// good (PROTOCOL.md §5). Every revocation of certificates is through a serial
-// of 1 or more, so it is the trip, whatever it revokes.
-func (b *Mailbox) tripped() bool { return b != nil && len(b.RevokedCerts) > 0 }
 
 // Expect is what a conditional write asks of its target as it writes: what a
 // request's If-Match or If-None-Match held of the target at its read
@@ -362,9 +357,8 @@ type Standing struct {
 	Rank uint64
 	// Listed is true while the revocation of certificates held covers the
 	// mailbox's current signer (PROTOCOL.md §10.2): a certificate at or below
-	// it, or the identity once the address is in working-key mode. No pass
-	// of the mailbox is taken until it publishes a prekey under a
-	// certificate above it.
+	// it, never the identity. Only the identity's pass is taken until the
+	// mailbox publishes a prekey under a certificate above it.
 	Listed bool
 	// InAccount is true for a mailbox in an account, whose limits are read from
 	// it; a mailbox in none has the server's, with nothing to read.
@@ -614,12 +608,6 @@ type Store interface {
 	// Mailbox returns what is held of an address (view): its mailbox's record and
 	// its identity's revocations, or ErrNotFound if neither.
 	Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error)
-	// Reread returns what is held of an address as Mailbox does, but read
-	// from the backend, strongly consistent, whatever memory holds: for an
-	// answer that must not rest on a copy another process's write has not
-	// yet reached (PROTOCOL.md §11.7, the trip). What it reads is added to
-	// memory's copy.
-	Reread(ctx context.Context, a protocol.Address) (*Mailbox, error)
 	// Known returns what memory holds of an address, with no read: what Mailbox
 	// returns, or nil for an address it holds as missing. ok is false when
 	// only a read can tell, which is what Mailbox then does.

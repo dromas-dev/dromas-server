@@ -441,6 +441,6 @@ func (x *index) standing(a protocol.Address) (Standing, bool) {
 		return Standing{}, false
 	}
 	st := m.st
-	st.Listed = m.through > 0 && st.Rank <= m.through
+	st.Listed = m.through > 0 && st.Rank > 0 && st.Rank <= m.through // certificates only: never the identity
 	return st, true
 }
