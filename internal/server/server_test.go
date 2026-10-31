@@ -436,36 +436,76 @@ func (r *raw) registerCertified(d time.Duration) uint64 {
 	return 2
 }
 
-// A signature is at most protocol.MaxSignature bytes as it arrives (PROTOCOL.md
-// §3.2), what follows its END line included, and is kept and served as it was
-// sent (§13). A pass is at most protocol.MaxPassAuthorization.
+// A signature is in its one form (PROTOCOL.md §3.2), the bytes the Go client
+// and ssh-keygen -Y sign write, and so at most its identity's key type's
+// bound (protocol.SignatureBound); it is kept and served byte for byte as it
+// was sent (§13). A byte after its END line, or one more than the bound, is
+// bad_key at a registration and at a renewal. A pass is at most
+// protocol.MaxPassAuthorization. A certificate with an extension or a
+// critical option makes a signature over the bound, which is refused for
+// that before the certificate is read: a statement under one is bad_key, and
+// a pass under one, never the mailbox's current certificate,
+// certificate_not_current.
 func TestASignatureIsBounded(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	now := e.clock.Now()
-	pad := func(sig []byte, to int) []byte {
-		return append(append([]byte{}, sig...), bytes.Repeat([]byte{'.'}, to-len(sig))...)
-	}
+	bound := protocol.SignatureBound(protocol.IdentityEd25519)
 
-	r := e.raw()
-	r.prekey(1, now.Add(protocol.PrekeyLifetime), nil)
-	r.sig[1] = pad(r.sig[1], protocol.MaxSignature)
-	e.want(e.do("PUT", r.path(""), r.registration(1), r.pass(1)), 201, "")
+	r := e.raw().certified()
+	r.prekey(2, now.Add(protocol.PrekeyLifetime), nil)
+	if n := len(r.sig[2]); n > bound {
+		t.Fatalf("a statement under a certificate in its one form is %d bytes, over the bound %d", n, bound)
+	}
+	e.want(e.do("PUT", r.path(""), r.registration(2), r.pass(2)), 201, "")
 	var got protocol.MailboxResponse
-	if err := json.Unmarshal(e.do("GET", r.path(""), nil, "").body, &got); err != nil || !bytes.Equal(got.PrekeySignature, r.sig[1]) {
+	if err := json.Unmarshal(e.do("GET", r.path(""), nil, "").body, &got); err != nil || !bytes.Equal(got.PrekeySignature, r.sig[2]) {
 		t.Errorf("the signature is not served as it was sent: %v", err)
 	}
 
-	over := e.raw()
-	over.prekey(1, now.Add(protocol.PrekeyLifetime), nil)
-	pass := over.pass(1)
-	over.sig[1] = pad(over.sig[1], protocol.MaxSignature+1)
-	e.want(e.do("PUT", over.path(""), over.registration(1), pass), 400, protocol.CodeBadKey)
+	for name, more := range map[string]func([]byte) []byte{
+		"a byte after its END line": func(s []byte) []byte { return append(append([]byte{}, s...), '\n') },
+		"MaxSignature and one bytes": func(s []byte) []byte {
+			return append(append([]byte{}, s...), bytes.Repeat([]byte{'.'}, protocol.MaxSignature+1-len(s))...)
+		},
+	} {
+		over := e.raw()
+		over.prekey(1, now.Add(protocol.PrekeyLifetime), nil)
+		pass := over.pass(1)
+		over.sig[1] = more(over.sig[1])
+		t.Logf("a registration, %s", name)
+		e.want(e.do("PUT", over.path(""), over.registration(1), pass), 400, protocol.CodeBadKey)
+		// A renewal is held to it too.
+		r.prekey(3, now.Add(protocol.PrekeyLifetime), nil)
+		r.sig[3] = more(r.sig[3])
+		t.Logf("a renewal, %s", name)
+		e.want(e.do("PUT", r.path("/prekey"), r.upload(3), r.pass(3)), 400, protocol.CodeBadKey)
+	}
 
-	// A renewal is held to it too.
-	r.prekey(2, now.Add(protocol.PrekeyLifetime), nil)
-	r.sig[2] = pad(r.sig[2], protocol.MaxSignature+1)
-	e.want(e.do("PUT", r.path("/prekey"), r.upload(2), r.pass(2)), 400, protocol.CodeBadKey)
+	for name, with := range map[string]func(*ssh.Certificate){
+		"an extension":      func(c *ssh.Certificate) { c.Extensions = map[string]string{"permit-pty": ""} },
+		"a critical option": func(c *ssh.Certificate) { c.CriticalOptions = map[string]string{"force-command": "/bin/true"} },
+	} {
+		_, priv, _ := ed25519.GenerateKey(rand.Reader)
+		work, _ := ssh.NewSignerFromKey(priv)
+		c := &ssh.Certificate{Key: work.PublicKey(), Serial: 5, CertType: ssh.UserCert, KeyId: protocol.CertificateKeyID,
+			ValidPrincipals: []string{r.id.Address().String()}, ValidAfter: uint64(now.Add(-time.Hour).Unix()), ValidBefore: uint64(now.Add(24 * time.Hour).Unix())} //nolint:gosec // a test clock
+		with(c)
+		if err := c.SignCert(rand.Reader, r.signer); err != nil {
+			t.Fatal(err)
+		}
+		under, err := ssh.NewCertSigner(c, work)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.prekeyUnder(under, 4, now.Add(protocol.PrekeyLifetime), nil)
+		if n := len(r.sig[4]); n <= bound {
+			t.Fatalf("a certificate with %s: a statement under it is %d bytes, within the bound %d: the test does not reach the case", name, n, bound)
+		}
+		t.Logf("a certificate with %s", name)
+		e.want(e.do("PUT", r.path("/prekey"), r.upload(4), r.pass(4)), 400, protocol.CodeBadKey)
+		e.wantNotCurrent(e.do("GET", r.path("/messages"), nil, r.pass(4)), 2)
+	}
 
 	e.want(e.do("GET", r.path("/messages"), nil, strings.Repeat("x", protocol.MaxPassAuthorization+1)), 401, protocol.CodeUnauthorized)
 }

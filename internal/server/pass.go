@@ -31,10 +31,10 @@ import (
 // carries it is a lookup in memory.
 
 // seenPass is a pass this process checked: the hash of its Authorization
-// value in the one form a client writes it (Pass.Authorization) and in the
-// form it was shown in, the signer it is signed by, and until when it is
-// taken: the moment it runs out or its signer's certificate ends, whichever
-// comes first.
+// value as protocol.Pass.Authorization writes it, the pass's key in memory,
+// and as it was shown, which the gate knows it by; the signer it is signed
+// by; and until when it is taken: the moment it runs out or its signer's
+// certificate ends, whichever comes first.
 type seenPass struct {
 	sum    [32]byte
 	raw    [32]byte
@@ -259,10 +259,12 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, sign
 			return err
 		}
 	}
-	// A pass is remembered in the one form a client writes it, its signature
-	// as a verifier reads it, so the same pass written in another form a
-	// server reads (PROTOCOL.md §8, §3.2) is answered from memory too, and
-	// its many spellings cost one check (dromas-dev/dromas-server#69).
+	// A pass is remembered by protocol.Pass.Authorization, which writes its
+	// header in the one form a client does and a P-256 signature's s as the
+	// lower of s and n − s: so the same pass in another header a server reads
+	// (PROTOCOL.md §8), or with its signature's other s, which ECDSA takes
+	// (§3.2), is answered from memory too, for one check
+	// (dromas-dev/dromas-server#69).
 	raw := sum
 	if one := sha256.Sum256([]byte(p.Authorization())); one != sum {
 		if remembered(one) {

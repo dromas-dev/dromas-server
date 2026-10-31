@@ -258,10 +258,10 @@ func TestMissesPerIP(t *testing.T) {
 	if r := e2.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages", nil, pass); r.status != http.StatusOK {
 		t.Fatalf("the owner's poll with its pass remembered: %d %s", r.status, r.body)
 	}
-	// So is that pass written in another form a server reads (PROTOCOL.md
-	// §8): it is remembered by the one form a client writes, so a new
-	// spelling of it costs no check, and the address past its count is no
-	// bar.
+	// So is that pass in another header a server reads as the same
+	// credentials (PROTOCOL.md §8, RFC 9110 §11): it is remembered by the one
+	// form a client writes, so another header of it costs no check, and the
+	// address past its count is no bar.
 	for _, respelled := range []string{
 		strings.Replace(pass, "dromas-pass ", "DROMAS-PASS ", 1),
 		strings.ReplaceAll(pass, `", `, `" ,  `),
