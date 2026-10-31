@@ -1,6 +1,6 @@
 #!/bin/sh
 # working-key-openssh.sh — what stock ssh-keygen does with the two forms of signer (PROTOCOL.md §5): the identity's own signature,
-# identity mode's, and a certificate the identity signs for a working key, working-key mode's; and with the two certificates the
+# and a certificate the identity signs for a working key; and with the two certificates the
 # protocol refuses whatever OpenSSH says, one of the identity's own key and one valid "forever" (dromas-client issues #30 and #579,
 # where the results are). A measurement, not a test of our code: nothing of ours is run.
 #   test/working-key-openssh.sh make  <dir>   make keys, certificates and signatures in <dir> (which must not exist)
@@ -69,7 +69,7 @@ if [ "$mode" = make ]; then
   mkdir -p selfcert; cp identity selfcert/work; cp identity.pub selfcert/work.pub; chmod 600 selfcert/work
   if ssh-keygen -q -s identity -I work -n "$A" -V +33d -z 7 -O clear selfcert/work.pub 2>selfcert/cert.err; then echo "cert selfcert: made"; else echo "cert selfcert: FAILED: $(head -1 selfcert/cert.err | cut -c1-120)"; fi
   for n in good defopts crit expired serial3 wrongprin otherca p256ca forever selfcert; do sgn $n; done
-  # the identity's own signature, identity mode's
+  # the identity's own signature
   mkdir -p bare; ssh-keygen -Y sign -n "$ns" -f identity < m > bare/m.sig 2>/dev/null || : > bare/m.sig
   # signed with the private key's own path, the certificate lying beside it
   ssh-keygen -Y sign -n "$ns" -f good/work < m > good/m.sig.plain 2>/dev/null || : > good/m.sig.plain

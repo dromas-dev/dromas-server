@@ -8,12 +8,11 @@
 #   5. a mailbox whose clock is off from the server's;
 #   6. revocation: a mailbox revoked at the real server, by the Go client or with ssh-keygen and curl as PROTOCOL.md §10.1 shows, and each
 #      client checking the proof it is shown; a record alone revokes;
-#   7. the two modes (PROTOCOL.md §5): every mailbox above is in identity mode, its identity signing what it says; a Go mailbox made in
-#      working-key mode (init --offline), which publishes its revocation of certificates, the trip, before it registers, exchanges
-#      messages with both clients' identity-mode mailboxes, renews and revokes its earlier certificates, and each client checks the
-#      revocation it is shown, refusing messages under a revoked certificate and following the mailbox to its next one; a revocation
-#      of certificates made with ssh-keygen alone, for a recipe mailbox that never made one, is taken, after which the server takes
-#      none of that mailbox's identity's statements or passes, and the Go client posts nothing to it;
+#   7. the two forms of signer (PROTOCOL.md §5): every mailbox above is signed for by its identity; a Go mailbox registered under a
+#      certificate at once (init --offline) exchanges messages with both clients' mailboxes, renews and revokes its earlier
+#      certificates, and each client checks the revocation it is shown, refusing messages under a revoked certificate and following
+#      the mailbox to its next one; a revocation of certificates made with ssh-keygen alone, for a recipe mailbox its identity signs
+#      for, is taken, and covers no signature of that identity: its passes, its messages and its statement are still taken;
 #   8. a revocation of an address with no mailbox here: kept and served, its registration refused, and a Go mailbox shown it before it
 #      posts;
 #   9. the sender ACL: a Go mailbox's block reaches this server, which refuses the recipe mailbox's send;
@@ -73,7 +72,7 @@ holds(){ DROMAS_SERVER_URL=http://127.0.0.1:9 gocli "$1" revocation ask "$2" 2> 
 through(){ gocli "$1" revocation ask "$2" 2> /dev/null | jq -r 'select(.type == "certificates_revoked") | .through'; }   # <go mailbox> <address> → the serial its revocation of certificates runs through, as the mailbox holds it once it has asked
 passof(){ local a t; a=$(cat "$1/address") && t=$(date -u -d "@$(( $(date +%s) + 600 ))" +%Y-%m-%dT%H:%M:%SZ) \
   && printf 'dromas-pass-v1\n%s\n%s\n%s\n' "$a" "${2:-${DR_SERVER_URL#http://}}" "$t" | ssh-keygen -q -Y sign -n "dromas-pass-v1:$a" -f "$1/identity" > "$work/pass.sig" \
-  && printf 'dromas-pass address="%s", not_after="%s", signature="%s"' "$a" "$t" "$(base64 < "$work/pass.sig" | tr -d '\n')"; }   # <go mailbox in identity mode> → a pass its identity signs, as PROTOCOL.md §8 makes one with ssh-keygen
+  && printf 'dromas-pass address="%s", not_after="%s", signature="%s"' "$a" "$t" "$(base64 < "$work/pass.sig" | tr -d '\n')"; }   # <go mailbox> → a pass its identity signs, which a server always takes, as PROTOCOL.md §8 makes one with ssh-keygen
 linkof(){ jq -er 'select(.type == "mailbox") | .link'; }      # a mailbox line, as init and addr print one → its link
 revoked_line(){ printf '{"type":"revoked","address":"%s","detail":"published to the server"}' "$1"; }      # <address> → the line revocation publish prints
 record_of(){ local a; a=$(cat "$1/address") && printf 'dromas-revoke-v1\n%s\n' "$a" | ssh-keygen -q -Y sign -n "dromas-revoke-v1:$a" -f "$1/identity" > "$work/rev.sig" &&
@@ -216,24 +215,21 @@ out=$(DROMAS_HOME="$work/nobox" "$work/dromas" revocation publish --record "$wor
   && [ "$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'Content-Type: application/json' --data-binary "@$work/v5.json" "$DR_SERVER_URL/v1/$V5A/revocations")" = 410 ] \
   && ok "the Go client's record revokes from the Go client with no mailbox, and the same record again is 410: nothing changes" || bad "revoke with a record: $out"
 
-# --- 7. the two modes (PROTOCOL.md §5): a Go mailbox in working-key mode, its certificates revoked, and a trip a recipe mailbox did not make ---
+# --- 7. the two forms of signer (PROTOCOL.md §5): a Go mailbox under certificates, its certificates revoked, and a revocation that covers no identity ---
 W1="$work/w1"; W2="$work/w2"; W3="$work/w3"
-W1L=$(gocli "$W1" init --offline | linkof) && W1A=${W1L##*/} && W2L=$(recipe "$W2" "dr_init" | linkof) && W2A=${W2L##*/} && W3L=$(gocli "$W3" init | linkof) && W3A=${W3L##*/} || bad "the two modes: the mailboxes"
+W1L=$(gocli "$W1" init --offline | linkof) && W1A=${W1L##*/} && W2L=$(recipe "$W2" "dr_init" | linkof) && W2A=${W2L##*/} && W3L=$(gocli "$W3" init | linkof) && W3A=${W3L##*/} || bad "the two forms: the mailboxes"
 kept(){ jq -r .revoked_certificates "$1" | base64 -d; }   # <the record a mailbox keeps a revocation of certificates as> → the statement in it
 put(){ curl -s -o "$work/put.json" -w '%{http_code}' -X PUT -H 'Content-Type: application/json' --data-binary "@$1" "$DR_SERVER_URL/v1/$2/revocations"; }   # <record> <address> → the status; the body is left in put.json
-curl -sf "$DR_SERVER_URL/v1/$W1A" | jq -e 'has("revoked_certificates") and has("revoked_certificates_signature") and has("prekey")' > /dev/null \
-  && curl -sf "$DR_SERVER_URL/v1/$W3A" | jq -e '(has("revoked_certificates") or has("revoked_certificates_signature")) | not' > /dev/null \
-  && ok "init --offline publishes the trip before it registers its first statement under a certificate, which the server takes; init makes none" || bad "init --offline: $(curl -s "$DR_SERVER_URL/v1/$W1A")"
+curl -sf "$DR_SERVER_URL/v1/$W1A" | jq -e '(has("revoked_certificates") or has("revoked_certificates_signature") | not) and has("prekey")' > /dev/null \
+  && ok "init --offline registers under a certificate at once, with no revocation of certificates published" || bad "init --offline: $(curl -s "$DR_SERVER_URL/v1/$W1A")"
 printf 'under the first certificate\n' > "$work/body8"
-gocli "$W1" send "$W2L" < "$work/body8" > /dev/null 2> "$work/err" && gocli "$W1" send "$W3L" < "$work/body8" > /dev/null 2>> "$work/err" && recipe "$W2" "dr_send $W3L '$work/body8'" 2>> "$work/err" || bad "the two modes: the first sends: $(cat "$work/err")"
+gocli "$W1" send "$W2L" < "$work/body8" > /dev/null 2> "$work/err" && gocli "$W1" send "$W3L" < "$work/body8" > /dev/null 2>> "$work/err" && recipe "$W2" "dr_send $W3L '$work/body8'" 2>> "$work/err" || bad "the two forms: the first sends: $(cat "$work/err")"
 # The Go client renews and revokes every certificate before its new one. Each client is shown the revocation, checks it, and refuses what the old one signed.
 out=$(gocli "$W1" cert revoke-earlier 2>&1) && [ "$(curl -s -o "$work/mailbox.json" -w '%{http_code}' "$DR_SERVER_URL/v1/$W1A")" = 200 ] \
   && jq -e 'has("revoked_certificates") and has("revoked_certificates_signature") and has("prekey")' "$work/mailbox.json" > /dev/null \
-  && ok "the Go mailbox in working-key mode renews and revokes its earlier certificates: the server shows the revocation to anyone in the read of the mailbox, and the address goes on" || bad "cert revoke-earlier: $out"
-out=$(gocli "$W3" cert revoke-earlier 2>&1); [ $? -ne 0 ] && curl -sf "$DR_SERVER_URL/v1/$W3A" | jq -e 'has("revoked_certificates") | not' > /dev/null \
-  && ok "cert revoke-earlier is refused in identity mode, and publishes nothing" || bad "cert revoke-earlier in identity mode: $out"
+  && ok "the Go mailbox under certificates renews and revokes its earlier certificates: the server shows the revocation to anyone in the read of the mailbox, and the address goes on" || bad "cert revoke-earlier: $out"
 printf 'under the second certificate\n' > "$work/body8b"
-gocli "$W1" send "$W2L" < "$work/body8b" > /dev/null 2> "$work/err" && gocli "$W1" send "$W3L" < "$work/body8b" > /dev/null 2>> "$work/err" || bad "the two modes: the sends after the renewal: $(cat "$work/err")"
+gocli "$W1" send "$W2L" < "$work/body8b" > /dev/null 2> "$work/err" && gocli "$W1" send "$W3L" < "$work/body8b" > /dev/null 2>> "$work/err" || bad "the two forms: the sends after the renewal: $(cat "$work/err")"
 out=$(recipe "$W2" "dr_recv" 2>&1); [ $? -eq 0 ] && [ "$(grep -c '"code":"certificate_revoked"' <<< "$out")" = 1 ] && grep -q 'under the second certificate' <<< "$out" && ! grep -q 'under the first certificate' <<< "$out" \
   && curl -sf "$DR_SERVER_URL/v1/$W1A" | jq -r .revoked_certificates | base64 -d | cmp -s - <(kept "$W2/peers/$W1A/revoked-certs.json") && [ ! -e "$W2/peers/$W1A/revoke.sig" ] \
   && ok "the recipe refuses messages under the certificate the Go mailbox revoked, delivers messages under its new one, and keeps the revocation it checked" || bad "recipe recv after the revocation: $out"
@@ -241,30 +237,27 @@ out=$(gocli "$W3" recv 2>&1); [ $? -eq 0 ] && [ "$(grep -c '"code":"certificate_
   && [ "$(through "$W3" "$W1A")" = "$(kept "$W2/peers/$W1A/revoked-certs.json" | sed -n 3p)" ] \
   && ok "the Go client does the same, and takes the recipe mailbox's messages, which its identity signed" || bad "Go recv after the revocation: $out"
 recipe "$W2" "dr_send $W1L '$work/body8'" 2> "$work/err" && gocli "$W3" send "$W1L" < "$work/body8" > /dev/null 2>> "$work/err" && out=$(gocli "$W1" recv 2>&1) && [ "$(grep -c '"body"' <<< "$out")" = 2 ] \
-  && ok "both clients' identity-mode mailboxes write to the working-key mailbox at its second certificate" || bad "sends to the renewed mailbox: $(cat "$work/err") $out"
-# A revocation of certificates made with ssh-keygen alone, for the recipe mailbox, which never made one: the trip of an address in identity mode.
+  && ok "both clients' mailboxes write to the Go mailbox at its second certificate" || bad "sends to the renewed mailbox: $(cat "$work/err") $out"
+# A revocation of certificates made with ssh-keygen alone, for the recipe mailbox, whose identity signs for it: it covers certificates only.
 mkcerts(){ printf 'dromas-revoke-certs-v1\n%s\n%s\n' "$W2A" "$2" > "$work/$1.certs" && ssh-keygen -q -Y sign -n "dromas-revoke-certs-v1:$W2A" -f "$3" < "$work/$1.certs" > "$work/$1.sig" \
   && jq -cn --arg i "$(base64 < "$W2/identity.doc" | tr -d '\n')" --arg l "$(base64 < "$work/$1.certs" | tr -d '\n')" --arg g "$(base64 < "$work/$1.sig" | tr -d '\n')" '{identity:$i, revoked_certificates:$l, revoked_certificates_signature:$g}' > "$work/$1.json"; }   # <name> <serial> <key>
-printf 'signed by the identity before the trip\n' > "$work/body8c"
-recipe "$W2" "dr_send $W3L '$work/body8c'" 2> "$work/err" || bad "the two modes: the recipe's send before the trip: $(cat "$work/err")"
+printf 'signed by the identity before the revocation\n' > "$work/body8c"
+recipe "$W2" "dr_send $W3L '$work/body8c'" 2> "$work/err" || bad "the two forms: the recipe's send before the revocation: $(cat "$work/err")"
 ssh-keygen -q -t ed25519 -N '' -C '' -f "$work/stranger" < /dev/null
-mkcerts bystranger 2 "$work/stranger" && mkcerts one 2 "$W2/identity" && mkcerts lower 1 "$W2/identity" || bad "the two modes: ssh-keygen did not sign a revocation"
+mkcerts bystranger 2 "$work/stranger" && mkcerts one 2 "$W2/identity" && mkcerts lower 1 "$W2/identity" || bad "the two forms: ssh-keygen did not sign a revocation"
 [ "$(put "$work/bystranger.json" "$W2A")" = 400 ] && [ "$(jq -r .code "$work/put.json")" = bad_revocation ] && [ "$(put "$work/one.json" "$W3A")" = 400 ] && [ "$(jq -r .code "$work/put.json")" = identity_mismatch ] \
   && curl -sf "$DR_SERVER_URL/v1/$W2A" | jq -e '(has("revoked_certificates") or has("revoked_certificates_signature")) | not' > /dev/null \
   && ok "the server refuses a revocation of certificates another key signed, and one sent for another address: 400 bad_revocation, 400 identity_mismatch" || bad "junk revocations: $(cat "$work/put.json")"
 [ "$(put "$work/one.json" "$W2A")" = 200 ] && [ "$(put "$work/one.json" "$W2A")" = 200 ] && [ "$(put "$work/lower.json" "$W2A")" = 409 ] && [ "$(jq -r .code "$work/put.json")" = conflict ] \
   && curl -sf "$DR_SERVER_URL/v1/$W2A" | jq -r .revoked_certificates | base64 -d | cmp -s - "$work/one.certs" \
-  && ok "a revocation of certificates signed with ssh-keygen alone is taken with no pass from an address in identity mode, the trip: 200, the same again 200, one through a lower serial 409 conflict" || bad "the recipe mailbox's trip: $(cat "$work/put.json")"
-# The trip covers the identity, which ranks 0: the server takes none of the recipe mailbox's passes, the Go client refuses what its identity
-# signed, the message sent before the trip among them, and posts nothing to it; the recipe mailbox, shown a trip it did not make, stops.
-out=$(recipe "$W2" "dr_recv" 2>&1); [ $? -ne 0 ] && ok "the recipe mailbox, shown a trip it did not make, stops: $(tail -n 1 <<< "$out")" || bad "the recipe mailbox after a trip it did not make: $out"
-[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: $(passof "$W2")" "$DR_SERVER_URL/v1/$W2A/messages")" = 401 ] \
-  && [ "$(curl -s -H "Authorization: $(passof "$W2")" "$DR_SERVER_URL/v1/$W2A/messages" | jq -r .code)" = certificate_revoked ] \
-  && ok "the server takes no pass the recipe mailbox's identity signs once its trip is held: 401 certificate_revoked" || bad "the identity's pass after the trip"
-out=$(gocli "$W3" recv 2>&1); [ $? -eq 0 ] && [ "$(grep -c '"code":"certificate_revoked"' <<< "$out")" = 1 ] && ! grep -q 'signed by the identity before the trip' <<< "$out" && [ "$(through "$W3" "$W2A")" = 2 ] \
-  && ok "the Go client refuses the message the recipe mailbox's identity signed before the trip, once it holds the trip" || bad "Go recv after the recipe mailbox's trip: $out"
-out=$(gocli "$W3" send "$W2L" < "$work/body8" 2>&1); [ $? -ne 0 ] && ! grep -q "prekey_expired" <<< "$out" && ls "$W3"/outbox/*.P > /dev/null 2>&1 && ! ls "$W3"/outbox/*.json > /dev/null 2>&1 \
-  && ok "a sender asks before it posts: shown the trip, it seals nothing to a statement the identity signed, and the message waits in the outbox" || bad "a send to a mailbox whose identity the trip covers: $out"
+  && ok "a revocation of certificates signed with ssh-keygen alone is taken with no pass: 200, the same again 200, one through a lower serial 409 conflict" || bad "the recipe mailbox's revocation of certificates: $(cat "$work/put.json")"
+# It covers certificates only (PROTOCOL.md §10.2): the identity, which signs for the recipe mailbox, goes on.
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: $(passof "$W2")" "$DR_SERVER_URL/v1/$W2A/messages")" = 200 ] \
+  && ok "the server takes the recipe mailbox's identity's pass with a revocation of its certificates held" || bad "the identity's pass after a revocation of certificates"
+out=$(gocli "$W3" recv 2>&1); [ $? -eq 0 ] && grep -q 'signed by the identity before the revocation' <<< "$out" && ! grep -q '"code":"certificate_revoked"' <<< "$out" && [ "$(through "$W3" "$W2A")" = 2 ] \
+  && ok "the Go client takes the message the recipe mailbox's identity signed, and keeps the revocation of its certificates" || bad "Go recv after the recipe mailbox's revocation: $out"
+gocli "$W3" send "$W2L" < "$work/body8" > /dev/null 2> "$work/err" && out=$(recipe "$W2" "dr_recv" 2>&1) && grep -q 'under the first certificate' <<< "$out" \
+  && ok "a sender is shown the revocation, and still seals to the recipe mailbox's statement, which its identity signed; the recipe mailbox drains" || bad "a send to a mailbox whose certificates are revoked: $(cat "$work/err") $out"
 out=$(gocli "$W3" revocation ask "$W2L" 2> /dev/null) && [ "$out" = "{\"type\":\"certificates_revoked\",\"address\":\"$W2A\",\"through\":2}" ] && out=$(gocli "$W1" revocation ask "$W3L" 2> "$work/err") && [ "$(jq -r '"\(.type) \(.address)"' <<< "$out")" = "not_revoked $W3A" ] && jq -e '.detail | contains("the server'"'"'s word")' <<< "$out" > /dev/null \
   && ok "asked at any time, the server shows a mailbox's revocation of its certificates, or that it holds nothing, which the client says as the server's word" || bad "revoked --ask: $out $(cat "$work/err")"
 
