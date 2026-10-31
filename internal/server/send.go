@@ -53,7 +53,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 	case !sender.open():
 		return fail(protocol.CodeUnknownSender, "register your own mailbox first: dromas init", "the mailbox the pass names is not registered")
 	}
-	if listed, err := sender.listed(sender.CertSerial); err != nil {
+	if listed, err := sender.listed(sender.Rank); err != nil {
 		return err
 	} else if listed {
 		return listedCertificate()
@@ -64,15 +64,15 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	// 2. The request's target, before the body is read: the recipient's
-	// address, and in the query the two serials and nothing else, each once
-	// and written as a statement writes one.
-	to, err := pathAddr(r, protocol.PrekeySerialParam, protocol.CertificateSerialParam)
+	// address, and in the query the statement the ciphertext is sealed to,
+	// by its hash, once, and nothing else.
+	to, err := pathAddr(r, protocol.StatementParam)
 	if err != nil {
 		return err
 	}
 	q, err := protocol.ParseSendQuery(r.URL.RawQuery)
 	if err != nil {
-		return queryProblem(err, "name the serials of the prekey the ciphertext is encrypted to, and of the certificate its statement is signed under: dromas send does")
+		return queryProblem(err, "name the prekey statement the ciphertext is encrypted to by the SHA-256 of its bytes, in lowercase hex: dromas send does")
 	}
 
 	// 3. The body is the ciphertext's bytes, whatever its Content-Type says,
@@ -150,7 +150,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	// 6 to 9, one call for the posts of this ciphertext to this mailbox naming
-	// the same serials in flight at once, from any sender
+	// the same statement in flight at once, from any sender
 	// (dromas-dev/dromas-server#76, #16): one that arrives while the
 	// first is in them waits for it, and is answered as step 6 answers a
 	// post of bytes the mailbox holds, or with the first's own refusal, which a
@@ -242,13 +242,15 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 	if rcpt.Prekey.Expired(now) {
 		return delivered{}, fail(protocol.CodePrekeyExpired, "the mailbox's owner must publish a new prekey (dromas prekey renew); retry later", "this mailbox's prekey has expired")
 	}
-	// A prekey under a certificate the mailbox's identity has revoked is one
-	// nobody may encrypt to. The cure is an expired prekey's: the owner
-	// publishes a new one, under a new certificate.
-	if listed, err := rcpt.listed(rcpt.CertSerial); err != nil {
+	// A prekey by a signer the mailbox's revocation of certificates covers is
+	// one nobody may encrypt to: under a certificate at or below it, or by
+	// the identity once the address is in working-key mode. The cure is an
+	// expired prekey's: the owner publishes a new one, under a new
+	// certificate.
+	if listed, err := rcpt.listed(rcpt.Rank); err != nil {
 		return delivered{}, err
 	} else if listed {
-		return delivered{}, fail(protocol.CodePrekeyExpired, "the mailbox's owner must publish a new prekey (dromas prekey renew); retry later", "this mailbox's prekey is signed under a certificate its identity revoked")
+		return delivered{}, fail(protocol.CodePrekeyExpired, "the mailbox's owner must publish a new prekey (dromas prekey renew); retry later", "this mailbox's prekey is signed by a signer its revocation of certificates covers")
 	}
 	// A mailbox takes messages from a sender whose identity its client can verify:
 	// one on an Ed25519 key always, and otherwise what it declared with its
@@ -258,9 +260,10 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 		return delivered{}, fail(protocol.CodeSenderKeyType, "a mailbox whose identity is an ssh-ed25519 key, as dromas init makes one, can write to any mailbox",
 			"this mailbox's client does not verify identities of your mailbox's key type, %s", keyTypeValue(t))
 	}
-	// A prekey is named by both serials: its own, and its certificate's.
-	if q.PrekeySerial != rcpt.Prekey.Serial || q.CertificateSerial != rcpt.CertSerial {
-		return delivered{}, fail(protocol.CodeStalePrekey, "a newer prekey exists: read GET /v1/<address> again and re-encrypt the same envelope (dromas does this)", "the mailbox's current prekey is serial %d, under certificate %d", prekeySerialValue(rcpt.Prekey.Serial), certificateSerialValue(rcpt.CertSerial))
+	// A send names its statement by the hash of its bytes as served: the
+	// statement's hash is the current one's, or another is current.
+	if q.Statement != protocol.StatementHash(rcpt.Statement) {
+		return delivered{}, fail(protocol.CodeStalePrekey, "a newer prekey exists: read GET /v1/<address> again and re-encrypt the same envelope (dromas does this)", "the mailbox's current prekey statement is another")
 	}
 	if refused := checkStanzas(p.stanzas, rcpt); refused != nil {
 		return delivered{}, refused
@@ -436,7 +439,7 @@ func (s *Server) duplicate(w http.ResponseWriter, orig *Header) error {
 // type, beside grease, the stanzas sorted by protocol.ReadStanzas, the one
 // reading of them a reader shares, which refuses before any key agreement
 // a file a server takes no send of (PROTOCOL.md §11.10 step 7, §12.3 check 1). A
-// send names the current serial, so no retired prekey is live. Which KEY it
+// send names the current statement, so no retired prekey is live. Which KEY it
 // is encrypted to cannot be checked, by design of native age. Each case has
 // its own hint, in this order: a stanza of another type, none native, more
 // than one, then the type.

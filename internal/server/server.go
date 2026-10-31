@@ -63,11 +63,12 @@ type Config struct {
 	// (NewMetrics). None: nothing is counted.
 	Metrics *Metrics
 	// Policy is the server's version policy at start (PROTOCOL.md §11.17),
-	// which GET /v1/ answers and every request under /v1/ is held to
-	// (versioned), and which its file's Reloader replaces
-	// (Server.VersionPolicy); its caller holds it to
-	// protocol.ServerDocument.Check (ReadVersionPolicy). None: no floor, no
-	// deprecation, no sunset and no latest version.
+	// which GET /v1/ answers with the server's own members and every request
+	// under /v1/ is held to (versioned), and which its file's Reloader
+	// replaces (Server.VersionPolicy); its caller holds it to
+	// protocol.ServerDocument.Check (ReadVersionPolicy). Its
+	// max_certificate_lifetime is Limits'. None: no floor, no deprecation,
+	// no sunset and no latest version.
 	Policy protocol.ServerDocument
 }
 
@@ -169,7 +170,7 @@ func New(c Config) *Server {
 	if s.now == nil {
 		s.now = time.Now
 	}
-	policy := policyOf(c.Policy)
+	policy := policyOf(c.Policy, c.Limits)
 	s.policy.Store(&policy)
 	if len(s.identityTypes) == 0 {
 		s.identityTypes = protocol.IdentityTypes()
