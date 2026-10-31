@@ -228,7 +228,7 @@ func (s *Server) registered(w http.ResponseWriter, r *http.Request, id *protocol
 			return err
 		}
 	} else {
-		if err := s.checkPass(r, cur.Addr, key, cur.Signer, cur.Rank, nil); err != nil {
+		if err := s.checkPass(r, cur.Addr, key, cur.Signer, cur.Rank, false, nil); err != nil {
 			return err
 		}
 		// The mailbox's calls, with whatever its account lifts, read from the
@@ -384,7 +384,7 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 		} else if listed {
 			return refusedRevoked
 		}
-		if err := s.checkPass(r, h, key, b.Signer, b.Rank, nil); err != nil {
+		if err := s.checkPass(r, h, key, b.Signer, b.Rank, false, nil); err != nil {
 			return err
 		}
 		if err := s.spendOwner(r.Context(), h); err != nil {
@@ -437,7 +437,7 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	m.release(s.now())
-	if err := s.checkPass(r, h, key, signerHash(id, signer), signer.Rank(), nil); err != nil {
+	if err := s.checkPass(r, h, key, signerHash(id, signer), signer.Rank(), false, nil); err != nil {
 		return err
 	}
 	// A renewal by the mailbox's current signer counts against the mailbox's
