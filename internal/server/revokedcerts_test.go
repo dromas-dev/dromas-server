@@ -94,14 +94,13 @@ func TestRevokedCertificates(t *testing.T) {
 	put := func(serial, under uint64) reply {
 		return e.do("PUT", r.path("/prekey"), r.upload(serial), r.pass(under))
 	}
-	r.prekey(2, now.Add(protocol.MaxPrekeyLifetime), nil)
-	e.want(put(2, 2), 200, "") // the mailbox stands at certificate 2, prekey 2
 	path := r.path("/revocations")
-	good := r.certs(1)
+	good := r.certs(1) // the trip, of a mailbox in identity mode
+	work := r.certify(2)
 
 	// What is not a revocation of this mailbox's certificates, each of it well
 	// signed by someone.
-	byWork, err := protocol.Sign(r.work[2], good.RevokedCertificates, protocol.RevokedCertsNamespace(r.id.Address()))
+	byWork, err := protocol.Sign(work, good.RevokedCertificates, protocol.RevokedCertsNamespace(r.id.Address()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +131,7 @@ func TestRevokedCertificates(t *testing.T) {
 		}
 	}
 	// A pass does not help: the identity's signature is the authority.
-	e.want(e.do("PUT", path, protocol.Revocations{Identity: r.id.Document(), RevokedCertificates: good.RevokedCertificates, RevokedCertificatesSignature: byWork}, r.pass(2)), 400, protocol.CodeBadRevocation)
+	e.want(e.do("PUT", path, protocol.Revocations{Identity: r.id.Document(), RevokedCertificates: good.RevokedCertificates, RevokedCertificatesSignature: byWork}, r.pass(1)), 400, protocol.CodeBadRevocation)
 	unrevoked := e.do("GET", r.path(""), nil, "")
 	e.want(unrevoked, 200, "")
 	if got := held(t, unrevoked); got != nil {
@@ -160,6 +159,14 @@ func TestRevokedCertificates(t *testing.T) {
 		members["revoked_certificates"] == nil || members["revoked_certificates_signature"] == nil {
 		t.Errorf("the mailbox is read with %d members, want its identity, prekey and signature, then the statement and its signature: %s", len(members), shown.body)
 	}
+	// It is the trip: the identity, which signs the mailbox's current
+	// statement, ranks 0, which it covers. The identity's pass is refused, and
+	// nobody is sent to its prekey, until the first statement under a
+	// certificate above it, which needs no pass by the identity.
+	e.want(e.do("GET", r.path("/messages"), nil, r.pass(1)), 401, protocol.CodeCertificateRevoked)
+	e.want(e.sendTo(r, 1, other, 1), 409, protocol.CodePrekeyExpired)
+	r.prekeyUnder(work, 2, now.Add(protocol.MaxPrekeyLifetime), nil)
+	e.want(put(2, 2), 200, "") // the mailbox stands at certificate 2, prekey 2
 	e.want(e.do("GET", r.path("/messages"), nil, r.pass(2)), 200, "")
 	e.want(e.sendTo(other, 1, r, 2), 201, "")
 	e.want(e.sendTo(r, 2, other, 1), 201, "")
@@ -442,7 +449,8 @@ func TestTheStandingKnowsTheRevokedCertificates(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
-	r := e.raw().register(protocol.MaxPrekeyLifetime)
+	r := e.raw()
+	r.registerWorking(protocol.MaxPrekeyLifetime)
 	r.prekey(3, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(3), r.pass(3)), 200, "") // the mailbox stands at certificate 3
 	if _, err := e.store.Count(ctx, r.id.Address()); err != nil {           // a process that has loaded it
