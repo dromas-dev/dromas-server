@@ -548,13 +548,24 @@ func TestRegistration(t *testing.T) {
 	h = protocol.AddressOf(small)
 	e.want(e.do("PUT", "/v1/"+h.String(), protocol.RegisterRequest{Identity: small, Prekey: reg.Prekey, PrekeySignature: reg.PrekeySignature}, pass), 400, protocol.CodeBadKey)
 
-	// A prekey statement under another identity's certificate; one the
-	// identity signed itself; one a working key signed with no certificate;
-	// one valid for too long; one expired.
+	// A prekey statement signed by another identity; one under a
+	// certificate of the identity's own key, the identity's signature
+	// wrapped in a certificate (PROTOCOL.md §5); one a working key signed
+	// with no certificate; one valid for too long; one expired.
 	other.prekey(1, now.Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", r.path(""), protocol.RegisterRequest{Identity: reg.Identity, Prekey: reg.Prekey, PrekeySignature: other.sig[1]}, pass), 400, protocol.CodeBadKey)
-	byIdentity, _ := protocol.Sign(r.signer, reg.Prekey, protocol.PrekeyNamespace(r.id.Address()))
-	e.want(e.do("PUT", r.path(""), protocol.RegisterRequest{Identity: reg.Identity, Prekey: reg.Prekey, PrekeySignature: byIdentity}, pass), 400, protocol.CodeBadKey)
+	unix := uint64(now.Unix()) //nolint:gosec // a test clock
+	ofItself := &ssh.Certificate{Key: r.signer.PublicKey(), Serial: 7, CertType: ssh.UserCert, KeyId: protocol.CertificateKeyID,
+		ValidPrincipals: []string{r.id.Address().String()}, ValidAfter: unix - 3600, ValidBefore: unix + 86400}
+	if err := ofItself.SignCert(rand.Reader, r.signer); err != nil {
+		t.Fatal(err)
+	}
+	wrapped, err := ssh.NewCertSigner(ofItself, r.signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byWrapped, _ := protocol.Sign(wrapped, reg.Prekey, protocol.PrekeyNamespace(r.id.Address()))
+	e.want(e.do("PUT", r.path(""), protocol.RegisterRequest{Identity: reg.Identity, Prekey: reg.Prekey, PrekeySignature: byWrapped}, pass), 400, protocol.CodeBadKey)
 	_, bare, _ := ed25519.GenerateKey(rand.Reader)
 	bareSigner, _ := ssh.NewSignerFromKey(bare)
 	byBare, _ := protocol.Sign(bareSigner, reg.Prekey, protocol.PrekeyNamespace(r.id.Address()))
@@ -573,7 +584,7 @@ func TestRegistration(t *testing.T) {
 	e.want(e.do("PUT", r.path(""), reg, "Bearer drt1_abc"), 401, protocol.CodeUnauthorized)
 	e.want(e.do("PUT", r.path(""), reg, other.pass(1)), 401, protocol.CodeUnauthorized)
 	e.want(e.do("PUT", r.path(""), reg, e.passFor(r.by[1], r.id.Address(), "another.example")), 401, protocol.CodeUnauthorized)
-	e.want(e.do("PUT", r.path(""), reg, e.passFor(r.certify(2), r.id.Address(), e.name())), 401, protocol.CodeCertificateNotCurrent)
+	e.wantNotCurrent(e.do("PUT", r.path(""), reg, e.passFor(r.certify(2), r.id.Address(), e.name())), 0)
 	e.clock.Add(-protocol.PassLifetime)
 	ranOut := r.pass(1)
 	e.clock.Add(protocol.PassLifetime)

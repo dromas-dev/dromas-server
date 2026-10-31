@@ -282,3 +282,22 @@ func TestTheLargestPolicyFits(t *testing.T) {
 		t.Error("a file past the bound was read")
 	}
 }
+
+// A version policy file names none of the server's own members: its
+// capabilities, the code's, and the longest certificate it takes, its
+// setting (--max-certificate-lifetime). The document it is served in carries
+// the setting's (PROTOCOL.md §11.18).
+func TestAPolicyNamesNoMemberOfTheServersOwn(t *testing.T) {
+	t.Parallel()
+	l := relaxed()
+	for _, member := range []string{`"capabilities":[]`, `"max_certificate_lifetime":3891600`} {
+		b := []byte(`{"min_version":"1.2",` + member + `}`)
+		if _, err := ParseVersionPolicy(b, l); err == nil {
+			t.Errorf("a policy naming %s is taken", member)
+		}
+	}
+	d, err := ParseVersionPolicy([]byte(`{"min_version":"1.2"}`), l)
+	if err != nil || d.MaxCertificateLifetime != uint64(l.MaxCertificateLifetime/time.Second) {
+		t.Fatalf("the document of a policy: max_certificate_lifetime %d, %v; want %d", d.MaxCertificateLifetime, err, l.MaxCertificateLifetime/time.Second)
+	}
+}
