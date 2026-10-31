@@ -45,6 +45,17 @@ type Limits struct {
 	CertificatesPerDay           int           // per mailbox, a number a day: renewals under a later certificate, but for one that replaces a revoked certificate (decided: 10, as renewals)
 	CertificateRevocationsPerDay int           // per mailbox, a number a day: raises of its revocation of certificates (decided: a count of its own, apart from CertificatesPerDay; 10, as that one) [tunable]
 
+	// MaxCertificateLifetime is the longest a certificate the server takes
+	// when it first takes one may run, its valid-before less its valid-after
+	// (PROTOCOL.md §11.7), in whole seconds: served as
+	// max_certificate_lifetime in the server's document (§11.18). A renewal
+	// under the mailbox's current certificate is not held to it. It must be
+	// above protocol.TTL and protocol.MaxSkew together, or dromas-server
+	// serve does not start: a client signs no message under a certificate
+	// with the TTL or less left, and dates one the hour back (decided: 45 days
+	// and the hour).
+	MaxCertificateLifetime time.Duration
+
 	// ACLEntries is the most entries a mailbox's ACL holds, its two lists
 	// together [tunable]: a mailbox's record, with its ACL, is held in the mailbox
 	// cache, so this bounds what one record costs memory there. Never off,
@@ -103,12 +114,19 @@ func DefaultLimits() Limits {
 		CallRefill:                   6 * time.Second,
 		CertificatesPerDay:           10,
 		CertificateRevocationsPerDay: 10,
+		MaxCertificateLifetime:       45*24*time.Hour + protocol.MaxSkew,
 		ACLEntries:                   500,
 		BodyTimeout:                  20 * time.Second,
 		BodyMinRate:                  500,
 		HeadBytes:                    headBytes(),
 		HeadTimeout:                  10 * time.Second,
 	}
+}
+
+// maxCertificate is MaxCertificateLifetime in the whole seconds the
+// server's document serves, which is what a certificate is held to.
+func (l Limits) maxCertificate() uint64 {
+	return uint64(max(l.MaxCertificateLifetime, 0) / time.Second)
 }
 
 // ceiling is the largest ciphertext any sender may send.

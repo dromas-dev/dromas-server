@@ -15,27 +15,30 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// A mailbox proves itself with a pass it signs for itself (PROTOCOL.md §8):
-// the server issues nothing and stores nothing for it. A pass is checked in
-// three steps, cheapest first: the certificate it carries against the hash of
-// the mailbox's current one, which costs no signature check; the working key's
-// signature on the pass; and then the identity's signature on the
-// certificate, with every rule of a certificate, as when it was put on
-// record. So a pass that is not the mailbox's costs at most one signature check
-// to refuse, and one that is costs two. A pass that passed is remembered
-// until it runs out, and every later call that carries it is a lookup in
-// memory.
+// A mailbox proves itself with a pass it signs for itself (PROTOCOL.md §8),
+// by the signer of its current statement: its identity in identity mode, or
+// a working key under its current certificate in working-key mode. The
+// server issues nothing and stores nothing for it. A pass is checked in
+// three steps, cheapest first: the signing key it carries against the hash
+// of the mailbox's current signer's, which costs no signature check; the
+// signature on the pass; and then the signer itself against the identity on
+// record: for a certificate, the identity's signature on it, with every rule
+// of a certificate, as when it was put on record, and for the identity, its
+// key byte for byte. So a pass that is not the mailbox's costs at most one
+// signature check to refuse, and one under a certificate costs two. A pass
+// that passed is remembered until it runs out, and every later call that
+// carries it is a lookup in memory.
 
 // seenPass is a pass this process checked: the hash of its Authorization
 // value in the one form a client writes it (Pass.Authorization) and in the
-// form it was shown in, the certificate it is signed under, and until when it
-// is taken: the moment it runs out or its certificate ends, whichever comes
-// first.
+// form it was shown in, the signer it is signed by, and until when it is
+// taken: the moment it runs out or its signer's certificate ends, whichever
+// comes first.
 type seenPass struct {
-	sum   [32]byte
-	raw   [32]byte
-	cert  [32]byte
-	until time.Time
+	sum    [32]byte
+	raw    [32]byte
+	signer [32]byte
+	until  time.Time
 }
 
 // passes remembers, for each mailbox, the pass it showed last, and each such
@@ -61,13 +64,13 @@ func newPasses() *passes {
 }
 
 // has reports whether the Authorization value hashing to sum is the pass mailbox
-// a showed last, in either form, checked under the certificate cert and not
-// run out at now.
-func (ps *passes) has(a protocol.Address, sum, cert [32]byte, now time.Time) bool {
+// a showed last, in either form, checked as signed by the signer whose hash is
+// signer and not run out at now.
+func (ps *passes) has(a protocol.Address, sum, signer [32]byte, now time.Time) bool {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 	p, ok := ps.seen[a]
-	return ok && (p.sum == sum || p.raw == sum) && p.cert == cert && now.Before(p.until)
+	return ok && (p.sum == sum || p.raw == sum) && p.signer == signer && now.Before(p.until)
 }
 
 // known returns the mailbox whose pass the Authorization value hashing to sum
@@ -182,43 +185,50 @@ func unauthorized(hint, detail string) *problem {
 	return fail(protocol.CodeUnauthorized, hint, detail)
 }
 
-// listedCertificate refuses a pass of a mailbox whose current certificate its
-// identity has revoked (PROTOCOL.md §10.2). No pass is looked at: one under
-// that certificate is not taken, and the mailbox has no other until it publishes
-// a prekey under a new one, which needs no pass under the old.
+// listedCertificate refuses a pass of a mailbox whose current signer its
+// identity's revocation of certificates covers (PROTOCOL.md §10.2): a
+// certificate at or below it, or the identity, once the address is in
+// working-key mode. No pass is looked at: one by that signer is not taken,
+// and the mailbox has no other until it publishes a prekey under a
+// certificate above it, which needs no pass by the old signer.
 func listedCertificate() *problem {
-	return fail(protocol.CodeCertificateRevoked, "publish a new prekey, which comes with a new certificate: dromas prekey renew", "the mailbox's current certificate is one its identity revoked")
+	return fail(protocol.CodeCertificateRevoked, "publish a new prekey under a new certificate: dromas prekey renew", "the mailbox's current signer is one its identity's revocation of certificates covers")
 }
 
 // The hints of a 401: what a client does about it.
 const (
-	hintPass    = "send the mailbox's pass in Authorization, signed by its working key (dromas and dr_owner do this)" //nolint:gosec // a hint's words, not a credential
-	hintNewPass = "sign a new pass and retry once (dromas and dr_owner do this)"                                      //nolint:gosec // a hint's words, not a credential
+	hintPass    = "send the mailbox's pass in Authorization, signed by the signer of its current prekey (dromas and dr_owner do this)" //nolint:gosec // a hint's words, not a credential
+	hintNewPass = "sign a new pass and retry once (dromas and dr_owner do this)"                                                       //nolint:gosec // a hint's words, not a credential
 )
 
 // checkPass checks that the call carries the pass of mailbox a: made for this
-// server, not run out, and signed under the certificate whose hash is cert
-// by a working key of the identity whose key, in SSH wire form, is key
-// (PROTOCOL.md §8). serial is that certificate's serial, which a pass
-// refused as under another names (certificate_serial). p is the call's pass
-// if the caller parsed it already, and otherwise nil.
+// server, not run out, and signed by the signer whose signing key's hash is
+// signer, of rank rank (PROTOCOL.md §8): the identity, whose key in SSH wire
+// form is key, or a working key under a certificate that identity made. p is
+// the call's pass if the caller parsed it already, and otherwise nil.
+//
+// A pass by another signer is refused by the mode (PROTOCOL.md §5): the
+// identity's pass where the signer is a certificate, so where the address is
+// in working-key mode, is certificate_revoked; any other is
+// certificate_not_current, naming the certificate's serial where the signer
+// is one.
 //
 // A pass this process does not remember costs signature checks, and anyone
 // can bring one: so its caller's address reserves a count under
 // Limits.MissesPerMinute first, kept if the pass fails and given back if it
 // passes (s.miss). One the process remembers is a lookup in memory.
-func (s *Server) checkPass(r *http.Request, a protocol.Address, key string, cert [32]byte, serial uint64, p *protocol.Pass) error {
-	return s.passCheck(r, a, key, cert, serial, p, true)
+func (s *Server) checkPass(r *http.Request, a protocol.Address, key string, signer [32]byte, rank uint64, p *protocol.Pass) error {
+	return s.passCheck(r, a, key, signer, rank, p, true)
 }
 
 // checkPassBounded is checkPass for a call that a count taken before it
 // already bounds, a registration's (Limits.RegistrationsPerHour): its pass
 // is checked without a count of its own.
-func (s *Server) checkPassBounded(r *http.Request, a protocol.Address, key string, cert [32]byte, serial uint64) error {
-	return s.passCheck(r, a, key, cert, serial, nil, false)
+func (s *Server) checkPassBounded(r *http.Request, a protocol.Address, key string, signer [32]byte, rank uint64) error {
+	return s.passCheck(r, a, key, signer, rank, nil, false)
 }
 
-func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, cert [32]byte, serial uint64, p *protocol.Pass, count bool) (err error) {
+func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, signer [32]byte, rank uint64, p *protocol.Pass, count bool) (err error) {
 	auth, one := authorization(r)
 	if !one || len(auth) > protocol.MaxPassAuthorization {
 		if !count {
@@ -228,7 +238,7 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, cert
 	}
 	now := s.now()
 	sum := sha256.Sum256([]byte(auth))
-	if s.passes.has(a, sum, cert, now) {
+	if s.passes.has(a, sum, signer, now) {
 		s.metrics.pass(true, nil)
 		return nil
 	}
@@ -249,7 +259,7 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, cert
 	// its many spellings cost one check (dromas-dev/dromas-server#69).
 	raw := sum
 	if one := sha256.Sum256([]byte(p.Authorization())); one != sum {
-		if s.passes.has(a, one, cert, now) {
+		if s.passes.has(a, one, signer, now) {
 			s.metrics.pass(true, nil)
 			return nil
 		}
@@ -287,12 +297,12 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, cert
 		return fail(protocol.CodePassExpired, fmt.Sprintf("%s; refused again, this machine's clock reads more than %d minutes ahead of the server's: check it", hintNewPass, (protocol.MaxPassLifetime-protocol.PassLifetime)/time.Minute),
 			fmt.Sprintf("the pass runs out more than %d minutes from now", protocol.MaxPassLifetime/time.Minute))
 	}
-	// The certificate's hash, then the working key's signature: what
-	// refuses a pass that is not the mailbox's, for one signature check at most.
-	under, err := p.VerifyUnder(cert, name, now)
+	// The signing key's hash, then the signature: what refuses a pass that
+	// is not the mailbox's, for one signature check at most.
+	under, err := p.VerifyUnder(signer, name, now)
 	switch {
 	case errors.Is(err, protocol.ErrCertificate):
-		return fail(protocol.CodeCertificateNotCurrent, "sign the pass with the working key of the mailbox's newest prekey; if that key is lost, dromas prekey renew", "the pass is not under certificate %d, the one this call takes a pass under", certificateSerialValue(serial))
+		return otherSigner(p, key, rank, name, now)
 	case errors.Is(err, protocol.ErrCertificateNotBegun):
 		return fail(protocol.CodePassExpired, "a certificate starts an hour before it is made: check this machine's clock, then dromas prekey renew", "the certificate the pass is signed under has not begun")
 	case errors.Is(err, protocol.ErrCertificateTime):
@@ -300,25 +310,53 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, cert
 	case err != nil:
 		return unauthorized(hintNewPass, "the pass is not this mailbox's for this server")
 	}
-	// Then the certificate itself, against the mailbox's identity, as when it was
-	// put on record: the identity's signature and every rule of a
-	// certificate. It is a second check of what was checked then, and it is
-	// reached only by a pass the working key signed. If it fails, the record
-	// is wrong, and a new prekey, which is checked in full, puts it right.
-	checked, err := checkCertificate(key, under, a, now)
+	// Then the signer itself, against the mailbox's identity, as when it was
+	// put on record: a certificate by the identity's signature and every rule
+	// of a certificate, the identity by its key, byte for byte. It is a
+	// second check of what was checked then, and it is reached only by a pass
+	// that signer's key signed. If it fails, the record is wrong, and a new
+	// prekey, which is checked in full, puts it right.
+	until, err := checkSigner(key, under, a, now)
 	if err != nil {
 		if s.log != nil {
-			s.log.Printf("mailbox %s: the certificate on record does not verify against the identity on record: %v", a, err) // the address redacted, as every line is
+			s.log.Printf("mailbox %s: the signer on record does not verify against the identity on record: %v", a, err) // the address redacted, as every line is
 		}
-		return fail(protocol.CodeCertificateNotCurrent, "publish a new prekey, which comes with a new certificate: dromas prekey renew", "the mailbox's certificate on record, %d, does not verify against its identity", certificateSerialValue(serial))
+		return wrongRecord(rank)
 	}
 	// A pass is never good for longer than the certificate it is under.
-	until := p.NotAfter
-	if end := checked.NotAfter(); end.Before(until) {
-		until = end
+	if until.IsZero() || p.NotAfter.Before(until) {
+		until = p.NotAfter
 	}
-	s.passes.keep(a, seenPass{sum: sum, raw: raw, cert: cert, until: until}, now)
+	s.passes.keep(a, seenPass{sum: sum, raw: raw, signer: signer, until: until}, now)
 	return nil
+}
+
+// otherSigner refuses a pass signed by another key than the mailbox's current
+// signer, whose rank is rank, for the identity whose key in SSH wire form is
+// key. Where the signer is a certificate, the address is in working-key mode,
+// and a pass the identity signed is refused as the mode refuses it: the
+// identity ranks 0, which the revocation of certificates covers. That costs
+// one signature check, where the signature is by the identity's key and none
+// was made before. Where the signer is the identity, the address is in
+// identity mode, and the refusal names no certificate.
+func otherSigner(p *protocol.Pass, key string, rank uint64, name string, now time.Time) error {
+	if rank == 0 {
+		return fail(protocol.CodeCertificateNotCurrent, "sign the pass with the mailbox's identity, the signer of its current prekey: dromas does", "the pass is not signed by the mailbox's identity, which signs its current prekey")
+	}
+	if _, err := p.VerifyUnder(sha256.Sum256([]byte(key)), name, now); err == nil {
+		return fail(protocol.CodeCertificateRevoked, "sign the pass with the working key of the mailbox's newest prekey; if that key is lost, dromas prekey renew", "the pass is signed by the identity, and this mailbox is in working-key mode: its revocation of certificates covers the identity")
+	}
+	return fail(protocol.CodeCertificateNotCurrent, "sign the pass with the working key of the mailbox's newest prekey; if that key is lost, dromas prekey renew", "the pass is not under certificate %d, the one this call takes a pass under", certificateSerialValue(rank))
+}
+
+// wrongRecord is the answer to a pass whose signer on record, of rank rank,
+// does not verify against the mailbox's identity on record.
+func wrongRecord(rank uint64) *problem {
+	const hint = "publish a new prekey: dromas prekey renew"
+	if rank == 0 {
+		return fail(protocol.CodeCertificateNotCurrent, hint, "the mailbox's signer on record is not its identity")
+	}
+	return fail(protocol.CodeCertificateNotCurrent, hint, "the mailbox's certificate on record, %d, does not verify against its identity", certificateSerialValue(rank))
 }
 
 // notAPass refuses a call whose Authorization holds no pass, and counts it
@@ -342,22 +380,34 @@ func (s *Server) failed(r *http.Request) error {
 	return nil
 }
 
-// checkCertificate holds a certificate to the identity whose key, in SSH wire
-// form, is key, and whose address is a: protocol.CheckCertificate, for an
-// identity rebuilt from its key with every check its document had.
-func checkCertificate(key string, cert ssh.PublicKey, a protocol.Address, now time.Time) (*protocol.Certificate, error) {
+// checkSigner holds the signing key a pass verified under to the identity
+// whose key, in SSH wire form, is key, and whose address is a: a certificate
+// by protocol.CheckCertificate, for an identity rebuilt from its key with
+// every check its document had, and the identity's own key byte for byte.
+// It returns when a certificate ends, and the zero time for the identity.
+func checkSigner(key string, under ssh.PublicKey, a protocol.Address, now time.Time) (time.Time, error) {
 	pub, err := ssh.ParsePublicKey([]byte(key))
 	if err != nil {
-		return nil, err
+		return time.Time{}, err
 	}
 	id, err := protocol.IdentityOf(pub)
 	if err != nil {
-		return nil, err
+		return time.Time{}, err
 	}
 	if id.Address() != a {
-		return nil, errors.New("the identity on record is not this address's")
+		return time.Time{}, errors.New("the identity on record is not this address's")
 	}
-	return protocol.CheckCertificate(id, cert, now)
+	if _, ok := under.(*ssh.Certificate); !ok {
+		if string(under.Marshal()) != key {
+			return time.Time{}, errors.New("the signer on record is neither a certificate nor the identity's key")
+		}
+		return time.Time{}, nil
+	}
+	c, err := protocol.CheckCertificate(id, under, now)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return c.NotAfter(), nil
 }
 
 // owner authenticates a call a mailbox makes about itself: it returns the
@@ -381,7 +431,7 @@ func (s *Server) owner(r *http.Request, params ...string) (protocol.Address, err
 	case st.Listed:
 		return a, listedCertificate()
 	}
-	return a, s.checkPass(r, a, st.Key, st.Cert, st.CertSerial, nil)
+	return a, s.checkPass(r, a, st.Key, st.Signer, st.Rank, nil)
 }
 
 // sender authenticates a send: the sender is the mailbox the call's pass names
@@ -404,5 +454,5 @@ func (s *Server) sender(r *http.Request) (protocol.Address, error) {
 	case st.Listed:
 		return a, listedCertificate()
 	}
-	return a, s.checkPass(r, a, st.Key, st.Cert, st.CertSerial, p)
+	return a, s.checkPass(r, a, st.Key, st.Signer, st.Rank, p)
 }

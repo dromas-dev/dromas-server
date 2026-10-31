@@ -39,18 +39,19 @@ type Mailbox struct {
 	Addr     protocol.Address
 	Identity []byte // the identity document, exactly as registered or as the revocations carried it
 	State    State
-	// The current prekey: its statement, the working key's signature over it,
-	// which carries the key's certificate, and the statement parsed.
+	// The current prekey: its statement, its signer's signature over it,
+	// which carries the signing key, and the statement parsed.
 	Statement []byte
 	Signature []byte
 	Prekey    *protocol.Prekey
-	// The certificate Signature carries, which is the mailbox's current one: its
-	// serial, and the SHA-256 of its bytes. A pass is taken only under it,
-	// and a prekey only under it or a later one (PROTOCOL.md §5). A mailbox's
-	// statements are ordered by this serial first, and by the prekey's own
-	// second.
-	CertSerial uint64
-	Cert       [32]byte
+	// The current statement's signer (PROTOCOL.md §5): its rank, 0 for the
+	// identity and a certificate's serial for a working key, and the SHA-256
+	// of its signing key's wire bytes, the identity's key or the certificate.
+	// A pass is taken only by it, and a prekey only by it or a signer of a
+	// higher rank. A mailbox's statements are ordered by this rank first, and
+	// by the prekey's own serial second.
+	Rank   uint64
+	Signer [32]byte
 	// SenderKeyTypes is what the mailbox declared with its current prekey: the
 	// identity key types of the senders it takes messages from, or
 	// protocol.AnySender (PROTOCOL.md §7). Only names this build verifies
@@ -62,8 +63,9 @@ type Mailbox struct {
 	Rev     uint64 // the record's revision, 0 with no record; a write must name the one it read
 	Created time.Time
 	// Expires is when the record may go: DynamoDB's TTL deletes it some time
-	// after (PROTOCOL.md §13). Every registration and renewal moves it to
-	// when nothing of the mailbox is valid any more. Zero: never.
+	// after (PROTOCOL.md §13). Every registration and renewal raises it to
+	// when nothing the mailbox has published is valid any more, and nothing
+	// lowers it (keep). Zero: never.
 	Expires time.Time
 	// Account is the account the mailbox belongs to, or "" (PROTOCOL.md §11.16).
 	// Only Adopt and Leave change it.
@@ -116,14 +118,21 @@ func (b *Mailbox) holdsRevocations() bool {
 	return b != nil && (len(b.Revocation) > 0 || len(b.RevokedCerts) > 0)
 }
 
-// listed reports whether the mailbox's identity has revoked the certificate of
-// this serial, by the revocation on record. A mailbox with none has revoked none.
-func (b *Mailbox) listed(serial uint64) (bool, error) {
+// listed reports whether the revocation of certificates on record covers a
+// signer of this rank (PROTOCOL.md §5): a certificate at or below it, or the
+// identity, rank 0, once one is held. A mailbox with none has revoked none.
+func (b *Mailbox) listed(rank uint64) (bool, error) {
 	if len(b.RevokedCerts) == 0 {
 		return false, nil
 	}
-	return listNames(b.RevokedCerts, serial)
+	return listNames(b.RevokedCerts, rank)
 }
+
+// tripped reports whether what is held of an address carries a revocation of
+// its certificates: the trip, which puts the address in working-key mode for
+// good (PROTOCOL.md §5). Every revocation of certificates is through a serial
+// of 1 or more, so it is the trip, whatever it revokes.
+func (b *Mailbox) tripped() bool { return b != nil && len(b.RevokedCerts) > 0 }
 
 // Expect is what a conditional write asks of its target as it writes: what a
 // request's If-Match or If-None-Match held of the target at its read
@@ -343,17 +352,19 @@ type Header struct {
 }
 
 // Standing is what checking a mailbox's pass needs of it (PROTOCOL.md §8):
-// its state, its identity's public key, which certificate is its current
-// one, and whether its identity has revoked that certificate.
+// its state, its identity's public key, which signer is its current one,
+// and whether its identity's revocation of certificates covers that signer.
 type Standing struct {
-	State State
-	Key   string   // the identity's key in SSH wire form, of whatever type: what line 2 of its document holds
-	Cert  [32]byte // Mailbox.Cert
-	// CertSerial is Mailbox.CertSerial, which Listed is judged by.
-	CertSerial uint64
-	// Listed is true while the mailbox's current certificate is one its identity
-	// has revoked (PROTOCOL.md §10.2): no pass of the mailbox is taken until it
-	// publishes a prekey under a new certificate.
+	State  State
+	Key    string   // the identity's key in SSH wire form, of whatever type: what line 2 of its document holds
+	Signer [32]byte // Mailbox.Signer
+	// Rank is Mailbox.Rank, which Listed is judged by.
+	Rank uint64
+	// Listed is true while the revocation of certificates held covers the
+	// mailbox's current signer (PROTOCOL.md §10.2): a certificate at or below
+	// it, or the identity once the address is in working-key mode. No pass
+	// of the mailbox is taken until it publishes a prekey under a
+	// certificate above it.
 	Listed bool
 	// InAccount is true for a mailbox in an account, whose limits are read from
 	// it; a mailbox in none has the server's, with nothing to read.
@@ -370,9 +381,9 @@ func (b *Mailbox) standing() (st Standing, ok bool, err error) {
 	if err != nil {
 		return Standing{}, false, fmt.Errorf("the stored identity: %w", err)
 	}
-	st = Standing{State: b.State, Key: key, Cert: b.Cert, CertSerial: b.CertSerial, InAccount: b.Account != ""}
+	st = Standing{State: b.State, Key: key, Signer: b.Signer, Rank: b.Rank, InAccount: b.Account != ""}
 	if b.State != Revoked {
-		if st.Listed, err = b.listed(b.CertSerial); err != nil {
+		if st.Listed, err = b.listed(b.Rank); err != nil {
 			return Standing{}, false, err
 		}
 	}
@@ -417,18 +428,29 @@ func identityType(doc []byte) string {
 	return string(name)
 }
 
-// certHash names a certificate by the SHA-256 of its bytes.
-func certHash(c *protocol.Certificate) [32]byte { return sha256.Sum256(c.Marshal()) }
-
-// expiry is when the record of a mailbox whose current statement is p, under
-// cert, may go (PROTOCOL.md §13): once the certificate has ended, so that no
-// working key of it is left to register with, and the last message sealed to p
-// has expired.
-func expiry(p *protocol.Prekey, cert *protocol.Certificate) time.Time {
-	if end := p.NotAfter.Add(protocol.TTL); end.After(cert.NotAfter()) {
-		return end
+// signerHash names the signer of a statement of identity id's mailbox by the
+// SHA-256 of its signing key's wire bytes: the identity's key, or the
+// certificate (protocol.Pass.VerifyUnder).
+func signerHash(id *protocol.Identity, s *protocol.Signer) [32]byte {
+	if c := s.Certificate(); c != nil {
+		return sha256.Sum256(c.Marshal())
 	}
-	return cert.NotAfter()
+	return sha256.Sum256(id.PublicKey().Marshal())
+}
+
+// keep is when the record of a mailbox may go once it takes statement p,
+// signed by s, where it was to go at held (PROTOCOL.md §13): the latest of
+// held, the end of the last message sealed to p, and the end of s's
+// certificate, if s is one, so that no working key a certificate it took
+// certified is left to register with. It is one date, raised and never
+// lowered: a statement under a shorter certificate keeps the end of every
+// longer one taken before it.
+func keep(held time.Time, p *protocol.Prekey, s *protocol.Signer) time.Time {
+	ends := []time.Time{held, p.NotAfter.Add(protocol.TTL)}
+	if c := s.Certificate(); c != nil {
+		ends = append(ends, c.NotAfter())
+	}
+	return slices.MaxFunc(ends, time.Time.Compare)
 }
 
 // Store errors. A write's error is one of two outcomes (Memory.write): a
@@ -592,6 +614,12 @@ type Store interface {
 	// Mailbox returns what is held of an address (view): its mailbox's record and
 	// its identity's revocations, or ErrNotFound if neither.
 	Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error)
+	// Reread returns what is held of an address as Mailbox does, but read
+	// from the backend, strongly consistent, whatever memory holds: for an
+	// answer that must not rest on a copy another process's write has not
+	// yet reached (PROTOCOL.md §11.7, the trip). What it reads is added to
+	// memory's copy.
+	Reread(ctx context.Context, a protocol.Address) (*Mailbox, error)
 	// Known returns what memory holds of an address, with no read: what Mailbox
 	// returns, or nil for an address it holds as missing. ok is false when
 	// only a read can tell, which is what Mailbox then does.

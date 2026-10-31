@@ -63,6 +63,11 @@ func certificateSerialValue(v uint64) value {
 	return value{v, func(p *protocol.Problem) { p.CertificateSerial = u64(v) }}
 }
 
+// maxLifetimeValue is the longest certificate the server takes, in seconds.
+func maxLifetimeValue(v uint64) value {
+	return value{v, func(p *protocol.Problem) { p.MaxCertificateLifetime = u64(v) }}
+}
+
 func throughValue(v uint64) value {
 	return value{v, func(p *protocol.Problem) { p.Through = u64(v) }}
 }

@@ -115,8 +115,9 @@ type Server struct {
 	// purges are the deletes of what is left of revoked mailboxes in flight, one
 	// per address (purge). Never DoChan (reads).
 	purges singleflight.Group
-	// posts are the posts of one ciphertext to one mailbox in flight at once,
-	// from any sender (send): one call, which the others wait for. Never
+	// posts are the posts of one ciphertext to one mailbox naming one
+	// statement, by its hash, in flight at once, from any sender (send): one
+	// call, which the others wait for. Never
 	// DoChan (reads).
 	posts singleflight.Group
 	// reads are the reads of mailbox records in flight (lookup), one per
@@ -312,7 +313,7 @@ func (s *Server) boxsCall(pass passRule, r *http.Request) bool {
 
 // live reports whether this process's memory holds mailbox a as live, with no
 // read of a store: loaded (Held), or its record in the cache (Known), and
-// active: not revoked, its current certificate not one its identity revoked.
+// active: not revoked, its current signer not one its identity revoked.
 // Memory is what the stream keeps current, so a change made through another
 // process counts as one made here. A mailbox memory does not hold is not live
 // here: its call spends its address's flood budget, and its route reads it.
@@ -324,7 +325,7 @@ func (s *Server) live(a protocol.Address) bool {
 	if !ok || b == nil || b.State != Active {
 		return false
 	}
-	listed, err := b.listed(b.CertSerial)
+	listed, err := b.listed(b.Rank)
 	return err == nil && !listed
 }
 
