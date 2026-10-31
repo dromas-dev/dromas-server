@@ -367,6 +367,9 @@ func (r *raw) prekey(serial uint64, notAfter time.Time, key *age.HybridIdentity)
 // prekeyUnder makes statement serial, signed by signer.
 func (r *raw) prekeyUnder(signer ssh.Signer, serial uint64, notAfter time.Time, key *age.HybridIdentity) {
 	r.e.t.Helper()
+	if signer == nil {
+		r.e.t.Fatalf("statement %d: no signer", serial)
+	}
 	if key == nil {
 		key, _ = age.GenerateHybridIdentity()
 	}
@@ -387,10 +390,19 @@ func (r *raw) upload(serial uint64) protocol.PrekeyRequest {
 	return protocol.PrekeyRequest{Prekey: r.stmt[serial], PrekeySignature: r.sig[serial]}
 }
 
-// pass is a new pass by the signer of statement serial.
+// pass is a new pass by the signer of statement serial, or, where the
+// mailbox made no statement of that serial, under its certificate of that
+// serial.
 func (r *raw) pass(serial uint64) string {
 	r.e.t.Helper()
-	return r.e.passFor(r.by[serial], r.id.Address(), r.e.name())
+	s := r.by[serial]
+	if s == nil {
+		s = r.work[serial]
+	}
+	if s == nil {
+		r.e.t.Fatalf("no statement and no certificate of serial %d", serial)
+	}
+	return r.e.passFor(s, r.id.Address(), r.e.name())
 }
 
 // sealed is a send of ciphertext to statement serial.
