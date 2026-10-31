@@ -41,9 +41,9 @@ go run ./cmd/dromas-server serve --dev
 
 `serve --dev` is the whole server on the in-memory backend, with no AWS, listening on `127.0.0.1:8080`: nothing survives a restart. Point a client at it with `DROMAS_SERVER_URL=http://127.0.0.1:8080`.
 
-`test/interop.sh` runs both clients, from the release `go.mod` requires, against a real `serve --dev`: messages both ways, renewal, revocation, certificates and the sender ACL. Its header says what it needs, and how to test post-quantum mailboxes when the packaged age is older than 1.3.
+`test/interop.sh` runs both clients, from the release `go.mod` requires, against a real `serve --dev`: messages both ways, renewal, revocation, certificates and the sender ACL. Its header says what it needs, and which age it runs where the packaged one is older than 1.3.
 
-The other backend is three DynamoDB tables and an S3 Express One Zone directory bucket. `dromas-server serve -h` lists every flag, and `ARCHITECTURE.md` § Storage has the layout. That mode also needs `--names`, the names clients call the server by: a mailbox's pass is made for one server by name, and the server takes one only on a request that calls it by a name of its own (`ARCHITECTURE.md` § The pass check).
+The other backend is three DynamoDB tables and an S3 Express One Zone directory bucket. `dromas-server serve --help` lists every flag, and `ARCHITECTURE.md` § Storage has the layout. That mode also needs `--names`, the names clients call the server by: a mailbox's pass is made for one server by name, and the server takes one only on a request that calls it by a name of its own (`ARCHITECTURE.md` § The pass check).
 
 Run behind a reverse proxy that terminates TLS: `--listen` takes one or more TCP addresses (comma-separated, served alike), and `--trusted-proxy` names the proxy's addresses, whose `X-Forwarded-For` (its last entry) names the client every per-IP limit counts (`ARCHITECTURE.md` § Behind a reverse proxy). Without `--trusted-proxy` the peer is the client.
 
