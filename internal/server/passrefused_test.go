@@ -10,14 +10,14 @@ package server
 // a caller can reach the second (a record that does not verify).
 //
 // A mailbox whose current certificate its identity revoked is answered
-// certificate_revoked from its record before any pass is checked, at every
-// call that takes a pass under that certificate, and the way back is an
-// upload under a later certificate, whose pass is read under that one.
+// certificate_revoked from its record, at every call that takes a pass under
+// that certificate, but for the identity's pass, which is always taken; and
+// the way back is an upload under a later certificate, whose pass is read
+// under that one or the identity's.
 //
-// A pass of the form the address's mode refuses (PROTOCOL.md §5, §8): one
-// the identity signed, on an address in working-key mode, is
-// certificate_revoked; one under a certificate, on an address in identity
-// mode, is certificate_not_current with no certificate_serial.
+// A pass under a certificate, at a mailbox whose identity signs its current
+// statement, is certificate_not_current with no certificate_serial
+// (PROTOCOL.md §5, §8).
 
 import (
 	"context"
@@ -256,10 +256,10 @@ func TestASendNamesTheSendersCurrentCertificate(t *testing.T) {
 }
 
 // Once the mailbox's identity revokes its current certificate, every call that
-// takes a pass under that certificate is certificate_revoked before any pass
-// is checked: with no pass, one under the revoked current certificate, one
-// under an older one (revoked too), one under a later one never on record,
-// and one that is no pass. A send can only know whose pass it is by reading
+// takes a pass under that certificate is certificate_revoked before any
+// signature is checked: with no pass, one under the revoked current
+// certificate, one under an older one (revoked too), one under a later one
+// never on record, and one that is no pass. The identity's pass is taken. A send can only know whose pass it is by reading
 // it, so a send with no pass, or one that is no pass, is unauthorized
 // (PROTOCOL.md §8). The way back is an upload under a later
 // certificate, whose pass is read under that one (PROTOCOL.md §8, §11.9).
@@ -277,9 +277,9 @@ func TestARevokedCurrentCertificateIsAnsweredBeforeThePass(t *testing.T) {
 		"under certificate 3, taken before":    seen,
 		"under certificate 3, new":             r.pass(3),
 		"under certificate 2, revoked too":     r.pass(2),
-		"by the identity, revoked too":         e.passFor(r.signer, r.id.Address(), e.name()),
 		"under certificate 5, never on record": later,
 	}
+	identity := e.passFor(r.signer, r.id.Address(), e.name())
 	id := strings.Repeat("a", 64)
 	for _, c := range []struct {
 		method, path string
@@ -300,6 +300,15 @@ func TestARevokedCurrentCertificateIsAnsweredBeforeThePass(t *testing.T) {
 				t.Errorf("%s %s %s: %d %s", c.method, c.path, name, got.status, got.body)
 			}
 		}
+		// The identity's pass is always taken (PROTOCOL.md §8), but where the
+		// call brings the statement under the revoked certificate.
+		got := e.do(c.method, r.path(c.path), c.body, identity)
+		if brings := c.method == "PUT" && (c.path == "" || c.path == "/prekey"); brings != (got.status == 401 && got.code() == protocol.CodeCertificateRevoked) || !brings && got.status == 401 {
+			t.Errorf("%s %s by the identity: %d %s", c.method, c.path, got.status, got.body)
+		}
+	}
+	if got := e.do("POST", o.path("/messages"), o.sealed(1, []byte("x")), identity); got.status == 401 {
+		t.Errorf("a send by the identity: %d %s", got.status, got.body)
 	}
 	for name, pass := range passes {
 		want := protocol.CodeCertificateRevoked
@@ -313,6 +322,7 @@ func TestARevokedCurrentCertificateIsAnsweredBeforeThePass(t *testing.T) {
 	// A statement under the revoked certificate at a higher serial is refused
 	// before its pass, whatever that is under.
 	r.prekeyUnder(r.work[3], 4, e.clock.Now().Add(time.Hour), nil)
+	passes["by the identity"] = identity
 	for name, pass := range passes {
 		if got := e.do("PUT", r.path("/prekey"), r.upload(4), pass); got.status != 401 || got.code() != protocol.CodeCertificateRevoked {
 			t.Errorf("an upload under the revoked certificate, %s: %d %s", name, got.status, got.body)
@@ -352,13 +362,13 @@ func TestARegistrationUnderARevokedCertificateIsAnsweredBeforeThePass(t *testing
 	e.want(e.do("PUT", m.path(""), m.registration(5), m.pass(5)), 201, "")
 }
 
-// A pass of the form the address's mode refuses (PROTOCOL.md §5, §8). In
-// working-key mode the identity's pass is certificate_revoked, at every call
-// that takes the mailbox's pass: the trip covers the identity. In identity
-// mode a pass under a certificate is certificate_not_current, naming no
-// certificate, since the mailbox has none. Control: each mailbox's own pass
-// is taken at the same calls.
-func TestAPassOfTheFormTheModeRefuses(t *testing.T) {
+// A pass of either form, at a mailbox whose current statement is of the
+// other (PROTOCOL.md §5, §8): at a mailbox under a certificate, the
+// identity's pass is taken, at every call that takes the mailbox's pass; at a
+// mailbox whose identity signs its statement, a pass under a certificate is
+// certificate_not_current, naming no certificate, since the mailbox has
+// none. Control: each mailbox's own pass is taken at the same calls.
+func TestAPassOfEitherForm(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	w, i, o := e.raw(), e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
@@ -374,16 +384,18 @@ func TestAPassOfTheFormTheModeRefuses(t *testing.T) {
 		}
 	}
 	for name, call := range calls(w, ws) {
-		e.want(call(byIdentity), 401, protocol.CodeCertificateRevoked)
+		if got := call(byIdentity); got.status == 401 {
+			t.Errorf("%s by the identity, at a mailbox under a certificate: %d %s", name, got.status, got.body)
+		}
 		if got := call(w.pass(ws)); got.status == 401 {
-			t.Errorf("control: %s by the working-key mailbox's own pass: %d %s", name, got.status, got.body)
+			t.Errorf("control: %s by the mailbox's certificate: %d %s", name, got.status, got.body)
 		}
 	}
 	for name, call := range calls(i, 1) {
-		t.Logf("%s under a certificate, in identity mode", name)
+		t.Logf("%s under a certificate, at a mailbox its identity signs for", name)
 		e.wantNotCurrent(call(underCert), 0)
 		if got := call(i.pass(1)); got.status == 401 {
-			t.Errorf("control: %s by the identity-mode mailbox's own pass: %d %s", name, got.status, got.body)
+			t.Errorf("control: %s by the mailbox's identity: %d %s", name, got.status, got.body)
 		}
 	}
 }

@@ -539,11 +539,12 @@ func TestTheRemedyRenewsWhenATakerSpentTheDaysRenewals(t *testing.T) {
 func TestAnIdenticalRegistrationUnderARevokedCertificateIsRefused(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	r := e.raw().register(protocol.MaxPrekeyLifetime)
-	e.want(e.do("PUT", r.path(""), r.registration(1), r.pass(1)), 200, "")
-	e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), 200, "")
-	for _, pass := range []string{r.pass(1), ""} {
-		e.want(e.do("PUT", r.path("/prekey"), r.upload(1), pass), 401, protocol.CodeCertificateRevoked)
-		e.want(e.do("PUT", r.path(""), r.registration(1), pass), 401, protocol.CodeCertificateRevoked)
+	r := e.raw()
+	n := r.registerCertified(protocol.MaxPrekeyLifetime)
+	e.want(e.do("PUT", r.path(""), r.registration(n), r.pass(n)), 200, "")
+	e.want(e.do("PUT", r.path("/revocations"), r.certs(n), ""), 200, "")
+	for _, pass := range []string{r.pass(n), "", e.passFor(r.signer, r.id.Address(), e.name())} {
+		e.want(e.do("PUT", r.path("/prekey"), r.upload(n), pass), 401, protocol.CodeCertificateRevoked)
+		e.want(e.do("PUT", r.path(""), r.registration(n), pass), 401, protocol.CodeCertificateRevoked)
 	}
 }
