@@ -100,7 +100,7 @@ type Server struct {
 	lifted    *buckets // per mailbox whose account lifts its new messages: at ReceiveCeiling
 	drained   *buckets // per mailbox: its first fetches of held messages
 	sends     *buckets // per sender, a number a day
-	renewals  *buckets // per mailbox, a number a day: renewals under its current certificate
+	renewals  *buckets // per mailbox, a number a day: renewals by its current signer
 	certs     *buckets // per mailbox, a number a day: renewals under a later certificate, which only its identity can make
 	raises    *buckets // per mailbox, a number a day: raises of its revocation of certificates, which only its identity can make
 	// inFlight counts the sends let past the mailbox cap and not yet stored, by
@@ -299,8 +299,8 @@ func (s *Server) gate(pass passRule, h http.Handler) http.Handler {
 // pass this process has checked, to a route that takes that mailbox's pass
 // (pass), and the mailbox is live in this process's memory (live). All this
 // reads is the Authorization line, its hash, and lookups in memory, which
-// cost what reading its bytes does. Whether the pass is under the mailbox's
-// current certificate, the route's own check of it says (checkPass).
+// cost what reading its bytes does. Whether the pass is by the mailbox's
+// current signer, the route's own check of it says (checkPass).
 func (s *Server) boxsCall(pass passRule, r *http.Request) bool {
 	if pass == passNone {
 		return false
