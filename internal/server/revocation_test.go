@@ -75,7 +75,7 @@ func TestRevocation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
-	a, b, c := e.workingMailbox(), e.mailbox(), e.mailbox() // A in working-key mode, so that it has a working key to try
+	a, b, c := e.certifiedMailbox(), e.mailbox(), e.mailbox() // A under a certificate, so that it has a working key to try
 	send(t, b, a, "waiting in A's mailbox when it is revoked")
 	send(t, a, b, "sent by A before it was revoked")
 	passA := e.pass(a)
@@ -83,14 +83,12 @@ func TestRevocation(t *testing.T) {
 	path := revocationPath(a.Address())
 	read := mailboxPath(a.Address())
 
-	// Nothing is held about a mailbox that is not revoked but its revocation
-	// of certificates, A's trip to working-key mode: its read is 200 and shows
-	// no revocation of the address. There is none of no mailbox.
+	// Nothing is held about a mailbox that is not revoked: its read is 200 and
+	// shows none. There is none of no mailbox.
 	unrevoked := e.do("GET", read, nil, "")
 	e.want(unrevoked, 200, "")
-	trip := held(t, unrevoked)
-	if trip == nil || len(trip.Revocation) != 0 || len(trip.RevokedCertificates) == 0 {
-		t.Fatalf("a mailbox in working-key mode nobody revoked is read with a revocation of the address, or without its trip: %s", unrevoked.body)
+	if got := held(t, unrevoked); got != nil {
+		t.Fatalf("a mailbox nobody revoked is read with a revocation: %s", unrevoked.body)
 	}
 	e.want(e.do("GET", mailboxPath(protocol.Address{1}), nil, ""), 404, protocol.CodeNoSuchMailbox)
 
@@ -144,7 +142,7 @@ func TestRevocation(t *testing.T) {
 	// After all of that the mailbox is as it was.
 	unrevoked = e.do("GET", read, nil, "")
 	e.want(unrevoked, 200, "")
-	if got := held(t, unrevoked); got == nil || len(got.Revocation) != 0 || !bytes.Equal(got.RevokedCertificates, trip.RevokedCertificates) {
+	if got := held(t, unrevoked); got != nil {
 		t.Fatalf("what was refused is shown: %s", unrevoked.body)
 	}
 	if n, _ := e.store.Count(ctx, a.Address()); n != 1 {
@@ -181,10 +179,8 @@ func TestRevocation(t *testing.T) {
 	if id, err := protocol.VerifyRevocation(a.Address(), got.Identity, got.Revocation); err != nil || id.Address() != a.Address() || !bytes.Equal(got.Revocation, rec.Revocation) {
 		t.Fatalf("what the server shows for a revoked mailbox does not verify: %v", err)
 	}
-	// A is in working-key mode, so the record carries its revocation of
-	// certificates, the trip, beside the revocation of the address.
-	if written, members := recordOf(t, shown); len(members) != 5 || !bytes.HasPrefix(written, []byte(`{"type":"revocation_record",`)) || !bytes.Equal(got.RevokedCertificates, trip.RevokedCertificates) {
-		t.Errorf("the record served has %d members, want its type first, then identity and revocation, then the revocation of certificates and its signature: %s", len(members), shown.body)
+	if written, members := recordOf(t, shown); len(members) != 3 || !bytes.HasPrefix(written, []byte(`{"type":"revocation_record",`)) {
+		t.Errorf("the record served has %d members, want its type first, then identity and revocation: %s", len(members), shown.body)
 	}
 
 	// The clients meet it and check it for themselves.

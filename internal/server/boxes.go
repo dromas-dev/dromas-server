@@ -45,9 +45,8 @@ const hintDocument = "the identity document is \"dromas-v1\", LF, one SSH public
 // for them.
 //
 // A registration is held to what is kept of the address, mailbox or none: 410
-// while the address is revoked, nothing by a signer its identity's
-// revocation of certificates covers, and a certificate only once that
-// revocation, the trip, is held (trip).
+// while the address is revoked, and nothing under a certificate its
+// identity's revocation of certificates covers.
 func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 	h, err := pathAddr(r)
 	if err != nil {
@@ -111,23 +110,15 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 		return s.registered(w, r, id, cur, &req, false)
 	}
 	// A registration that would make a mailbox: the counts kept here bound the
-	// signatures and the pass that follow, which reserve no miss of their own;
-	// the read of the store for the trip, which may follow, reserves one.
+	// signatures and the pass that follow, which reserve no miss of their own.
 	g.keep()
 	p, signer, err := s.checkPrekey(id, req.Prekey, req.PrekeySignature, [32]byte{})
 	if err != nil {
 		return err
 	}
-	// The mode (PROTOCOL.md §5), before the pass: a signer the revocation of
-	// certificates held covers, the identity among them once one is, and a
-	// certificate while none is held, which a read of the store decides.
-	if cur, err = s.trip(r, h, cur, signer); err != nil {
-		return err
-	}
-	if cur != nil { // its identity's revocation of certificates, with no mailbox, or what the store's read for the trip found
-		if cur.State == Revoked {
-			return revokedWith(cur)
-		}
+	// A certificate the revocation of certificates held covers, before the
+	// pass (PROTOCOL.md §11.7 step 6). It covers certificates only.
+	if cur != nil { // an address with no mailbox whose identity revoked certificates
 		if listed, err := cur.listed(signer.Rank()); err != nil {
 			return err
 		} else if listed {
@@ -191,59 +182,11 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 	return busy
 }
 
-// statementRevoked is the answer to a prekey statement signed by a signer the
-// address's revocation of certificates covers (PROTOCOL.md §10.2): a
-// certificate at or below it, or the identity, once one is held.
+// statementRevoked is the answer to a prekey statement under a certificate the
+// address's revocation of certificates covers (PROTOCOL.md §10.2): one at or
+// below it.
 func statementRevoked() *problem {
-	return fail(protocol.CodeCertificateRevoked, "certify a new working key above the revocation of certificates: dromas prekey renew", "the statement is signed by a signer this address's revocation of certificates covers")
-}
-
-// identityMode is the answer to a statement under a certificate on an address
-// in identity mode: one whose revocation of certificates, the trip, the
-// server does not hold (PROTOCOL.md §11.7).
-func identityMode() *problem {
-	return fail(protocol.CodeIdentityMode, "publish the address's revocation of certificates first, then this statement again: dromas does this", "this address is in identity mode: no revocation of its certificates is held here, and no certificate is taken without one")
-}
-
-// trip holds the signer of a statement of address a to the address's mode
-// before its pass is checked (PROTOCOL.md §5, §11.7): a certificate is taken
-// only while the server holds the address's revocation of certificates,
-// the trip. held is what is held of the address, nil for nothing. The
-// identity, and a certificate on an address held tripped, pass as they are:
-// whether the revocation covers a signer is the caller's (listed).
-//
-// A certificate on an address memory holds no trip of is refused only after
-// one read of the store, strongly consistent (Store.Reread), made once the
-// statement's signature has verified: the trip's 200 may have come from
-// another process, whose write this one's memory has not seen yet. The read
-// reserves one of the caller's address's misses, kept if the trip is not
-// there, so the read is not free to a caller who sends statements its
-// address's mode refuses. It returns what is held of the address, that read's
-// where it was made.
-func (s *Server) trip(r *http.Request, a protocol.Address, held *Mailbox, signer *protocol.Signer) (*Mailbox, error) {
-	if signer.Certificate() == nil || held.tripped() {
-		return held, nil
-	}
-	m, err := s.miss(r)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { m.release(s.now()) }() // settled below, but for a panic
-	read, cancel := bounded(r.Context())
-	fresh, err := s.store.Reread(read, a)
-	cancel()
-	switch {
-	case errors.Is(err, ErrNotFound):
-		fresh = nil
-	case err != nil:
-		return nil, err
-	}
-	if !fresh.tripped() {
-		m.keep()
-		return nil, identityMode()
-	}
-	m.release(s.now())
-	return fresh, nil
+	return fail(protocol.CodeCertificateRevoked, "certify a new working key above the revocation of certificates: dromas prekey renew", "the statement is signed under a certificate this address's revocation of certificates covers")
 }
 
 // settled reports whether what is held of an address answers a registration
@@ -285,7 +228,7 @@ func (s *Server) registered(w http.ResponseWriter, r *http.Request, id *protocol
 			return err
 		}
 	} else {
-		if err := s.checkPass(r, cur.Addr, key, cur.Signer, cur.Rank, nil); err != nil {
+		if err := s.checkPass(r, cur.Addr, key, cur.Signer, cur.Rank, false, nil); err != nil {
 			return err
 		}
 		// The mailbox's calls, with whatever its account lifts, read from the
@@ -336,7 +279,8 @@ func (s *Server) take(b *Mailbox, id *protocol.Identity, statement, sig []byte, 
 // made (protocol.VerifyPrekey), and one that could be published now, not
 // expired and ending at most protocol.MaxPrekeyLifetime from now, which is an
 // hour past what a client asks for. It returns the signer too: holding it to
-// the address's mode is the caller's.
+// the revocation of certificates held, and to the mailbox's order, is the
+// caller's.
 //
 // A certificate is held to the sanity refusals, each exact at this server's
 // clock (PROTOCOL.md §11.7): begun, not ended, and, unless its hash is
@@ -382,17 +326,17 @@ func (s *Server) checkPrekey(id *protocol.Identity, statement, sig []byte, curre
 
 // prekey is PUT /v1/<address>/prekey (PROTOCOL.md §11.9). The authority is a
 // statement ordered after the current one, signed by the identity or under a
-// certificate of the identity, with a pass by that same signer: no pass by
-// the mailbox's current one is needed, which is how a mailbox that lost its
-// working key comes back. The statement is held to the address's mode
-// (trip): its first under a certificate is taken only once the server holds
-// the address's revocation of certificates.
+// certificate of the identity, with a pass by that same signer or by the
+// identity: no pass by the mailbox's current one is needed, which is how a
+// mailbox that lost its working key comes back, and how a mailbox moves to
+// its first certificate.
 //
 // A mailbox's statements are ordered by their signer's rank first, 0 for the
 // identity and a certificate's serial for a working key, and by their own
-// serial second (PROTOCOL.md §5). So a prekey published at the highest
-// serial there is, by whoever took a working key, holds nothing: the
-// mailbox's next certificate passes it.
+// serial second (PROTOCOL.md §5.3), so they are one way: once a statement
+// under a certificate is taken, one the identity signs stands below it and is
+// refused. A prekey published at the highest serial there is, by whoever took
+// a working key, holds nothing: the mailbox's next certificate passes it.
 //
 // What could not be taken even if it verified is refused before any
 // signature is checked: the statement's place in that order is read from it
@@ -440,7 +384,7 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 		} else if listed {
 			return refusedRevoked
 		}
-		if err := s.checkPass(r, h, key, b.Signer, b.Rank, nil); err != nil {
+		if err := s.checkPass(r, h, key, b.Signer, b.Rank, false, nil); err != nil {
 			return err
 		}
 		if err := s.spendOwner(r.Context(), h); err != nil {
@@ -493,33 +437,7 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	m.release(s.now())
-	// The mode, before the pass: the first statement under a certificate is
-	// taken only once the address's revocation of certificates is held, which
-	// a read of the store decides where memory holds none. What that read
-	// holds of the revocations is what the rest of the call is held to.
-	if held, err := s.trip(r, h, b, signer); err != nil {
-		return err
-	} else if held != b {
-		switch {
-		case held.State == Revoked:
-			return revokedWith(held)
-		case !held.open():
-			return noSuchMailbox
-		}
-		rv, err := held.revocations()
-		if err != nil {
-			return err
-		}
-		if b, err = b.withRevocations(rv); err != nil {
-			return err
-		}
-		if listed, err := b.listed(o.Rank); err != nil {
-			return err
-		} else if listed {
-			return refusedRevoked
-		}
-	}
-	if err := s.checkPass(r, h, key, signerHash(id, signer), signer.Rank(), nil); err != nil {
+	if err := s.checkPass(r, h, key, signerHash(id, signer), signer.Rank(), false, nil); err != nil {
 		return err
 	}
 	// A renewal by the mailbox's current signer counts against the mailbox's
@@ -527,12 +445,13 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 	// apart, so whoever holds the current working key and spends the
 	// renewals does not hold back the identity's. The count is read with the
 	// mailbox's calls, so a refusal of either gives the longer wait (longest).
-	// One while the revocation of certificates held covers the mailbox's
-	// current signer spends none of the mailbox's counts, its calls among
-	// them: it replaces what the identity revoked, each raise of which is
-	// counted (revoke), the trip that covers the identity among them, and
-	// whoever held the taken working key may have spent the calls before the
-	// raise (#84). It
+	// A mailbox's first certificate, after statements its identity signed, is
+	// a renewal by a later signer, and counted so. One while the revocation of
+	// certificates held covers the mailbox's current certificate spends none
+	// of the mailbox's counts, its calls among them: it replaces what the
+	// identity revoked, each raise of which is counted (revoke), and whoever
+	// held the taken working key may have spent the calls before the raise
+	// (#84). It
 	// was counted at the gate, against its address's flood budget, as every
 	// renewal is. Let's Encrypt exempts more renewals than this, from every
 	// limit: why ours differs is PRECEDENTS.md in the client repo.

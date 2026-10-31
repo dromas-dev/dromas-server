@@ -549,11 +549,6 @@ func (c *countingStore) Known(a protocol.Address) (*Mailbox, bool) { return c.s.
 
 func (c *countingStore) Begin(a protocol.Address) uint64 { return c.s.Begin(a) }
 
-func (c *countingStore) Reread(ctx context.Context, a protocol.Address) (*Mailbox, error) {
-	c.count()
-	return c.s.Reread(ctx, a)
-}
-
 func (c *countingStore) Count(ctx context.Context, mailbox protocol.Address) (int, error) {
 	return c.s.Count(ctx, mailbox)
 }
@@ -663,7 +658,7 @@ func TestPollStaysInMemory(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
-	b, c := e.mailbox(), e.workingMailbox() // c renews under a new certificate
+	b, c := e.mailbox(), e.certifiedMailbox() // c renews under a new certificate
 	cs := &countingStore{s: e.store}
 	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: cs, Limits: relaxed(), Now: e.clock.Now}).Handler()))
 	defer srv.Close()

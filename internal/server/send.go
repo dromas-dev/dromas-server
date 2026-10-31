@@ -53,10 +53,19 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 	case !sender.open():
 		return fail(protocol.CodeUnknownSender, "register your own mailbox first: dromas init", "the mailbox the pass names is not registered")
 	}
+	// Where its current certificate is revoked, only the identity's pass is
+	// taken (PROTOCOL.md §8): the pass is held to that again, a lookup in
+	// memory for the identity's pass the check above took.
 	if listed, err := sender.listed(sender.Rank); err != nil {
 		return err
 	} else if listed {
-		return listedCertificate()
+		key, err := identityWire(sender.Identity)
+		if err != nil {
+			return err
+		}
+		if err := s.checkPass(r, from, key, sender.Signer, sender.Rank, true, nil); err != nil {
+			return err
+		}
 	}
 	lim, err := s.limitsFor(ctx, sender)
 	if err != nil {
@@ -242,15 +251,14 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 	if rcpt.Prekey.Expired(now) {
 		return delivered{}, fail(protocol.CodePrekeyExpired, "the mailbox's owner must publish a new prekey (dromas prekey renew); retry later", "this mailbox's prekey has expired")
 	}
-	// A prekey by a signer the mailbox's revocation of certificates covers is
-	// one nobody may encrypt to: under a certificate at or below it, or by
-	// the identity once the address is in working-key mode. The cure is an
+	// A prekey under a certificate the mailbox's revocation of certificates
+	// covers, one at or below it, is one nobody may encrypt to. The cure is an
 	// expired prekey's: the owner publishes a new one, under a new
 	// certificate.
 	if listed, err := rcpt.listed(rcpt.Rank); err != nil {
 		return delivered{}, err
 	} else if listed {
-		return delivered{}, fail(protocol.CodePrekeyExpired, "the mailbox's owner must publish a new prekey (dromas prekey renew); retry later", "this mailbox's prekey is signed by a signer its revocation of certificates covers")
+		return delivered{}, fail(protocol.CodePrekeyExpired, "the mailbox's owner must publish a new prekey (dromas prekey renew); retry later", "this mailbox's prekey is signed under a certificate its revocation of certificates covers")
 	}
 	// A mailbox takes messages from a sender whose identity its client can verify:
 	// one on an Ed25519 key always, and otherwise what it declared with its

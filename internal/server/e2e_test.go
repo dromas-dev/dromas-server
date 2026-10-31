@@ -125,16 +125,15 @@ func (e *env) heldMailbox() *client.Mailbox {
 	return b
 }
 
-// workingMailbox makes and registers a mailbox in working-key mode, as dromas
-// init --offline does (client.Options.WorkingKey): it publishes its
-// revocation of certificates, the trip, then registers under a certificate.
-func (e *env) workingMailbox() *client.Mailbox {
+// certifiedMailbox makes and registers a mailbox under a certificate at
+// once, as dromas init --offline does (client.Options.WorkingKey).
+func (e *env) certifiedMailbox() *client.Mailbox {
 	e.t.Helper()
 	o := e.opts()
 	o.WorkingKey = true
 	b, err := client.Init(context.Background(), e.t.TempDir(), o)
 	if err != nil {
-		e.t.Fatalf("init in working-key mode: %v", err)
+		e.t.Fatalf("init under a certificate: %v", err)
 	}
 	landAll(e.t, b)
 	return b
@@ -324,17 +323,17 @@ func TestRetryGetsOriginalReceipt(t *testing.T) {
 func TestPassRefusedAfterRekey(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	// In identity mode a new prekey keeps the signer, the identity, and the
-	// pass it signed before is still the mailbox's.
+	// A mailbox its identity signs for keeps its signer at a new prekey, and
+	// the pass the identity signed before is still the mailbox's.
 	i := e.mailbox()
 	before := e.pass(i)
 	if _, err := i.Rekey(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	e.want(e.do(http.MethodGet, "/v1/"+i.Address().String()+"/messages", nil, before), http.StatusOK, "")
-	// In working-key mode a new prekey comes with a new certificate, and a
+	// A mailbox under a certificate renews with a new certificate, and a
 	// pass under the one before is not current.
-	b := e.workingMailbox()
+	b := e.certifiedMailbox()
 	receive(t, b)
 	// A pass under the certificate in use, as the mailbox signs one.
 	pass := func() string { return e.pass(b) }
