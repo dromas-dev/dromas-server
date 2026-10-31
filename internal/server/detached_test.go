@@ -125,13 +125,13 @@ func TestAWriteOutlivesItsCallersHangUp(t *testing.T) {
 	e.want(e.sendTo(to, 1, from, 1), http.StatusTooManyRequests, protocol.CodeRateLimited)
 
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
-	r.prekeyUnder(r.work[1], 2, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+	r.prekeyUnder(r.by[1], 2, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	up, _ := json.Marshal(r.upload(2))
 	hangUp("PUT", r.path("/prekey"), "application/json", up, r.pass(1))
 	if b, _ := e.store.Mailbox(ctx0, r.id.Address()); b.Prekey.Serial != 2 {
 		t.Fatalf("a renewal whose caller hung up mid-write: the mailbox is at prekey %d", b.Prekey.Serial)
 	}
-	r.prekeyUnder(r.work[1], 3, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+	r.prekeyUnder(r.by[1], 3, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(3), r.pass(1)), http.StatusTooManyRequests, protocol.CodeRateLimited)
 
 	// An ACL put whose caller hangs up while it is written still refuses

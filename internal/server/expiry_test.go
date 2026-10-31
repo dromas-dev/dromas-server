@@ -172,7 +172,7 @@ func TestASecondProcessLearnsWhatIsRevoked(t *testing.T) {
 	certs := e.raw().register(protocol.MaxPrekeyLifetime)
 	poll := func(r *raw) func() reply {
 		return func() reply {
-			return e2.do("GET", r.path("/messages"), nil, e2.passFor(r.work[1], r.id.Address(), e2.name()))
+			return e2.do("GET", r.path("/messages"), nil, e2.passFor(r.by[1], r.id.Address(), e2.name()))
 		}
 	}
 	e2.want(poll(certs)(), 200, "") // the second process holds it
@@ -261,7 +261,7 @@ func TestASecondProcessInARevocationsWindow(t *testing.T) {
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	a := r.id.Address()
 	deliver(func(Change) bool { return false })
-	poll := func() reply { return e2.do("GET", r.path("/messages"), nil, e2.passFor(r.work[1], a, e2.name())) }
+	poll := func() reply { return e2.do("GET", r.path("/messages"), nil, e2.passFor(r.by[1], a, e2.name())) }
 	e2.want(poll(), http.StatusOK, "")       // the second process holds the mailbox
 	second.cache.write(a, evicted[*Mailbox]) // and its record cache loses it
 	sig, err := protocol.SignRevocation(r.signer, a)

@@ -689,7 +689,7 @@ func concurrently(t *testing.T, e *env, l Limits, to *raw, froms []*raw, n int) 
 	}
 	var posts []post
 	for _, from := range froms {
-		pass := e2.passFor(from.work[1], from.id.Address(), e2.name())
+		pass := e2.passFor(from.by[1], from.id.Address(), e2.name())
 		for range n {
 			var ct bytes.Buffer
 			w, _ := age.Encrypt(&ct, to.keys[1].Recipient())
@@ -952,7 +952,7 @@ func TestAPanicSettlesItsReservations(t *testing.T) {
 		_ = resp.Body.Close()
 	}
 
-	call(http.MethodPut, victim.path(""), victim.registration(1), api.passFor(victim.work[1], victim.id.Address(), api.name()))
+	call(http.MethodPut, victim.path(""), victim.registration(1), api.passFor(victim.by[1], victim.id.Address(), api.name()))
 	if n := held(s.regs); n != 0 {
 		t.Errorf("after a panic in a registration's read: %d registration reservations held", n)
 	}
@@ -960,7 +960,7 @@ func TestAPanicSettlesItsReservations(t *testing.T) {
 	ct := ciphertextTo(t, owner)
 	e.want(e.do(http.MethodPost, owner.path("/messages"), owner.sealed(1, ct), victim.pass(1)), http.StatusCreated, "")
 	id := sha256.Sum256(ct)
-	call(http.MethodGet, owner.path("/messages/"+hex.EncodeToString(id[:])), nil, api.passFor(owner.work[1], owner.id.Address(), api.name()))
+	call(http.MethodGet, owner.path("/messages/"+hex.EncodeToString(id[:])), nil, api.passFor(owner.by[1], owner.id.Address(), api.name()))
 	if n := held(s.drained); n != 0 {
 		t.Errorf("after a panic in a fetch: %d drain reservations held", n)
 	}

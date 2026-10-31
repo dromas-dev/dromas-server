@@ -40,6 +40,7 @@ func versionsEnv(t *testing.T, l Limits, with ...func(*Config)) (*env, time.Time
 				{Version: "1.3", At: formatTime(start.Add(time.Hour))},
 				{Below: "1.4", At: formatTime(start.Add(2 * time.Hour))},
 			},
+			MaxCertificateLifetime: DefaultLimits().maxCertificate(),
 		}
 		if err := c.Policy.Check(); err != nil {
 			t.Fatal(err)

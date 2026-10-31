@@ -302,7 +302,7 @@ func TestALargeAnswerWrittenFirstGoesOutAfterTheDrainOfItsBody(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = conn.Close() }()
-	pass := e.passFor(to.work[1], to.id.Address(), addr)
+	pass := e.passFor(to.by[1], to.id.Address(), addr)
 	if _, err := io.WriteString(conn, "GET "+to.path("/messages/"+hex.EncodeToString(id[:]))+" HTTP/1.1\r\nHost: "+addr+"\r\nAuthorization: "+pass+"\r\nContent-Length: 1000\r\n\r\n{"); err != nil {
 		t.Fatal(err)
 	}

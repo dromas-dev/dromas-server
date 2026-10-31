@@ -121,9 +121,9 @@ func TestARefusalGivesTheLongestWait(t *testing.T) {
 
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	until := e.clock.Now().Add(protocol.PrekeyLifetime)
-	r.prekeyUnder(r.work[1], 2, until, nil)
+	r.prekeyUnder(r.by[1], 2, until, nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(2), r.pass(1)), http.StatusOK, "")
-	r.prekeyUnder(r.work[1], 3, until, nil)
+	r.prekeyUnder(r.by[1], 3, until, nil)
 	got = e.do("PUT", r.path("/prekey"), r.upload(3), r.pass(1))
 	e.limited(got, protocol.QuotaRenewals)
 	if w := waits(got); w < 23*3600 {
@@ -237,7 +237,7 @@ func TestTheFloodBudget(t *testing.T) {
 	e.limited(call(ip, "GET", protocol.LinkPath+b.id.Address().String(), nil, ""), protocol.QuotaRequests)
 	// Each of these is answered from what its body holds, from an address
 	// with its budget, and refused before its body is read from one without.
-	b.prekeyUnder(b.work[1], 2, e.clock.Now().Add(protocol.PrekeyLifetime), nil)
+	b.prekeyUnder(b.by[1], 2, e.clock.Now().Add(protocol.PrekeyLifetime), nil)
 	e.want(e.do("PUT", b.path("/prekey"), b.upload(2), b.pass(1)), http.StatusOK, "")
 	for _, c := range []struct {
 		path   string

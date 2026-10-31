@@ -324,7 +324,7 @@ func TestARetryIsAnsweredFromWhatIsKeptWhateverItWouldMakeNew(t *testing.T) {
 			var last, under uint64 // the statement the retry repeats, and its certificate
 			if slices.Contains(spent, string(protocol.QuotaRenewals)) {
 				last, under = 2, 1
-				r.prekeyUnder(r.work[1], last, until, nil)
+				r.prekeyUnder(r.by[1], last, until, nil)
 				first = call(ip, "PUT", r.path("/prekey"), r.upload(last), r.pass(under))
 			}
 			if slices.Contains(spent, string(protocol.QuotaCertificates)) && first.status < 300 {
@@ -337,7 +337,7 @@ func TestARetryIsAnsweredFromWhatIsKeptWhateverItWouldMakeNew(t *testing.T) {
 				r.prekey(5, until, nil)
 				return first, retries, func() reply { return call(ip, "PUT", r.path("/prekey"), r.upload(5), r.pass(5)) }
 			}
-			r.prekeyUnder(r.work[1], 4, until, nil) // the control: a higher serial under the same certificate
+			r.prekeyUnder(r.by[1], 4, until, nil) // the control: a higher serial under the same certificate
 			return first, retries, func() reply { return call(ip, "PUT", r.path("/prekey"), r.upload(4), r.pass(1)) }
 		}},
 		{"send", map[string]func(*Limits){

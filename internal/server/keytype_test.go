@@ -60,7 +60,7 @@ func TestAMailboxOfTheOptionalKeyType(t *testing.T) {
 	// Ed25519 mailbox signs for this address.
 	q, ed := e.rawP256().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 	e.want(e.do("GET", p.path("/messages"), nil, q.pass(1)), 401, protocol.CodeUnauthorized)
-	e.want(e.do("GET", p.path("/messages"), nil, e.passFor(ed.work[1], p.id.Address(), e.name())), 401, protocol.CodeCertificateNotCurrent)
+	e.want(e.do("GET", p.path("/messages"), nil, e.passFor(ed.by[1], p.id.Address(), e.name())), 401, protocol.CodeCertificateNotCurrent)
 
 	// A new certificate, by a prekey published under it: the old one's
 	// passes stop.

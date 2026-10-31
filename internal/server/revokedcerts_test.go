@@ -22,9 +22,11 @@ import (
 // revoked certificate, and sends nobody to a prekey under one.
 
 // certs is the revocation of r's certificates through a serial, signed by its
-// identity, in the record that carries it.
+// identity, in the record that carries it. Any one is the trip, so r signs
+// every statement after it under a certificate (raw.prekey).
 func (r *raw) certs(through uint64) protocol.Revocations {
 	r.e.t.Helper()
+	r.tripped = true
 	l, err := protocol.NewRevokedCertificates(r.id.Address(), through)
 	if err != nil {
 		r.e.t.Fatal(err)

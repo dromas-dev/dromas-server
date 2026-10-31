@@ -560,7 +560,7 @@ func TestRegistration(t *testing.T) {
 	e.want(e.do("PUT", r.path(""), reg, ""), 401, protocol.CodeUnauthorized)
 	e.want(e.do("PUT", r.path(""), reg, "Bearer drt1_abc"), 401, protocol.CodeUnauthorized)
 	e.want(e.do("PUT", r.path(""), reg, other.pass(1)), 401, protocol.CodeUnauthorized)
-	e.want(e.do("PUT", r.path(""), reg, e.passFor(r.work[1], r.id.Address(), "another.example")), 401, protocol.CodeUnauthorized)
+	e.want(e.do("PUT", r.path(""), reg, e.passFor(r.by[1], r.id.Address(), "another.example")), 401, protocol.CodeUnauthorized)
 	e.want(e.do("PUT", r.path(""), reg, e.passFor(r.certify(2), r.id.Address(), e.name())), 401, protocol.CodeCertificateNotCurrent)
 	e.clock.Add(-protocol.PassLifetime)
 	ranOut := r.pass(1)
@@ -767,7 +767,7 @@ func TestOwnerCalls(t *testing.T) {
 	// made for another server.
 	o := e.raw().register(time.Hour)
 	e.want(e.do("GET", r.path("/messages"), nil, o.pass(1)), 401, protocol.CodeUnauthorized)
-	e.want(e.do("GET", r.path("/messages"), nil, e.passFor(r.work[1], r.id.Address(), "another.example")), 401, protocol.CodeUnauthorized)
+	e.want(e.do("GET", r.path("/messages"), nil, e.passFor(r.by[1], r.id.Address(), "another.example")), 401, protocol.CodeUnauthorized)
 	// A working key the identity certified, which the server never saw a
 	// prekey under, is not the mailbox's current one.
 	e.want(e.do("GET", r.path("/messages"), nil, e.passFor(r.certify(2), r.id.Address(), e.name())), 401, protocol.CodeCertificateNotCurrent)
@@ -943,19 +943,19 @@ func TestAPassIsForOneServer(t *testing.T) {
 	t.Cleanup(e.srv.Close)
 	r := e.raw()
 	r.prekey(1, clk.Now().Add(time.Hour), nil)
-	ours := e.passFor(r.work[1], r.id.Address(), "mail.example")
-	theirs := e.passFor(r.work[1], r.id.Address(), "another.example")
+	ours := e.passFor(r.by[1], r.id.Address(), "mail.example")
+	theirs := e.passFor(r.by[1], r.id.Address(), "another.example")
 
 	// Called by a name that is not its own, the server takes no pass: not
 	// one made for that name, and not one made for its own.
 	e.want(e.doAs("another.example", "PUT", r.path(""), r.registration(1), theirs), 401, protocol.CodeUnauthorized)
 	e.want(e.doAs("another.example", "PUT", r.path(""), r.registration(1), ours), 401, protocol.CodeUnauthorized)
-	e.want(e.do("PUT", r.path(""), r.registration(1), e.passFor(r.work[1], r.id.Address(), e.name())), 401, protocol.CodeUnauthorized)
+	e.want(e.do("PUT", r.path(""), r.registration(1), e.passFor(r.by[1], r.id.Address(), e.name())), 401, protocol.CodeUnauthorized)
 	// Called by its own name: the pass made for that name, and no other.
 	e.want(e.doAs("mail.example", "PUT", r.path(""), r.registration(1), theirs), 401, protocol.CodeUnauthorized)
 	e.want(e.doAs("mail.example", "PUT", r.path(""), r.registration(1), ours), 201, "")
 	e.want(e.doAs("MAIL.example", "GET", r.path("/messages"), nil, ours), 200, "")
-	e.want(e.doAs("mail.example:8443", "GET", r.path("/messages"), nil, e.passFor(r.work[1], r.id.Address(), "mail.example:8443")), 200, "")
+	e.want(e.doAs("mail.example:8443", "GET", r.path("/messages"), nil, e.passFor(r.by[1], r.id.Address(), "mail.example:8443")), 200, "")
 	e.want(e.doAs("mail.example", "GET", r.path("/messages"), nil, theirs), 401, protocol.CodeUnauthorized)
 	// A pass the server has taken is taken again only as that pass: the
 	// same mailbox's pass for another server stays refused.
@@ -980,7 +980,7 @@ func TestTheServerReadsItsHostAsAnOrigin(t *testing.T) {
 	r.prekey(1, clk.Now().Add(time.Hour), nil)
 	pass := func(name string) string {
 		clk.Add(time.Second)
-		return e.passFor(r.work[1], r.id.Address(), name)
+		return e.passFor(r.by[1], r.id.Address(), name)
 	}
 	// A pass that names the default port is not for the name the server
 	// writes, which leaves it out.

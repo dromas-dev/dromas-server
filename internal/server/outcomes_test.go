@@ -468,12 +468,12 @@ func TestARenewalTheStoreMayHaveAppliedIsCounted(t *testing.T) {
 			s := &overFake{t: t, dynamo: scripted("UpdateItem", c.answers...)}
 			e := newEnv(t, l, func(cfg *Config) { s.Store, cfg.Store = cfg.Store, s })
 			r := e.raw().register(protocol.MaxPrekeyLifetime)
-			r.prekeyUnder(r.work[1], 2, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+			r.prekeyUnder(r.by[1], 2, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 			s.armed.Store(true)
 			first := e.do("PUT", r.path("/prekey"), r.upload(2), r.pass(1))
 			b, _ := e.store.Mailbox(t.Context(), r.id.Address())
 			again := e.do("PUT", r.path("/prekey"), r.upload(2), r.pass(1))
-			r.prekeyUnder(r.work[1], 3, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+			r.prekeyUnder(r.by[1], 3, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 			next := e.do("PUT", r.path("/prekey"), r.upload(3), r.pass(1))
 			t.Logf("renewal %d %s, the mailbox at prekey %d; identical retry %d; next renewal %d %s", first.status, first.code(), b.Prekey.Serial, again.status, next.status, next.code())
 			if next.status != http.StatusTooManyRequests {
