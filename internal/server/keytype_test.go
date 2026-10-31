@@ -38,13 +38,13 @@ func (e *env) rawP256() *raw {
 		e.t.Fatal(err)
 	}
 	return &raw{e: e, signer: s, id: id, keys: map[uint64]*age.HybridIdentity{}, stmt: map[uint64][]byte{}, sig: map[uint64][]byte{},
-		work: map[uint64]ssh.Signer{}}
+		by: map[uint64]ssh.Signer{}, work: map[uint64]ssh.Signer{}}
 }
 
 // A mailbox whose identity is of the optional type registers, proves itself with
-// a pass, and moves to a new certificate, as a mailbox on an Ed25519 key does:
-// the server checks the identity's signature when a certificate is put on
-// record, and a pass against that certificate after.
+// a pass, makes the trip and moves to a certificate, as a mailbox on an
+// Ed25519 key does: the server checks the identity's signature when a
+// certificate is put on record, and a pass against that certificate after.
 func TestAMailboxOfTheOptionalKeyType(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
@@ -62,11 +62,12 @@ func TestAMailboxOfTheOptionalKeyType(t *testing.T) {
 	e.want(e.do("GET", p.path("/messages"), nil, q.pass(1)), 401, protocol.CodeUnauthorized)
 	e.want(e.do("GET", p.path("/messages"), nil, e.passFor(ed.by[1], p.id.Address(), e.name())), 401, protocol.CodeCertificateNotCurrent)
 
-	// A new certificate, by a prekey published under it: the old one's
-	// passes stop.
+	// The trip, then a certificate, by a prekey published under it: the
+	// identity's passes stop.
+	p.trip()
 	p.prekey(2, now.Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", p.path("/prekey"), p.upload(2), p.pass(2)), 200, "")
-	e.want(e.do("GET", p.path("/messages"), nil, p.pass(1)), 401, protocol.CodeCertificateNotCurrent)
+	e.want(e.do("GET", p.path("/messages"), nil, p.pass(1)), 401, protocol.CodeCertificateRevoked)
 	e.want(e.do("GET", p.path("/messages"), nil, p.pass(2)), 200, "")
 
 	// A certificate another P-256 key signed for this address is no
@@ -93,25 +94,40 @@ func TestAMailboxOfTheOptionalKeyType(t *testing.T) {
 	e.want(e.do("PUT", p.path("/prekey"), p.upload(3), e.passFor(under, p.id.Address(), e.name())), 400, protocol.CodeBadKey)
 }
 
-// A pass's signature does not cover the certificate it names, and a mailbox's
-// certificate is public: it rides in everything the mailbox signs. So anyone can
-// put a mailbox's certificate into a pass they signed with a key of their own.
-// The hash matches, and the signature is what refuses it.
+// A pass's signature does not cover the key it names, and a mailbox's signing
+// key is public: its identity's key, or its certificate, rides in everything
+// the mailbox signs. So anyone can put a mailbox's signing key into a pass
+// they signed with a key of their own. The hash matches, and the signature
+// is what refuses it, in either mode.
 func TestAPassThatCarriesAnotherMailboxsCertificate(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	for name, victim := range map[string]*raw{"ssh-ed25519": e.raw(), "ecdsa-sha2-nistp256": e.rawP256()} {
-		victim.register(protocol.MaxPrekeyLifetime)
-		thief := e.raw().register(protocol.MaxPrekeyLifetime)
-		a := victim.id.Address()
-		notAfter := e.clock.Now().Add(protocol.PassLifetime)
-		pass := passCarrying(t, victim.work[1].PublicKey(), thief.work[1], a, e.name(), notAfter)
-		if _, err := protocol.ParsePass(pass); err != nil {
-			t.Fatalf("%s: the forged pass does not parse: %v", name, err)
+		for _, working := range []bool{false, true} {
+			victim := victim
+			if working {
+				victim = e.raw()
+				if name != "ssh-ed25519" {
+					victim = e.rawP256()
+				}
+			}
+			serial := uint64(1)
+			if working {
+				serial = victim.registerWorking(protocol.MaxPrekeyLifetime)
+			} else {
+				victim.register(protocol.MaxPrekeyLifetime)
+			}
+			thief := e.raw().register(protocol.MaxPrekeyLifetime)
+			a := victim.id.Address()
+			notAfter := e.clock.Now().Add(protocol.PassLifetime)
+			pass := passCarrying(t, victim.by[serial].PublicKey(), thief.by[1], a, e.name(), notAfter)
+			if _, err := protocol.ParsePass(pass); err != nil {
+				t.Fatalf("%s, working-key mode %v: the forged pass does not parse: %v", name, working, err)
+			}
+			e.want(e.do("GET", victim.path("/messages"), nil, pass), 401, protocol.CodeUnauthorized)
+			// Control: the victim's own pass, by the same signer, is taken.
+			e.want(e.do("GET", victim.path("/messages"), nil, victim.pass(serial)), 200, "")
 		}
-		e.want(e.do("GET", victim.path("/messages"), nil, pass), 401, protocol.CodeUnauthorized)
-		// Control: the victim's own pass, under the same certificate, is taken.
-		e.want(e.do("GET", victim.path("/messages"), nil, victim.pass(1)), 200, "")
 	}
 }
 
@@ -126,7 +142,7 @@ func TestACertificateOnRecordThatTheIdentityDidNotSign(t *testing.T) {
 	ctx := context.Background()
 	now := e.clock.Now()
 	for name, victim := range map[string]*raw{"ssh-ed25519": e.raw(), "ecdsa-sha2-nistp256": e.rawP256()} {
-		victim.register(protocol.MaxPrekeyLifetime)
+		serial := victim.registerWorking(protocol.MaxPrekeyLifetime)
 		a := victim.id.Address()
 		// A certificate for this address, in every rule, that another key signed.
 		_, wpriv, err := ed25519.GenerateKey(rand.Reader)
@@ -138,7 +154,7 @@ func TestACertificateOnRecordThatTheIdentityDidNotSign(t *testing.T) {
 			t.Fatal(err)
 		}
 		unix := uint64(now.Unix()) //nolint:gosec // a test clock
-		c := &ssh.Certificate{Key: work.PublicKey(), Serial: 1, CertType: ssh.UserCert, KeyId: protocol.CertificateKeyID,
+		c := &ssh.Certificate{Key: work.PublicKey(), Serial: serial, CertType: ssh.UserCert, KeyId: protocol.CertificateKeyID,
 			ValidPrincipals: []string{a.String()}, ValidAfter: unix - 60, ValidBefore: unix + 65*86400}
 		if err := c.SignCert(rand.Reader, e.raw().signer); err != nil {
 			t.Fatal(err)
@@ -169,8 +185,29 @@ func TestACertificateOnRecordThatTheIdentityDidNotSign(t *testing.T) {
 		}
 		// And the mailbox's own pass, under the certificate its identity did
 		// sign, is no longer under the one on record.
-		e.wantNotCurrent(e.do("GET", victim.path("/messages"), nil, victim.pass(1)), b.Rank)
+		e.wantNotCurrent(e.do("GET", victim.path("/messages"), nil, victim.pass(serial)), b.Rank)
 	}
+	// In identity mode the signer on record is the identity's key: a record
+	// that holds the hash of another bare key gives no pass by that key, and
+	// the refusal names no certificate.
+	victim := e.raw().register(protocol.MaxPrekeyLifetime)
+	b, err := e.store.Mailbox(ctx, victim.id.Address())
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := e.raw().signer
+	b.Signer = sha256.Sum256(other.PublicKey().Marshal())
+	if err := e.store.UpdateMailbox(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	pass := e.passFor(other, victim.id.Address(), e.name())
+	if p, err := protocol.ParsePass(pass); err != nil {
+		t.Fatal(err)
+	} else if _, err := p.VerifyUnder(b.Signer, e.name(), now); err != nil {
+		t.Errorf("identity mode: control: the hash or the signature refused it: %v", err)
+	}
+	e.wantNotCurrent(e.do("GET", victim.path("/messages"), nil, pass), 0)
+	e.wantNotCurrent(e.do("GET", victim.path("/messages"), nil, victim.pass(1)), 0)
 }
 
 // A pass the server remembers is taken until it runs out, and never past the
@@ -180,7 +217,7 @@ func TestARememberedPassEndsWithItsCertificate(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	now := e.clock.Now()
-	r := e.raw()
+	r := e.raw().trip()
 	_, wpriv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -190,17 +227,16 @@ func TestARememberedPassEndsWithItsCertificate(t *testing.T) {
 		t.Fatal(err)
 	}
 	unix := uint64(now.Unix()) //nolint:gosec // a test clock
-	// A certificate with five minutes left, begun the ten minutes a server
-	// asks of one, and a prekey that ends with it.
-	c := &ssh.Certificate{Key: work.PublicKey(), Serial: 1, CertType: ssh.UserCert, KeyId: protocol.CertificateKeyID,
+	// A certificate with five minutes left, and a prekey that ends with it.
+	c := &ssh.Certificate{Key: work.PublicKey(), Serial: 2, CertType: ssh.UserCert, KeyId: protocol.CertificateKeyID,
 		ValidPrincipals: []string{r.id.Address().String()}, ValidAfter: unix - uint64(protocol.PassLifetime/time.Second), ValidBefore: unix + 300}
 	if err := c.SignCert(rand.Reader, r.signer); err != nil {
 		t.Fatal(err)
 	}
-	if r.work[1], err = ssh.NewCertSigner(c, work); err != nil {
+	if r.work[2], err = ssh.NewCertSigner(c, work); err != nil {
 		t.Fatal(err)
 	}
-	r.prekeyUnder(r.work[1], 1, now.Add(5*time.Minute), nil)
+	r.prekeyUnder(r.work[2], 1, now.Add(5*time.Minute), nil)
 	e.want(e.do("PUT", r.path(""), r.registration(1), r.pass(1)), 201, "")
 	pass := r.pass(1) // good for ten minutes: five past the certificate's end
 	e.want(e.do("GET", r.path("/messages"), nil, pass), 200, "")
