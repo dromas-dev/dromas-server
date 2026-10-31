@@ -2,10 +2,12 @@ package server
 
 import (
 	"bytes"
+	"crypto/elliptic"
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +21,7 @@ import (
 
 	"github.com/dromas-dev/dromas-client/api/apitest"
 	"github.com/dromas-dev/dromas-client/protocol"
+	"golang.org/x/crypto/ssh"
 )
 
 // recorded is a request body that records whether anything read it, and
@@ -76,7 +79,8 @@ func moved(before, after map[string]float64) map[string]float64 {
 var passSignature = regexp.MustCompile(`signature="([^"]*)"`)
 
 // respelled is pass with a space put in its signature's armor, after the
-// BEGIN line: one pass to a verifier, another value to a hash.
+// BEGIN line: a value no process has checked, which is no pass of the
+// mailbox's.
 func respelled(t *testing.T, pass string) string {
 	t.Helper()
 	armored, err := base64.StdEncoding.DecodeString(passSignature.FindStringSubmatch(pass)[1])
@@ -359,20 +363,25 @@ func TestANewPassSpendsItsAddresssFloodBudget(t *testing.T) {
 	e.limited(call(other, "GET", "/v1/"+c.Address().String()+"/messages", nil, first), protocol.QuotaRequests)
 }
 
-// One pass written another way that OpenSSH reads as the same signature is
-// that one pass to the server: answered from memory, with no second check
-// of its signatures, however its armor is spaced and however its SSHSIG blob
-// writes its version, a NUL after its namespace or its reserved field,
-// which nothing signs (dromas-dev/dromas-server#69). A signature that
-// differs in a bit is checked, and refused.
-func TestARespelledPassCostsNoSecondCheck(t *testing.T) {
+// A pass's signature has one form (PROTOCOL.md §3.2): a pass written in any
+// other, a space or a CR in its armor, text after its END line, its base64 on
+// one line, SSHSIG version 0, a NUL after its namespace or a byte in its
+// reserved field, is no pass of the mailbox's, however OpenSSH reads it; a
+// signature that differs in a bit is refused too. A P-256 signature's other
+// s, n − s, is a signature ECDSA takes, and the same pass to the server:
+// remembered by protocol.Pass.Authorization, which writes s low, it is
+// answered from memory, with no second check of its signature.
+func TestAPassHasOneFormAndBothValuesOfS(t *testing.T) {
 	t.Parallel()
 	e, m, _ := metered(t, relaxed())
+	checked := m.passes.WithLabelValues("checked", "")
 	b := e.mailbox()
-	poll := func(auth string) reply { return e.do("GET", "/v1/"+b.Address().String()+"/messages", nil, auth) }
+	poll := func(a protocol.Address, auth string) reply {
+		return e.do("GET", "/v1/"+a.String()+"/messages", nil, auth)
+	}
 	e.clock.Add(time.Second) // not the pass the registration showed
 	pass := e.pass(b)
-	e.want(poll(pass), http.StatusOK, "")
+	e.want(poll(b.Address(), pass), http.StatusOK, "")
 	armored, err := base64.StdEncoding.DecodeString(passSignature.FindStringSubmatch(pass)[1])
 	if err != nil {
 		t.Fatal(err)
@@ -404,34 +413,83 @@ func TestARespelledPassCostsNoSecondCheck(t *testing.T) {
 		}
 		return protocol.Armor(out)
 	}
-	with := func(a []byte) string {
+	with := func(pass string, a []byte) string {
 		return passSignature.ReplaceAllLiteralString(pass, `signature="`+base64.StdEncoding.EncodeToString(a)+`"`)
 	}
 	forms := map[string][]byte{
 		"CRLF after the BEGIN line":    bytes.Replace(armored, []byte("-----\n"), []byte("-----\r\n"), 1),
 		"text after the END line":      append(append([]byte{}, armored...), "anything"...),
 		"a tab inside the base64":      bytes.Replace(armored, []byte("-----\n"), []byte("-----\n\t"), 1),
+		"a space inside the base64":    bytes.Replace(armored, []byte("-----\n"), []byte("-----\n "), 1),
 		"a NUL before the END line":    bytes.Replace(armored, []byte("\n-----END"), []byte("\x00\n-----END"), 1),
 		"the base64 on one line":       []byte("-----BEGIN SSH SIGNATURE-----\n" + base64.StdEncoding.EncodeToString(blob) + "\n-----END SSH SIGNATURE-----\n"),
 		"SSHSIG version 0":             rewrite(0, false, nil),
 		"a NUL ending the namespace":   rewrite(1, true, nil),
 		"a byte in the reserved field": rewrite(1, false, []byte{'x'}),
 	}
-	at := bytes.IndexByte(armored, '\n') + 1
-	for i := 0; i < 40; i++ {
-		forms[fmt.Sprintf("a space after byte %d of the base64", i)] = append(append(append([]byte{}, armored[:at+i]...), ' '), armored[at+i:]...)
-	}
-	checked := m.passes.WithLabelValues("checked", "")
-	before := testutil.ToFloat64(checked)
-	for name, a := range forms {
-		if r := poll(with(a)); r.status != http.StatusOK {
-			t.Errorf("%s: %d %s", name, r.status, r.body)
-		}
-	}
-	if n := testutil.ToFloat64(checked) - before; n != 0 {
-		t.Errorf("%d ways of writing one pass: %v checked again", len(forms), n)
-	}
 	flipped := append([]byte{}, blob...)
 	flipped[len(flipped)-1] ^= 1
-	e.want(poll(with(protocol.Armor(flipped))), http.StatusUnauthorized, protocol.CodeUnauthorized)
+	forms["a bit flipped in the signature"] = protocol.Armor(flipped)
+	for name, a := range forms {
+		if r := poll(b.Address(), with(pass, a)); r.status != http.StatusUnauthorized || r.code() != protocol.CodeUnauthorized {
+			t.Errorf("%s: %d %s, want 401 unauthorized", name, r.status, r.body)
+		}
+	}
+
+	// A P-256 identity's pass with its other s: one pass, from memory.
+	p := e.rawP256().register(protocol.MaxPrekeyLifetime)
+	first := p.pass(1)
+	e.want(poll(p.id.Address(), first), http.StatusOK, "")
+	before := testutil.ToFloat64(checked)
+	other := with(first, otherS(t, first))
+	if other == first {
+		t.Fatal("the other s wrote the same pass")
+	}
+	e.want(poll(p.id.Address(), other), http.StatusOK, "")
+	if n := testutil.ToFloat64(checked) - before; n != 0 {
+		t.Errorf("a P-256 pass with its other s: checked %v times more, want none", n)
+	}
+	if a, err := protocol.ParsePass(first); err != nil {
+		t.Fatal(err)
+	} else if o, err := protocol.ParsePass(other); err != nil || o.Authorization() != a.Authorization() {
+		t.Errorf("a P-256 pass and the same pass with its other s are two in memory: %v", err)
+	}
+}
+
+// otherS is the armored signature of a P-256 pass with (r, n − s) in place of
+// its (r, s): the other signature ECDSA takes of the same message.
+func otherS(t *testing.T, pass string) []byte {
+	t.Helper()
+	armored, err := base64.StdEncoding.DecodeString(passSignature.FindStringSubmatch(pass)[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := protocol.Dearmor(armored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sig struct {
+		Magic     [6]byte
+		Version   uint32
+		Key       []byte
+		Namespace string
+		Reserved  []byte
+		Hash      string
+		Signature []byte
+	}
+	if err := ssh.Unmarshal(blob, &sig); err != nil {
+		t.Fatal(err)
+	}
+	var s ssh.Signature
+	if err := ssh.Unmarshal(sig.Signature, &s); err != nil {
+		t.Fatal(err)
+	}
+	var rs struct{ R, S *big.Int }
+	if err := ssh.Unmarshal(s.Blob, &rs); err != nil {
+		t.Fatal(err)
+	}
+	rs.S = new(big.Int).Sub(elliptic.P256().Params().N, rs.S)
+	s.Blob = ssh.Marshal(rs)
+	sig.Signature = ssh.Marshal(s)
+	return protocol.Armor(ssh.Marshal(sig))
 }
