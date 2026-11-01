@@ -170,8 +170,9 @@ func TestTheRecordAndTheRevocationsAreTwoItems(t *testing.T) {
 }
 
 // A second process that holds a mailbox learns from the stream what another
-// wrote: a revocation of the mailbox's certificates, and the revocation of its
-// address, each answered from its memory once it arrives. AWS only.
+// wrote: a revocation of the mailbox's certificates, after which it still
+// takes the identity's pass, and the revocation of its address, each answered
+// from its memory once it arrives. AWS only.
 func TestASecondProcessLearnsWhatIsRevoked(t *testing.T) {
 	t.Parallel()
 	e, _ := dynamoEnv(t)
@@ -193,7 +194,7 @@ func TestASecondProcessLearnsWhatIsRevoked(t *testing.T) {
 		t.Fatalf("%s: the second process answers %d %s, want %d %s", what, r.status, r.code(), status, code)
 	}
 
-	certs := e.raw().register(protocol.MaxPrekeyLifetime)
+	certs := e.raw().certified().register(protocol.MaxPrekeyLifetime)
 	poll := func(r *raw) func() reply {
 		return func() reply {
 			return e2.do("GET", r.path("/messages"), nil, e2.passFor(r.by[1], r.id.Address(), e2.name()))
@@ -202,6 +203,7 @@ func TestASecondProcessLearnsWhatIsRevoked(t *testing.T) {
 	e2.want(poll(certs)(), 200, "") // the second process holds it
 	e.want(e.do("PUT", certs.path("/revocations"), certs.certs(1), ""), 200, "")
 	within("the mailbox's certificate revoked", poll(certs), 401, protocol.CodeCertificateRevoked)
+	e2.want(e2.do("GET", certs.path("/messages"), nil, e2.passFor(certs.signer, certs.id.Address(), e2.name())), 200, "")
 
 	revoked := e.raw().register(protocol.MaxPrekeyLifetime)
 	e2.want(poll(revoked)(), 200, "")

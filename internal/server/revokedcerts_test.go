@@ -414,11 +414,12 @@ func TestAPrekeyAtTheHighestSerialDoesNotEndTheAddress(t *testing.T) {
 // The revocation of certificates is in the mailbox's record, so a process that
 // starts later serves the same one and refuses the same pass: nothing about a
 // revoked certificate lives only in the memory of the process that took the
-// revocation. AWS only: the in-memory store has one process.
+// revocation. It takes the identity's pass, which no revocation of
+// certificates covers. AWS only: the in-memory store has one process.
 func TestARevocationOfCertificatesOutlivesTheProcess(t *testing.T) {
 	t.Parallel()
 	e, _ := dynamoEnv(t)
-	r := e.raw().register(protocol.MaxPrekeyLifetime)
+	r := e.raw().certified().register(protocol.MaxPrekeyLifetime)
 	rec := r.certs(1)
 	e.want(e.do("PUT", r.path("/revocations"), rec, ""), 200, "")
 
@@ -429,6 +430,7 @@ func TestARevocationOfCertificatesOutlivesTheProcess(t *testing.T) {
 	r2 := *r
 	r2.e = e2
 	e2.want(e2.do("GET", r.path("/messages"), nil, r2.pass(1)), 401, protocol.CodeCertificateRevoked)
+	e2.want(e2.do("GET", r.path("/messages"), nil, e2.passFor(r.signer, r.id.Address(), e2.name())), 200, "")
 	shown := e2.do("GET", r.path(""), nil, "")
 	e2.want(shown, 200, "")
 	got := held(t, shown)

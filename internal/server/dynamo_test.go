@@ -307,7 +307,7 @@ func TestTwoProcesses(t *testing.T) {
 	t.Cleanup(srv2.Close)
 	e2 := &env{t: t, clock: e.clock, store: other, srv: srv2}
 
-	a, b := e.mailbox(), e.mailbox()
+	a, b := e.mailbox(), e.certifiedMailbox() // b renews under a new certificate
 	tok := func() string { return e2.pass(b) }
 	waitFor := func(what string, ok func() bool) time.Duration {
 		t.Helper()
@@ -363,7 +363,7 @@ func TestTwoProcesses(t *testing.T) {
 
 	// A new prekey comes under a new certificate: the other process, which
 	// took the old pass a moment ago, refuses it from memory once the stream
-	// brings the change.
+	// brings the change, and takes the identity's pass, as always.
 	old := tok()
 	if r := e2.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages", nil, old); r.status != http.StatusOK {
 		t.Fatalf("the pass before the renewal, on the other process: %d %s", r.status, r.body)
@@ -384,6 +384,9 @@ func TestTwoProcesses(t *testing.T) {
 	}
 	if r := e2.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages", nil, tok()); r.status != http.StatusOK {
 		t.Fatalf("the new pass on the other process: %d %s", r.status, r.body)
+	}
+	if r := e2.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages", nil, e2.passFor(signer(t, b), b.Address(), e2.name())); r.status != http.StatusOK {
+		t.Fatalf("the identity's pass on the other process: %d %s", r.status, r.body)
 	}
 }
 
