@@ -203,7 +203,7 @@ func TestEveryRouteEvaluatesItsPreconditions(t *testing.T) {
 			e.want(e.do("GET", c.path, nil, c.pass), http.StatusOK, "")
 		}},
 		{name: "the link page", exists: true, ok: 200, setup: func(*env) call {
-			return call{"GET", protocol.LinkPath + strings.Repeat("ab", 38) + "a", nil, ""}
+			return call{"GET", protocol.LinkPath + "d_" + strings.Repeat("ab", 32), nil, ""}
 		}},
 	}
 	for _, c := range cases {

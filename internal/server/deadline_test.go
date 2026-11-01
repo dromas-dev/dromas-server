@@ -106,7 +106,7 @@ func closesWithin(conn net.Conn, d time.Duration) (bool, string) {
 // (dromas-dev/dromas-client#413 item 3).
 func TestABodyThatStopsIsCutBehindEveryAnswer(t *testing.T) {
 	t.Parallel()
-	nobody := strings.Repeat("ab", 38) + "a"
+	nobody := "d_" + strings.Repeat("ab", 32)
 	cases := []struct {
 		name    string
 		limits  func(*Limits)
@@ -178,7 +178,7 @@ func TestABodyThatStopsIsCutBehindEveryAnswer(t *testing.T) {
 // error for the trailer is not the deadline's.
 func TestAChunkedBodyCutInItsTrailerIs408(t *testing.T) {
 	t.Parallel()
-	nobody := strings.Repeat("ab", 38) + "a"
+	nobody := "d_" + strings.Repeat("ab", 32)
 	head := "PUT /v1/" + nobody + " HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n"
 	for _, c := range []struct{ name, req string }{
 		{"stops in a chunk's data (control)", head + "a\r\n{\"x"},
@@ -223,7 +223,7 @@ func TestAnAnswerWrittenFirstOutlivesTheDrainOfItsBody(t *testing.T) {
 	if testing.Short() {
 		t.Skip("long: -short skips it; scripts/check.sh full and CI run it")
 	}
-	nobody := strings.Repeat("ab", 38) + "a"
+	nobody := "d_" + strings.Repeat("ab", 32)
 	cases := []struct {
 		name   string
 		limits func(*Limits)
@@ -375,7 +375,7 @@ func trickle(t *testing.T, addr, head string, size, rate int) (status string, at
 // closed (dromas-dev/dromas-client#413 item 3).
 func TestABodyTheServerWouldNotDrainIsNotRead(t *testing.T) {
 	t.Parallel()
-	nobody := strings.Repeat("ab", 38) + "a"
+	nobody := "d_" + strings.Repeat("ab", 32)
 	for _, c := range []struct{ name, head, body string }{
 		{"its request asks to close", "Connection: close\r\nContent-Length: 1000\r\n", "{"},
 		{"it waits for 100 Continue", "Expect: 100-continue\r\nContent-Length: 1000\r\n", ""},
@@ -474,7 +474,7 @@ func TestAnAnswerNeverReadIsCut(t *testing.T) {
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	pass := r.pass(1)
 	tag := e.do("GET", r.path("/messages"), nil, pass).header.Get("ETag")
-	nobody := strings.Repeat("ab", 38) + "a"
+	nobody := "d_" + strings.Repeat("ab", 32)
 	cases := []struct {
 		name, req string
 		once      bool
@@ -620,7 +620,7 @@ func TestAPacedBodysDeadlineEndsWithTheBody(t *testing.T) {
 		_ = resp.Body.Close()
 		return resp.StatusCode
 	}
-	nobody := "/v1/" + strings.Repeat("ab", 38) + "a"
+	nobody := "/v1/" + "d_" + strings.Repeat("ab", 32)
 	if got := do("GET", nobody, ""); got != http.StatusNotFound {
 		t.Fatalf("before: %d", got)
 	}

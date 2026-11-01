@@ -110,7 +110,7 @@ func TestMetricsCarryNoCallerValue(t *testing.T) {
 	e.want(e.do("GET", to+"/messages/"+id, nil, e.pass(b)), http.StatusOK, "")
 	call := e.caller()
 	for range 4 { // past the address's flood budget
-		call("203.0.113.77", "GET", "/v1/"+strings.Repeat("e", 77), nil, "")
+		call("203.0.113.77", "GET", "/v1/"+"d_"+strings.Repeat("e", 64), nil, "")
 		call("203.0.113.77", "GET", "/made/up/path", nil, "")
 	}
 	w := httptest.NewRecorder()
@@ -119,7 +119,7 @@ func TestMetricsCarryNoCallerValue(t *testing.T) {
 	if !strings.Contains(text, `dromas_server_limit_requests_total{decision="denied",limit="requests",subject="ip"}`) {
 		t.Fatalf("the scrape lacks the flood budget's refusals, so it shows nothing of these calls:\n%s", text)
 	}
-	for _, v := range []string{a.Address().String(), b.Address().String(), id, strings.Repeat("e", 77), "203.0.113.77", "127.0.0.1", "/made/up", a.Address().String()[:16]} {
+	for _, v := range []string{a.Address().String(), b.Address().String(), id, "d_" + strings.Repeat("e", 64), "203.0.113.77", "127.0.0.1", "/made/up", a.Address().String()[:16]} {
 		if strings.Contains(text, v) {
 			t.Errorf("the metrics carry %q", v)
 		}

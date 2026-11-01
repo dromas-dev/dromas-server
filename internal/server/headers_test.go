@@ -45,7 +45,7 @@ func TestEveryAPIAnswerTellsABrowserItIsNoPage(t *testing.T) {
 func TestTheLinkPagesPolicyNamesItsStyleByItsHash(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	r := e.do("GET", "/to/"+strings.Repeat("ab", 38)+"a", nil, "")
+	r := e.do("GET", "/to/"+"d_"+strings.Repeat("ab", 32), nil, "")
 	e.want(r, http.StatusOK, "")
 	csp := r.header.Get("Content-Security-Policy")
 	_, rest, _ := strings.Cut(string(r.body), "<style>")

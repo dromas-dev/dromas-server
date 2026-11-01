@@ -6,7 +6,7 @@ PutItem {
  },
  "Item": {
   "acl": {
-   "B": "eyJhbGxvdyI6WyIqIl0sImRlbnkiOlsid2ViYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiXX0="
+   "B": "eyJhbGxvdyI6WyIqIl0sImRlbnkiOlsiZF9zUUlBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBIl19"
   },
   "addr": {
    "B": "sAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
@@ -85,7 +85,7 @@ UpdateItem {
  },
  "ExpressionAttributeValues": {
   ":acl": {
-   "B": "eyJhbGxvdyI6WyIqIl0sImRlbnkiOlsid2ViYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiXX0="
+   "B": "eyJhbGxvdyI6WyIqIl0sImRlbnkiOlsiZF9zUUlBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBIl19"
   },
   ":expires_at": {
    "N": "1798027200"
@@ -339,7 +339,7 @@ GetItem {
  "TableName": "msgs"
 }
 ## PutMessage
-S3 PUT /bodies/waaqaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/1d04000000000000000000000000000000000000000000000000000000000000?x-id=PutObject
+S3 PUT /bodies/d_sAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/1d04000000000000000000000000000000000000000000000000000000000000?x-id=PutObject
 PutItem {
  "ConditionExpression": "attribute_not_exists(#l) OR #r \u003c= :cutoff",
  "ExpressionAttributeNames": {
@@ -474,7 +474,7 @@ GetItem {
  },
  "TableName": "msgs"
 }
-S3 GET /bodies/waaqaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/1d04000000000000000000000000000000000000000000000000000000000000?x-id=GetObject
+S3 GET /bodies/d_sAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/1d04000000000000000000000000000000000000000000000000000000000000?x-id=GetObject
 ## Message, from byte 40
 GetItem {
  "ConsistentRead": false,
@@ -488,9 +488,9 @@ GetItem {
  },
  "TableName": "msgs"
 }
-S3 GET /bodies/waaqaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/1d04000000000000000000000000000000000000000000000000000000000000?x-id=GetObject Range: bytes=40-
+S3 GET /bodies/d_sAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/1d04000000000000000000000000000000000000000000000000000000000000?x-id=GetObject Range: bytes=40-
 ## DeleteMessage
-S3 DELETE /bodies/waaqaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/1d04000000000000000000000000000000000000000000000000000000000000?x-id=DeleteObject
+S3 DELETE /bodies/d_sAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/1d04000000000000000000000000000000000000000000000000000000000000?x-id=DeleteObject
 DeleteItem {
  "ConditionExpression": "attribute_exists(#l) AND #r \u003e :cutoff",
  "ExpressionAttributeNames": {
@@ -538,7 +538,7 @@ Query {
  "TableName": "msgs"
 }
 S3 POST /bodies?delete=
-<Delete xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Object><Key>waaqaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/1d04000000000000000000000000000000000000000000000000000000000000</Key></Object><Quiet>true</Quiet></Delete>
+<Delete xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Object><Key>d_sAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/1d04000000000000000000000000000000000000000000000000000000000000</Key></Object><Quiet>true</Quiet></Delete>
 DeleteItem {
  "ConditionExpression": "attribute_exists(#l) AND #r \u003e :cutoff",
  "ExpressionAttributeNames": {
