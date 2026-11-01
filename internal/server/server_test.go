@@ -872,30 +872,32 @@ func TestOwnerCalls(t *testing.T) {
 	e.want(e.do("GET", r.path("/messages"), nil, ahead), 200, "")
 }
 
-// An address in a path is 77 characters of lowercase base32, so a mailbox has one URL:
-// the same address in uppercase is no address, on every route that names
-// one, whoever calls (PROTOCOL.md §2.2).
-func TestAnAddressInAPathIsLowercase(t *testing.T) {
+// An address in a path is "d_" and 64 characters of base64url, so a mailbox
+// has one URL: any other form is no address, on every route that names one,
+// whoever calls, and the address with a letter in the other case is another
+// address (PROTOCOL.md §4.2).
+func TestAnAddressInAPathIsInItsOneForm(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	pass := r.pass(1)
-	upper := "/v1/" + strings.ToUpper(r.id.Address().String())
-	lower := r.id.Address().String()
-	i := strings.IndexAny(lower, "abcdef") // one letter in uppercase
-	mixed := "/v1/" + lower[:i] + strings.ToUpper(lower[i:i+1]) + lower[i+1:]
+	own := r.id.Address().String()
+	bare := "/v1/" + own[2:]
+	for _, path := range []string{bare, "/v1/e_" + own[2:], "/v1/D_" + own[2:], "/v1/" + own[:10] + "+" + own[11:], "/v1/" + own + "="} {
+		e.want(e.do("GET", path, nil, ""), 400, protocol.CodeBadAddress)
+	}
 	for _, c := range []struct{ method, path, pass string }{
-		{"GET", upper, ""},
-		{"GET", mixed, ""},
-		{"GET", upper + "/messages", pass},
-		{"GET", upper + "/messages/" + strings.Repeat("a", 64), pass},
-		{"DELETE", upper + "/messages/" + strings.Repeat("a", 64), pass},
-		{"GET", upper + "/acl", pass},
-		{"DELETE", upper + "/account", pass},
+		{"GET", bare + "/messages", pass},
+		{"GET", bare + "/messages/" + strings.Repeat("a", 64), pass},
+		{"DELETE", bare + "/messages/" + strings.Repeat("a", 64), pass},
+		{"GET", bare + "/acl", pass},
+		{"DELETE", bare + "/account", pass},
 	} {
 		e.want(e.do(c.method, c.path, nil, c.pass), 400, protocol.CodeBadAddress)
 	}
-	e.want(e.do("PUT", upper+"/prekey", r.upload(1), pass), 400, protocol.CodeBadAddress)
+	e.want(e.do("PUT", bare+"/prekey", r.upload(1), pass), 400, protocol.CodeBadAddress)
+	i := 2 + strings.IndexAny(own[2:], "abcdefghijklmnopqrstuvwxyz") // one letter in the other case
+	e.want(e.do("GET", "/v1/"+own[:i]+strings.ToUpper(own[i:i+1])+own[i+1:], nil, ""), 404, protocol.CodeNoSuchMailbox)
 	e.want(e.do("GET", r.path(""), nil, ""), 200, "")
 	e.want(e.do("GET", r.path("/messages"), nil, pass), 200, "")
 }

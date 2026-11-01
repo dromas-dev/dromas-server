@@ -572,7 +572,7 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 			return call{"DELETE", msg, nil, to.pass(1)}, ""
 		}}},
 		linkRoute: {{"any address", true, none, func(*env) (call, string) {
-			return call{"GET", protocol.LinkPath + strings.Repeat("ab", 38) + "a", nil, ""}, ""
+			return call{"GET", protocol.LinkPath + "d_" + strings.Repeat("ab", 32), nil, ""}, ""
 		}}},
 	}
 	// refusedFirst is the refusal of each state refused before its

@@ -716,14 +716,14 @@ func (p *pacedWriter) Write(b []byte) (int, error) {
 // Unwrap lets http.ResponseController reach the connection.
 func (p *pacedWriter) Unwrap() http.ResponseWriter { return p.ResponseWriter }
 
-// pathAddr reads the address in the URL path, 77 characters of lowercase
-// base32: one mailbox has one URL, so any other form, uppercase among them, is
-// no address. Then it holds the query to params, the parameters the call takes
+// pathAddr reads the address in the URL path, "d_" and 64 characters of
+// base64url: one mailbox has one URL, so any other form, another form's name
+// or the bytes bare among them, is no address. Then it holds the query to params, the parameters the call takes
 // (queryOf).
 func pathAddr(r *http.Request, params ...string) (protocol.Address, error) {
 	a, err := protocol.ParseAddress(r.PathValue("addr"))
 	if err != nil {
-		return a, fail(protocol.CodeBadAddress, "an address is 77 characters of lowercase base32", "the path does not name an address")
+		return a, fail(protocol.CodeBadAddress, "an address is \"d_\" and 64 characters of base64url", "the path does not name an address")
 	}
 	if _, err := queryOf(r, params...); err != nil {
 		return a, err
@@ -1160,12 +1160,12 @@ func pathID(r *http.Request) ([32]byte, error) {
 	return id, err
 }
 
-// nameRun is a run of 64 or more letters and digits, in either case: every
-// address (77 of lowercase base32) and message id (64 hex), wherever a log
-// line holds one.
-var nameRun = regexp.MustCompile(`[0-9A-Za-z]{64,}`)
+// nameRun is a run of 64 or more letters, digits, "-" and "_": every address
+// ("d_" and 64 of base64url, whose "-" and "_" fall anywhere in it) and message
+// id (64 hex), wherever a log line holds one.
+var nameRun = regexp.MustCompile(`[0-9A-Za-z_-]{64,}`)
 
-// redact replaces each run of 64 or more letters and digits in a log line with
+// redact replaces each run of 64 or more letters, digits, "-" and "_" in a log line with
 // "#" and the first 16 hex characters of the SHA-256 of the run in lower
 // case, a name only someone already holding the run can match: no log line
 // carries an address or a message id, in a path, a store's error or

@@ -73,8 +73,8 @@ func TestEveryRefusalNamesItsLimit(t *testing.T) {
 	e.want(e.do("POST", b.path("/messages"), nil, ""), http.StatusUnauthorized, "")
 	e.limited(e.do("POST", b.path("/messages"), nil, ""), protocol.QuotaSendsBeforePass)
 
-	e.want(e.do("GET", "/v1/"+strings.Repeat("c", 77), nil, ""), http.StatusNotFound, protocol.CodeNoSuchMailbox)
-	e.limited(e.do("GET", "/v1/"+strings.Repeat("e", 77), nil, ""), protocol.QuotaMisses)
+	e.want(e.do("GET", "/v1/"+"d_"+strings.Repeat("c", 64), nil, ""), http.StatusNotFound, protocol.CodeNoSuchMailbox)
+	e.limited(e.do("GET", "/v1/"+"d_"+strings.Repeat("e", 64), nil, ""), protocol.QuotaMisses)
 
 	// The registration came from this address, so its count is spent. With
 	// it spent, a registration's read of its address is a lookup's, under a

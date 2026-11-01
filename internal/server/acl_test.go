@@ -68,7 +68,7 @@ func TestACLRoute(t *testing.T) {
 	b, other := e.mailbox(), e.mailbox()
 	path := "/v1/" + b.Address().String() + "/acl"
 	pass := e.pass(b)
-	x, y := other.Address().String(), strings.Repeat("ab", 38)+"a"
+	x, y := other.Address().String(), "d_"+strings.Repeat("ab", 32)
 	const open = `{"allow":["*"],"deny":[]}`
 
 	// The mailbox's own pass, and only that.

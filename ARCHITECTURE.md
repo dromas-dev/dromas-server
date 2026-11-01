@@ -231,12 +231,12 @@ sequenceDiagram
   - Redis is the penciled alternative.
   - Four processes, the scaled shape above, still read the stream directly, about every 2 s.
 
-### Extreme scale: shard by the address's first character
+### Extreme scale: shard by the first character of the address's bytes
 
-**It fits the design.** Every mailbox call names its mailbox in the path (`/v1/<addr>/…`, and a send is `POST /v1/<recipient>/messages`), and addresses are SHA-384 output in base32, so a first character splits the load into 32 even shards. The edge routes by path prefix. `cloudflared`'s ingress rules can match a path, as can Cloudflare's load-balancing rules or an AWS ALB (an NLB can't).
+**It fits the design.** Every mailbox call names its mailbox in the path (`/v1/<addr>/…`, and a send is `POST /v1/<recipient>/messages`), and an address is `d_` and SHA-384 output in base64url, so the first character after `d_` splits the load into 64 even shards. The edge routes by path prefix. `cloudflared`'s ingress rules can match a path, as can Cloudflare's load-balancing rules or an AWS ALB (an NLB can't).
 
 What changes:
-- **Memory stops being replicated.** Each shard group holds only its thirty-second of layer 1, layer 2, the mailbox standings and the poll buckets. That removes the one capacity limit above, where every process held all of layer 1.
+- **Memory stops being replicated.** Each shard group holds only its sixty-fourth of layer 1, layer 2, the mailbox standings and the poll buckets. That removes the one capacity limit above, where every process held all of layer 1.
 - **The stream bouncer routes by the same character.** Mailbox events go only to their shard. Mailbox-record changes (revocations, certificates, prekeys) go to every shard, because any shard may check a sender.
 - **Per-sender send limits cross shards.** A's sends land on each recipient's shard. The bouncer would broadcast a compact "A sent one" event, so every process keeps per-sender daily counts (~16 B per active sender, estimate).
 - **Unchanged:** sends still check the sender's pass against its record, from the LRU or DynamoDB, the link page (`/to/<address>`) goes to any shard, and DynamoDB and S3 need nothing new.

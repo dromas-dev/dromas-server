@@ -172,13 +172,13 @@ func TestEveryOtherRequestIsTheSites(t *testing.T) {
 		}
 	}
 	before := len(rec.taken())
-	addr := strings.Repeat("a", 77)
+	addr := "d_" + strings.Repeat("a", 64)
 	for _, c := range []struct {
 		method, target string
 		status         int
 		code           protocol.Code
 	}{
-		{"GET", "/v1/" + strings.Repeat("a", 77), http.StatusNotFound, protocol.CodeNoSuchMailbox},
+		{"GET", "/v1/" + "d_" + strings.Repeat("a", 64), http.StatusNotFound, protocol.CodeNoSuchMailbox},
 		{"GET", "/v1", http.StatusTemporaryRedirect, ""},
 		{"PUT", "/to", http.StatusTemporaryRedirect, ""},
 		{"GET", "/v1/nope", http.StatusBadRequest, protocol.CodeBadAddress},
@@ -282,7 +282,7 @@ func TestASitePageIsDatedOnceByTheServersClock(t *testing.T) {
 func TestASitePageSpendsOnlyAFloodBudget(t *testing.T) {
 	t.Parallel()
 	srv := siteServer(t, DefaultLimits(), false)
-	if resp, _ := get(t, srv, http.MethodGet, "/v1/"+strings.Repeat("a", 77)); resp.StatusCode != http.StatusServiceUnavailable {
+	if resp, _ := get(t, srv, http.MethodGet, "/v1/"+"d_"+strings.Repeat("a", 64)); resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("the API before it is ready: %d, want 503", resp.StatusCode)
 	}
 	for i := range 30 {

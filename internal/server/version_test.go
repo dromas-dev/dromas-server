@@ -71,7 +71,7 @@ func (e *env) asVersion(v string) {
 func TestARetiredVersionIsAnswered410(t *testing.T) {
 	t.Parallel()
 	e, _ := versionsEnv(t, relaxed())
-	nobody := "/v1/" + strings.Repeat("ab", 38) + "a"
+	nobody := "/v1/" + "d_" + strings.Repeat("ab", 32)
 	retired := func(r reply, what string) {
 		t.Helper()
 		if r.status != http.StatusGone || r.code() != protocol.CodeVersionRetired || r.problem().MinVersion != "1.2" {
@@ -87,7 +87,7 @@ func TestARetiredVersionIsAnswered410(t *testing.T) {
 		e.want(e.doWith("GET", nobody, nil, "", protocol.VersionHeader, v), http.StatusNotFound, protocol.CodeNoSuchMailbox)
 	}
 	// Outside /v1/, nothing is the policy's: the link page takes any version.
-	e.want(e.do("GET", protocol.LinkPath+strings.Repeat("ab", 38)+"a", nil, ""), http.StatusOK, "")
+	e.want(e.do("GET", protocol.LinkPath+"d_"+strings.Repeat("ab", 32), nil, ""), http.StatusOK, "")
 
 	// The sunsets, by the server's clock: 1.3.x's an hour on, every version
 	// below 1.4's two hours on.
@@ -152,7 +152,7 @@ func TestDeprecationAndSunsetAreTheEarliestThatCover(t *testing.T) {
 	e.asVersion("1.5.0")
 	b := e.raw().register(protocol.MaxPrekeyLifetime)
 	e.setMiddle(nil)
-	nobody := "/v1/" + strings.Repeat("ab", 38) + "a"
+	nobody := "/v1/" + "d_" + strings.Repeat("ab", 32)
 	dep := func(d time.Duration) string { return protocol.FormatDeprecation(n.Add(d)) }
 	sun := func(d time.Duration) string { return protocol.FormatSunset(n.Add(d)) }
 	for _, c := range []struct {
@@ -273,8 +273,8 @@ func TestARetiredVersionReadsNothing(t *testing.T) {
 	l2.RequestBurst, l2.RequestRefill = 1, time.Hour
 	e2, _ := versionsEnv(t, l2)
 	c2 := e2.caller()
-	e2.want(c2("10.9.1.1", "GET", "/v1/"+strings.Repeat("ab", 38)+"a", nil, ""), http.StatusGone, protocol.CodeVersionRetired)
-	e2.limited(c2("10.9.1.1", "GET", "/v1/"+strings.Repeat("ab", 38)+"a", nil, ""), protocol.QuotaRequests)
+	e2.want(c2("10.9.1.1", "GET", "/v1/"+"d_"+strings.Repeat("ab", 32), nil, ""), http.StatusGone, protocol.CodeVersionRetired)
+	e2.limited(c2("10.9.1.1", "GET", "/v1/"+"d_"+strings.Repeat("ab", 32), nil, ""), protocol.QuotaRequests)
 }
 
 // A retired version is answered before any route is matched, a path no
@@ -288,9 +288,9 @@ func TestARetiredVersionIsAnsweredBeforeRouting(t *testing.T) {
 		method, path, version string
 		status                int
 	}{
-		{"GET", "/v1/" + strings.Repeat("ab", 38) + "a" + "/nothing/here", "1.1.0", http.StatusGone},
+		{"GET", "/v1/" + "d_" + strings.Repeat("ab", 32) + "/nothing/here", "1.1.0", http.StatusGone},
 		{"POST", "/v1/", "1.1.0", http.StatusMethodNotAllowed}, // the document's path takes every version, whatever the method
-		{"GET", "/v1/" + strings.Repeat("ab", 38) + "a" + "/nothing/here", "1.5.0", http.StatusNotFound},
+		{"GET", "/v1/" + "d_" + strings.Repeat("ab", 32) + "/nothing/here", "1.5.0", http.StatusNotFound},
 	} {
 		req := httptest.NewRequest(c.method, c.path, nil)
 		req.Header.Set(protocol.VersionHeader, c.version)
@@ -356,7 +356,7 @@ func TestTheVersionMetricCountsEachState(t *testing.T) {
 	t.Parallel()
 	reg := prometheus.NewRegistry()
 	e, _ := versionsEnv(t, relaxed(), func(c *Config) { c.Metrics = NewMetrics(reg) })
-	nobody := "/v1/" + strings.Repeat("ab", 38) + "a"
+	nobody := "/v1/" + "d_" + strings.Repeat("ab", 32)
 	for _, c := range []struct {
 		version, path, state string
 	}{
@@ -368,7 +368,7 @@ func TestTheVersionMetricCountsEachState(t *testing.T) {
 		{"1.1.0", nobody, "retired"},
 		{"", nobody, "retired"},
 		{"1.1.0", protocol.DocumentPath, "retired"},
-		{"", protocol.LinkPath + strings.Repeat("ab", 38) + "a", ""}, // outside /v1/; the link page takes no Dromas-Version
+		{"", protocol.LinkPath + "d_" + strings.Repeat("ab", 32), ""}, // outside /v1/; the link page takes no Dromas-Version
 	} {
 		before := counts(t, reg, "dromas_server_version_requests_total")
 		if c.version == "" {

@@ -21,7 +21,7 @@
 # The recipe runs a mailbox of its own: the two clients meet over the wire, never in one mailbox directory.
 # Every script step runs in a FRESH shell (agents run each command in a new one). Every mailbox is post-quantum: where the
 # local age is older than 1.3, the client module's own (its go.mod's tool, built by go tool) goes first in PATH.
-# Needs: go, bash ≥ 4, ssh-keygen, curl, jq, sha256sum, sha384sum, openssl, base32, base64, od, GNU date (passof's date -d). Run from anywhere:
+# Needs: go, bash ≥ 4, ssh-keygen, curl, jq, sha256sum, sha384sum, openssl, base64, od, GNU date (passof's date -d). Run from anywhere:
 #   test/interop.sh            SCRIPT=<path> overrides the dromas.sh it sources.
 # With DROMAS_TEST_MAILBOXES_TABLE, DROMAS_TEST_MESSAGES_TABLE, DROMAS_TEST_ACCOUNTS_TABLE and DROMAS_TEST_BUCKET set, the server runs on those tables and
 # that bucket instead of --dev: tables and a bucket kept for tests, never the ones a running server uses.
@@ -59,7 +59,7 @@ echo "server: dromas-server serve ${store[*]:0:6}"
 "$work/dromas-server" serve "${store[@]}" --listen "127.0.0.1:$port" --poll-burst 0 --registrations-per-hour 0 2> "$work/server.log" & srv=$!   # every mailbox here registers from one address
 export DR_SERVER_URL="http://127.0.0.1:$port" DROMAS_SERVER_URL="http://127.0.0.1:$port"
 for _ in $(seq 300); do   # up once the API answers other than 503 (loading)
-  code=$(curl -s -o /dev/null -w '%{http_code}' "$DR_SERVER_URL/v1/$(printf 'a%.0s' $(seq 77))"); [ "$code" != 000 ] && [ "$code" != 503 ] && break; sleep 0.1
+  code=$(curl -s -o /dev/null -w '%{http_code}' "$DR_SERVER_URL/v1/d_$(printf 'a%.0s' $(seq 64))"); [ "$code" != 000 ] && [ "$code" != 503 ] && break; sleep 0.1
 done
 [ "$code" != 000 ] && [ "$code" != 503 ] || { echo "the server did not answer on port $port"; exit 1; }
 
@@ -81,7 +81,7 @@ look(){ curl -s -o /dev/null -w '%{http_code}' "$DR_SERVER_URL/v1/$1"; }   # <ad
 
 # --- 1. both ways, across renewals ---
 dr_hex(){ [[ $1 =~ ^[0-9a-f]{64}$ ]]; }      # a message's id
-dr_isaddr(){ [[ $1 =~ ^[a-z2-7]{77}$ ]]; }      # an address
+dr_isaddr(){ [[ $1 =~ ^d_[A-Za-z0-9_-]{64}$ ]]; }      # an address
 RL=$(recipe "$R" "dr_init" | linkof) && RA=${RL##*/} && dr_isaddr "$RA" && [ "$RL" = "$DR_SERVER_URL/to/$RA" ] && ok "recipe init prints its link: $RL" || bad "recipe init: $RL"
 GL=$(gocli "$G" init | linkof) && GA=${GL##*/} && dr_isaddr "$GA" && [ "$GL" = "$DR_SERVER_URL/to/$GA" ] && ok "Go init prints its link: $GL" || bad "Go init: $GL"
 for L in "$RL" "$GL"; do
@@ -105,7 +105,7 @@ out=$(recipe "$R" dr_recv 2>&1) && grep -q 'after both renewals' <<< "$out" && o
 out=$(gocli "$G" recv 2>&1) && grep -q 'from the recipe' <<< "$out" && ok "Go receives after renewals" || bad "Go after renewals: $out"
 
 # --- 2. the recipe's error path on a real problem+json ---
-nobody=$(printf 'a%.0s' $(seq 77))      # an address nobody registered
+nobody=d_$(printf 'a%.0s' $(seq 64))      # an address nobody registered
 err=$(recipe "$R" "dr_send $nobody '$work/body'" 2>&1); rc=$?
 [ $rc -ne 0 ] && grep -qxF '{"type":"error","status":404,"code":"no_such_mailbox","detail":"ERROR 404 no_such_mailbox"}' <<< "$err" && ! grep -q 'no mailbox has this address' <<< "$err" && ok "recipe prints a real problem's status and code, and none of the server's words (PROTOCOL.md §11.3)" || bad "recipe error path: rc=$rc $err"
 
@@ -265,7 +265,7 @@ out=$(gocli "$W3" revocation ask "$W2L" 2> /dev/null) && [ "$out" = "{\"type\":\
 at(){ curl -s -o /dev/null -w '%{http_code}' "$DR_SERVER_URL/v1/$1/revocations"; }   # <address> → the status of the read of its revocations here
 X1="$work/x1"; X3="$work/x3"; X6="$work/x6"
 X1L=$(gocli "$X1" init | linkof) && X1A=${X1L##*/} && X6L=$(gocli "$X6" init --offline | linkof) && X6A=${X6L##*/} || bad "the mailboxes of section 8"
-mkdir -p -m 700 "$X3" && ssh-keygen -q -t ed25519 -N '' -C '' -f "$X3/identity" && gocli "$X3" revocation make > "$work/x3.json" 2> "$work/err" && X3A=$(jq -r .identity "$work/x3.json" | base64 -d | openssl dgst -sha384 -binary | base32 | tr -d '=\n' | tr A-Z a-z) && X3L="$DR_SERVER_URL/to/$X3A" \
+mkdir -p -m 700 "$X3" && ssh-keygen -q -t ed25519 -N '' -C '' -f "$X3/identity" && gocli "$X3" revocation make > "$work/x3.json" 2> "$work/err" && X3A=$(jq -r .identity "$work/x3.json" | base64 -d | openssl dgst -sha384 -binary | openssl base64 -A | tr '+/' '-_' | sed 's/^/d_/') && X3L="$DR_SERVER_URL/to/$X3A" \
   || bad "a record of an address never registered: $(cat "$work/err")"
 [ "$(at "$X1A")" = 404 ] && [ "$(curl -s "$DR_SERVER_URL/v1/$X1A/revocations" | jq -r .code)" = not_revoked ] && [ "$(at "$X3A")" = 404 ] \
   && ok "the server answers 404 not_revoked for an address it holds no revocation of, with a mailbox there or none" || bad "the read of revocations, before anything"

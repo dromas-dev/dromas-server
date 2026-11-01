@@ -233,7 +233,7 @@ func TestARequestMeetsTheVersionPolicyInForce(t *testing.T) {
 		t.Fatal(err)
 	}
 	e := newEnv(t, relaxed(), func(c *Config) { c.Policy = d })
-	nobody := "/v1/" + strings.Repeat("ab", 38) + "a"
+	nobody := "/v1/" + "d_" + strings.Repeat("ab", 32)
 	e.want(e.doWith("GET", nobody, nil, "", protocol.VersionHeader, "1.5.0"), http.StatusNotFound, protocol.CodeNoSuchMailbox)
 	if err := os.WriteFile(path, []byte(policyText("1.6", "1.6.0")), 0o600); err != nil {
 		t.Fatal(err)
