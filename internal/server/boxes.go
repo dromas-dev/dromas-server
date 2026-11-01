@@ -148,7 +148,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 		Prekey:         p,
 		Rank:           signer.Rank(),
 		Signer:         signerHash(id, signer),
-		SenderKeyTypes: declared(req.SenderKeyTypes),
+		SenderKeyTypes: protocol.Declaration(req.SenderKeyTypes),
 		Created:        now,
 		Expires:        keep(time.Time{}, p, signer),
 	}
@@ -269,7 +269,7 @@ func (s *Server) take(b *Mailbox, id *protocol.Identity, statement, sig []byte, 
 	b.Retired = retired
 	b.Statement, b.Signature, b.Prekey = statement, sig, p
 	b.Rank, b.Signer = signer.Rank(), signerHash(id, signer)
-	b.SenderKeyTypes = declared(senders) // the declaration that comes with this prekey, in place of the one before
+	b.SenderKeyTypes = protocol.Declaration(senders) // the declaration that comes with this prekey, in place of the one before
 	b.Expires = keep(b.Expires, p, signer)
 	return nil
 }

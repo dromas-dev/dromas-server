@@ -261,9 +261,10 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 		return delivered{}, fail(protocol.CodePrekeyExpired, "the mailbox's owner must publish a new prekey (dromas prekey renew); retry later", "this mailbox's prekey is signed under a certificate its revocation of certificates covers")
 	}
 	// A mailbox takes messages from a sender whose identity its client can verify:
-	// one on an Ed25519 key always, and otherwise what it declared with its
-	// prekey. Refused here, the sender has an error and no receipt for a message
-	// the recipient would have refused on reading it.
+	// one of a type PROTOCOL.md §4.1 defines always, and one of an optional type
+	// where it declared that type with its prekey. Refused here, the sender has
+	// an error and no receipt for a message the recipient would have refused on
+	// reading it.
 	if t := identityType(p.sender.Identity); !protocol.AcceptsSender(rcpt.SenderKeyTypes, t) {
 		return delivered{}, fail(protocol.CodeSenderKeyType, "a mailbox whose identity is an ssh-ed25519 key, as dromas init makes one, can write to any mailbox",
 			"this mailbox's client does not verify identities of your mailbox's key type, %s", keyTypeValue(t))

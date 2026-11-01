@@ -12,7 +12,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"io"
-	"slices"
 	"testing"
 	"time"
 
@@ -331,16 +330,17 @@ func TestGoClientOnAP256Identity(t *testing.T) {
 	}
 }
 
-// A mailbox takes messages from a sender whose identity is of a key type it declared
-// with its prekey: Ed25519 always, another type if it listed it, any type if
-// it said "any". The server refuses the rest, so the sender has an error and
-// no receipt for a message the recipient's client would have refused. The
-// declaration is the last prekey's: a new prekey without one clears it.
+// A mailbox takes messages from a sender of every key type PROTOCOL.md §4.1
+// defines, whatever it declared, and what the server keeps of a declaration
+// is the optional types this build verifies alone: none of §4.1's, and no
+// name it does not know (§7). This build verifies no optional type, so every
+// declaration is kept as nothing, at a registration and at a new prekey.
 func TestTheSenderKeyTypesAMailboxDeclared(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	now := e.clock.Now()
 	p256, ed := e.rawP256().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
+	every := []string{protocol.IdentityEd25519, protocol.IdentityP256, "any", "no-such-key-type@dromas.invalid"}
 	declaring := func(types []string) *raw {
 		t.Helper()
 		r := e.raw()
@@ -372,57 +372,32 @@ func TestTheSenderKeyTypesAMailboxDeclared(t *testing.T) {
 		return e.do("POST", to.path("/messages"), to.sealed(serial, ct.Bytes()), from.pass(1))
 	}
 
-	nothing := declaring(nil)
-	listed := declaring([]string{protocol.IdentityEd25519, protocol.IdentityP256})
-	anyType := declaring([]string{protocol.AnySender, protocol.IdentityP256})
-	unknown := declaring([]string{"no-such-key-type@dromas.invalid", protocol.IdentityEd25519})
-	for name, c := range map[string]struct {
-		mailbox *raw
-		want    []string
-	}{
-		"nothing":               {nothing, nil},
-		"Ed25519 and P-256":     {listed, []string{protocol.IdentityEd25519, protocol.IdentityP256}},
-		"any, and a type":       {anyType, []string{protocol.AnySender}},
-		"a name nobody defines": {unknown, []string{protocol.IdentityEd25519}},
-	} {
-		if got := served(c.mailbox); !slices.Equal(got, c.want) {
-			t.Errorf("a mailbox that declared %s is served as declaring %v, want %v", name, got, c.want)
+	nothing, named := declaring(nil), declaring(every)
+	for _, r := range []*raw{nothing, named} {
+		if got := served(r); got != nil {
+			t.Errorf("a mailbox is served as declaring %v", got)
 		}
 	}
-
-	// A sender on a P-256 identity.
-	e.want(sendTo(p256, nothing, 1), 403, protocol.CodeSenderKeyType)
-	e.want(sendTo(p256, unknown, 1), 403, protocol.CodeSenderKeyType)
-	e.want(sendTo(p256, listed, 1), 201, "")
-	e.want(sendTo(p256, anyType, 1), 201, "")
-	// A sender on an Ed25519 identity is taken by every mailbox.
-	for _, to := range []*raw{nothing, listed, anyType, unknown, p256} {
-		e.want(sendTo(ed, to, 1), 201, "")
+	// A sender of either type is taken by every mailbox.
+	for _, from := range []*raw{p256, ed} {
+		for _, to := range []*raw{nothing, named, p256, ed} {
+			e.want(sendTo(from, to, 1), 201, "")
+		}
 	}
-
-	// The declaration is the current prekey's. A new prekey that brings none
-	// clears it, and one that brings another replaces it.
-	listed.prekey(2, now.Add(protocol.MaxPrekeyLifetime), nil)
-	e.want(e.do("PUT", listed.path("/prekey"), listed.upload(2), listed.pass(2)), 200, "")
-	if got := served(listed); got != nil {
-		t.Errorf("after a prekey that declared nothing, the mailbox is served as declaring %v", got)
-	}
-	e.want(sendTo(p256, listed, 2), 403, protocol.CodeSenderKeyType)
+	// A new prekey's declaration is kept the same way.
 	nothing.prekey(2, now.Add(protocol.MaxPrekeyLifetime), nil)
 	up := nothing.upload(2)
-	up.SenderKeyTypes = []string{protocol.IdentityP256}
+	up.SenderKeyTypes = every
 	e.want(e.do("PUT", nothing.path("/prekey"), up, nothing.pass(2)), 200, "")
-	e.want(sendTo(p256, nothing, 2), 201, "")
-	// The same upload again, now declaring nothing: an identical retry changes nothing.
-	e.want(e.do("PUT", nothing.path("/prekey"), nothing.upload(2), nothing.pass(2)), 200, "")
-	if got := served(nothing); !slices.Equal(got, []string{protocol.IdentityP256}) {
-		t.Errorf("an identical retry changed the declaration to %v", got)
+	if got := served(nothing); got != nil {
+		t.Errorf("after a new prekey, the mailbox is served as declaring %v", got)
 	}
+	e.want(sendTo(p256, nothing, 2), 201, "")
 
 	// A declaration that is not a list of strings is no request.
 	bad := e.raw()
 	bad.prekey(1, now.Add(protocol.MaxPrekeyLifetime), nil)
 	reg, _ := json.Marshal(bad.registration(1))
-	e.want(e.do("PUT", bad.path(""), bytes.Replace(reg, []byte("}"), []byte(`,"sender_key_types":"any"}`), 1), bad.pass(1)), 400, protocol.CodeBadRequest)
+	e.want(e.do("PUT", bad.path(""), bytes.Replace(reg, []byte("}"), []byte(`,"sender_key_types":"ssh-ed25519"}`), 1), bad.pass(1)), 400, protocol.CodeBadRequest)
 	e.want(e.do("PUT", bad.path(""), bytes.Replace(reg, []byte("}"), []byte(`,"sender_key_types":[1]}`), 1), bad.pass(1)), 400, protocol.CodeBadRequest)
 }

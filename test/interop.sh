@@ -125,17 +125,17 @@ rec="$R/sent/$GA.$(jq -r .envelope.msg_id <<< "$out").json"
 jq -e --argjson d "$out" '(.receipt | keys == ["expires_at", "id", "received_at"]) and keys == ["envelope", "receipt"] and .envelope == $d.envelope' "$rec" > /dev/null && [ -e "$G/inbox/$(jq -r .receipt.id "$rec").json" ] \
   && ok "the recipe's sent/ record is the same, its receipt naming the file in the recipient's inbox/" || bad "the recipe's sent/ record: $(cat "$rec" 2>&1)"
 
-# --- 4. a mailbox whose identity is of the optional key type, ecdsa-sha2-nistp256, in each client ---
+# --- 4. a mailbox whose identity is of key type ecdsa-sha2-nistp256, in each client ---
 # The recipe takes the identity key it finds, so its mailbox's key is made with ssh-keygen first. Each client's P-256 mailbox
-# then exchanges messages with the other client's Ed25519 mailbox of step 1, which declared that it verifies the type.
+# then exchanges messages with the other client's Ed25519 mailbox of step 1: every client verifies both types, and declares neither.
 RP="$work/rp"; GP="$work/gp"; mkdir -p "$RP"
 ssh-keygen -q -t ecdsa -b 256 -N '' -C '' -f "$RP/identity" < /dev/null
 RPL=$(recipe "$RP" "dr_init" | linkof) && RPA=${RPL##*/} && dr_isaddr "$RPA" && [ "$(sed -n 2p "$RP/identity.doc" | cut -d' ' -f1)" = ecdsa-sha2-nistp256 ] \
   && ok "recipe init on a P-256 identity made by ssh-keygen" || bad "recipe init on P-256: $RPL"
-GPO=$(gocli "$GP" init --identity-type ecdsa-sha2-nistp256 2> "$work/err") && GPL=$(linkof <<< "$GPO") && GPA=${GPL##*/} && dr_isaddr "$GPA" && jq -e '.detail | startswith("WARNING: ")' <<< "$GPO" > /dev/null \
-  && ok "Go init --identity-type ecdsa-sha2-nistp256, with its warning" || bad "Go init on P-256: $GPL $(cat "$work/err")"
-[ "$(curl -s "$DR_SERVER_URL/v1/$GA" | jq -c .sender_key_types)" = '["ssh-ed25519","ecdsa-sha2-nistp256"]' ] && [ "$(curl -s "$DR_SERVER_URL/v1/$RA" | jq -c .sender_key_types)" = '["ssh-ed25519","ecdsa-sha2-nistp256"]' ] \
-  && ok "each client's mailbox is served with the sender key types it declared" || bad "sender_key_types: $(curl -s "$DR_SERVER_URL/v1/$GA" | jq -c .sender_key_types) $(curl -s "$DR_SERVER_URL/v1/$RA" | jq -c .sender_key_types)"
+GPO=$(gocli "$GP" init --identity-type ecdsa-sha2-nistp256 2> "$work/err") && GPL=$(linkof <<< "$GPO") && GPA=${GPL##*/} && dr_isaddr "$GPA" && jq -e '.detail == null' <<< "$GPO" > /dev/null \
+  && ok "Go init --identity-type ecdsa-sha2-nistp256, with no warning" || bad "Go init on P-256: $GPL $(cat "$work/err")"
+[ "$(curl -s "$DR_SERVER_URL/v1/$GA" | jq -c .sender_key_types)" = null ] && [ "$(curl -s "$DR_SERVER_URL/v1/$RA" | jq -c .sender_key_types)" = null ] \
+  && ok "neither client's mailbox declares a sender key type" || bad "sender_key_types: $(curl -s "$DR_SERVER_URL/v1/$GA" | jq -c .sender_key_types) $(curl -s "$DR_SERVER_URL/v1/$RA" | jq -c .sender_key_types)"
 printf 'p256 recipe to go\n' > "$work/body5"
 recipe "$RP" "dr_send $GL '$work/body5'" && out=$(gocli "$G" recv 2> "$work/err") && jq -e --arg f "$RPA" '.envelope.body == "p256 recipe to go\n" and .envelope.from == $f' <<< "$out" > /dev/null \
   && ok "recipe on P-256 → Go: delivered, verified as signed by a P-256 identity ssh-keygen made" || bad "recipe on P-256 → Go: $out $(cat "$work/err")"
@@ -146,14 +146,6 @@ printf 'p256 go to recipe\n' | gocli "$GP" send "$RL" > /dev/null && out=$(recip
 printf 'recipe to p256 go\n' > "$work/body5"
 recipe "$R" "dr_send $GPL '$work/body5'" && out=$(gocli "$GP" recv 2> "$work/err") && jq -e --arg f "$RA" '.envelope.body == "recipe to p256 go\n" and .envelope.from == $f' <<< "$out" > /dev/null \
   && ok "recipe → Go on P-256: delivered" || bad "recipe → Go on P-256: $out $(cat "$work/err")"
-# A mailbox that declares Ed25519 only: the server refuses it a P-256 sender's messages, and the Go client does not even post it.
-GE="$work/ge"
-GEL=$(DROMAS_SENDER_KEY_TYPES=ssh-ed25519 gocli "$GE" init | linkof) && GEA=${GEL##*/} && [ "$(curl -s "$DR_SERVER_URL/v1/$GEA" | jq -c .sender_key_types)" = '["ssh-ed25519"]' ] \
-  && ok "a mailbox told to declare Ed25519 only is served so" || bad "DROMAS_SENDER_KEY_TYPES: $(curl -s "$DR_SERVER_URL/v1/$GEA")"
-out=$(printf 'x\n' | gocli "$GP" send "$GEL" 2>&1); [ $? -ne 0 ] && grep -q "does not verify identities of this mailbox's key type" <<< "$out" \
-  && ok "Go on P-256 does not send to a mailbox that does not verify its key type" || bad "Go on P-256 → Ed25519-only mailbox: $out"
-out=$(recipe "$RP" "dr_send $GEL '$work/body5'" 2>&1); [ $? -ne 0 ] && grep -q "ERROR 403 sender_key_type" <<< "$out" \
-  && ok "the server refuses the recipe's P-256 mailbox the same send: 403 sender_key_type, and no receipt" || bad "recipe on P-256 → Ed25519-only mailbox: $out"
 
 # --- 5. a mailbox whose clock is off from the server's (PROTOCOL.md §15.7) ---
 # The recipe reads one clock, dr_now, which is set apart here; the server and the Go mailboxes keep the real one. Every check is
