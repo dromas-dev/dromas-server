@@ -297,7 +297,7 @@ func (s *Server) checkPrekey(id *protocol.Identity, statement, sig []byte, curre
 	const (
 		check   = ": check it, then dromas init for a new mailbox, dromas prekey renew for one in use"
 		early   = "a certificate starts an hour before it is made, so this machine's clock reads more than an hour ahead of the server's" + check
-		tooLong = "a client signs a prekey for 33 days, so this machine's clock reads more than an hour ahead of the server's" + check
+		tooLong = "a client signs a prekey for no longer than the protocol's prekey lifetime, so this machine's clock reads more than an hour ahead of the server's" + check
 	)
 	now := s.now()
 	p, signer, err := protocol.VerifyPrekey(id, statement, sig, now)
