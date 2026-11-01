@@ -134,7 +134,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 	// 4. It is an age file: its stanzas read as a reader reads them.
 	stanzas, err := protocol.ReadStanzas(ciphertext)
 	if err != nil {
-		return fail(protocol.CodeNotAge, "encrypt with age to the mailbox's prekey", "the ciphertext is not an age file")
+		return fail(protocol.CodeBadRequest, "encrypt with age to the mailbox's prekey", "the ciphertext is not an age file")
 	}
 
 	// 5. The recipient is registered and active.

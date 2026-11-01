@@ -232,11 +232,11 @@ func TestAMessagesHeadTakesNoTokenAndMarksNothing(t *testing.T) {
 	}
 	e.want(e.do(http.MethodGet, msg, nil, pass), http.StatusOK, "")
 	e.want(e.do(http.MethodGet, msg, nil, pass), http.StatusOK, "")
-	e.want(e.do(http.MethodGet, msg, nil, pass), http.StatusTooManyRequests, protocol.CodeRefetchSpent)
+	e.want(e.do(http.MethodGet, msg, nil, pass), http.StatusTooManyRequests, protocol.CodeFetchPaced)
 }
 
 // A send's retry, the same bytes the mailbox holds, whose precondition is false
-// is 412, not its first receipt (PROTOCOL.md §11.4; the client repo's #412
+// is 412, not its first receipt (PROTOCOL.md §11.10 step 6; the client repo's #412
 // item 5): the send evaluates them before its dedupe, and takes no MAY of
 // RFC 9110 §13.1.1.
 func TestASendsRetryWithAFalsePreconditionIs412(t *testing.T) {
@@ -269,7 +269,7 @@ func TestAFetchWithAFalsePreconditionLeavesTheMessageUnfetched(t *testing.T) {
 	}
 	for i, want := range []int{http.StatusOK, http.StatusOK, http.StatusTooManyRequests} {
 		if got := e.do("GET", msg, nil, pass); got.status != want {
-			t.Errorf("fetch %d after the two with a false precondition: %d %s, want %d (the first, one repeat, then refetch_spent)", i+1, got.status, got.code(), want)
+			t.Errorf("fetch %d after the two with a false precondition: %d %s, want %d (the first, one repeat, then fetch_paced)", i+1, got.status, got.code(), want)
 		}
 	}
 }
@@ -384,7 +384,7 @@ type reach struct {
 // marks no message fetched and makes no write of the store. A state refused
 // before its preconditions, a revocation of certificates through a serial
 // lower than the one held, is answered so whatever they are (PROTOCOL.md
-// §11.4 rule 3; dromas-dev/dromas-client#448 item 2), and spends and changes
+// §11.2, RFC 9110 §13.2.1; dromas-dev/dromas-client#448 item 2), and spends and changes
 // the same nothing. The routes are read from the code: one without its
 // states here fails.
 func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {

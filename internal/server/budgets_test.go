@@ -273,8 +273,8 @@ func TestAStatementOutOfOrderIsRefusedBeforeItsSignature(t *testing.T) {
 
 // Registration never changes a mailbox, so a registered mailbox is answered from its
 // record whether this process holds it or reads it, and spends nothing of its
-// address's registrations (PROTOCOL.md §11.4, the order of refusals;
-// dromas-dev/dromas-client#410): with the address's one registration
+// address's registrations (PROTOCOL.md §11.5, a request that would change
+// nothing; dromas-dev/dromas-client#410): with the address's one registration
 // spent, the mailbox's identical retry is 200, and another statement is 409 with
 // no check, signed or not, with a pass or none.
 func TestARegisteredMailboxIsAnsweredWhateverItsAddressSpentOfRegistrations(t *testing.T) {

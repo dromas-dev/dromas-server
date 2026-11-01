@@ -293,7 +293,7 @@ func TestAPreconditionIsIgnoredWhereTheAnswerWouldBeARefusal(t *testing.T) {
 		{"the revocations of an address with none", call{"GET", r.path("/revocations"), nil, ""}, 404, protocol.CodeNotRevoked},
 		{"a revocation of a revoked address", call{"PUT", gone.path("/revocations"), gone.certs(1), ""}, 410, protocol.CodeRevoked},
 		{"a registration whose body is not JSON", call{"PUT", nobody.path(""), []byte(`not json`), nobody.pass(1)}, 400, protocol.CodeBadRequest},
-		{"a send that is not an age file", call{"POST", r.path("/messages"), r.sealed(1, []byte("not age")), other.pass(1)}, 400, protocol.CodeNotAge},
+		{"a send that is not an age file", call{"POST", r.path("/messages"), r.sealed(1, []byte("not age")), other.pass(1)}, 400, protocol.CodeBadRequest},
 	} {
 		for _, h := range [][2]string{{"If-Match", `"x"`}, {"If-None-Match", "*"}} {
 			got := e.doWith(c.q.method, c.q.path, c.q.body, c.q.pass, h[0], h[1])
