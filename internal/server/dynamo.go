@@ -220,8 +220,11 @@ func (s *dynamoBackend) Start(ctx context.Context, apply func(Change)) error {
 	return nil
 }
 
-// Ready implements Backend: the three streams are followed.
-func (s *dynamoBackend) Ready() bool { return s.ready.Load() }
+// Ready implements Backend: the three streams are followed, and each
+// follower has been current within its unsyncedAfter.
+func (s *dynamoBackend) Ready() bool {
+	return s.ready.Load() && s.mailboxFeed.current(s.mailboxFeed.now()) && s.msgFeed.current(s.msgFeed.now()) && s.accFeed.current(s.accFeed.now())
+}
 
 // Keys. Every key is binary. Mailboxes: addr is the address, sk 0x00 its mailbox's
 // record and 0x01 its revocations, the identity's, kept with or without a

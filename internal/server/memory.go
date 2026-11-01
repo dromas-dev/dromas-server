@@ -267,8 +267,19 @@ func (s *Memory) apply(c Change) {
 			s.forget(c.Addr)
 			return
 		}
-		s.cache.write(c.Addr, s.cache.image(c.Mailbox))
-		s.idx.setStanding(c.Addr, st, versionOf(c.Mailbox))
+		// A view held of the address with no record, read since its record
+		// was deleted, has no version to hold an image to: the image may be
+		// of the record deleted, its event behind this process's delete on
+		// the stream. The view is dropped, and the next use reads the address
+		// (dromas-dev/dromas-server#169).
+		img := s.cache.image(c.Mailbox)
+		s.cache.write(c.Addr, func(cur *Mailbox, held, missing bool) (*Mailbox, bool) {
+			if held && !cur.hasRecord() {
+				return nil, false
+			}
+			return img(cur, held, missing)
+		})
+		s.idx.imageStanding(c.Addr, st, versionOf(c.Mailbox))
 	case RevocationsChange:
 		// They add to what memory holds, since nothing in them is ever
 		// taken away; they are never deleted.
