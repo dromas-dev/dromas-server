@@ -86,8 +86,8 @@ func TestTheTwoClocksFurthestApart(t *testing.T) {
 // Further off, the mailbox is refused, each check exact at the server's
 // clock: more than 50 minutes ahead, for its pass, which a client makes for
 // ten minutes and a server takes up to an hour ahead; more than an hour
-// ahead, for its statement, which ends past the 33 days and the hour a
-// server takes, before its pass is read. The date on every answer is how the
+// ahead, for its statement, which ends past the hour a server takes beyond
+// protocol.PrekeyLifetime, before its pass is read. The date on every answer is how the
 // server says what its clock reads (the client's words for it are the
 // client's to test, and the server's are not shown: PROTOCOL.md §11.3).
 // A mailbox that cannot register leaves nothing in the way of registering once
@@ -176,8 +176,9 @@ func TestAMailboxWhoseClockGoesBackFetchesNothing(t *testing.T) {
 	}
 }
 
-// The server takes a prekey statement that ends up to an hour past the 33
-// days a client asks for, and refuses one a second longer. And it dates every
+// The server takes a prekey statement that ends up to an hour past
+// protocol.PrekeyLifetime, the longest a client signs one for, and refuses one
+// a second longer. And it dates every
 // answer by that clock, which is how a refusal for a time states it.
 func TestThePrekeyCeilingAndTheDateOnAnAnswer(t *testing.T) {
 	t.Parallel()

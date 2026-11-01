@@ -1590,7 +1590,7 @@ func TestSendNamesTheCurrentPrekey(t *testing.T) {
 	a, b := e.mailbox(), e.mailbox()
 	old, _ := e.store.Mailbox(ctx, b.Address())
 	oldRecipient, _ := old.Prekey.Recipient()
-	e.clock.Add(20 * 24 * time.Hour) // a renewal well before not_after
+	e.clock.Add(protocol.PrekeyLifetime / 2) // a renewal well before not_after
 	if _, err := b.Rekey(ctx); err != nil {
 		t.Fatalf("rekey: %v", err)
 	}

@@ -13,12 +13,13 @@ import (
 // dated afresh, and the server keeps a message the TTL less the hour after it
 // received it, so a reader whose clock the server takes refuses none as
 // stale before its expires_at (PROTOCOL.md §12.2, §13). A message mailbox_full
-// held in its sender's outbox is the case the TTL's monthly promise is for.
+// held in its sender's outbox is the case the TTL's promise is for, read as
+// seldom as a mailbox's prekey lets it (client.RecvWithin).
 func TestAMessageIsTakenWhileTheServerServesIt(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	day := 24 * time.Hour
-	t.Run("held by mailbox_full, read every 30 days", func(t *testing.T) {
+	every := client.RecvWithin(protocol.PrekeyLifetime)
+	t.Run("held by mailbox_full, read as seldom as its prekey lets it", func(t *testing.T) {
 		const mailboxCap = 3
 		l := relaxed()
 		l.MailboxCap = mailboxCap
@@ -42,17 +43,17 @@ func TestAMessageIsTakenWhileTheServerServesIt(t *testing.T) {
 		if held != 1 {
 			t.Fatalf("%d held by mailbox_full, want 1", held)
 		}
-		e.clock.Add(30 * day)
+		e.clock.Add(every)
 		if got := len(receive(t, r).Delivered); got != mailboxCap {
-			t.Fatalf("day 30: delivered %d", got)
+			t.Fatalf("after %v: delivered %d", every, got)
 		}
 		sent, err := s.Flush(ctx)
 		if err != nil || len(sent) != 1 {
 			t.Fatalf("flush: %v, %v", sent, err)
 		}
-		e.clock.Add(30 * day)
+		e.clock.Add(every)
 		res := receive(t, r)
-		t.Logf("day 60, expires_at %s: delivered %d, refused %v", sent[0].ExpiresAt, len(res.Delivered), res.Refused)
+		t.Logf("after %v, expires_at %s: delivered %d, refused %v", 2*every, sent[0].ExpiresAt, len(res.Delivered), res.Refused)
 		if len(res.Delivered) != 1 {
 			t.Error("refused while the server served it")
 		}

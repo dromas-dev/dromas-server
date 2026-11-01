@@ -157,7 +157,7 @@ out=$(recipe "$RP" "dr_send $GEL '$work/body5'" 2>&1); [ $? -ne 0 ] && grep -q "
 
 # --- 5. a mailbox whose clock is off from the server's (PROTOCOL.md §15.7) ---
 # The recipe reads one clock, dr_now, which is set apart here; the server and the Go mailboxes keep the real one. Every check is
-# exact at the server's clock: a pass is taken up to an hour ahead, and a statement up to an hour past the 33 days a client asks for.
+# exact at the server's clock: a pass is taken up to an hour ahead, and a statement up to an hour past the longest a client signs one for.
 clock(){ echo "dr_now(){ echo \$((\$(date -u +%s) + ($1))); }"; }   # <seconds> → the recipe's clock, that far from the real one
 for c in "-540 9 minutes slow" "2940 49 minutes fast"; do
   off=${c%% *}; name=${c#* }; d="$work/clock$off"; gf="$work/gf$off"

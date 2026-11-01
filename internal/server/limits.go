@@ -21,7 +21,7 @@ type Limits struct {
 	MaxWait        time.Duration // the longest a list is held, whatever its wait asks (PROTOCOL.md §11.11) [tunable]
 	MaxHeldLists   int           // lists this process holds at once; past it a held list is answered 503 (0: none held) [tunable]
 	AccountMaxSize int           // the most an account lifts MaxSize to, so what a send reads first; up to MaxSize, nothing
-	RenewalsPerDay int           // prekey renewals per mailbox, a number a day as SendsPerDay (decided: 10), so no mailbox can spend the mailboxes table's write capacity
+	RenewalsPerDay int           // prekey renewals per mailbox, a number a day as SendsPerDay (decided: 5), so no mailbox can spend the mailboxes table's write capacity
 	RetiredKept    int           // retired prekeys a mailbox record keeps for the new-key rule, newest first (decided: 10), so a record stays small
 
 	RegistrationsPerHour      int // per IPv4 address or IPv6 /64 [tunable]
@@ -42,8 +42,8 @@ type Limits struct {
 	DrainRefill                  time.Duration // (decided: 6 s, ten a minute)
 	CallBurst                    int           // per mailbox: its calls with its pass that no other budget counts [tunable]; an account lifts it
 	CallRefill                   time.Duration // [tunable]
-	CertificatesPerDay           int           // per mailbox, a number a day: renewals under a later certificate, but for one that replaces a revoked certificate (decided: 10, as renewals)
-	CertificateRevocationsPerDay int           // per mailbox, a number a day: raises of its revocation of certificates (decided: a count of its own, apart from CertificatesPerDay; 10, as that one) [tunable]
+	CertificatesPerDay           int           // per mailbox, a number a day: renewals under a later certificate, but for one that replaces a revoked certificate (decided: 5, as renewals)
+	CertificateRevocationsPerDay int           // per mailbox, a number a day: raises of its revocation of certificates (decided: a count of its own, apart from CertificatesPerDay; 10) [tunable]
 
 	// MaxCertificateLifetime is the longest a certificate the server takes
 	// when it first takes one may run, its valid-before less its valid-after
@@ -99,7 +99,7 @@ func DefaultLimits() Limits {
 		PollAfter:                    60,
 		MaxWait:                      5 * time.Minute,
 		MaxHeldLists:                 50_000,
-		RenewalsPerDay:               10,
+		RenewalsPerDay:               5,
 		RetiredKept:                  10,
 		RegistrationsPerHour:         10,
 		RangeRegistrationsPerHour:    500,
@@ -112,7 +112,7 @@ func DefaultLimits() Limits {
 		DrainRefill:                  6 * time.Second,
 		CallBurst:                    50,
 		CallRefill:                   6 * time.Second,
-		CertificatesPerDay:           10,
+		CertificatesPerDay:           5,
 		CertificateRevocationsPerDay: 10,
 		MaxCertificateLifetime:       45*24*time.Hour + protocol.MaxSkew,
 		ACLEntries:                   500,
