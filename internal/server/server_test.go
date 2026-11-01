@@ -1625,7 +1625,7 @@ func TestRenewalLimits(t *testing.T) {
 	// its current signer, the identity, and counts under the renewals; a
 	// renewal under a later certificate counts under the certificates
 	// (TestTheIdentitysActsAreCountedApart).
-	l.RenewalsPerDay, l.CertificatesPerDay, l.RetiredKept = 3, 3, 2
+	l.RenewalsPerDay, l.CertificatesPerDay, l.RetiredKept, l.RenewalsBurst, l.CertificatesBurst = 3, 3, 2, 3, 3
 	e := newEnv(t, l)
 	ctx := context.Background()
 	b := e.mailbox()

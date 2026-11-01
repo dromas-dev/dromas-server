@@ -37,7 +37,7 @@ func TestARetryAfterARenewalGetsItsReceipt(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	l := relaxed()
-	l.SendsPerDay = 1
+	l.SendsPerDay, l.SendsBurst = 1, 1
 	e := newEnv(t, l)
 	a, b := e.mailbox(), e.mailbox()
 	sent := capture(e, "/v1/"+b.Address().String())
@@ -474,7 +474,7 @@ func TestAFloorNoHigherIsAnsweredWithoutACheck(t *testing.T) {
 func TestTheIdentitysActsAreCountedApart(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.CertificatesPerDay, l.CertificateRevocationsPerDay = 1, 1
+	l.CertificatesPerDay, l.CertificateRevocationsPerDay, l.CertificatesBurst, l.CertificateRevocationsBurst = 1, 1, 1, 1
 	e := newEnv(t, l)
 	r := e.raw().register(protocol.MaxPrekeyLifetime).certified()
 	until := e.clock.Now().Add(protocol.PrekeyLifetime)
@@ -506,7 +506,7 @@ func TestATakerCannotHoldTheRemedyBack(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	l.CallBurst, l.CallRefill = DefaultLimits().CallBurst, DefaultLimits().CallRefill
-	l.CertificatesPerDay, l.CertificateRevocationsPerDay = 1, 1
+	l.CertificatesPerDay, l.CertificateRevocationsPerDay, l.CertificatesBurst, l.CertificateRevocationsBurst = 1, 1, 1, 1
 	e := newEnv(t, l)
 	r := e.raw()
 	r.registerCertified(protocol.MaxPrekeyLifetime)
@@ -731,7 +731,7 @@ func concurrently(t *testing.T, e *env, l Limits, to *raw, froms []*raw, n int) 
 func TestDailySendsAreTakenBeforeTheWrite(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.SendsPerDay, l.MailboxCap = 5, 0
+	l.SendsPerDay, l.MailboxCap, l.SendsBurst = 5, 0, 5
 	e := newEnv(t, l)
 	from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 	if stored := concurrently(t, e, l, to, []*raw{from}, 20); stored != 5 {
@@ -910,7 +910,7 @@ func (s panicStore) Revoke(context.Context, protocol.Address, *Revocations, Expe
 func TestAPanicSettlesItsReservations(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.MissesPerMinute, l.DrainBurst, l.DrainRefill, l.CertificateRevocationsPerDay = 10, 10, time.Minute, 10
+	l.MissesPerMinute, l.DrainBurst, l.DrainRefill, l.CertificateRevocationsPerDay, l.CertificateRevocationsBurst = 10, 10, time.Minute, 10, 10
 	l.RegistrationsPerHour = 10
 	e := newEnv(t, l)
 	victim, owner := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
@@ -1043,5 +1043,33 @@ func TestTheDrainBudget(t *testing.T) {
 	epass := e2.pass(echo)
 	for _, m := range listOf(t, e2.do(http.MethodGet, "/v1/"+echo.Address().String()+"/messages", nil, epass)).Messages {
 		e2.want(e2.do(http.MethodGet, "/v1/"+echo.Address().String()+"/messages/"+m.ID, nil, epass), http.StatusOK, "")
+	}
+}
+
+// A number a day and its bucket are set apart (Limits.SendsBurst), as Let's
+// Encrypt sets a limit by its burst, count and period: a sender takes the
+// whole bucket at once, past it waits one day divided by the number a day,
+// and is refused naming that number.
+func TestABucketLargerThanItsNumberADay(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	l := relaxed()
+	l.SendsPerDay, l.SendsBurst = 2, 5
+	e := newEnv(t, l)
+	a, b := e.mailbox(), e.mailbox()
+	for i := range l.SendsBurst {
+		send(t, a, b, fmt.Sprint(i))
+	}
+	_, err := a.Send(ctx, b.Address(), "past the bucket")
+	var ae *client.APIError
+	every := 24 * time.Hour / time.Duration(l.SendsPerDay)
+	if !errorsAs(err, &ae) || ae.Problem.Code != protocol.CodeRateLimited || ae.Problem.QuotaID != protocol.QuotaSends ||
+		ae.Problem.Limit == nil || *ae.Problem.Limit != uint64(l.SendsPerDay) || ae.RetryAfter <= every-time.Minute || ae.RetryAfter > every {
+		t.Fatalf("a send past a bucket of %d: %v, want rate_limited sends naming %d a day, due in %v", l.SendsBurst, err, l.SendsPerDay, every)
+	}
+	e.clock.Add(every)
+	send(t, a, b, "one back")
+	if _, err := a.Send(ctx, b.Address(), "and no more"); codeOf(err) != protocol.CodeRateLimited {
+		t.Fatalf("a second send after one came back: %v, want rate_limited", err)
 	}
 }

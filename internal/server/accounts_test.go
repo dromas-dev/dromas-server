@@ -162,7 +162,7 @@ func TestAccounts(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	l := relaxed()
-	l.SendsPerDay, l.MaxSize, l.AccountMaxSize = 2, 4096, 16384 // the smallest message is 2,048 bytes
+	l.SendsPerDay, l.MaxSize, l.AccountMaxSize, l.SendsBurst = 2, 4096, 16384, 2 // the smallest message is 2,048 bytes
 
 	t.Run("an unmetered account lifts the daily limit and the cap", func(t *testing.T) {
 		e := newEnv(t, l)
@@ -650,7 +650,7 @@ func TestAccountChangesReachMemory(t *testing.T) {
 	}
 	ctx := context.Background()
 	l := relaxed()
-	l.SendsPerDay = 1
+	l.SendsPerDay, l.SendsBurst = 1, 1
 	e := newEnv(t, l)
 	s := e.store.(*Memory)
 	acc, key := accountEnv(t, e, false, 1)

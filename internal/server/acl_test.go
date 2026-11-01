@@ -360,7 +360,7 @@ func TestAnACLsGETReadsItsPreconditions(t *testing.T) {
 func TestACLRefusesSends(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.SendsPerDay = 1
+	l.SendsPerDay, l.SendsBurst = 1, 1
 	e := newEnv(t, l)
 	a, b, c := e.mailbox(), e.mailbox(), e.mailbox()
 	to := "/v1/" + b.Address().String()

@@ -105,3 +105,28 @@ func TestAMaximumCertificateAboveTheTTLPasses(t *testing.T) {
 		}
 	}
 }
+
+// A number a day that is on with a bucket of nothing is refused at start, for
+// each of the four, and the defaults pass.
+func TestABurstOfNothingIsRefused(t *testing.T) {
+	if err := bursts(server.DefaultLimits()); err != nil {
+		t.Fatalf("the defaults: %v", err)
+	}
+	for name, zero := range map[string]func(*server.Limits){
+		"sends":                   func(l *server.Limits) { l.SendsBurst = 0 },
+		"renewals":                func(l *server.Limits) { l.RenewalsBurst = 0 },
+		"certificates":            func(l *server.Limits) { l.CertificatesBurst = 0 },
+		"certificate-revocations": func(l *server.Limits) { l.CertificateRevocationsBurst = 0 },
+	} {
+		l := server.DefaultLimits()
+		zero(&l)
+		if err := bursts(l); err == nil || !strings.Contains(err.Error(), "--"+name+"-burst") {
+			t.Errorf("%s: %v, want a refusal naming --%s-burst", name, err, name)
+		}
+	}
+	l := server.DefaultLimits()
+	l.SendsPerDay, l.SendsBurst = 0, 0
+	if err := bursts(l); err != nil {
+		t.Errorf("a limit that is off with no bucket: %v", err)
+	}
+}

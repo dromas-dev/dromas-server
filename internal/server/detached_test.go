@@ -79,7 +79,7 @@ func TestAWriteOutlivesItsCallersHangUp(t *testing.T) {
 	t.Parallel()
 	ctx0 := context.Background()
 	l := relaxed()
-	l.SendsPerDay, l.RenewalsPerDay = 1, 1
+	l.SendsPerDay, l.RenewalsPerDay, l.SendsBurst, l.RenewalsBurst = 1, 1, 1, 1
 	h := &heldTillGone{req: make(chan context.Context, 1), entered: make(chan struct{}, 1)}
 	e := newEnv(t, l, func(c *Config) { h.Store, c.Store = c.Store, h })
 	done := make(chan struct{}, 8)
@@ -262,7 +262,7 @@ func TestACountIsKeptWhenItsWriteMayHaveBeenApplied(t *testing.T) {
 	for i, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			l := relaxed()
-			l.SendsPerDay = 1
+			l.SendsPerDay, l.SendsBurst = 1, 1
 			s := &failPut{}
 			e := newEnv(t, l, func(cfg *Config) { s.Store, cfg.Store = cfg.Store, s })
 			from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)

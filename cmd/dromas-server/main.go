@@ -105,6 +105,25 @@ func receiveRate(l server.Limits) error {
 	return nil
 }
 
+// bursts refuses a number a day that is on with a bucket that holds nothing,
+// which would leave that limit off where its flag says it is on.
+func bursts(l server.Limits) error {
+	for _, b := range []struct {
+		name          string
+		perDay, burst int
+	}{
+		{"sends", l.SendsPerDay, l.SendsBurst},
+		{"renewals", l.RenewalsPerDay, l.RenewalsBurst},
+		{"certificates", l.CertificatesPerDay, l.CertificatesBurst},
+		{"certificate-revocations", l.CertificateRevocationsPerDay, l.CertificateRevocationsBurst},
+	} {
+		if b.perDay < 0 || b.burst < 0 || (b.perDay > 0 && b.burst == 0) {
+			return fmt.Errorf("--%s-burst: %d with --%s-per-day %d: a number a day that is on takes a bucket of at least 1", b.name, b.burst, b.name, b.perDay)
+		}
+	}
+	return nil
+}
+
 // certificateLifetime refuses a longest certificate the server takes that is
 // not above protocol.TTL and protocol.MaxSkew together: a client signs no
 // message under a certificate with the TTL or less left, and dates one the
@@ -145,8 +164,10 @@ func serve(args []string) error {
 	fs.IntVar(&l.MaxSize, "max-size", l.MaxSize, "cap on a ciphertext, bytes: a send reads its body to it. A whole number of its own padding blocks, at most the protocol's largest ciphertext (PROTOCOL.md §9.3, §11.10), or serve does not start")
 	fs.IntVar(&l.AccountMaxSize, "account-max-size", l.AccountMaxSize, "the most an account can lift --max-size to, bytes (up to --max-size: nothing). Held as --max-size is")
 	fs.IntVar(&l.MailboxCap, "mailbox-cap", l.MailboxCap, "messages per mailbox (0: off)")
-	fs.IntVar(&l.SendsPerDay, "sends-per-day", l.SendsPerDay, "sends per sender a day: that many at once, then one back each day divided by it (0: off)")
-	fs.IntVar(&l.RenewalsPerDay, "renewals-per-day", l.RenewalsPerDay, "prekey renewals per mailbox a day, as --sends-per-day (0: off)")
+	fs.IntVar(&l.SendsPerDay, "sends-per-day", l.SendsPerDay, "sends per sender a day: one back each day divided by it, into a bucket of --sends-burst (0: off)")
+	fs.IntVar(&l.SendsBurst, "sends-burst", l.SendsBurst, "sends per sender at once: the bucket --sends-per-day refills")
+	fs.IntVar(&l.RenewalsPerDay, "renewals-per-day", l.RenewalsPerDay, "prekey renewals per mailbox a day, as --sends-per-day, into a bucket of --renewals-burst (0: off)")
+	fs.IntVar(&l.RenewalsBurst, "renewals-burst", l.RenewalsBurst, "prekey renewals per mailbox at once: the bucket --renewals-per-day refills")
 	fs.IntVar(&l.RetiredKept, "retired-kept", l.RetiredKept, "retired prekeys a mailbox record keeps, newest first (0: all live ones)")
 	fs.IntVar(&l.PollBurst, "poll-burst", l.PollBurst, "polls a mailbox may make at once (0: off)")
 	fs.DurationVar(&l.PollRefill, "poll-refill", l.PollRefill, "one more poll each")
@@ -165,8 +186,10 @@ func serve(args []string) error {
 	fs.DurationVar(&l.DrainRefill, "drain-refill", l.DrainRefill, "one more first fetch each")
 	fs.IntVar(&l.CallBurst, "call-burst", l.CallBurst, "a mailbox's calls with its pass that no other budget counts, at once (0: off)")
 	fs.DurationVar(&l.CallRefill, "call-refill", l.CallRefill, "one more such call each")
-	fs.IntVar(&l.CertificatesPerDay, "certificates-per-day", l.CertificatesPerDay, "per mailbox a day, as --sends-per-day: renewals under a later certificate, but for one that replaces a revoked certificate (0: off)")
-	fs.IntVar(&l.CertificateRevocationsPerDay, "certificate-revocations-per-day", l.CertificateRevocationsPerDay, "per mailbox a day, as --sends-per-day: raises of its revocation of certificates (0: off)")
+	fs.IntVar(&l.CertificatesPerDay, "certificates-per-day", l.CertificatesPerDay, "per mailbox a day, as --sends-per-day: renewals under a later certificate, but for one that replaces a revoked certificate, into a bucket of --certificates-burst (0: off)")
+	fs.IntVar(&l.CertificatesBurst, "certificates-burst", l.CertificatesBurst, "the bucket --certificates-per-day refills")
+	fs.IntVar(&l.CertificateRevocationsPerDay, "certificate-revocations-per-day", l.CertificateRevocationsPerDay, "per mailbox a day, as --sends-per-day: raises of its revocation of certificates, into a bucket of --certificate-revocations-burst (0: off)")
+	fs.IntVar(&l.CertificateRevocationsBurst, "certificate-revocations-burst", l.CertificateRevocationsBurst, "the bucket --certificate-revocations-per-day refills")
 	fs.DurationVar(&l.MaxCertificateLifetime, "max-certificate-lifetime", l.MaxCertificateLifetime, "the longest a certificate may run, valid-before less valid-after, when a mailbox's statement first takes it, in whole seconds, served as max_certificate_lifetime in GET /v1/; a renewal under the mailbox's current certificate is not held to it: above the message TTL and the hour together, or serve does not start")
 	fs.IntVar(&l.ACLEntries, "acl-entries", l.ACLEntries, "the most entries a mailbox's ACL holds, its two lists together: from 1 to the protocol's "+strconv.Itoa(protocol.MaxACLEntries)+", or serve does not start")
 	fs.DurationVar(&l.BodyTimeout, "body-timeout", l.BodyTimeout, "how long a request body, or each write of a response, may take before one more second for each --body-min-rate bytes of it moved; what a handler leaves of a body is read before the answer, to the deadline the handler's reads left, and the answer has this from then; also the longest wait for the one large read (0: off)")
@@ -199,6 +222,9 @@ func serve(args []string) error {
 		return err
 	}
 	if err := aclEntries(l); err != nil {
+		return err
+	}
+	if err := bursts(l); err != nil {
 		return err
 	}
 	logger := log.New(server.Redacting(os.Stderr), "", log.LstdFlags|log.LUTC)

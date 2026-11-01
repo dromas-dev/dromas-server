@@ -120,7 +120,7 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 	l.PollBurst, l.PollRefill = 1000, time.Hour
 	l.DrainBurst, l.DrainRefill = 1000, time.Hour
 	l.ReceiveBurst, l.ReceiveRefill = 1000, time.Hour
-	l.SendsPerDay = 1000
+	l.SendsPerDay, l.SendsBurst = 1000, 1000
 	site := siteBackend(t, siteFiles)
 	reg := prometheus.NewRegistry()
 	e := newEnv(t, l, func(c *Config) { c.Metrics, c.SiteBackend = NewMetrics(reg), site })

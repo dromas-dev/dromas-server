@@ -53,8 +53,8 @@ type env struct {
 
 func relaxed() Limits {
 	l := DefaultLimits()
-	l.SendsPerDay, l.PollBurst, l.RegistrationsPerHour, l.RenewalsPerDay, l.MissesPerMinute = 0, 0, 0, 0, 0
-	l.ReceiveBurst, l.DrainBurst, l.CallBurst, l.CertificatesPerDay, l.CertificateRevocationsPerDay = 0, 0, 0, 0, 0
+	l.SendsPerDay, l.PollBurst, l.RegistrationsPerHour, l.RenewalsPerDay, l.MissesPerMinute, l.SendsBurst, l.RenewalsBurst = 0, 0, 0, 0, 0, 0, 0
+	l.ReceiveBurst, l.DrainBurst, l.CallBurst, l.CertificatesPerDay, l.CertificateRevocationsPerDay, l.CertificatesBurst, l.CertificateRevocationsBurst = 0, 0, 0, 0, 0, 0, 0
 	l.RangeRegistrationsPerHour, l.RequestBurst = 0, 0
 	return l
 }
@@ -462,7 +462,7 @@ func TestLimits(t *testing.T) {
 	})
 	t.Run("sends per day", func(t *testing.T) {
 		l := relaxed()
-		l.SendsPerDay = 2
+		l.SendsPerDay, l.SendsBurst = 2, 2
 		e := newEnv(t, l)
 		a, b := e.mailbox(), e.mailbox()
 		send(t, a, b, "1")

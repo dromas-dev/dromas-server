@@ -97,7 +97,7 @@ func TestARefusalGivesTheLongestWait(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	l.CallBurst, l.CallRefill = 1, time.Minute
-	l.SendsPerDay, l.RenewalsPerDay = 1, 1
+	l.SendsPerDay, l.RenewalsPerDay, l.SendsBurst, l.RenewalsBurst = 1, 1, 1, 1
 	e := newEnv(t, l)
 	a, b := e.mailbox(), e.mailbox()
 	to := "/v1/" + b.Address().String()
@@ -140,7 +140,7 @@ func TestARetryPastTheCallsIsDeferredByTheCalls(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	l.CallBurst, l.CallRefill = 2, time.Minute
-	l.SendsPerDay = 1
+	l.SendsPerDay, l.SendsBurst = 1, 1
 	e := newEnv(t, l)
 	a, b := e.mailbox(), e.mailbox()
 	to := "/v1/" + b.Address().String() + "/messages"
