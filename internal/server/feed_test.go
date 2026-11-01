@@ -26,6 +26,7 @@ type fakeStream struct {
 	seq     int
 	expire  map[string]bool // shard ids whose next GetRecords finds the iterator expired
 	trimmed bool
+	denied  bool // every GetRecords is refused, as AWS refuses a role without the grant
 }
 
 type fakeShard struct {
@@ -103,6 +104,9 @@ func (f *fakeStream) GetRecords(_ context.Context, in *dynamodbstreams.GetRecord
 	if f.trimmed {
 		return nil, &stypes.TrimmedDataAccessException{}
 	}
+	if f.denied {
+		return nil, errors.New("AccessDeniedException: not authorized to perform dynamodb:GetRecords")
+	}
 	if f.expire[id] {
 		delete(f.expire, id)
 		return nil, &stypes.ExpiredIteratorException{}
@@ -154,6 +158,47 @@ func feedFixture(t *testing.T) (*fakeStream, *feed, *Memory, protocol.Address, u
 func (s *Memory) countOf(mailbox protocol.Address) int {
 	n, _ := s.Count(context.Background(), mailbox)
 	return n
+}
+
+// A follower whose reads fail, refused as AWS refuses a role without the
+// grant, is not current once unsyncedAfter has passed since it last read its
+// stream to the end, so the process answers 503 (dynamoBackend.Ready); a
+// pass that reads to the end makes it current again.
+func TestAFollowerWhoseReadsFailIsNotCurrent(t *testing.T) {
+	t.Parallel()
+	fs, f, _, _, _ := feedFixture(t)
+	now := time.Now()
+	f.clock = func() time.Time { return now }
+	fs.open("s1", "")
+	ctx := context.Background()
+	if err := f.position(ctx, "arn"); err != nil {
+		t.Fatal(err)
+	}
+	if !f.current(now) {
+		t.Fatal("a follower just positioned is not current")
+	}
+	deny := func(d bool) {
+		fs.mu.Lock()
+		defer fs.mu.Unlock()
+		fs.denied = d
+	}
+	deny(true)
+	for range 3 {
+		now = now.Add(f.unsyncedAfter() / 2)
+		if err := f.once(ctx); err == nil {
+			t.Fatal("a pass whose reads are refused passed")
+		}
+	}
+	if f.current(now) {
+		t.Errorf("a follower whose reads are refused is current %s after it was positioned", 3*f.unsyncedAfter()/2)
+	}
+	deny(false)
+	if err := f.once(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !f.current(now) || f.current(now.Add(f.unsyncedAfter()+time.Second)) {
+		t.Error("a pass that reads to the end does not make the follower current from then")
+	}
 }
 
 func TestFeed(t *testing.T) {

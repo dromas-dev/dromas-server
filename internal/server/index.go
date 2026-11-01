@@ -397,6 +397,38 @@ func (x *index) setStanding(a protocol.Address, st Standing, v version) {
 	})
 }
 
+// imageStanding is setStanding for the feed's image of a record. A mailbox
+// loaded with no record is dropped instead, as forget drops one, so that its
+// next use reads it: it has no version to hold the image to, and the image
+// may be of a record this process deleted, its event behind the delete on
+// the stream. One loading is judged once its load is done, by what it read.
+func (x *index) imageStanding(a protocol.Address, st Standing, v version) {
+	sh := x.shard(a)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	defer sh.woke(a)
+	newer := func(m *mailboxMem) {
+		if !(version{m.created, m.rev}).after(v) {
+			m.st, m.created, m.rev = st, v.created, v.rev
+		}
+	}
+	switch m := sh.mailboxes[a]; {
+	case m == nil:
+	case m.loading != nil:
+		m.loading.queued = append(m.loading.queued, func(m *mailboxMem) {
+			if !m.exists {
+				m.stale = true // dropped once its load is done
+				return
+			}
+			newer(m)
+		})
+	case !m.exists:
+		delete(sh.mailboxes, a)
+	default:
+		newer(m)
+	}
+}
+
 // setRevocations records what an address's identity revoked, adding to
 // what memory holds: nothing it revoked is taken away.
 func (x *index) setRevocations(a protocol.Address, revoked bool, through uint64) {

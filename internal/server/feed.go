@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -35,6 +36,41 @@ type feed struct {
 	shards map[string]*shard
 	listed time.Time // the last full listing of shards
 	ended  bool      // a shard ended since: list again for its children
+
+	// synced is when the follower was last current, in unix ns: positioned,
+	// or at the end of a pass that read each shard as far as it went. Read
+	// by any goroutine (current).
+	synced atomic.Int64
+	clock  func() time.Time // what synced is read by; time.Now if nil
+}
+
+func (f *feed) now() time.Time {
+	if f.clock != nil {
+		return f.clock()
+	}
+	return time.Now()
+}
+
+// unsyncedAfter is how long a follower may go without a pass that read its
+// stream to its end before the process cannot show that its memory is
+// current (ARCHITECTURE.md § The in-process plan, item 6): three intervals,
+// and no less than 30 seconds. A follower refused by AWS, or one whose
+// reads fail or never reach the end, is unsynced past it.
+func (f *feed) unsyncedAfter() time.Duration { return max(30*time.Second, 3*f.interval) }
+
+// current reports whether the follower was current within unsyncedAfter of now.
+func (f *feed) current(now time.Time) bool {
+	return now.Sub(time.Unix(0, f.synced.Load())) <= f.unsyncedAfter()
+}
+
+// once is one pass, which marks the follower current when it reads every
+// shard as far as it goes.
+func (f *feed) once(ctx context.Context) error {
+	err := f.pass(ctx)
+	if err == nil {
+		f.synced.Store(f.now().UnixNano())
+	}
+	return err
 }
 
 // streamsAPI is the part of the DynamoDB Streams client the follower uses.
@@ -136,6 +172,7 @@ func (f *feed) position(ctx context.Context, arn string) error {
 		f.shards[sh.id] = sh
 	}
 	f.listed = time.Now()
+	f.synced.Store(f.now().UnixNano())
 	return nil
 }
 
@@ -170,7 +207,7 @@ func (f *feed) run(ctx context.Context, fatal func(error)) {
 	t := time.NewTicker(f.interval)
 	defer t.Stop()
 	for {
-		if err := f.pass(ctx); err != nil {
+		if err := f.once(ctx); err != nil {
 			if ctx.Err() != nil {
 				return
 			}

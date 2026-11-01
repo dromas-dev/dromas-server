@@ -442,15 +442,16 @@ func (s *Server) dated(h http.Handler) http.Handler {
 	})
 }
 
-// whenReady answers 503 until the store's memory is loaded: a poll answered
-// before then could read a count of zero that is not true.
+// whenReady answers 503 while the store cannot show that its memory is
+// current: until it is loaded, and while a stream follower is unsynced. A
+// poll answered then could read a count of zero that is not true.
 func (s *Server) whenReady(h http.Handler) http.Handler {
 	if s.ready == nil {
 		return h
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.ready() {
-			p := fail(protocol.CodeUnavailable, "retry later", "the server is starting")
+			p := fail(protocol.CodeUnavailable, "retry later", "the server cannot show that what it holds is current")
 			p.retryAfter = retryLater
 			writeProblem(w, p)
 			return

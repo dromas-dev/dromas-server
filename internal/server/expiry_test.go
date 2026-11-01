@@ -118,6 +118,44 @@ func TestAForgottenMailboxRegistersAnew(t *testing.T) {
 	}
 }
 
+// The feed's image of a record this process has deleted since, its event
+// behind the delete on the stream, brings back nothing: not the record onto
+// the view of the address read since, which holds its revocations alone, nor
+// its standing. The mailbox registers anew (dromas-dev/dromas-server#169).
+func TestALateImageOfADeletedRecordBringsNothingBack(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t, relaxed())
+	m, ok := e.store.(*Memory)
+	if !ok {
+		t.Skipf("the store is %T, not memory", e.store)
+	}
+	now := e.clock.Now()
+	r := e.raw().register(protocol.MaxPrekeyLifetime)
+	a := r.id.Address()
+	e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), 200, "")
+	r.prekey(2, now.Add(protocol.MaxPrekeyLifetime), nil)
+	e.want(e.do("PUT", r.path("/prekey"), r.upload(2), r.pass(2)), 200, "")
+	late, known := m.Known(a)
+	if !known || !late.open() {
+		t.Fatalf("the renewed record is not held: %v", late)
+	}
+	if err := m.DeleteMailbox(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	e.want(e.do("GET", r.path(""), nil, ""), 404, protocol.CodeNoSuchMailbox) // the view read since: revocations alone
+	m.apply(Change{Kind: RecordChange, Addr: a, Mailbox: late})
+	if b, known := m.Known(a); known && b.open() {
+		t.Errorf("the late image brings back the deleted record, serial %d", b.Prekey.Serial)
+	}
+	if st, ok := m.Held(a); ok && st.State == Active {
+		t.Errorf("the late image brings back the deleted record's standing: %+v", st)
+	}
+	e.want(e.do("GET", r.path(""), nil, ""), 404, protocol.CodeNoSuchMailbox)
+	r.prekey(3, now.Add(protocol.MaxPrekeyLifetime), nil)
+	e.want(e.do("PUT", r.path(""), r.registration(3), r.pass(3)), 201, "")
+}
+
 // In DynamoDB a mailbox's record carries its expiry as the TTL attribute, in
 // seconds, and nothing its identity revoked, which is the item beside it
 // (sk 0x01); a revocation of the address deletes the record and keeps the
