@@ -464,7 +464,7 @@ func TestARenewalTheStoreMayHaveAppliedIsCounted(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			l := relaxed()
-			l.RenewalsPerDay = 1
+			l.RenewalsPerDay, l.RenewalsBurst = 1, 1
 			s := &overFake{t: t, dynamo: scripted("UpdateItem", c.answers...)}
 			e := newEnv(t, l, func(cfg *Config) { s.Store, cfg.Store = cfg.Store, s })
 			r := e.raw().register(protocol.MaxPrekeyLifetime)
@@ -500,7 +500,7 @@ func TestASendWhoseWriteWasRetriedIsStored(t *testing.T) {
 		}
 		t.Run(fmt.Sprintf("counted/retried=%v", retried), func(t *testing.T) {
 			l := relaxed()
-			l.SendsPerDay = 1
+			l.SendsPerDay, l.SendsBurst = 1, 1
 			s := &overFake{t: t, dynamo: dynamo()}
 			e := newEnv(t, l, func(cfg *Config) { s.Store, cfg.Store = cfg.Store, s })
 			from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)

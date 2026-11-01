@@ -502,8 +502,8 @@ func TestTheRemedyRenewsWhenATakerSpentTheDaysRenewals(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	l := relaxed()
-	l.RenewalsPerDay = DefaultLimits().RenewalsPerDay
-	l.CertificatesPerDay = DefaultLimits().CertificatesPerDay
+	l.RenewalsPerDay, l.RenewalsBurst = DefaultLimits().RenewalsPerDay, DefaultLimits().RenewalsBurst
+	l.CertificatesPerDay, l.CertificatesBurst = DefaultLimits().CertificatesPerDay, DefaultLimits().CertificatesBurst
 	e := newEnv(t, l)
 	a := e.certifiedMailbox()
 	taken := worker(t, a)

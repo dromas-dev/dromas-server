@@ -14,7 +14,8 @@ import (
 type Limits struct {
 	MaxSize        int           // the cap on a ciphertext, in bytes, and what a send reads of its body; nothing may depend on its value
 	MailboxCap     int           // total per mailbox, a storage ceiling [tunable]
-	SendsPerDay    int           // per sender, a number a day: that many at once, one back each day divided by it (decided: 20)
+	SendsPerDay    int           // per sender, a number a day: one back each day divided by it, into a bucket of SendsBurst (decided: 50)
+	SendsBurst     int           // per sender: the sends it may make at once, the bucket SendsPerDay refills (decided: 60)
 	PollBurst      int           // polls a mailbox may make at once (decided: 10); also the fetches of messages already fetched
 	PollRefill     time.Duration // one more poll each (decided: 50 s; once a minute is stated); also one more such fetch
 	PollAfter      int           // seconds, told to clients (decided: 60)
@@ -22,6 +23,7 @@ type Limits struct {
 	MaxHeldLists   int           // lists this process holds at once; past it a held list is answered 503 (0: none held) [tunable]
 	AccountMaxSize int           // the most an account lifts MaxSize to, so what a send reads first; up to MaxSize, nothing
 	RenewalsPerDay int           // prekey renewals per mailbox, a number a day as SendsPerDay (decided: 5), so no mailbox can spend the mailboxes table's write capacity
+	RenewalsBurst  int           // per mailbox: the renewals it may make at once, the bucket RenewalsPerDay refills (decided: 5, as its number a day)
 	RetiredKept    int           // retired prekeys a mailbox record keeps for the new-key rule, newest first (decided: 10), so a record stays small
 
 	RegistrationsPerHour      int // per IPv4 address or IPv6 /64 [tunable]
@@ -44,6 +46,8 @@ type Limits struct {
 	CallRefill                   time.Duration // [tunable]
 	CertificatesPerDay           int           // per mailbox, a number a day: renewals under a later certificate, but for one that replaces a revoked certificate (decided: 5, as renewals)
 	CertificateRevocationsPerDay int           // per mailbox, a number a day: raises of its revocation of certificates (decided: a count of its own, apart from CertificatesPerDay; 10) [tunable]
+	CertificatesBurst            int           // per mailbox: the bucket CertificatesPerDay refills (decided: 5, as its number a day)
+	CertificateRevocationsBurst  int           // per mailbox: the bucket CertificateRevocationsPerDay refills (decided: 10, as its number a day) [tunable]
 
 	// MaxCertificateLifetime is the longest a certificate the server takes
 	// when it first takes one may run, its valid-before less its valid-after
@@ -93,13 +97,15 @@ func DefaultLimits() Limits {
 	return Limits{
 		MaxSize:                      64 << 10,
 		MailboxCap:                   1000,
-		SendsPerDay:                  20,
+		SendsPerDay:                  50,
+		SendsBurst:                   60,
 		PollBurst:                    10,
 		PollRefill:                   50 * time.Second,
 		PollAfter:                    60,
 		MaxWait:                      5 * time.Minute,
 		MaxHeldLists:                 50_000,
 		RenewalsPerDay:               5,
+		RenewalsBurst:                5,
 		RetiredKept:                  10,
 		RegistrationsPerHour:         10,
 		RangeRegistrationsPerHour:    500,
@@ -114,6 +120,8 @@ func DefaultLimits() Limits {
 		CallRefill:                   6 * time.Second,
 		CertificatesPerDay:           5,
 		CertificateRevocationsPerDay: 10,
+		CertificatesBurst:            5,
+		CertificateRevocationsBurst:  10,
 		MaxCertificateLifetime:       45*24*time.Hour + protocol.MaxSkew,
 		ACLEntries:                   500,
 		BodyTimeout:                  20 * time.Second,
@@ -280,14 +288,15 @@ func (r *reservation) settle(back bool, now time.Time) {
 	bs.mu.Unlock()
 }
 
-// perPeriod is buckets of n, refilled n per period: a number a day is one
-// back each day divided by it (Let's Encrypt's token bucket, and never a
-// window that empties at midnight: dromas-dev/dromas-server#54).
-func perPeriod(name string, n int, period time.Duration) *buckets {
-	if n == 0 {
+// perPeriod is buckets of burst, refilled n per period: a number a day is one
+// back each day divided by it, into a bucket that holds burst, as Let's
+// Encrypt sets a limit by its burst, count and period (Boulder's
+// ratelimits.Limit), never a window that empties at midnight. n == 0 is off.
+func perPeriod(name string, burst, n int, period time.Duration) *buckets {
+	if n == 0 || burst == 0 {
 		return newBuckets(name, 0, 0)
 	}
-	return newBuckets(name, n, period/time.Duration(n))
+	return newBuckets(name, burst, period/time.Duration(n))
 }
 
 // take takes one token for key at now. When none is left it returns how

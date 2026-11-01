@@ -315,8 +315,8 @@ func TestARetryIsAnsweredFromWhatIsKeptWhateverItWouldMakeNew(t *testing.T) {
 				func() reply { return call(ip, "PUT", other.path(""), other.registration(1), other.pass(1)) }
 		}},
 		{"renewal", map[string]func(*Limits){
-			string(protocol.QuotaRenewals):     func(l *Limits) { l.RenewalsPerDay = 1 },
-			string(protocol.QuotaCertificates): func(l *Limits) { l.CertificatesPerDay = 1 },
+			string(protocol.QuotaRenewals):     func(l *Limits) { l.RenewalsPerDay, l.RenewalsBurst = 1, 1 },
+			string(protocol.QuotaCertificates): func(l *Limits) { l.CertificatesPerDay, l.CertificatesBurst = 1, 1 },
 		}, func(e *env, call caller, spent []string) (reply, []retried, func() reply) {
 			// A renewal under the mailbox's current certificate spends its
 			// renewals, and one under a later certificate its certificates:
@@ -346,7 +346,7 @@ func TestARetryIsAnsweredFromWhatIsKeptWhateverItWouldMakeNew(t *testing.T) {
 			return first, retries, func() reply { return call(ip, "PUT", r.path("/prekey"), r.upload(base+3), r.pass(base+3)) }
 		}},
 		{"send", map[string]func(*Limits){
-			string(protocol.QuotaSends):      func(l *Limits) { l.SendsPerDay = 1 },
+			string(protocol.QuotaSends):      func(l *Limits) { l.SendsPerDay, l.SendsBurst = 1, 1 },
 			string(protocol.CodeMailboxFull): func(l *Limits) { l.MailboxCap = 1 },
 			string(protocol.CodeMailboxBusy): func(l *Limits) { l.ReceiveBurst, l.ReceiveRefill = 1, time.Hour },
 		}, func(e *env, call caller, _ []string) (reply, []retried, func() reply) {
@@ -370,7 +370,7 @@ func TestARetryIsAnsweredFromWhatIsKeptWhateverItWouldMakeNew(t *testing.T) {
 		{"revocation", map[string]func(*Limits){
 			string(protocol.QuotaRegistrations):          registrations[string(protocol.QuotaRegistrations)],
 			string(protocol.QuotaRegistrationsRange):     registrations[string(protocol.QuotaRegistrationsRange)],
-			string(protocol.QuotaCertificateRevocations): func(l *Limits) { l.CertificateRevocationsPerDay = 1 },
+			string(protocol.QuotaCertificateRevocations): func(l *Limits) { l.CertificateRevocationsPerDay, l.CertificateRevocationsBurst = 1, 1 },
 		}, func(e *env, call caller, spent []string) (reply, []retried, func() reply) {
 			// A revocation of an address held nothing of spends its caller's
 			// registrations, and a raise of a mailbox's revocation of

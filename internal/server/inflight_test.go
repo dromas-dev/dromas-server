@@ -35,7 +35,7 @@ func TestPostsOfTheSameBytesInFlightAreOneCall(t *testing.T) {
 		name string
 		set  func(*Limits)
 	}{
-		{"sends a day", func(l *Limits) { l.SendsPerDay = 2 }},
+		{"sends a day", func(l *Limits) { l.SendsPerDay, l.SendsBurst = 2, 2 }},
 		{"the mailbox cap", func(l *Limits) { l.MailboxCap = 2 }},
 		{"the mailbox's new messages", func(l *Limits) { l.ReceiveBurst, l.ReceiveRefill = 2, time.Hour }},
 	} {
@@ -86,7 +86,7 @@ func TestPostsOfTheSameBytesInFlightAreOneCall(t *testing.T) {
 	// reads before it (leadDedupe), so the second comes while the first is
 	// in flight, and is stored after the first has read.
 	l := relaxed()
-	l.SendsPerDay = 1
+	l.SendsPerDay, l.SendsBurst = 1, 1
 	lead := &armedDedupe{leadDedupe: &leadDedupe{wait: time.Second, entered: make(chan struct{}), second: make(chan struct{}), read: make(chan struct{})}}
 	e = newEnv(t, l, func(cfg *Config) { lead.Store, cfg.Store = cfg.Store, lead })
 	to, spent, fresh := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)

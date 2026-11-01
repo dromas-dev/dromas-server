@@ -18,7 +18,7 @@ func TestAnErrorsValuesAreMembers(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	l := relaxed()
-	l.SendsPerDay = 1
+	l.SendsPerDay, l.SendsBurst = 1, 1
 	e := newEnv(t, l)
 	a, b := e.mailbox(), e.mailbox()
 	problem := func(err error) protocol.Problem {

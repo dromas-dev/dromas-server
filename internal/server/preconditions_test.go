@@ -395,9 +395,9 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 	l.PollBurst, l.PollRefill = 1000, time.Hour
 	l.DrainBurst, l.DrainRefill = 1000, time.Hour
 	l.ReceiveBurst, l.ReceiveRefill = 1000, time.Hour
-	l.SendsPerDay, l.SendsPerMinutePerIP, l.MissesPerMinute = 1000, 1000, 1000
+	l.SendsPerDay, l.SendsPerMinutePerIP, l.MissesPerMinute, l.SendsBurst = 1000, 1000, 1000, 1000
 	l.RegistrationsPerHour, l.RangeRegistrationsPerHour = 1000, 1000
-	l.RenewalsPerDay, l.CertificatesPerDay, l.CertificateRevocationsPerDay = 1000, 1000, 1000
+	l.RenewalsPerDay, l.CertificatesPerDay, l.CertificateRevocationsPerDay, l.RenewalsBurst, l.CertificatesBurst, l.CertificateRevocationsBurst = 1000, 1000, 1000, 1000, 1000, 1000
 	calls := map[string]int{string(protocol.QuotaCalls): 1}
 	none := map[string]int{}
 	live := func(e *env) *raw { return e.raw().register(protocol.MaxPrekeyLifetime) }
