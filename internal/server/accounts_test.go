@@ -284,7 +284,7 @@ func TestAccounts(t *testing.T) {
 
 	t.Run("calls that are refused", func(t *testing.T) {
 		e := newEnv(t, l)
-		r := e.raw().register(30 * 24 * time.Hour)
+		r := e.raw().register(protocol.PrekeyLifetime)
 		pass := r.pass(1)
 		e.want(e.do(http.MethodPut, r.path("/account"), protocol.AdoptRequest{Key: "x"}, ""), 401, protocol.CodeUnauthorized)
 		e.want(e.do(http.MethodPut, r.path("/account"), []byte(`{"key":1}`), pass), 400, protocol.CodeBadRequest)
