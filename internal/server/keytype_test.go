@@ -40,11 +40,11 @@ func (e *env) rawP256() *raw {
 		by: map[uint64]ssh.Signer{}, work: map[uint64]ssh.Signer{}}
 }
 
-// A mailbox whose identity is of the optional type registers, proves itself with
+// A mailbox whose identity is a P-256 key registers, proves itself with
 // a pass, and moves to a certificate, as a mailbox on an
 // Ed25519 key does: the server checks the identity's signature when a
 // certificate is put on record, and a pass against that certificate after.
-func TestAMailboxOfTheOptionalKeyType(t *testing.T) {
+func TestAMailboxWhoseIdentityIsP256(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	now := e.clock.Now()

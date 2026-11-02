@@ -79,7 +79,7 @@ func TestAnACLBoundInRangePasses(t *testing.T) {
 // it listens: a certificate no longer signs no message (PROTOCOL.md §11.18).
 func TestServeRefusesAMaximumCertificateThatSignsNoMessage(t *testing.T) {
 	least := protocol.TTL + protocol.MaxSkew
-	for _, v := range []time.Duration{0, least, least - time.Second} {
+	for _, v := range []time.Duration{0, least, least - time.Second, least + time.Second/2} {
 		done := make(chan error, 1)
 		go func() {
 			done <- serve([]string{"--dev", "--listen", "127.0.0.1:0", "--max-certificate-lifetime", v.String()})

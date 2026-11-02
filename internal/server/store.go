@@ -47,15 +47,15 @@ type Mailbox struct {
 	// The current statement's signer (PROTOCOL.md §5): its rank, 0 for the
 	// identity and a certificate's serial for a working key, and the SHA-256
 	// of its signing key's wire bytes, the identity's key or the certificate.
-	// A pass is taken only by it, and a prekey only by it or a signer of a
-	// higher rank. A mailbox's statements are ordered by this rank first, and
+	// A pass is taken only by it or the identity, and a prekey only by it or a
+	// signer of a higher rank. A mailbox's statements are ordered by this rank first, and
 	// by the prekey's own serial second.
 	Rank   uint64
 	Signer [32]byte
 	// SenderKeyTypes is what the mailbox declared with its current prekey: the
-	// identity key types of the senders it takes messages from, or
-	// protocol.AnySender (PROTOCOL.md §7). Only names this build verifies
-	// are kept (declared): a mailbox of any other type cannot send here.
+	// optional identity key types it takes senders of (PROTOCOL.md §7), of those
+	// this build verifies (protocol.Declaration). A sender of a type §4.1
+	// defines needs no declaration.
 	SenderKeyTypes []string
 	// Retired holds the newest retired prekeys (Limits.RetiredKept), each
 	// until its not_after: its key may not come back.
