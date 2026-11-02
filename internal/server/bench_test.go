@@ -68,7 +68,7 @@ func polledMailbox(tb testing.TB) (http.Handler, Store, protocol.Address, *fakeA
 		tb.Fatal(err)
 	}
 	a := id.Address()
-	p := &protocol.Prekey{Address: a, Serial: 1, Key: key.Recipient().String(), NotAfter: now.Add(protocol.MaxPrekeyLifetime)}
+	p := &protocol.Prekey{Address: a, Rank: rankOf(under), Serial: 1, Key: key.Recipient().String(), NotAfter: now.Add(protocol.MaxPrekeyLifetime)}
 	sig, err := protocol.Sign(under, p.Statement(), protocol.PrekeyNamespace(a))
 	if err != nil {
 		tb.Fatal(err)

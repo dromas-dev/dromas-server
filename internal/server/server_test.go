@@ -379,12 +379,21 @@ func (r *raw) prekeyUnder(signer ssh.Signer, serial uint64, notAfter time.Time, 
 		key, _ = age.GenerateHybridIdentity()
 	}
 	r.keys[serial] = key
-	p := &protocol.Prekey{Address: r.id.Address(), Serial: serial, Key: key.Recipient().String(), NotAfter: notAfter}
+	p := &protocol.Prekey{Address: r.id.Address(), Rank: rankOf(signer), Serial: serial, Key: key.Recipient().String(), NotAfter: notAfter}
 	sig, err := protocol.Sign(signer, p.Statement(), protocol.PrekeyNamespace(r.id.Address()))
 	if err != nil {
 		r.e.t.Fatal(err)
 	}
 	r.stmt[serial], r.sig[serial], r.by[serial] = p.Statement(), sig, signer
+}
+
+// rankOf is the rank a signer signs at: a certificate's serial, and 0 for a
+// bare key.
+func rankOf(by ssh.Signer) uint64 {
+	if cert, ok := by.PublicKey().(*ssh.Certificate); ok {
+		return cert.Serial
+	}
+	return 0
 }
 
 func (r *raw) registration(serial uint64) protocol.RegisterRequest {
@@ -519,11 +528,11 @@ func TestAPrekeyOfAnotherTypeIsBadKey(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	x25519, _ := age.GenerateX25519Identity()
-	unknown := strings.Split(string(clientFile(t, "testdata/vectors/prekey/unsupported-type.txt")), "\n")[3]
+	unknown := strings.Split(string(clientFile(t, "testdata/vectors/prekey/unsupported-type.txt")), "\n")[4]
 	for _, key := range []string{x25519.Recipient().String(), unknown} {
 		other := func(r *raw, serial uint64) {
 			signer := r.certify(serial)
-			p := &protocol.Prekey{Address: r.id.Address(), Serial: serial, Key: key, NotAfter: e.clock.Now().Add(protocol.PrekeyLifetime)}
+			p := &protocol.Prekey{Address: r.id.Address(), Rank: rankOf(signer), Serial: serial, Key: key, NotAfter: e.clock.Now().Add(protocol.PrekeyLifetime)}
 			sig, err := protocol.Sign(signer, p.Statement(), protocol.PrekeyNamespace(r.id.Address()))
 			if err != nil {
 				t.Fatal(err)

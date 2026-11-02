@@ -357,7 +357,7 @@ func TestTheClientRevokesItsEarlierCertificates(t *testing.T) {
 	// highest serial there is, is refused too.
 	e.wantNotCurrent(e.do("GET", "/v1/"+a.Address().String()+"/messages", nil, old), second)
 	key, _ := age.GenerateHybridIdentity()
-	top := &protocol.Prekey{Address: a.Address(), Serial: protocol.MaxSerial, Key: key.Recipient().String(), NotAfter: e.clock.Now().Add(time.Hour)}
+	top := &protocol.Prekey{Address: a.Address(), Rank: rankOf(taken), Serial: protocol.MaxSerial, Key: key.Recipient().String(), NotAfter: e.clock.Now().Add(time.Hour)}
 	sig, err := protocol.Sign(taken, top.Statement(), protocol.PrekeyNamespace(a.Address()))
 	if err != nil {
 		t.Fatal(err)
@@ -387,7 +387,7 @@ func TestAPrekeyAtTheHighestSerialDoesNotEndTheAddress(t *testing.T) {
 	taken := worker(t, a)
 	_, first := e.numbers(a.Address())
 	key, _ := age.GenerateHybridIdentity()
-	top := &protocol.Prekey{Address: a.Address(), Serial: protocol.MaxSerial, Key: key.Recipient().String(), NotAfter: e.clock.Now().Add(time.Hour)}
+	top := &protocol.Prekey{Address: a.Address(), Rank: rankOf(taken), Serial: protocol.MaxSerial, Key: key.Recipient().String(), NotAfter: e.clock.Now().Add(time.Hour)}
 	sig, err := protocol.Sign(taken, top.Statement(), protocol.PrekeyNamespace(a.Address()))
 	if err != nil {
 		t.Fatal(err)
@@ -510,7 +510,7 @@ func TestTheRemedyRenewsWhenATakerSpentTheDaysRenewals(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		p := &protocol.Prekey{Address: a.Address(), Serial: serial, Key: key.Recipient().String(), NotAfter: e.clock.Now().Add(time.Hour)}
+		p := &protocol.Prekey{Address: a.Address(), Rank: rankOf(taken), Serial: serial, Key: key.Recipient().String(), NotAfter: e.clock.Now().Add(time.Hour)}
 		sig, err := protocol.Sign(taken, p.Statement(), protocol.PrekeyNamespace(a.Address()))
 		if err != nil {
 			t.Fatal(err)

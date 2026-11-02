@@ -256,7 +256,7 @@ func TestAStatementOutOfOrderIsRefusedBeforeItsSignature(t *testing.T) {
 	r := e.raw()
 	n := r.registerCertified(protocol.MaxPrekeyLifetime)
 	key, _ := age.GenerateHybridIdentity()
-	stale := &protocol.Prekey{Address: r.id.Address(), Serial: n, Key: key.Recipient().String(), NotAfter: e.clock.Now().Add(time.Hour)}
+	stale := &protocol.Prekey{Address: r.id.Address(), Rank: n, Serial: n, Key: key.Recipient().String(), NotAfter: e.clock.Now().Add(time.Hour)}
 	misSigned := protocol.PrekeyRequest{Prekey: stale.Statement(), PrekeySignature: r.sig[n]} // the current statement's signature, over other bytes
 	e.want(e.do("PUT", r.path("/prekey"), misSigned, r.pass(n)), http.StatusConflict, protocol.CodeConflict)
 	e.want(e.do("PUT", r.path("/revocations"), r.certs(n), ""), http.StatusOK, "")
