@@ -15,10 +15,11 @@ The memory and item-size measurements, and what a pass costs to check the first 
 ```sh
 (cd bench/poll/cli && go build -o "$out/poll-cli" .)
 go build -o "$out/dromas-server" ./cmd/dromas-server
-go build -o "$out/dromas" github.com/dromas-dev/dromas-client/cmd/dromas
+(cd "$(go list -m -f '{{.Dir}}' github.com/dromas-dev/dromas-client)" && go build -o "$out/dromas" ./cmd/dromas)
 GOMAXPROCS=1 "$out/dromas-server" serve --dev --listen 127.0.0.1:18777 --poll-burst 0 2> "$out/server.log" &
 SP=$(pgrep -f "$out/dromas-server serve")                      # the server's OWN pid, never $!
-export DROMAS_HOME=$mailbox DROMAS_SERVER_URL=http://127.0.0.1:18777
+printf 'base-dir = "%s"\nmail-dir = "%s/mail"\n' "$mailbox" "$mailbox" > "$out/poll.toml"
+export DROMAS_CONFIG=$out/poll.toml DROMAS_SERVER_URL=http://127.0.0.1:18777
 A=$("$out/dromas" init); A=${A##*/}                     # a mailbox; init leaves its pass in $mailbox/pass
 U=$DROMAS_SERVER_URL/v1/$A/messages
 GOMAXPROCS=1 "$out/poll-cli" 2000 "$U" "$(cat "$mailbox/pass")"    # warm up

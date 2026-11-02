@@ -66,8 +66,8 @@ done
 R="$work/r"; G="$work/g"
 recipe(){ local home=$1; shift; DR_HOME=$home bash -c ". '$SCRIPT'; $*"; }   # a fresh shell per call
 # The Go client holds messages from a sender its mailbox has not allowed (PROTOCOL.md §12.3). These tests are of what the two clients
-# send each other, so every mailbox the Go client runs lands every sender's messages in inbox/, by its policy file, unless a test wrote one.
-gocli(){ local home=$1; shift; mkdir -p -m 700 "$home" && { [ -e "$home/policy" ] || printf 'unknown inbox\n' > "$home/policy"; } && DROMAS_HOME=$home "$work/dromas" "$@"; }
+# send each other, so every mailbox the Go client runs lands every sender's messages in inbox/, by its config file.
+gocli(){ local home=$1; shift; mkdir -p -m 700 "$home" && { [ -e "$home.toml" ] || printf 'base-dir = "%s"\nmail-dir = "%s/mail"\n[policy]\nunknown = "inbox"\n' "$home" "$home" > "$home.toml"; } && DROMAS_CONFIG=$home.toml "$work/dromas" "$@"; }
 holds(){ DROMAS_SERVER_URL=http://127.0.0.1:9 gocli "$1" revocation ask "$2" 2> /dev/null | jq -e '.type == "revoked"' > /dev/null; }   # <go mailbox> <address>: it keeps a revocation of the address, with no server to ask (a mailbox keeps its records in its state file)
 through(){ gocli "$1" revocation ask "$2" 2> /dev/null | jq -r 'select(.type == "certificates_revoked") | .through'; }   # <go mailbox> <address> → the serial its revocation of certificates runs through, as the mailbox holds it once it has asked
 passof(){ local a t; a=$(cat "$1/address") && t=$(date -u -d "@$(( $(date +%s) + 600 ))" +%Y-%m-%dT%H:%M:%SZ) \
@@ -116,13 +116,13 @@ id=$(printf 'threaded, from Go\n' | gocli "$G" send --subject 'a subject' --repl
 out=$(recipe "$R" dr_recv 2> "$work/err") && jq -e --arg m $M1 '.envelope.subject == "a subject" and .envelope.in_reply_to == $m and .envelope.body == "threaded, from Go\n"' <<< "$out" > /dev/null \
   && ok "Go → recipe: subject and in_reply_to arrive" || bad "Go → recipe with flags: $out $(cat "$work/err")"
 mid=$(jq -r .envelope.msg_id <<< "$out")
-jq -e --arg id "$id" --argjson d "$out" '.receipt.id == $id and (.receipt | keys == ["expires_at", "id", "received_at"]) and keys == ["envelope", "receipt"] and .envelope == $d.envelope' "$G/sent/$RA.$mid.json" > /dev/null \
-  && ok "Go's sent/ record is the envelope its recipient delivered, and the real server's receipt" || bad "Go's sent/ record: $(cat "$G/sent/$RA.$mid.json" 2>&1)"
+jq -e --arg id "$id" --argjson d "$out" '.receipt.id == $id and (.receipt | keys == ["expires_at", "id", "received_at"]) and keys == ["envelope", "receipt"] and .envelope == $d.envelope' "$G/mail/sent/$RA.$mid.json" > /dev/null \
+  && ok "Go's sent/ record is the envelope its recipient delivered, and the real server's receipt" || bad "Go's sent/ record: $(cat "$G/mail/sent/$RA.$mid.json" 2>&1)"
 recipe "$R" "dr_send $GA '$work/body'" || bad "recipe send"
 out=$(gocli "$G" recv 2> "$work/err") && jq -e --arg f "$RA" '.envelope.from == $f and .envelope.body == "from the recipe\n"' <<< "$out" > /dev/null \
   && ok "recipe → Go: delivered" || bad "recipe → Go: $out $(cat "$work/err")"
 rec="$R/sent/$GA.$(jq -r .envelope.msg_id <<< "$out").json"
-jq -e --argjson d "$out" '(.receipt | keys == ["expires_at", "id", "received_at"]) and keys == ["envelope", "receipt"] and .envelope == $d.envelope' "$rec" > /dev/null && [ -e "$G/inbox/$(jq -r .receipt.id "$rec").json" ] \
+jq -e --argjson d "$out" '(.receipt | keys == ["expires_at", "id", "received_at"]) and keys == ["envelope", "receipt"] and .envelope == $d.envelope' "$rec" > /dev/null && [ -e "$G/mail/inbox/$(jq -r .receipt.id "$rec").json" ] \
   && ok "the recipe's sent/ record is the same, its receipt naming the file in the recipient's inbox/" || bad "the recipe's sent/ record: $(cat "$rec" 2>&1)"
 
 # --- 4. a mailbox whose identity is of key type ecdsa-sha2-nistp256, in each client ---
@@ -203,7 +203,7 @@ jq -c --arg s "$(printf 'revoke it' | base64)" '.revocation_signature = $s' "$wo
   && [ "$(curl -s -X PUT -H 'Content-Type: application/json' --data-binary "@$work/v5.json" "$DR_SERVER_URL/v1/$V4A/revocations" | jq -r .code)" = identity_mismatch ] \
   && [ "$(look "$V5A")" = 200 ] \
   && ok "the server refuses what is not a revocation of that address: 400 bad_revocation, 400 identity_mismatch" || bad "junk revocations"
-out=$(DROMAS_HOME="$work/nobox" "$work/dromas" revocation publish --record "$work/v5.json" "$V5A" 2>&1) && [ "$out" = "$(revoked_line $V5A)" ] && [ "$(look "$V5A")" = 410 ] \
+out=$(cd "$work" && "$work/dromas" revocation publish --record "$work/v5.json" "$V5A" 2>&1) && [ "$out" = "$(revoked_line $V5A)" ] && [ "$(look "$V5A")" = 410 ] \
   && [ "$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'Content-Type: application/json' --data-binary "@$work/v5.json" "$DR_SERVER_URL/v1/$V5A/revocations")" = 410 ] \
   && ok "the Go client's record revokes from the Go client with no mailbox, and the same record again is 410: nothing changes" || bad "revoke with a record: $out"
 
