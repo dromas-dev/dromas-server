@@ -4,7 +4,7 @@
 #   1. messages both ways between a recipe mailbox and a Go mailbox, sent to each mailbox's link, across a prekey renewal on each side; the page each link opens;
 #   2. the recipe's error path on a real problem+json body;
 #   3. the envelope's optional fields from the Go client, and each client's sent/ record, with the real server's receipt;
-#   4. a mailbox whose identity is of the optional key type, in each client, and the sender key types a mailbox declares;
+#   4. a mailbox whose identity is a P-256 key, in each client, and the sender key types a mailbox declares;
 #   5. a mailbox whose clock is off from the server's;
 #   6. revocation: a mailbox revoked at the real server, by the Go client or with ssh-keygen and curl as PROTOCOL.md §10.1 shows, and each
 #      client checking the proof it is shown; a record alone revokes;

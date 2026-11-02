@@ -195,8 +195,8 @@ func settled(b *Mailbox) bool { return b.open() || b != nil && b.State == Revoke
 
 // registered answers a registration of a mailbox that is registered, or of an
 // address that is revoked, from its record: registration never changes it.
-// An identical retry is answered 200 once its pass, by the mailbox's current
-// signer, is checked; nothing else is. A signer the identity's revocation of
+// An identical retry is answered 200 once its pass, by the identity or the
+// mailbox's current signer, is checked; nothing else is. A signer the identity's revocation of
 // certificates covers signs nothing this server takes, the mailbox's current
 // statement sent again included, so it is refused before the pass, as a
 // prekey upload's identical retry is (PROTOCOL.md §10.2).
@@ -416,7 +416,7 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 	}
 	if o.Rank < b.Rank || (o.Rank == b.Rank && o.Signer != b.Signer) {
 		if b.Rank == 0 {
-			return fail(protocol.CodeCertificateNotCurrent, "sign the prekey with the mailbox's identity, or under a certificate once the address's revocation of certificates is held: dromas prekey renew", "the statement must be signed by the mailbox's identity or under a certificate")
+			return fail(protocol.CodeCertificateNotCurrent, "sign the prekey with the mailbox's identity, or under a certificate: dromas prekey renew", "the statement must be signed by the mailbox's identity or under a certificate")
 		}
 		return fail(protocol.CodeCertificateNotCurrent, "certify a new working key at a higher serial: dromas prekey renew", "the certificate's serial must be above %d, or the certificate be the mailbox's current one", certificateSerialValue(b.Rank))
 	}
