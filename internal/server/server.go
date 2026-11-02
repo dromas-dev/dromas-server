@@ -44,8 +44,8 @@ type Config struct {
 	// the peer is always the client.
 	TrustedProxies []netip.Prefix
 	// Names are the names clients call this server by: the host of its URL,
-	// lowercase, with its port only when that is not the scheme's default. A
-	// pass is taken only on a request whose Host, written so, is one of them
+	// lowercase, with a port only when that is neither 80 nor 443. A pass is
+	// taken only on a request whose Host, written so, is one of them
 	// (PROTOCOL.md §8). None: any Host
 	// is taken, which is for the dev server and tests only, since a pass
 	// made for another server would then pass here.
