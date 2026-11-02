@@ -677,9 +677,8 @@ func TestAResentRevocationLoadsNothing(t *testing.T) {
 // A revocation of the address may come with the revocation of its
 // certificates the mailbox already holds: the record a server shows for an
 // address carries both. That is nothing new, and the revocation of the
-// address is taken all the same. A part that is not a revocation of
-// certificates is refused, with the revocation beside it, and nothing changes.
-// Once the mailbox is revoked, anything sent for it is answered from its record.
+// address is kept all the same. Once the mailbox is revoked, anything sent for
+// it is answered from its record.
 func TestARevocationComesWithTheCertificatesHeld(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -694,13 +693,112 @@ func TestARevocationComesWithTheCertificatesHeld(t *testing.T) {
 	}
 	junk := both
 	junk.RevokedCertificates, junk.RevokedCertificatesSignature = []byte("not a revocation"), []byte("not a signature")
-	e.want(e.do("PUT", path, junk, ""), 400, protocol.CodeBadRevocation)
-	if stored, err := e.store.Mailbox(ctx, r.id.Address()); err != nil || stored.State == Revoked {
-		t.Fatalf("a revocation that came with something that is not one was taken: %+v, %v", stored, err)
-	}
 	e.want(e.do("PUT", path, both, ""), 201, "")
 	if stored, err := e.store.Mailbox(ctx, r.id.Address()); err != nil || stored.State != Revoked || !bytes.Equal(stored.Revocation, both.Revocation) {
 		t.Fatalf("a revocation that came with the certificates' already held was not taken: %+v, %v", stored, err)
 	}
 	e.want(e.do("PUT", path, junk, ""), 410, protocol.CodeRevoked)
+}
+
+// A revocation of the address is read first (PROTOCOL.md §11.15). One that
+// verifies is kept and answered 201 whatever is beside it, and a revocation of
+// certificates beside it is kept only if that verifies and runs higher. One
+// that does not verify is 400 bad_revocation, and nothing in the body is kept.
+func TestARevocationOfTheAddressIsReadBeforeWhatIsBesideIt(t *testing.T) {
+	t.Parallel()
+	bad := []byte("not a signature")
+	for name, c := range map[string]struct {
+		heldThrough uint64 // the revocation of certificates the server keeps first, if any
+		body        func(r *raw, revocation []byte) protocol.Revocations
+		status      int
+		through     uint64 // the serial of the revocation of certificates kept after
+	}{
+		"good, beside certificates that do not verify": {body: func(r *raw, rev []byte) protocol.Revocations {
+			b := r.certs(5)
+			b.Revocation, b.RevokedCertificatesSignature = rev, bad
+			return b
+		}, status: 201},
+		"good, beside certificates that verify, higher": {heldThrough: 3, body: func(r *raw, rev []byte) protocol.Revocations {
+			b := r.certs(5)
+			b.Revocation = rev
+			return b
+		}, status: 201, through: 5},
+		"good, beside certificates that verify, lower": {heldThrough: 7, body: func(r *raw, rev []byte) protocol.Revocations {
+			b := r.certs(5)
+			b.Revocation = rev
+			return b
+		}, status: 201, through: 7},
+		"bad, beside certificates that verify": {body: func(r *raw, _ []byte) protocol.Revocations {
+			b := r.certs(5)
+			b.Revocation = bad
+			return b
+		}, status: 400},
+		"bad, beside certificates that verify, higher than those kept": {heldThrough: 3, body: func(r *raw, _ []byte) protocol.Revocations {
+			b := r.certs(5)
+			b.Revocation = bad
+			return b
+		}, status: 400, through: 3},
+		"bad, beside certificates that do not verify": {body: func(r *raw, _ []byte) protocol.Revocations {
+			b := r.certs(5)
+			b.Revocation, b.RevokedCertificatesSignature = bad, bad
+			return b
+		}, status: 400},
+		"bad, alone": {body: func(r *raw, _ []byte) protocol.Revocations {
+			return protocol.Revocations{Identity: r.id.Document(), Revocation: bad}
+		}, status: 400},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			e := newEnv(t, relaxed())
+			r := e.raw().register(protocol.MaxPrekeyLifetime)
+			path := r.path("/revocations")
+			if c.heldThrough > 0 {
+				e.want(e.do("PUT", path, r.certs(c.heldThrough), ""), 200, "")
+			}
+			rev, err := protocol.SignRevocation(r.signer, r.id.Address())
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := e.do("PUT", path, c.body(r, rev), "")
+			want := protocol.Code("")
+			if c.status == 400 {
+				want = protocol.CodeBadRevocation
+			}
+			e.want(got, c.status, want)
+			stored, err := e.store.Mailbox(ctx, r.id.Address())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if revoked := stored.State == Revoked; revoked != (c.status == 201) || bytes.Equal(stored.Revocation, rev) != (c.status == 201) {
+				t.Fatalf("after %d: state %v, revocation %q", c.status, stored.State, stored.Revocation)
+			}
+			through := uint64(0)
+			if len(stored.RevokedCerts) > 0 {
+				certs, err := protocol.ParseRevokedCertificates(stored.RevokedCerts)
+				if err != nil {
+					t.Fatal(err)
+				}
+				through = certs.Through
+			}
+			if through != c.through {
+				t.Fatalf("the revocation of certificates kept runs through %d, want %d", through, c.through)
+			}
+		})
+	}
+
+	// A statement with no signature, or a signature with no statement, is no
+	// revocation record at all (api/openapi.yaml), whatever else it carries.
+	e := newEnv(t, relaxed())
+	r := e.raw().register(protocol.MaxPrekeyLifetime)
+	rev, err := protocol.SignRevocation(r.signer, r.id.Address())
+	if err != nil {
+		t.Fatal(err)
+	}
+	half := r.certs(5)
+	half.Revocation, half.RevokedCertificatesSignature = rev, nil
+	e.want(e.do("PUT", r.path("/revocations"), half, ""), 400, protocol.CodeBadRequest)
+	half = r.certs(5)
+	half.Revocation, half.RevokedCertificates = rev, nil
+	e.want(e.do("PUT", r.path("/revocations"), half, ""), 400, protocol.CodeBadRequest)
 }

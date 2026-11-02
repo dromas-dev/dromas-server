@@ -688,17 +688,23 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	defer func() { m.release(s.now()) }() // settled below, but for a panic
-	var certs *protocol.RevokedCertificates
-	if hasCerts {
-		if certs, err = protocol.VerifyRevokedCertificates(h, req.Identity, req.RevokedCertificates, req.RevokedCertificatesSignature); err != nil {
-			m.keep()
-			return fail(protocol.CodeBadRevocation, hintRevokedCerts, "this is not a revocation of this address's certificates")
-		}
-	}
+	// The revocation of the address first: one that does not verify refuses
+	// the body, a revocation of certificates beside it included, and one that
+	// verifies is kept whatever is beside it (PROTOCOL.md §11.15).
 	if req.Revocation != nil {
 		if _, err := protocol.VerifyRevocation(h, req.Identity, req.Revocation); err != nil {
 			m.keep()
 			return fail(protocol.CodeBadRevocation, hintRevocation, "this is not a revocation of this address")
+		}
+	}
+	var certs *protocol.RevokedCertificates
+	if hasCerts {
+		if certs, err = protocol.VerifyRevokedCertificates(h, req.Identity, req.RevokedCertificates, req.RevokedCertificatesSignature); err != nil {
+			if req.Revocation == nil {
+				m.keep()
+				return fail(protocol.CodeBadRevocation, hintRevokedCerts, "this is not a revocation of this address's certificates")
+			}
+			certs = nil // beside a revocation of the address that verifies, it counts for nothing
 		}
 	}
 	m.release(s.now())
