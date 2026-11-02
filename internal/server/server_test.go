@@ -261,7 +261,7 @@ func worker(t *testing.T, b *client.Mailbox) ssh.Signer {
 		}
 		return s
 	}
-	stem := filepath.Join(b.Dir(), "work", strconv.FormatUint(st.CertificateSerial, 10))
+	stem := filepath.Join(b.Dir(), "keys", "work", strconv.FormatUint(st.CertificateSerial, 10))
 	k, err := os.ReadFile(stem)
 	if err != nil {
 		t.Fatal(err)

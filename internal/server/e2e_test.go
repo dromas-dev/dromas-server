@@ -202,7 +202,7 @@ func TestEndToEnd(t *testing.T) {
 	if d.Envelope.From != a.Address() || d.ID != r.ID {
 		t.Fatal("wrong sender or id")
 	}
-	if in, err := os.ReadFile(filepath.Join(b.Dir(), "inbox", r.ID+".json")); err != nil || !bytes.Equal(in, d.Line) {
+	if in, err := os.ReadFile(filepath.Join(b.Dir(), "mail", "inbox", r.ID+".json")); err != nil || !bytes.Equal(in, d.Line) {
 		t.Fatalf("inbox copy: %v", err)
 	}
 	if !bytes.Contains(d.Plaintext, []byte("<b>&")) {
@@ -398,7 +398,7 @@ func TestRecoveryWithIdentityAlone(t *testing.T) {
 	e := newEnv(t, relaxed())
 	a, b := e.mailbox(), e.mailbox()
 	// A restored machine: the identity, nothing else.
-	for _, g := range []string{"prekeys/*", "work/*", "state"} {
+	for _, g := range []string{"keys/prekeys/*", "keys/work/*", "state"} {
 		names, _ := filepath.Glob(filepath.Join(b.Dir(), g))
 		for _, n := range names {
 			if err := os.Remove(n); err != nil {
@@ -409,6 +409,7 @@ func TestRecoveryWithIdentityAlone(t *testing.T) {
 	if _, err := b.Rekey(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	landAll(t, b) // what SetPolicy recorded went with the state file
 	send(t, a, b, "after recovery")
 	if res := receive(t, b); len(res.Delivered) != 1 {
 		t.Fatal("no delivery after recovery")
