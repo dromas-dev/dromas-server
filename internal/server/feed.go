@@ -36,10 +36,14 @@ type feed struct {
 	shards map[string]*shard
 	listed time.Time // the last full listing of shards
 	ended  bool      // a shard ended since: list again for its children
+	// What this pass has shown of its shards: seen, the time through which it
+	// has seen every change, and unshown, that a shard's read showed nothing.
+	seen    time.Time
+	unshown bool
 
-	// synced is when the follower was last current, in unix ns: positioned,
-	// or at the end of a pass that read each shard as far as it went. Read
-	// by any goroutine (current).
+	// synced is the time through which the follower has shown it saw every
+	// change, in unix ns: when it was positioned, or what the last pass that
+	// showed one showed. Read by any goroutine (current).
 	synced atomic.Int64
 	clock  func() time.Time // what synced is read by; time.Now if nil
 }
@@ -51,26 +55,34 @@ func (f *feed) now() time.Time {
 	return time.Now()
 }
 
-// unsyncedAfter is how long a follower may go without a pass that read its
-// stream to its end before the process cannot show that its memory is
-// current (ARCHITECTURE.md § The in-process plan, item 6): three intervals,
-// and no less than 30 seconds. A follower refused by AWS, or one whose
-// reads fail or never reach the end, is unsynced past it.
+// unsyncedAfter is how far behind its stream a follower may be before the
+// process cannot show that its memory is current (ARCHITECTURE.md § The
+// in-process plan, item 6): three intervals, and no less than 30 seconds. A
+// follower refused by AWS, or one whose reads fail or fall that far behind, is
+// unsynced past it.
 func (f *feed) unsyncedAfter() time.Duration { return max(30*time.Second, 3*f.interval) }
 
-// current reports whether the follower was current within unsyncedAfter of now.
+// current reports whether the follower has seen every change through a time
+// within unsyncedAfter of now.
 func (f *feed) current(now time.Time) bool {
 	return now.Sub(time.Unix(0, f.synced.Load())) <= f.unsyncedAfter()
 }
 
-// once is one pass, which marks the follower current when it reads every
-// shard as far as it goes.
+// once is one pass, which moves what the follower has shown to what the pass
+// showed of its every shard.
 func (f *feed) once(ctx context.Context) error {
 	err := f.pass(ctx)
-	if err == nil {
-		f.synced.Store(f.now().UnixNano())
+	if err == nil && !f.unshown {
+		f.synced.Store(f.seen.UnixNano())
 	}
 	return err
+}
+
+// sawThrough records that this pass has seen every change of a shard through t.
+func (f *feed) sawThrough(t time.Time) {
+	if t.Before(f.seen) {
+		f.seen = t
+	}
 }
 
 // streamsAPI is the part of the DynamoDB Streams client the follower uses.
@@ -228,6 +240,7 @@ func (f *feed) run(ctx context.Context, fatal func(error)) {
 
 // pass reads each shard whose parent is done, from where it left off.
 func (f *feed) pass(ctx context.Context) error {
+	f.seen, f.unshown = f.now(), false
 	if f.ended || time.Since(f.listed) > relistEvery {
 		if err := f.relist(ctx); err != nil {
 			if lost(err) {
@@ -280,8 +293,17 @@ func (f *feed) relist(ctx context.Context) error {
 	return nil
 }
 
-// read drains a shard as far as it goes now.
+// read reads a shard as far as it goes now, for one interval at most, so that a
+// shard that always has another record neither holds the pass from the other
+// shards nor reads as unsynced. A read stopped so shows how far behind it is by
+// its last record's date, as AWS's own adapter for DynamoDB Streams reads it
+// (awslabs/dynamodb-streams-kinesis-adapter, DynamoDBStreamsGetRecordsResponseAdapter,
+// millisBehindLatest): the API names nothing closer, and it is rounded down
+// to the second, on AWS's clock. A shard read to an empty page shows the pass's
+// start. AWS says it "might take multiple calls" to reach records past one, so a
+// long stall can read as current for one pass, which the next pass's records end.
 func (f *feed) read(ctx context.Context, sh *shard) error {
+	began := f.now()
 	if sh.iter == nil {
 		in := &dynamodbstreams.GetShardIteratorInput{StreamArn: &f.arn, ShardId: &sh.id}
 		switch {
@@ -308,7 +330,7 @@ func (f *feed) read(ctx context.Context, sh *shard) error {
 		out, err := f.api().GetRecords(ctx, &dynamodbstreams.GetRecordsInput{ShardIterator: sh.iter, Limit: aws.Int32(1000)})
 		var expired *stypes.ExpiredIteratorException
 		if errors.As(err, &expired) {
-			sh.iter = nil // re-positioned after the last record, next pass
+			sh.iter, f.unshown = nil, true // re-positioned after the last record, next pass
 			return nil
 		}
 		if lost(err) {
@@ -328,6 +350,15 @@ func (f *feed) read(ctx context.Context, sh *shard) error {
 			return nil
 		}
 		if len(out.Records) == 0 {
+			return nil
+		}
+		if f.now().Sub(began) >= f.interval {
+			last := out.Records[len(out.Records)-1].Dynamodb
+			if last == nil || last.ApproximateCreationDateTime == nil {
+				f.unshown = true
+			} else {
+				f.sawThrough(*last.ApproximateCreationDateTime)
+			}
 			return nil
 		}
 	}

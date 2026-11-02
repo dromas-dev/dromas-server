@@ -354,3 +354,192 @@ func TestAccountRecords(t *testing.T) {
 		t.Fatal("a deleted account is still cached")
 	}
 }
+
+// busyShard is shard "busy" with a new record at every read, dated behind before
+// the fake clock, and each read taking 20 ms, so a follower never meets an empty
+// page there. Any other shard is the fake stream's.
+type busyShard struct {
+	*fakeStream
+	now    *time.Time
+	behind time.Duration
+	pages  int
+	during func() // run at each page, to look at the follower mid-pass
+}
+
+func (b *busyShard) GetRecords(ctx context.Context, in *dynamodbstreams.GetRecordsInput, o ...func(*dynamodbstreams.Options)) (*dynamodbstreams.GetRecordsOutput, error) {
+	if !strings.HasPrefix(*in.ShardIterator, "busy:") {
+		return b.fakeStream.GetRecords(ctx, in, o...)
+	}
+	b.pages++
+	*b.now = b.now.Add(20 * time.Millisecond)
+	if b.during != nil {
+		b.during()
+	}
+	if b.pages > 5000 { // a follower that never leaves a busy shard is stopped here, to fail
+		return &dynamodbstreams.GetRecordsOutput{NextShardIterator: in.ShardIterator}, nil
+	}
+	at := b.now.Add(-b.behind)
+	return &dynamodbstreams.GetRecordsOutput{NextShardIterator: in.ShardIterator, Records: []stypes.Record{{
+		Dynamodb: &stypes.StreamRecord{SequenceNumber: aws.String(strconv.Itoa(b.pages)), ApproximateCreationDateTime: &at},
+	}}}, nil
+}
+
+func busyFollower(t *testing.T, behind time.Duration) (*feed, *busyShard, *fakeStream, *time.Time) {
+	t.Helper()
+	fs, f, _, _, _ := feedFixture(t)
+	now := time.Now()
+	f.interval, f.clock = time.Second, func() time.Time { return now }
+	fs.open("busy", "")
+	fs.open("quiet", "")
+	if err := f.position(context.Background(), "arn"); err != nil {
+		t.Fatal(err)
+	}
+	b := &busyShard{fakeStream: fs, now: &now, behind: behind}
+	f.streams = b
+	f.apply = func(stypes.Record) {}
+	return f, b, fs, &now
+}
+
+// A shard that always has another record ends no pass by an empty page. A follower
+// keeping up with it is current for as long as it keeps up, and the shards beside
+// it are read: without this every process answers 503 under sustained writes.
+func TestAFollowerKeepingUpWithABusyShardIsCurrent(t *testing.T) {
+	t.Parallel()
+	f, b, fs, now := busyFollower(t, time.Second)
+	var quiet []stypes.Record
+	f.apply = func(r stypes.Record) { quiet = append(quiet, r) }
+	b.during = func() {
+		if !f.current(*now) {
+			t.Fatalf("not current at page %d, a second behind its shard", b.pages)
+		}
+	}
+	for range 120 { // two minutes of passes, four unsyncedAfter
+		fs.write("quiet", stypes.Record{Dynamodb: &stypes.StreamRecord{}})
+		before := b.pages
+		if err := f.once(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if b.pages-before > 100 {
+			t.Fatalf("one pass read %d pages of a busy shard: an interval is 50", b.pages-before)
+		}
+	}
+	if !f.current(*now) {
+		t.Error("not current after two minutes, a second behind its shard")
+	}
+	if len(quiet) < 120 {
+		t.Errorf("%d records of the quiet shard read in 120 passes", len(quiet))
+	}
+}
+
+// A follower that a busy shard's last record shows is behind by more than
+// unsyncedAfter is not current, however fast it reads.
+func TestAFollowerFarBehindABusyShardIsNotCurrent(t *testing.T) {
+	t.Parallel()
+	f, _, _, now := busyFollower(t, 2*time.Minute)
+	for range 40 {
+		if err := f.once(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.current(*now) {
+		t.Errorf("current, two minutes behind, with unsyncedAfter %s", f.unsyncedAfter())
+	}
+}
+
+// A busy shard's record that carries no date shows nothing, so it cannot make the
+// follower current.
+func TestAPageWithNoDateShowsNothing(t *testing.T) {
+	t.Parallel()
+	f, b, _, now := busyFollower(t, 0)
+	f.streams = undated{b}
+	for range 40 {
+		if err := f.once(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.current(*now) {
+		t.Error("current, with no date to show it by")
+	}
+}
+
+type undated struct{ *busyShard }
+
+func (u undated) GetRecords(ctx context.Context, in *dynamodbstreams.GetRecordsInput, o ...func(*dynamodbstreams.Options)) (*dynamodbstreams.GetRecordsOutput, error) {
+	out, err := u.busyShard.GetRecords(ctx, in, o...)
+	if err == nil {
+		for i := range out.Records {
+			out.Records[i].Dynamodb.ApproximateCreationDateTime = nil
+		}
+	}
+	return out, err
+}
+
+// A pass that met an expired iterator has read nothing of that shard from there, so
+// it does not make the follower current; the next pass reads it from where it was.
+func TestAnExpiredIteratorDoesNotMakeAFollowerCurrent(t *testing.T) {
+	t.Parallel()
+	fs, f, s, mailbox, nowMs := feedFixture(t)
+	now := time.Now()
+	f.interval, f.clock = time.Second, func() time.Time { return now }
+	fs.open("s1", "")
+	ctx := context.Background()
+	if err := f.position(ctx, "arn"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.once(ctx); err != nil {
+		t.Fatal(err)
+	}
+	fs.write("s1", msgEvent(stypes.OperationTypeInsert, mailbox, 1, nowMs))
+	if err := f.once(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if s.countOf(mailbox) != 1 {
+		t.Fatal("the first record was not read")
+	}
+	now = now.Add(20 * time.Minute) // a stall, of AWS or of this process
+	fs.write("s1", msgEvent(stypes.OperationTypeInsert, mailbox, 2, nowMs))
+	fs.expire["s1"] = true
+	if err := f.once(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if f.current(now) {
+		t.Errorf("current with a record unread on the shard (count %d)", s.countOf(mailbox))
+	}
+	if err := f.once(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !f.current(now) || s.countOf(mailbox) != 2 {
+		t.Errorf("after the next pass: current %v, count %d", f.current(now), s.countOf(mailbox))
+	}
+}
+
+// A process answers only while every one of its followers is current: one follower
+// behind makes it not ready, whichever it is (ARCHITECTURE.md § The in-process plan,
+// item 6).
+func TestAProcessIsNotReadyWhileAFollowerIsBehind(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	follower := func() *feed {
+		f := &feed{interval: time.Second, clock: func() time.Time { return now }}
+		f.synced.Store(now.UnixNano())
+		return f
+	}
+	s := &dynamoBackend{mailboxFeed: follower(), msgFeed: follower(), accFeed: follower()}
+	if s.Ready() {
+		t.Fatal("ready before Start")
+	}
+	s.ready.Store(true)
+	if !s.Ready() {
+		t.Fatal("not ready, with every follower current")
+	}
+	for name, f := range map[string]*feed{"mailboxes": s.mailboxFeed, "messages": s.msgFeed, "accounts": s.accFeed} {
+		f.synced.Store(now.Add(-f.unsyncedAfter() - time.Second).UnixNano())
+		if s.Ready() {
+			t.Errorf("ready, with the %s follower behind", name)
+		}
+		f.synced.Store(now.UnixNano())
+		if !s.Ready() {
+			t.Errorf("not ready, with the %s follower current again", name)
+		}
+	}
+}
