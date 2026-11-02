@@ -29,8 +29,8 @@ const hintDocument = "the identity document is \"dromas-v1\", LF, one SSH public
 // Registration never changes a mailbox, so what is kept of the address is read
 // before any signature, and a mailbox registered there, or an address revoked,
 // is answered from it, held in memory or read, by one path (registered),
-// spending none of the address's registrations (PROTOCOL.md §11.4, the order
-// of refusals; dromas-dev/dromas-client#410), but for one that found nothing
+// spending none of the address's registrations (PROTOCOL.md §11.5, a request
+// that would change nothing; dromas-dev/dromas-client#410), but for one that found nothing
 // at its read and meets a mailbox at its write (ErrExists), one an identical
 // registration made meanwhile among them: it kept its counts before its
 // signatures, and is answered as registered with them spent (registered's
@@ -77,8 +77,8 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 	}
 	// A mailbox registered, or an address its identity revoked, is answered from
 	// what is kept of the address, whatever the statement and however many
-	// registrations the address has spent (PROTOCOL.md §11.4, the order of
-	// refusals): from memory, with nothing counted, or from one read.
+	// registrations the address has spent (PROTOCOL.md §11.7 step 5, §11.5):
+	// from memory, with nothing counted, or from one read.
 	cur, known := s.store.Known(h)
 	if known && settled(cur) {
 		return s.registered(w, r, id, cur, &req, false)
@@ -148,7 +148,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 		Prekey:         p,
 		Rank:           signer.Rank(),
 		Signer:         signerHash(id, signer),
-		SenderKeyTypes: declared(req.SenderKeyTypes),
+		SenderKeyTypes: protocol.Declaration(req.SenderKeyTypes),
 		Created:        now,
 		Expires:        keep(time.Time{}, p, signer),
 	}
@@ -269,7 +269,7 @@ func (s *Server) take(b *Mailbox, id *protocol.Identity, statement, sig []byte, 
 	b.Retired = retired
 	b.Statement, b.Signature, b.Prekey = statement, sig, p
 	b.Rank, b.Signer = signer.Rank(), signerHash(id, signer)
-	b.SenderKeyTypes = declared(senders) // the declaration that comes with this prekey, in place of the one before
+	b.SenderKeyTypes = protocol.Declaration(senders) // the declaration that comes with this prekey, in place of the one before
 	b.Expires = keep(b.Expires, p, signer)
 	return nil
 }
@@ -667,7 +667,7 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) error {
 				}
 				writeJSON(w, http.StatusOK, struct{}{})
 				return nil
-			default: // refused from what is held, before the preconditions, so as without them (PROTOCOL.md §11.4 rule 3)
+			default: // refused from what is held, before the preconditions, so as without them (PROTOCOL.md §11.2, RFC 9110 §13.2.1)
 				return fail(protocol.CodeConflict, "GET the same path for the one held: it covers every certificate yours does", "a revocation of this address's certificates through serial %d is held, and nothing revokes fewer", throughValue(held.Through))
 			}
 		}

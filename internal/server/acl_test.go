@@ -327,6 +327,8 @@ func TestAnACLsGETReadsItsPreconditions(t *testing.T) {
 		{"If-Match *", []string{"If-Match", "*"}, 200},
 		{"If-Match another", []string{"If-Match", `"other"`}, 412},
 		{"If-Match it weak", []string{"If-Match", "W/" + tag}, 412},
+		{"If-Match * among tags", []string{"If-Match", tag + ", *"}, 412},
+		{"If-Match a tag and junk", []string{"If-Match", tag + " junk"}, 412},
 		{"If-None-Match the tag", []string{"If-None-Match", tag}, 304},
 		{"If-None-Match it weak", []string{"If-None-Match", "W/" + tag}, 304},
 		{"If-None-Match *", []string{"If-None-Match", "*"}, 304},

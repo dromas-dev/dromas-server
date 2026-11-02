@@ -149,7 +149,7 @@ func New(c Config) *Server {
 		metrics:       c.Metrics,
 		polls:         newBuckets(string(protocol.QuotaPolls), c.Limits.PollBurst, c.Limits.PollRefill),
 		pages:         c.Limits.continuations(),
-		repeats:       newBuckets(string(protocol.CodeRefetchSpent), c.Limits.PollBurst, c.Limits.PollRefill),
+		repeats:       newBuckets(string(protocol.CodeFetchPaced), c.Limits.PollBurst, c.Limits.PollRefill),
 		regs:          perPeriod(string(protocol.QuotaRegistrations), c.Limits.RegistrationsPerHour, c.Limits.RegistrationsPerHour, time.Hour),
 		rangeRegs:     perPeriod(string(protocol.QuotaRegistrationsRange), c.Limits.RangeRegistrationsPerHour, c.Limits.RangeRegistrationsPerHour, time.Hour),
 		sendIPs:       perPeriod(string(protocol.QuotaSendsBeforePass), c.Limits.SendsPerMinutePerIP, c.Limits.SendsPerMinutePerIP, time.Minute),
@@ -791,7 +791,7 @@ func decodeJSON(data []byte, v any) error {
 	case err == nil:
 		return nil
 	case errors.Is(err, protocol.ErrNotBase64):
-		return failErr(protocol.CodeBadEncoding, "base64 of the exact file bytes", err)
+		return failErr(protocol.CodeBadRequest, "base64 of the exact file bytes", err)
 	default:
 		return failErr(protocol.CodeBadRequest, "", fmt.Errorf("the body is not the JSON object expected: %w", err))
 	}
@@ -1118,7 +1118,7 @@ func revokedWith(b *Mailbox) *problem {
 // fetchedAlready refuses a fetch of a message the mailbox has fetched before, once
 // its allowance for that is spent (fetch in messages.go).
 func fetchedAlready(wait time.Duration) *problem {
-	p := fail(protocol.CodeRefetchSpent, "keep each message when you fetch it, then ack it (dromas recv does both); to fetch this one again, wait for Retry-After",
+	p := fail(protocol.CodeFetchPaced, "keep each message when you fetch it, then ack it (dromas recv does both); to fetch this one again, wait for Retry-After",
 		"this message was fetched before, and the mailbox's allowance for fetching again is spent")
 	p.retryAfter = wait
 	return p

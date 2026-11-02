@@ -1,10 +1,10 @@
 package server
 
-// The orders of refusal a client acts on (PROTOCOL.md §11.4, the order of
-// refusals): a call about a mailbox answers its state before its pass (R1,
-// below), and what could change nothing is answered from what is kept (R2,
-// below). The third, a precondition evaluated once the target's state is
-// known, a false one a call that does nothing else, is
+// The orders of refusal a client acts on: a call about a mailbox answers its
+// state before its pass (R1, below; PROTOCOL.md §11.4 rule 1), and what could
+// change nothing is answered from what is kept (R2, below; PROTOCOL.md §11.5).
+// The third, a precondition evaluated once the target's state is known, a
+// false one a call that does nothing else (PROTOCOL.md §11.2), is
 // TestAFalsePreconditionIsACallThatDoesNothingElse. Every other order of
 // checks is this server's own, and its handlers are the sequence.
 
@@ -32,8 +32,8 @@ type stateAnswer struct {
 }
 
 // A call made with a mailbox's pass, or about a mailbox, answers that mailbox's state
-// before it judges the pass, whatever pass it carries (PROTOCOL.md §11.4, the
-// order of refusals): never registered or forgotten 404 no_such_mailbox, a
+// before it judges the pass, whatever pass it carries (PROTOCOL.md §11.4 rule
+// 1): never registered or forgotten 404 no_such_mailbox, a
 // revoked address 410 revoked with its record, a mailbox whose current
 // certificate its identity revoked 401 certificate_revoked. So a mailbox learns
 // its own state whatever pass it carries. Every route of routes(), and HEAD
@@ -245,7 +245,6 @@ var retryRoles = map[string]string{
 	string(protocol.QuotaMisses):                 "the bound of a read that may find no mailbox and of a pass that may fail, reserved before either",
 	string(protocol.QuotaPolls):                  "a list's",
 	string(protocol.QuotaPages):                  "a list's",
-	string(protocol.CodeRefetchSpent):            "a fetch's",
 	string(protocol.CodeFetchPaced):              "a fetch's",
 }
 
@@ -270,7 +269,7 @@ func emptyOK(_, got reply) string {
 }
 
 // What could change nothing is answered from what is kept, whatever it
-// would make new (PROTOCOL.md §11.4, the order of refusals): a registration's
+// would make new (PROTOCOL.md §11.5, a request that would change nothing): a registration's
 // identical retry, with its address's registrations and its /48's spent, is
 // 200 {}; a renewal's, with the mailbox's renewals and certificates spent, 200
 // {}; a send's retry, or another sender's post of the same bytes, with the

@@ -724,7 +724,7 @@ func TestLargeReadsTakeTurns(t *testing.T) {
 	if _, err := post(e.pass(lifted), 30000, 300*time.Millisecond); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("a large send did not wait its turn: %v", err)
 	}
-	if code, err := post(e.pass(lifted), 500, 5*time.Second); err != nil || code != http.StatusBadRequest { // read, then not_age
+	if code, err := post(e.pass(lifted), 500, 5*time.Second); err != nil || code != http.StatusBadRequest { // read, then bad_request
 		t.Fatalf("a small send waited: %d %v", code, err)
 	}
 	if code, err := post(e.pass(lifted), 100000, 5*time.Second); err != nil || code != http.StatusRequestEntityTooLarge {
@@ -796,7 +796,7 @@ func TestAStalledBodyGivesTheLargeReadBack(t *testing.T) {
 		t.Fatalf("a large send after a stalled one: %v", err)
 	}
 	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest { // read, then not_age
+	if resp.StatusCode != http.StatusBadRequest { // read, then bad_request
 		t.Fatalf("a large send after a stalled one: %d, want 400", resp.StatusCode)
 	}
 	cut, taken, waited := testutil.ToFloat64(m.cut), testutil.ToFloat64(m.largeRead.WithLabelValues("taken")), testutil.ToFloat64(m.largeRead.WithLabelValues("timed_out"))

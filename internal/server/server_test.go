@@ -549,7 +549,7 @@ func TestRegistration(t *testing.T) {
 	e.want(e.do("PUT", r.path(""), []byte(`{"identity":"","prekey":"","prekey_signature":"","extra":1}`), pass), 400, protocol.CodeBadRequest)
 	e.want(e.do("PUT", r.path(""), []byte(`{"identity":"","prekey":""}`), pass), 400, protocol.CodeBadRequest)
 	e.want(e.do("PUT", r.path(""), []byte(`{"identity":"","prekey":"","prekey_signature":null}`), pass), 400, protocol.CodeBadRequest)
-	e.want(e.do("PUT", r.path(""), []byte(`{"identity":"not base64!","prekey":"","prekey_signature":""}`), pass), 400, protocol.CodeBadEncoding)
+	e.want(e.do("PUT", r.path(""), []byte(`{"identity":"not base64!","prekey":"","prekey_signature":""}`), pass), 400, protocol.CodeBadRequest)
 	e.want(e.do("PUT", r.path(""), []byte(`not json`), pass), 400, protocol.CodeBadRequest)
 	// A body is read as every reader reads JSON (PROTOCOL.md §3.3): names
 	// exactly, none twice, one value, and each byte field in its one
@@ -573,8 +573,8 @@ func TestRegistration(t *testing.T) {
 		"base64 wrapped":         bytes.Replace(rj, []byte(`","prekey"`), []byte(`\n","prekey"`), 1),
 		"its unused bits set":    unusedBitsSet(t, rj),
 	} {
-		if got := e.do("PUT", r.path(""), body, pass); got.status != 400 || got.code() != protocol.CodeBadEncoding {
-			t.Errorf("%s: %d %s, want 400 %s", name, got.status, got.code(), protocol.CodeBadEncoding)
+		if got := e.do("PUT", r.path(""), body, pass); got.status != 400 || got.code() != protocol.CodeBadRequest || got.problem().Member == "" {
+			t.Errorf("%s: %d %s naming %q, want 400 %s naming the member", name, got.status, got.code(), got.problem().Member, protocol.CodeBadRequest)
 		}
 	}
 
@@ -1229,8 +1229,8 @@ func TestSendPipeline(t *testing.T) {
 	// refused as no age file.
 	j, _ := json.Marshal(map[string]any{"statement": ok.Statement, "ciphertext": ok.ciphertext})
 	for name, body := range map[string][]byte{"no body": nil, "a JSON object": j, "text": []byte("not an age file")} {
-		if got := e.do("POST", to+"/messages?"+serials, body, pass); got.status != 400 || got.code() != protocol.CodeNotAge {
-			t.Errorf("%s: %d %s, want 400 %s", name, got.status, got.code(), protocol.CodeNotAge)
+		if got := e.do("POST", to+"/messages?"+serials, body, pass); got.status != 400 || got.code() != protocol.CodeBadRequest {
+			t.Errorf("%s: %d %s, want 400 %s", name, got.status, got.code(), protocol.CodeBadRequest)
 		}
 	}
 	e.want(e.do("POST", to+"/messages", seal(classic.Recipient()), pass), 400, protocol.CodeWrongRecipientType)
@@ -1275,7 +1275,7 @@ func TestSendPipeline(t *testing.T) {
 	small.want(small.do("POST", sto+"?x=1", make([]byte, 101), spass), 400, protocol.CodeBadRequest)
 	small.want(small.do("POST", "/v1/nope/messages?"+serials, make([]byte, 101), spass), 400, protocol.CodeBadAddress)
 	tooLarge(small.do("POST", sto+"?"+serials, make([]byte, 101), spass))
-	small.want(small.do("POST", sto+"?"+serials, make([]byte, 100), spass), 400, protocol.CodeNotAge)
+	small.want(small.do("POST", sto+"?"+serials, make([]byte, 100), spass), 400, protocol.CodeBadRequest)
 	// A body of no known length goes chunked, with no Content-Length.
 	chunked, _ := http.NewRequest(http.MethodPost, small.srv.URL+sto+"?"+serials, io.MultiReader(bytes.NewReader(make([]byte, 101))))
 	chunked.Header.Set("Authorization", spass)

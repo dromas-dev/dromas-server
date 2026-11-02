@@ -122,7 +122,7 @@ func TestRevocation(t *testing.T) {
 		"a name in another case":                    {bytes.Replace(recJSON, []byte(`"revocation_signature"`), []byte(`"Revocation_Signature"`), 1), protocol.CodeBadRequest},
 		"a name twice":                              {bytes.Replace(recJSON, []byte(`{`), []byte(`{"revocation_signature":"eA==",`), 1), protocol.CodeBadRequest},
 		"a second value after it":                   {append(append([]byte{}, recJSON...), "{}"...), protocol.CodeBadRequest},
-		"base64 with its unused bits set":           {unusedBitsSet(t, recJSON), protocol.CodeBadEncoding},
+		"base64 with its unused bits set":           {unusedBitsSet(t, recJSON), protocol.CodeBadRequest},
 		"a record of another type":                  {bytes.Replace(recJSON, []byte(`"type":"revocation_record"`), []byte(`"type":"revocation"`), 1), protocol.CodeBadRequest},
 	} {
 		if r := e.do("PUT", path, bad.body, ""); r.status != 400 || r.code() != bad.code {

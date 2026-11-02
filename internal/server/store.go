@@ -397,23 +397,6 @@ func identityWire(doc []byte) (string, error) {
 	return string(wire), nil
 }
 
-// declared is what the server keeps of a mailbox's declaration of sender key
-// types: the names this build verifies, or protocol.AnySender alone if that
-// was among them. A name it does not know is dropped, not refused: a client
-// may verify more types than this server registers.
-func declared(types []string) []string {
-	if slices.Contains(types, protocol.AnySender) {
-		return []string{protocol.AnySender}
-	}
-	var kept []string
-	for _, t := range protocol.IdentityTypes() {
-		if slices.Contains(types, t) {
-			kept = append(kept, t)
-		}
-	}
-	return kept
-}
-
 // identityType is the key type of a stored identity document: the first word
 // of its second line. The document was parsed when its mailbox registered.
 func identityType(doc []byte) string {
