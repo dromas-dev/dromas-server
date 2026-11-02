@@ -366,3 +366,51 @@ func TestASecondProcessInARevocationsWindow(t *testing.T) {
 		t.Errorf("the poll after the window carries %s, want the revocation", got.body)
 	}
 }
+
+// A late image that arrives while the address's load is in flight is judged once the
+// load is done, by what it read: a load that found no record drops what memory
+// holds of the address, as with no load in flight, so the next use reads it. A
+// load that found one takes the image if it is newer.
+func TestALateImageDuringALoadIsJudgedByWhatTheLoadRead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	var a protocol.Address
+	a[0] = 7
+	for name, c := range map[string]struct {
+		read mailboxRead
+		held bool
+	}{
+		"no record": {mailboxRead{}, false},
+		"a record":  {mailboxRead{exists: true, created: 1, rev: 1}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			x := newIndex()
+			reading, finish := make(chan struct{}), make(chan struct{})
+			done := make(chan error, 1)
+			go func() {
+				done <- x.ensure(ctx, a, func() (mailboxRead, error) {
+					close(reading)
+					<-finish
+					return c.read, nil
+				})
+			}()
+			<-reading
+			x.imageStanding(a, Standing{}, version{1, 2})
+			close(finish)
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			sh := x.shard(a)
+			sh.mu.Lock()
+			m := sh.mailboxes[a]
+			sh.mu.Unlock()
+			if (m != nil) != c.held {
+				t.Fatalf("held %v after the load", m != nil)
+			}
+			if m != nil && m.rev != 2 {
+				t.Errorf("rev %d: the newer image was not taken", m.rev)
+			}
+		})
+	}
+}

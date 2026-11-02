@@ -56,7 +56,7 @@ flowchart LR
    - Mailbox records carry a revision number (`rev`), and a process only applies a newer one. An image of a record that arrives onto what memory holds of an address with no record (its revocations alone, read since the record was deleted) has nothing to be compared with: it may be of the record this process deleted, its event behind the delete on the stream. Memory drops what it holds of the address instead, and the next use reads it (`Memory.apply`, `index.imageStanding`).
    - A count is the size of the set, never an incremented number, so it can't drift.
 6. **A process that can't prove it's current stops answering** (fail closed while unsynced).
-   - Built: a process answers `503` until its stream followers are positioned, and while any follower has not read its stream to its end within `unsyncedAfter` (a follower refused by AWS, or one whose reads fail or never reach the end), and exits when a follower loses its place, so that the restart rebuilds memory.
+   - Built: a process answers `503` until its stream followers are positioned, and while any follower cannot show it has seen every change through a time within `unsyncedAfter` of now (a follower refused by AWS, or one whose reads fail or fall that far behind, by its last record's date on a shard that always has another), and exits when a follower loses its place, so that the restart rebuilds memory.
    - NOT built, for stage 2: a `/readyz` that fails with it, so that the edge drains the process.
    - If every process is behind, clients get `503` + `Retry-After`.
 7. **Redis is penciled in for later, not built now.** Today it would add two things:
