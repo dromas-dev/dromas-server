@@ -245,12 +245,20 @@ func TestAccounts(t *testing.T) {
 		if e.accountOf(a) != "" {
 			t.Fatal("a refused key adopted the mailbox")
 		}
-		// Adopting into the account the mailbox is already in spends no use,
-		// and a key that was never stored is refused there too.
+		// A key naming the account the mailbox is already in spends no use, and
+		// is answered 200 whatever state it is in or whether it is still held,
+		// so a retry whose answer was lost is 200 once the key has expired and
+		// its item has gone (PROTOCOL.md §11.16). One naming another account is
+		// still judged.
 		adopt(t, a, key)
 		adopt(t, a, key)
-		if _, err := a.Adopt(ctx, unstored); codeOf(err) != protocol.CodeAdoptKeyRefused {
-			t.Fatalf("a key never stored, naming the mailbox's own account: %v", err)
+		for name, k := range map[string]string{"never stored, as a key gone is": unstored, "expired": expiring} {
+			if got, err := a.Adopt(ctx, k); err != nil || got != acc.ID {
+				t.Fatalf("%s, naming the mailbox's own account: %q, %v", name, got, err)
+			}
+		}
+		if _, err := a.Adopt(ctx, moved); codeOf(err) != protocol.CodeAdoptKeyRefused {
+			t.Fatalf("a key naming another account, from a mailbox in this one: %v", err)
 		}
 		adopt(t, b, key)
 		if _, err := e.mailbox().Adopt(ctx, key); codeOf(err) != protocol.CodeAdoptKeyRefused {

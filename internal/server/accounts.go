@@ -43,9 +43,10 @@ func keyRefused() *problem {
 }
 
 // adopt is PUT /v1/<address>/account (with the pass): the mailbox joins the account its
-// adopt key names, spending one of the key's uses. Naming the account the
-// mailbox is already in spends none, so a retry whose answer was lost is 200
-// even once the key is spent.
+// adopt key names, spending one of the key's uses. A key naming the account the
+// mailbox is already in changes nothing, so it is answered 200 with no key read:
+// a retry whose answer was lost is 200 whether its key is spent, expired or gone
+// (PROTOCOL.md §11.16).
 func (s *Server) adopt(w http.ResponseWriter, r *http.Request) error {
 	a, err := s.owner(r)
 	if err != nil {
@@ -81,16 +82,16 @@ func (s *Server) adopt(w http.ResponseWriter, r *http.Request) error {
 	if err := precondition(r, targetState{exists: b.Account != "", hint: hintConditions}); err != nil {
 		return err
 	}
-	// The key is read before anything is written, so one that is not ours
-	// costs a read of the accounts table and no write of the mailbox's record.
-	k, err := s.store.AdoptKey(r.Context(), account, hash)
-	if errors.Is(err, ErrNotFound) {
-		return keyRefused()
-	}
-	if err != nil {
-		return err
-	}
 	if b.Account != account {
+		// The key is read before anything is written, so one that is not ours
+		// costs a read of the accounts table and no write of the mailbox's record.
+		k, err := s.store.AdoptKey(r.Context(), account, hash)
+		if errors.Is(err, ErrNotFound) {
+			return keyRefused()
+		}
+		if err != nil {
+			return err
+		}
 		if !k.good(s.now()) {
 			return keyRefused()
 		}
