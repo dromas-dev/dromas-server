@@ -262,23 +262,20 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, sign
 		sum = one
 	}
 	defer func() { s.metrics.pass(false, err) }()
-	// Where the signer is revoked, what is plainly not the identity's pass is
-	// answered so before any count (PROTOCOL.md §11.4 rule 1): another
-	// mailbox's, and the pass under the revoked certificate this process
-	// took before.
-	if listed && (p.Address != a || s.passes.has(a, sum, signer, now) || s.passes.has(a, raw, signer, now)) {
+	// Where the signer is revoked, every pass but the identity's is answered so
+	// before any count, date or signature (PROTOCOL.md §8, §11.4 rule 1): the
+	// mailbox learns its state whichever other pass it carries. A pass that names
+	// the identity's key goes on, and is judged as any pass is.
+	if listed && (p.Address != a || !p.CarriesKey(identity)) {
 		return listedCertificate()
 	}
-	// cheap is a refusal made with no signature checked, which gives back the
-	// count reserved for one.
-	cheap := false
 	if count {
 		var m *reservation
 		if m, err = s.miss(r); err != nil {
 			return err
 		}
 		defer func() {
-			if err != nil && !cheap {
+			if err != nil {
 				m.keep()
 			} else {
 				m.release(s.now())
@@ -320,8 +317,7 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, sign
 	}
 	switch {
 	case errors.Is(err, protocol.ErrCertificate):
-		cheap = listed
-		return otherSigner(rank, listed)
+		return otherSigner(rank)
 	case errors.Is(err, protocol.ErrCertificateNotBegun):
 		return fail(protocol.CodePassExpired, "a certificate starts an hour before it is made: check this machine's clock, then dromas prekey renew", "the certificate the pass is signed under has not begun")
 	case errors.Is(err, protocol.ErrCertificateTime):
@@ -351,15 +347,10 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, sign
 }
 
 // otherSigner refuses a pass signed by neither the identity nor the signer
-// the call takes a pass by, of rank rank: certificate_revoked where the
-// revocation of certificates held covers that signer, and otherwise
-// certificate_not_current, naming no certificate where the signer is the
-// identity. No signature was checked.
-func otherSigner(rank uint64, listed bool) error {
-	switch {
-	case listed:
-		return listedCertificate()
-	case rank == 0:
+// the call takes a pass by, of rank rank: certificate_not_current, naming no
+// certificate where the signer is the identity. No signature was checked.
+func otherSigner(rank uint64) error {
+	if rank == 0 {
 		return fail(protocol.CodeCertificateNotCurrent, "sign the pass with the mailbox's identity, the signer of its current prekey: dromas does", "the pass is not signed by the mailbox's identity, which signs its current prekey")
 	}
 	return fail(protocol.CodeCertificateNotCurrent, "sign the pass with the identity, or the working key of the mailbox's newest prekey: dromas does", "the pass is signed by neither the identity nor certificate %d, the one this call takes a pass under", certificateSerialValue(rank))

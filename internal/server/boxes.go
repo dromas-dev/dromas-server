@@ -440,37 +440,31 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 	if err := s.checkPass(r, h, key, signerHash(id, signer), signer.Rank(), false, nil); err != nil {
 		return err
 	}
-	// A renewal by the mailbox's current signer counts against the mailbox's
-	// renewals; one under a later certificate is its identity's act, counted
-	// apart, so whoever holds the current working key and spends the
-	// renewals does not hold back the identity's. The count is read with the
-	// mailbox's calls, so a refusal of either gives the longer wait (longest).
-	// A mailbox's first certificate, after statements its identity signed, is
-	// a renewal by a later signer, and counted so. One while the revocation of
+	// A renewal by the mailbox's current signer spends the mailbox's calls and
+	// its renewals. One under a later certificate is its identity's act, and
+	// spends its certificates alone: a statement the identity certified is all
+	// that reaches here, past checkPrekey and checkPass, so whoever holds the
+	// current working key and spends the calls and the renewals does not hold
+	// it back (PROTOCOL.md §11.5, §15.5). The current signer's two are read
+	// together, so a refusal of either gives the longer wait (longest). A
+	// mailbox's first certificate, after statements its identity signed, is a
+	// renewal by a later signer, and counted so. One while the revocation of
 	// certificates held covers the mailbox's current certificate spends none
-	// of the mailbox's counts, its calls among them: it replaces what the
-	// identity revoked, each raise of which is counted (revoke), and whoever
-	// held the taken working key may have spent the calls before the raise
-	// (#84). It
-	// was counted at the gate, against its address's flood budget, as every
-	// renewal is. Let's Encrypt exempts more renewals than this, from every
-	// limit: why ours differs is PRECEDENTS.md in the client repo.
+	// of the mailbox's counts: it replaces what the identity revoked, each raise
+	// of which is counted (revoke). The gate counted it against its address's
+	// flood budget, as every renewal is. Let's Encrypt exempts more renewals
+	// than this, from every limit: why ours differs is PRECEDENTS.md in the
+	// client repo.
 	var count []perDay
-	replaces := false
-	switch {
-	case signer.Rank() == b.Rank:
+	if signer.Rank() == b.Rank {
 		count = []perDay{s.renewalsADay()}
-	default:
-		if replaces, err = b.listed(b.Rank); err != nil {
-			return err
-		} else if !replaces {
-			count = []perDay{s.certificatesADay()}
-		}
-	}
-	if !replaces {
 		if err := s.spendOwner(r.Context(), h, count...); err != nil {
 			return err
 		}
+	} else if replaces, err := b.listed(b.Rank); err != nil {
+		return err
+	} else if !replaces {
+		count = []perDay{s.certificatesADay()}
 	}
 	// The write holds what an If-Match held, the record at the rev read.
 	if err := precondition(r, targetState{exists: true, hint: hintConditions}); err != nil {

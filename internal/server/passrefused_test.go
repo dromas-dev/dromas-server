@@ -337,6 +337,49 @@ func TestARevokedCurrentCertificateIsAnsweredBeforeThePass(t *testing.T) {
 	e.want(e.do("GET", r.path("/messages"), nil, r.pass(6)), 200, "")
 }
 
+// While a mailbox's current certificate is revoked, a pass that names any key
+// but the identity's is certificate_revoked whatever its date or signature, and
+// spends no miss, with the misses spent too (PROTOCOL.md §8, §11.4 rule 1). The
+// identity's pass is judged as any pass is, which is the control: one run out
+// is pass_expired, and spends the miss these do not.
+func TestARevokedCertificateAnswersEveryOtherPassForNoMiss(t *testing.T) {
+	t.Parallel()
+	l := relaxed()
+	l.MissesPerMinute = 1
+	e := newEnv(t, l)
+	r := at3(e)
+	e.want(e.do("PUT", r.path("/revocations"), r.certs(3), ""), http.StatusOK, "")
+	a, now := r.id.Address(), e.clock.Now()
+	at := func(signer ssh.Signer, when time.Time) string {
+		t.Helper()
+		auth, _, err := protocol.NewPass(signer, a, e.name(), when)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return auth
+	}
+	byCert := map[string]string{
+		"valid":     at(r.work[3], now),
+		"run out":   at(r.work[3], now.Add(-time.Hour)),
+		"too ahead": at(r.work[3], now.Add(2*time.Hour)),
+		"no signature": protocol.PassScheme + ` address="` + a.String() + `", not_after="` +
+			now.Add(protocol.MaxPassLifetime/2).Format(protocol.TimeLayout) + `", signature="AAAA"`,
+	}
+	revoked := func() {
+		t.Helper()
+		for name, pass := range byCert {
+			if got := e.do("GET", r.path("/messages"), nil, pass); got.status != http.StatusUnauthorized || got.code() != protocol.CodeCertificateRevoked {
+				t.Errorf("a pass under the revoked certificate, %s: %d %s", name, got.status, got.body)
+			}
+		}
+	}
+	revoked()
+	runOut := at(r.signer, now.Add(-time.Hour))
+	e.want(e.do("GET", r.path("/messages"), nil, runOut), http.StatusUnauthorized, protocol.CodePassExpired)
+	e.limited(e.do("GET", r.path("/messages"), nil, runOut), protocol.QuotaMisses)
+	revoked()
+}
+
 // An address with no mailbox whose identity revoked certificates: a registration
 // of a statement under one of them is certificate_revoked before its pass is
 // read, whatever it carries (PROTOCOL.md §11.7 step 6, §8). Control: one

@@ -495,9 +495,33 @@ func TestTheIdentitysActsAreCountedApart(t *testing.T) {
 }
 
 // A taker who holds a mailbox's working key can spend the mailbox's calls with its
-// pass, and so hold back a renewal (this repo's #35). It cannot hold back the
-// identity's raise of the revocation of certificates, which carries no pass
-// and spends a count no renewal spends. Once that is taken, the taken pass is
+// pass, and so hold back a renewal by that working key. It cannot hold back a
+// renewal under a later certificate, the identity's act, which spends its
+// certificates and no calls (PROTOCOL.md §11.5, §15.5). The control is a renewal
+// by the current signer, which the spent calls refuse.
+func TestATakerCannotHoldARenewalUnderALaterCertificateBack(t *testing.T) {
+	t.Parallel()
+	l := relaxed()
+	l.CallBurst, l.CallRefill = DefaultLimits().CallBurst, DefaultLimits().CallRefill
+	e := newEnv(t, l)
+	r := e.raw()
+	r.registerCertified(protocol.MaxPrekeyLifetime)
+	until := e.clock.Now().Add(protocol.PrekeyLifetime)
+	r.prekey(1000, until, nil)
+	e.want(e.do("PUT", r.path("/prekey"), r.upload(1000), r.pass(1000)), http.StatusOK, "")
+	taken := r.pass(1000)
+	for e.do("GET", r.path("/acl"), nil, taken).status == http.StatusOK {
+	}
+	r.prekeyUnder(r.work[1000], 1001, until, nil)
+	e.limited(e.do("PUT", r.path("/prekey"), r.upload(1001), taken), protocol.QuotaCalls)
+	r.prekey(2000, until, nil)
+	e.want(e.do("PUT", r.path("/prekey"), r.upload(2000), r.pass(2000)), http.StatusOK, "")
+	e.limited(e.do("GET", r.path("/acl"), nil, r.pass(2000)), protocol.QuotaCalls)
+}
+
+// A taker who holds a mailbox's working key cannot hold back the identity's
+// raise of the revocation of certificates, which carries no pass and spends a
+// count no renewal spends. Once that is taken, the taken pass is
 // refused, and the renewal that replaces the revoked certificate is taken at
 // once, with the mailbox's calls and the identity's certificates for the day
 // spent: it spends none of the mailbox's counts (#84). The calls are still
@@ -517,7 +541,7 @@ func TestATakerCannotHoldTheRemedyBack(t *testing.T) {
 	for e.do("GET", r.path("/acl"), nil, taken).status == http.StatusOK {
 	}
 	r.prekey(2000, until, nil)
-	e.want(e.do("PUT", r.path("/prekey"), r.upload(2000), r.pass(2000)), http.StatusTooManyRequests, protocol.CodeRateLimited) // held back by the taker
+	e.limited(e.do("PUT", r.path("/prekey"), r.upload(2000), r.pass(2000)), protocol.QuotaCertificates) // the day's one is spent
 	e.want(e.do("PUT", r.path("/revocations"), r.certs(1000), ""), http.StatusOK, "")
 	e.want(e.do("GET", r.path("/acl"), nil, taken), http.StatusUnauthorized, protocol.CodeCertificateRevoked)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(2000), r.pass(2000)), http.StatusOK, "")
