@@ -75,7 +75,7 @@ func costMailbox(t *testing.T, retired int) (*Mailbox, ssh.Signer) {
 	}
 	key := k.Recipient().String()
 	now := time.Now().UTC().Truncate(time.Second)
-	p := &protocol.Prekey{Address: id.Address(), Serial: uint64(retired) + 1, Key: key, NotAfter: now.Add(protocol.TTL)}
+	p := &protocol.Prekey{Address: id.Address(), Rank: rankOf(signer), Serial: uint64(retired) + 1, Key: key, NotAfter: now.Add(protocol.TTL)}
 	sig, err := protocol.Sign(signer, p.Statement(), protocol.PrekeyNamespace(id.Address()))
 	if err != nil {
 		t.Fatal(err)

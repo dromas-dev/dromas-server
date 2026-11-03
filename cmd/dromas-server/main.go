@@ -156,7 +156,7 @@ func serve(args []string) error {
 	msgs := fs.String("messages-table", "", "the DynamoDB table of messages")
 	accts := fs.String("accounts-table", "", "the DynamoDB table of accounts")
 	bucket := fs.String("bucket", "", "the S3 Express One Zone directory bucket")
-	names := fs.String("names", "", "comma-separated names clients call this server by: the host of its URL, lowercase, with its port only when that is not the scheme's default; a pass is taken only for one of them")
+	names := fs.String("names", "", "comma-separated names clients call this server by: the host of its URL, lowercase, with a port only when that is neither 80 nor 443; a pass is taken only for one of them")
 	idTypes := fs.String("identity-types", strings.Join(protocol.IdentityTypes(), ","), "comma-separated identity key types a mailbox may register with, of those this build verifies; "+protocol.IdentityEd25519+" is always one of them")
 	region := fs.String("region", "us-east-1", "the AWS region")
 	mailboxCache := fs.Int("mailbox-cache", server.DefaultMailboxCache, "mailbox records held in memory, for sends and reads of a mailbox")
@@ -240,15 +240,11 @@ func serve(args []string) error {
 		reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 		cfg.Metrics = server.NewMetrics(reg)
 	}
-	for _, n := range strings.Split(*names, ",") {
-		if n = strings.TrimSpace(n); n == "" {
-			continue
-		}
-		if err := protocol.CheckServerName(n); err != nil {
-			return fmt.Errorf("--names: %q: %w", n, err)
-		}
-		cfg.Names = append(cfg.Names, n)
+	serving, err := serverNames(*names)
+	if err != nil {
+		return err
 	}
+	cfg.Names = serving
 	for _, t := range strings.Split(*idTypes, ",") {
 		if t = strings.TrimSpace(t); t == "" {
 			continue
@@ -423,4 +419,21 @@ func listenAll(spec string) ([]net.Listener, error) {
 		return nil, errors.New("no address")
 	}
 	return ls, nil
+}
+
+// serverNames reads --names, a comma-separated list of the names clients call
+// this server by, each a server name in its one form (PROTOCOL.md §8): one that
+// carries port 80 or 443 is refused, since a pass never names either.
+func serverNames(list string) ([]string, error) {
+	var names []string
+	for _, n := range strings.Split(list, ",") {
+		if n = strings.TrimSpace(n); n == "" {
+			continue
+		}
+		if err := protocol.CheckServerName(n); err != nil {
+			return nil, fmt.Errorf("--names: %q: %w", n, err)
+		}
+		names = append(names, n)
+	}
+	return names, nil
 }

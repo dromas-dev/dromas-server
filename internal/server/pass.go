@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -146,25 +144,15 @@ func (s *Server) revokedAt(a protocol.Address, b *Mailbox) *problem {
 }
 
 // serverName is the name the caller called this server by, if it is one of
-// the server's own: the request's Host, lowercase, written as an origin is
-// (PROTOCOL.md §8), with its port as a number and none at all when it is
-// 443 or 80, either default taken as left unwritten, so that checking a pass
-// never rests on which scheme a request came by: a server may learn that
-// only from a forwarded header, and an authentication check does not hang
-// on one. A client that calls https on port 80, or http on 443, names a port
-// this drops, and its pass is refused. A pass names the server it was made for,
-// and the name is not sent with it: checked against a name that is not ours,
-// a pass made for another server would pass here.
+// the server's own: the request's Host written as a server name
+// (protocol.ServerName, PROTOCOL.md §8), which a Host can still carry port 80
+// or 443 ahead of, so that checking a pass never rests on which scheme a
+// request came by: a server may learn that only from a forwarded header, and
+// an authentication check does not hang on one. A pass names the server it was
+// made for, and the name is not sent with it: checked against a name that is
+// not ours, a pass made for another server would pass here.
 func (s *Server) serverName(r *http.Request) (string, bool) {
-	name := protocol.LowerASCII(r.Host)
-	if i := strings.LastIndexByte(name, ':'); i > strings.LastIndexByte(name, ']') {
-		switch n, err := strconv.ParseUint(name[i+1:], 10, 16); {
-		case i == len(name)-1, err == nil && (n == 443 || n == 80):
-			name = name[:i]
-		case err == nil:
-			name = name[:i+1] + strconv.FormatUint(n, 10)
-		}
-	}
+	name := protocol.ServerName(r.Host)
 	return name, len(s.names) == 0 || slices.Contains(s.names, name)
 }
 

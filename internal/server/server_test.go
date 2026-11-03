@@ -6,8 +6,10 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -377,12 +379,21 @@ func (r *raw) prekeyUnder(signer ssh.Signer, serial uint64, notAfter time.Time, 
 		key, _ = age.GenerateHybridIdentity()
 	}
 	r.keys[serial] = key
-	p := &protocol.Prekey{Address: r.id.Address(), Serial: serial, Key: key.Recipient().String(), NotAfter: notAfter}
+	p := &protocol.Prekey{Address: r.id.Address(), Rank: rankOf(signer), Serial: serial, Key: key.Recipient().String(), NotAfter: notAfter}
 	sig, err := protocol.Sign(signer, p.Statement(), protocol.PrekeyNamespace(r.id.Address()))
 	if err != nil {
 		r.e.t.Fatal(err)
 	}
 	r.stmt[serial], r.sig[serial], r.by[serial] = p.Statement(), sig, signer
+}
+
+// rankOf is the rank a signer signs at: a certificate's serial, and 0 for a
+// bare key.
+func rankOf(by ssh.Signer) uint64 {
+	if cert, ok := by.PublicKey().(*ssh.Certificate); ok {
+		return cert.Serial
+	}
+	return 0
 }
 
 func (r *raw) registration(serial uint64) protocol.RegisterRequest {
@@ -517,11 +528,11 @@ func TestAPrekeyOfAnotherTypeIsBadKey(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	x25519, _ := age.GenerateX25519Identity()
-	unknown := strings.Split(string(clientFile(t, "testdata/vectors/prekey/unsupported-type.txt")), "\n")[3]
+	unknown := strings.Split(string(clientFile(t, "testdata/vectors/prekey/unsupported-type.txt")), "\n")[4]
 	for _, key := range []string{x25519.Recipient().String(), unknown} {
 		other := func(r *raw, serial uint64) {
 			signer := r.certify(serial)
-			p := &protocol.Prekey{Address: r.id.Address(), Serial: serial, Key: key, NotAfter: e.clock.Now().Add(protocol.PrekeyLifetime)}
+			p := &protocol.Prekey{Address: r.id.Address(), Rank: rankOf(signer), Serial: serial, Key: key, NotAfter: e.clock.Now().Add(protocol.PrekeyLifetime)}
 			sig, err := protocol.Sign(signer, p.Statement(), protocol.PrekeyNamespace(r.id.Address()))
 			if err != nil {
 				t.Fatal(err)
@@ -1031,14 +1042,14 @@ func TestAPassIsForOneServer(t *testing.T) {
 	e.want(e.doAs("another.example", "GET", r.path("/messages"), nil, theirs), 401, protocol.CodeUnauthorized)
 }
 
-// The server writes the Host a request names as an origin is written, as a
-// client writes the server's name in its pass (PROTOCOL.md §8): its port as
-// a number, and none at all for 443 or 80, whichever scheme the client
-// called it by, which TLS ending in front of the server hides. So a mailbox whose
-// URL is https://mail.example:443 signs its pass for mail.example, and its
-// call names mail.example:443. Each pass here is a new one, a second later:
-// one the server has taken is taken again without its name being read.
-func TestTheServerReadsItsHostAsAnOrigin(t *testing.T) {
+// The server writes the Host a request names as a server name, as a client
+// writes it in its pass (PROTOCOL.md §8): its port as a number, and none at all
+// for 443 or 80, whichever scheme the client called it by, which TLS ending in
+// front of the server hides. So a mailbox whose URL is https://mail.example:443
+// signs its pass for mail.example, and its call names mail.example:443. Each
+// pass here is a new one, a second later: one the server has taken is taken
+// again without its name being read.
+func TestTheServerReadsItsHostAsAServerName(t *testing.T) {
 	t.Parallel()
 	clk := &clock{t: time.Now().UTC().Truncate(time.Second)}
 	e := &env{t: t, clock: clk, store: NewMemStore(clk.Now)}
@@ -1050,9 +1061,18 @@ func TestTheServerReadsItsHostAsAnOrigin(t *testing.T) {
 		clk.Add(time.Second)
 		return e.passFor(r.by[1], r.id.Address(), name)
 	}
-	// A pass that names the default port is not for the name the server
-	// writes, which leaves it out.
-	e.want(e.doAs("mail.example:443", "PUT", r.path(""), r.registration(1), pass("mail.example:443")), 401, protocol.CodeUnauthorized)
+	// A pass that names port 443 or 80 is for no server: no client makes one,
+	// and the name the server writes leaves the port out.
+	carrying := func(name string) string {
+		clk.Add(time.Second)
+		notAfter := clk.Now().Add(protocol.PassLifetime)
+		sig, err := protocol.Sign(r.by[1], protocol.PassStatement(r.id.Address(), name, notAfter), protocol.PassNamespace(r.id.Address()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fmt.Sprintf(`%s address="%s", not_after="%s", signature="%s"`, protocol.PassScheme, r.id.Address(), notAfter.UTC().Format(protocol.TimeLayout), base64.StdEncoding.EncodeToString(sig))
+	}
+	e.want(e.doAs("mail.example:443", "PUT", r.path(""), r.registration(1), carrying("mail.example:443")), 401, protocol.CodeUnauthorized)
 	e.want(e.doAs("mail.example:443", "PUT", r.path(""), r.registration(1), pass("mail.example")), 201, "")
 	for host, name := range map[string]string{
 		"mail.example:80":    "mail.example",
@@ -1063,7 +1083,70 @@ func TestTheServerReadsItsHostAsAnOrigin(t *testing.T) {
 	}
 	// A port that is no default stays, and must be the pass's.
 	e.want(e.doAs("mail.example:8443", "GET", r.path("/messages"), nil, pass("mail.example")), 401, protocol.CodeUnauthorized)
-	e.want(e.doAs("mail.example:80", "GET", r.path("/messages"), nil, pass("mail.example:80")), 401, protocol.CodeUnauthorized)
+	e.want(e.doAs("mail.example:80", "GET", r.path("/messages"), nil, carrying("mail.example:80")), 401, protocol.CodeUnauthorized)
+}
+
+// A statement names its signer's rank, and any other makes it invalid
+// (PROTOCOL.md §6), at a registration and at a renewal. SSHSIG signs no signing
+// key, so a statement signed under one certificate of a working key verifies
+// under a later certificate of that key, and its order reads above the one it
+// was signed below: its rank line is what refuses it.
+func TestAStatementNamesItsSignersRank(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, relaxed())
+	r := e.raw()
+	addr := r.id.Address()
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	work, _ := ssh.NewSignerFromKey(priv)
+	under := func(serial uint64) ssh.Signer {
+		cert, err := protocol.NewCertificate(r.id, r.signer, work.PublicKey(), serial, e.clock.Now(), DefaultLimits().MaxCertificateLifetime)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := cert.Signer(work)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	first, later := under(1000), under(2000)
+	statement := func(rank, serial uint64) *protocol.Prekey {
+		key, _ := age.GenerateHybridIdentity()
+		return &protocol.Prekey{Address: addr, Rank: rank, Serial: serial, Key: key.Recipient().String(), NotAfter: e.clock.Now().Add(time.Hour)}
+	}
+	signed := func(p *protocol.Prekey, by ssh.Signer) (st, sig []byte) {
+		sig, err := protocol.Sign(by, p.Statement(), protocol.PrekeyNamespace(addr))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p.Statement(), sig
+	}
+	register := func(p *protocol.Prekey, by ssh.Signer) reply {
+		st, sig := signed(p, by)
+		return e.do("PUT", r.path(""), protocol.RegisterRequest{Identity: r.id.Document(), Prekey: st, PrekeySignature: sig}, e.passFor(by, addr, e.name()))
+	}
+	for _, c := range []struct {
+		what string
+		rank uint64
+		by   ssh.Signer
+	}{
+		{"the identity, naming a certificate's rank", 1000, r.signer},
+		{"a certificate, naming 0", 0, first},
+		{"a certificate, naming a higher rank", 1001, first},
+		{"a certificate, naming a lower rank", 999, first},
+	} {
+		if got := register(statement(c.rank, 1), c.by); got.status != http.StatusBadRequest || got.problem().Code != protocol.CodeBadKey {
+			t.Errorf("%s: %d %s", c.what, got.status, got.body)
+		}
+	}
+	old := statement(1000, 1)
+	e.want(register(old, first), http.StatusCreated, "")
+	upload := func(p *protocol.Prekey, by ssh.Signer) reply {
+		st, sig := signed(p, by)
+		return e.do("PUT", r.path("/prekey"), protocol.PrekeyRequest{Prekey: st, PrekeySignature: sig}, e.passFor(r.signer, addr, e.name()))
+	}
+	e.want(upload(old, later), http.StatusBadRequest, protocol.CodeBadKey)
+	e.want(upload(statement(2000, 1), later), http.StatusOK, "")
 }
 
 func TestPrekeyRenewal(t *testing.T) {
