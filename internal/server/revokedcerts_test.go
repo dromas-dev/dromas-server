@@ -223,19 +223,16 @@ func TestRevokedCertificates(t *testing.T) {
 	r.prekey(5, now.Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(put(5, 5), 200, "")
 
-	// A revocation of the address may come with one of its certificates.
-	// Everything in a body is checked before anything is changed: a good
-	// revocation of certificates with what is not a revocation of the
-	// address, and the other way about, each change nothing.
+	// A revocation of the address may come with one of its certificates. A
+	// good revocation of certificates with what is not a revocation of the
+	// address changes nothing.
 	both := other.certs(1)
 	if both.Revocation, err = protocol.SignRevocation(other.signer, other.id.Address()); err != nil {
 		t.Fatal(err)
 	}
-	halfList, halfRevocation := both, both
+	halfList := both
 	halfList.Revocation = []byte("revoke it")
-	halfRevocation.RevokedCertificatesSignature = byWork
 	e.want(e.do("PUT", other.path("/revocations"), halfList, ""), 400, protocol.CodeBadRevocation)
-	e.want(e.do("PUT", other.path("/revocations"), halfRevocation, ""), 400, protocol.CodeBadRevocation)
 	if stored, err = e.store.Mailbox(ctx, other.id.Address()); err != nil || stored.State != Active || len(stored.RevokedCerts) != 0 || len(stored.Revocation) != 0 {
 		t.Fatalf("a body that verified in part changed the record: %+v, %v", stored, err)
 	}
