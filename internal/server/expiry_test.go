@@ -43,7 +43,7 @@ func (e *env) stands(a protocol.Address) (*Mailbox, *protocol.Certificate) {
 func TestARecordExpiresWhenNothingOfTheMailboxIsValid(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.MaxCertificateLifetime = 100 * 24 * time.Hour // past a prekey's last message
+	l.MaxCertificateLifetime = protocol.MaxCertificateLifetime // past a prekey's last message
 	e := newEnv(t, l)
 	now := e.clock.Now()
 	r := e.raw().register(protocol.MaxPrekeyLifetime)

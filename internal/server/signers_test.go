@@ -201,12 +201,15 @@ func certAt(t *testing.T, r *raw, serial uint64, after, before time.Time) ssh.Si
 // A certificate is held to the sanity refusals when it is first taken, each
 // exact at the server's clock (PROTOCOL.md §11.7 step 6): begun, not ended,
 // and no longer than the server's maximum, which the refusal carries in
-// max_certificate_lifetime. Nothing more: one begun this second is taken.
-// A renewal under the mailbox's current certificate is not held to the
-// maximum again, so a lower maximum strands no mailbox.
+// max_certificate_lifetime. Nothing more: one begun this second is taken. One
+// longer than the protocol's maximum is no certificate any verifier takes
+// (PROTOCOL.md §5.2), whatever the server's maximum. A renewal under the
+// mailbox's current certificate is not held to the maximum again, so a lower
+// maximum strands no mailbox.
 func TestTheSanityRefusals(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
+	l.MaxCertificateLifetime = protocol.MaxCertificateLifetime - 24*time.Hour
 	most := l.MaxCertificateLifetime
 	e := newEnv(t, l)
 	now := e.clock.Now()
@@ -223,6 +226,7 @@ func TestTheSanityRefusals(t *testing.T) {
 		{"ending a second from now", now.Add(-time.Hour), now.Add(time.Second), http.StatusCreated, ""},
 		{"the maximum", now.Add(-protocol.MaxSkew), now.Add(-protocol.MaxSkew).Add(most), http.StatusCreated, ""},
 		{"a second past the maximum", now.Add(-protocol.MaxSkew), now.Add(-protocol.MaxSkew).Add(most + time.Second), http.StatusBadRequest, protocol.CodeCertificateTooLong},
+		{"a second past the protocol's maximum", now.Add(-protocol.MaxSkew), now.Add(-protocol.MaxSkew).Add(protocol.MaxCertificateLifetime + time.Second), http.StatusBadRequest, protocol.CodeBadKey},
 	} {
 		r := e.raw().certified()
 		r.prekeyUnder(certAt(t, r, 2, c.after, c.before), 1, until, nil)
@@ -239,17 +243,17 @@ func TestTheSanityRefusals(t *testing.T) {
 	// certificate is not, at a server whose maximum is now lower than the
 	// certificate it took.
 	long := relaxed()
-	long.MaxCertificateLifetime = 2 * most
+	long.MaxCertificateLifetime = protocol.MaxCertificateLifetime
 	e1 := newEnv(t, long)
 	e2 := newEnv(t, l, func(c *Config) { c.Store, c.Now = e1.store, e1.clock.Now })
 	r := e1.raw().certified()
-	r.prekeyUnder(r.certifyFor(2, 2*most), 1, e1.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+	r.prekeyUnder(r.certifyFor(2, protocol.MaxCertificateLifetime), 1, e1.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	e1.want(e1.do("PUT", r.path(""), r.registration(1), r.pass(1)), http.StatusCreated, "")
 	r.prekeyUnder(r.work[2], 2, e1.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	at2 := func(serial uint64) string { return e2.passFor(r.by[serial], r.id.Address(), e2.name()) }
 	e2.want(e2.do("PUT", r.path("/prekey"), r.upload(2), at2(2)), http.StatusOK, "")
-	r.prekeyUnder(r.certifyFor(3, 2*most), 3, e1.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+	r.prekeyUnder(r.certifyFor(3, protocol.MaxCertificateLifetime), 3, e1.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	e2.want(e2.do("PUT", r.path("/prekey"), r.upload(3), at2(3)), http.StatusBadRequest, protocol.CodeCertificateTooLong)
-	r.prekey(3, e1.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+	r.prekeyUnder(r.certifyFor(3, most), 3, e1.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	e2.want(e2.do("PUT", r.path("/prekey"), r.upload(3), at2(3)), http.StatusOK, "")
 }
