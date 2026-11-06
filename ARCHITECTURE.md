@@ -308,7 +308,7 @@ What changes:
 
 ## Storage
 
-**Three DynamoDB tables, one kind of thing each, mailboxes (`--mailboxes-table`), messages (`--messages-table`) and accounts (`--accounts-table`), and an S3 Express One Zone directory bucket in `dromas-server`'s AZ for bodies (`--bucket`).** Kept apart, so a flood of messages cannot throttle registration or renewal, mailboxes are backed up and messages are not, and each table's stream feeds its own cache. An address's items in the mailboxes table are its mailbox's record and its revocations, which one Query of the address reads together. Every key is binary, an address its 32 bytes.
+**Three DynamoDB tables, one kind of thing each, mailboxes (`--mailboxes-table`), messages (`--messages-table`) and accounts (`--accounts-table`), and an S3 Express One Zone directory bucket in `dromas-server`'s AZ for bodies (`--bucket`).** Kept apart, so a flood of messages cannot throttle registration or renewal, mailboxes are backed up and messages are not, and each table's stream feeds its own cache. An address's items in the mailboxes table are its mailbox's record and its revocations, which one Query of the address reads together. Every key is binary, an address its 48 bytes, the SHA-384 of its identity.
 
 | Where | Key | Holds | Expiry |
 |---|---|---|---|
@@ -316,11 +316,11 @@ What changes:
 | mailboxes | `addr`, `sk` = `0x01` | the address's revocations, mailbox or none: `identity`; `revocation`, the signature that revoked the address, written once and never removed, which the read of the mailbox serves as `revocation_signature`; `revoked_certs`, `revoked_certs_sig` and `through`, the identity's highest revocation of its certificates as it was signed, its signature and the serial it revokes through, absent until one is published, then replaced whole by one through a higher serial. Three lines, so of a fixed size, and kept apart from the record, which a renewal writes whole | none: kept for good, a revocation of certificates too once the certificates it covers have ended |
 | mailboxes | `addr`, `sk` ≥ `0x02` | reserved for the mailbox's own items; none yet | as the mailbox |
 | mailboxes, its GSI `account` | `account`, `addr` | keys only: each account's mailboxes, from the records that name one. A record that leaves its account, or that the TTL deletes, leaves it | with the record |
-| messages | `mailbox`, `id` = SHA-256 of the ciphertext | one item a live message, its header: size, `received_at` (ms), `expires_at`, and `live` = `received_at` (ms, u64 big-endian) ‖ id. No sender and no signature (`PROTOCOL.md` §13); an ack deletes it | TTL on `expires_at`, for a message never acked |
-| messages, its LSI `live` | `mailbox`, `live` | the live messages, oldest first, with size: a list's cursor is the last `live` (`formatCursor`). An item without `live` is not in it, and is no message | with the item |
+| messages | `box` = the address, `id` = SHA-256 of the ciphertext | one item a live message, its header: size, `received_at` (ms), `expires_at`, and `live` = `received_at` (ms, u64 big-endian) ‖ id. No sender and no signature (`PROTOCOL.md` §13); an ack deletes it | TTL on `expires_at`, for a message never acked |
+| messages, its LSI `live` | `box`, `live` | the live messages, oldest first, with size: a list's cursor is the last `live` (`formatCursor`). An item without `live` is not in it, and is no message | with the item |
 | accounts | `account` = the account id's bytes, `sk` = `0x00` | the account: `unmetered`, `rev` | none |
 | accounts | `account`, `sk` = `0x04` ‖ SHA-256 of the key | an adopt key: `uses` left, `expires` (ms); never the key (`adoptkey.go`) | TTL on `expires_at` |
-| the bucket | `<hex mailbox>/<hex id>` | the age ciphertext, exactly as the send's body carried it | a lifecycle rule of at least the TTL (below) |
+| the bucket | `<address>/<hex id>`, the address in its text form (`d_` and base64url) | the age ciphertext, exactly as the send's body carried it | a lifecycle rule of at least the TTL (below) |
 
 Mailboxes: PITR on, AWS Backup on, TTL on, stream `NEW_IMAGE`. Messages: neither backup, TTL on, stream `NEW_IMAGE`. Accounts: PITR on, AWS Backup on (billing data), TTL on, stream `NEW_IMAGE`. **Each table is provisioned capacity, never on-demand,** so a burst read is throttled rather than absorbed: memory loads per mailbox (§ Startup).
 
