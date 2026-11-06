@@ -451,9 +451,12 @@ func TestLimits(t *testing.T) {
 		send(t, c, b, "2")
 		_, err := c.Send(ctx, b.Address(), "3")
 		var ae *client.APIError
-		if !errors.As(err, &ae) || ae.Problem.Code != protocol.CodeMailboxFull || ae.Status != 429 || ae.RetryAfter == 0 ||
-			ae.Problem.Count == nil || *ae.Problem.Count != 2 {
+		if !errors.As(err, &ae) || ae.Problem.Code != protocol.CodeMailboxFull || ae.Status != 429 || ae.RetryAfter == 0 {
 			t.Fatalf("send to a full mailbox: %v %+v", err, ae)
+		}
+		// The refusal says nothing of how many messages the mailbox stores.
+		if strings.ContainsAny(ae.Problem.Detail+ae.Problem.Hint, "0123456789") {
+			t.Fatalf("the refusal names a number: %+v", ae.Problem)
 		}
 		// Nothing is dropped to make room; the message waits in the outbox.
 		receive(t, b)
