@@ -66,8 +66,8 @@ github.com/dlclark/regexp2 v1.11.0 h1:G/nrcoOa7ZXlpoa/91N3X7mM3r8eIlMBBJZvsz/mxK
 github.com/dlclark/regexp2 v1.11.0/go.mod h1:DHkYz0B9wPfa6wondMfaivmHpzrQ3v9q8cnmRbL6yW8=
 github.com/dlclark/regexp2/v2 v2.12.0 h1:GsCgDZZeHluUDHASr2yqQonZk4Tma5LFmLH9CSsFFEE=
 github.com/dlclark/regexp2/v2 v2.12.0/go.mod h1:avUrQvPaLz2DrFNHJF0taWAFFX2C1GMSSoeiqFjcBmU=
-github.com/dromas-dev/dromas-client v0.4.3-0.20261103013052-249b4840a45a h1:USzYyM+2r5kkY4ME28Rq0DDdcY8rtyjwojgVyLMoQ/g=
-github.com/dromas-dev/dromas-client v0.4.3-0.20261103013052-249b4840a45a/go.mod h1:g8Ojm6++hZRVZ8W77pq+HUNOcabOhO4551fbLHou+5s=
+github.com/dromas-dev/dromas-client v0.4.3-0.20261106154841-67af08ed9f08 h1:Wnc2rqrk51heSH3+kvHfuulBPrVDxqJs2J5/LvIG1cc=
+github.com/dromas-dev/dromas-client v0.4.3-0.20261106154841-67af08ed9f08/go.mod h1:VS2gjbjdILgiSipPCfAJ3tUogZFBakbMGc2RCWULZ+E=
 github.com/go-openapi/jsonpointer v1.0.2 h1:NbW7xT2b+l7x+JefiPGDsZWsrLk1ogrz4AHK1TTzMt8=
 github.com/go-openapi/jsonpointer v1.0.2/go.mod h1:N0rI4MbNKD7xAFTiHtB+5Nhrg2j/wwYg7m7Fmb4/jk8=
 github.com/go-openapi/testify/v2 v2.8.0 h1:19QDx5b57p8KjO2E4sgs/woL4Akp+FGLRlVm2xn0Rho=

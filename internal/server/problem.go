@@ -50,11 +50,6 @@ func limitValue(n int) value {
 	return value{n, func(p *protocol.Problem) { p.Limit = u64(uint64(max(n, 0))) }}
 }
 
-// countValue is how many messages a full mailbox holds, as its list counts them.
-func countValue(n int) value {
-	return value{n, func(p *protocol.Problem) { p.Count = u64(uint64(max(n, 0))) }}
-}
-
 func prekeySerialValue(v uint64) value {
 	return value{v, func(p *protocol.Problem) { p.PrekeySerial = u64(v) }}
 }

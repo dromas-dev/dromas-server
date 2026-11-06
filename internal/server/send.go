@@ -407,7 +407,7 @@ func (s *Server) reserveCaps(ctx context.Context, to protocol.Address) (release 
 		return nil, nil, err
 	}
 	if n += f.mailbox[to]; n >= s.limits.MailboxCap {
-		p := fail(protocol.CodeMailboxFull, "the mailbox is full: retry later", "the mailbox holds %d messages", countValue(n))
+		p := fail(protocol.CodeMailboxFull, "the mailbox is full: retry later", "the mailbox is full")
 		p.retryAfter = time.Duration(s.limits.PollAfter) * time.Second
 		return nil, p, nil
 	}
