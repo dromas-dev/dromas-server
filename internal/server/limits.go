@@ -54,10 +54,11 @@ type Limits struct {
 	// (PROTOCOL.md §11.7), in whole seconds: served as
 	// max_certificate_lifetime in the server's document (§11.18). A renewal
 	// under the mailbox's current certificate is not held to it. It must be
-	// above protocol.TTL and protocol.MaxSkew together, or dromas-server
-	// serve does not start: a client signs no message under a certificate
-	// with the TTL or less left, and dates one the hour back (decided: 45 days
-	// and the hour).
+	// above protocol.TTL and protocol.MaxSkew together and at most
+	// protocol.MaxCertificateLifetime, or dromas-server serve does not start:
+	// a client signs no message under a certificate with the TTL or less left,
+	// and dates one the hour back, and every verifier refuses a longer one
+	// (decided: the protocol's maximum, 45 days and the hour).
 	MaxCertificateLifetime time.Duration
 
 	// ACLEntries is the most entries a mailbox's ACL holds, its two lists
@@ -122,7 +123,7 @@ func DefaultLimits() Limits {
 		CertificateRevocationsPerDay: 10,
 		CertificatesBurst:            5,
 		CertificateRevocationsBurst:  10,
-		MaxCertificateLifetime:       45*24*time.Hour + protocol.MaxSkew,
+		MaxCertificateLifetime:       protocol.MaxCertificateLifetime,
 		ACLEntries:                   500,
 		BodyTimeout:                  20 * time.Second,
 		BodyMinRate:                  500,

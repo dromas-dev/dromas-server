@@ -128,12 +128,17 @@ func bursts(l server.Limits) error {
 // not above protocol.TTL and protocol.MaxSkew together: a client signs no
 // message under a certificate with the TTL or less left, and dates one the
 // hour back, so a certificate no longer than that signs no message at all
-// (PROTOCOL.md §11.7, §11.18). serve checks it before anything starts.
+// (PROTOCOL.md §11.7, §11.18). Nor above protocol.MaxCertificateLifetime,
+// which every verifier holds a certificate to (§5.2): a longer maximum would
+// take certificates no reader accepts. serve checks it before anything starts.
 func certificateLifetime(l server.Limits) error {
 	// In the whole seconds it is served and held to in, so a fraction above the
 	// least is the least.
 	if least := protocol.TTL + protocol.MaxSkew; l.MaxCertificateLifetime.Truncate(time.Second) <= least {
 		return fmt.Errorf("--max-certificate-lifetime: %v is not above %v, the TTL and the hour a client dates a certificate back, so a certificate it takes would sign no message", l.MaxCertificateLifetime, least)
+	}
+	if most := protocol.MaxCertificateLifetime; l.MaxCertificateLifetime.Truncate(time.Second) > most {
+		return fmt.Errorf("--max-certificate-lifetime: %v is above %v, the protocol's maximum, which every verifier holds a certificate to", l.MaxCertificateLifetime, most)
 	}
 	return nil
 }
