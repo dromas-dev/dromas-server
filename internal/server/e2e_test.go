@@ -55,7 +55,8 @@ func relaxed() Limits {
 	l := DefaultLimits()
 	l.SendsPerDay, l.PollBurst, l.RegistrationsPerHour, l.RenewalsPerDay, l.MissesPerMinute, l.SendsBurst, l.RenewalsBurst = 0, 0, 0, 0, 0, 0, 0
 	l.ReceiveBurst, l.DrainBurst, l.CallBurst, l.CertificatesPerDay, l.CertificateRevocationsPerDay, l.CertificatesBurst, l.CertificateRevocationsBurst = 0, 0, 0, 0, 0, 0, 0
-	l.RangeRegistrationsPerHour, l.RequestBurst = 0, 0
+	l.RangeRegistrationsPerHour, l.RequestBurst, l.RangeRequestBurst, l.RangeMissesPerMinute = 0, 0, 0, 0
+	l.MaxBodiesBeforePass, l.MaxBodiesBeforePassPerRange = 0, 0
 	return l
 }
 

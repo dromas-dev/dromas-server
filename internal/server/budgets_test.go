@@ -945,10 +945,13 @@ func TestAPanicSettlesItsReservations(t *testing.T) {
 	srv.Start()
 	t.Cleanup(srv.Close)
 	api := &env{t: t, clock: e.clock, srv: srv}
-	held := func(bs *buckets) int {
-		bs.mu.Lock()
-		defer bs.mu.Unlock()
-		return len(bs.held)
+	held := func(sets ...*buckets) (n int) {
+		for _, bs := range sets {
+			bs.mu.Lock()
+			n += len(bs.held)
+			bs.mu.Unlock()
+		}
+		return n
 	}
 	call := func(method, path string, body any, pass string) {
 		t.Helper()
@@ -967,7 +970,7 @@ func TestAPanicSettlesItsReservations(t *testing.T) {
 	}
 
 	call(http.MethodGet, victim.path(""), nil, "")
-	if n := held(s.misses); n != 0 {
+	if n := held(s.misses.ip, s.misses.rng); n != 0 {
 		t.Errorf("after a panic in a lookup's read: %d miss reservations held", n)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -980,7 +983,7 @@ func TestAPanicSettlesItsReservations(t *testing.T) {
 	}
 
 	call(http.MethodPut, victim.path(""), victim.registration(1), api.passFor(victim.by[1], victim.id.Address(), api.name()))
-	if n := held(s.regs); n != 0 {
+	if n := held(s.regs.ip, s.regs.rng); n != 0 {
 		t.Errorf("after a panic in a registration's read: %d registration reservations held", n)
 	}
 
