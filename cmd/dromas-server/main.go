@@ -35,7 +35,6 @@ import (
 	"os"
 	"os/signal"
 	"slices"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -59,8 +58,9 @@ func main() {
 	case len(os.Args) >= 3 && os.Args[1] == "limits":
 		err = limits(os.Args[2], os.Args[3:])
 	default:
-		fmt.Fprintln(os.Stderr, "usage: dromas-server serve (--mailboxes-table T --messages-table T --accounts-table T --bucket B --names NAMES | --dev) [--listen addr] [options] [limits]")
+		fmt.Fprintln(os.Stderr, "usage: dromas-server serve (--mailboxes-table T --messages-table T --accounts-table T --bucket B --names NAMES | --dev) [--listen addr] [--limits FILE] [options]")
 		fmt.Fprintln(os.Stderr, "       dromas-server account (create | key | drop) [flags]")
+		fmt.Fprintln(os.Stderr, "       dromas-server limits default")
 		fmt.Fprintln(os.Stderr, "       dromas-server limits clear --socket PATH --ip ADDR")
 		fmt.Fprintln(os.Stderr, "       dromas-server limits top --socket PATH --limit NAME [--count N]")
 		os.Exit(2)
@@ -68,89 +68,6 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-}
-
-// sizeCaps refuses a cap on a ciphertext the protocol does not allow: one
-// above protocol.MaxCiphertext, the largest every reader takes (PROTOCOL.md
-// §11.10), or one that is not a whole number of its own padding blocks, which a
-// message just under it would be padded past (§9.3). serve checks the two
-// before anything starts.
-func sizeCaps(l server.Limits) error {
-	for _, c := range []struct {
-		flag string
-		n    int
-	}{{"--max-size", l.MaxSize}, {"--account-max-size", l.AccountMaxSize}} {
-		switch {
-		case c.n < 0:
-			return fmt.Errorf("%s: %d is not a size", c.flag, c.n)
-		case c.n > protocol.MaxCiphertext:
-			return fmt.Errorf("%s: %d bytes is over the largest ciphertext the protocol allows, %d (PROTOCOL.md §11.10)", c.flag, c.n, protocol.MaxCiphertext)
-		case protocol.PaddedSize(c.n) != c.n:
-			return fmt.Errorf("%s: %d bytes is not a whole number of its own padding blocks, so a message just under it would be padded past it (PROTOCOL.md §9.3): %d is the next size that is", c.flag, c.n, protocol.PaddedSize(c.n))
-		}
-	}
-	return nil
-}
-
-// receiveRate refuses a budget of new messages that would let a mailbox take messages
-// faster than server.ReceiveCeiling: one turned off, or one refilled faster.
-// serve checks it before anything starts.
-func receiveRate(l server.Limits) error {
-	switch {
-	case l.ReceiveBurst <= 0:
-		return fmt.Errorf("--receive-burst: %d is no budget, and no mailbox takes new messages faster than one each %v (server.ReceiveCeiling)", l.ReceiveBurst, server.ReceiveCeiling)
-	case l.ReceiveRefill < server.ReceiveCeiling:
-		return fmt.Errorf("--receive-refill: %v is shorter than %v, the fastest any mailbox takes new messages (server.ReceiveCeiling)", l.ReceiveRefill, server.ReceiveCeiling)
-	}
-	return nil
-}
-
-// bursts refuses a number a day that is on with a bucket that holds nothing,
-// which would leave that limit off where its flag says it is on.
-func bursts(l server.Limits) error {
-	for _, b := range []struct {
-		name          string
-		perDay, burst int
-	}{
-		{"sends", l.SendsPerDay, l.SendsBurst},
-		{"renewals", l.RenewalsPerDay, l.RenewalsBurst},
-		{"certificates", l.CertificatesPerDay, l.CertificatesBurst},
-		{"certificate-revocations", l.CertificateRevocationsPerDay, l.CertificateRevocationsBurst},
-	} {
-		if b.perDay < 0 || b.burst < 0 || (b.perDay > 0 && b.burst == 0) {
-			return fmt.Errorf("--%s-burst: %d with --%s-per-day %d: a number a day that is on takes a bucket of at least 1", b.name, b.burst, b.name, b.perDay)
-		}
-	}
-	return nil
-}
-
-// certificateLifetime refuses a longest certificate the server takes that is
-// not above protocol.TTL and protocol.MaxSkew together: a client signs no
-// message under a certificate with the TTL or less left, and dates one the
-// hour back, so a certificate no longer than that signs no message at all
-// (PROTOCOL.md §11.7, §11.18). Nor above protocol.MaxCertificateLifetime,
-// which every verifier holds a certificate to (§5.2): a longer maximum would
-// take certificates no reader accepts. serve checks it before anything starts.
-func certificateLifetime(l server.Limits) error {
-	// In the whole seconds it is served and held to in, so a fraction above the
-	// least is the least.
-	if least := protocol.TTL + protocol.MaxSkew; l.MaxCertificateLifetime.Truncate(time.Second) <= least {
-		return fmt.Errorf("--max-certificate-lifetime: %v is not above %v, the TTL and the hour a client dates a certificate back, so a certificate it takes would sign no message", l.MaxCertificateLifetime, least)
-	}
-	if most := protocol.MaxCertificateLifetime; l.MaxCertificateLifetime.Truncate(time.Second) > most {
-		return fmt.Errorf("--max-certificate-lifetime: %v is above %v, the protocol's maximum, which every verifier holds a certificate to", l.MaxCertificateLifetime, most)
-	}
-	return nil
-}
-
-// aclEntries refuses a bound on an ACL's entries that is off or over the
-// protocol's, which a client refuses in an answer (PROTOCOL.md §11.14).
-// serve checks it before anything starts.
-func aclEntries(l server.Limits) error {
-	if l.ACLEntries <= 0 || l.ACLEntries > protocol.MaxACLEntries {
-		return fmt.Errorf("--acl-entries: %d is not from 1 to %d, the most entries the protocol lets an ACL hold (PROTOCOL.md §11.14)", l.ACLEntries, protocol.MaxACLEntries)
-	}
-	return nil
 }
 
 func serve(args []string) error {
@@ -168,52 +85,24 @@ func serve(args []string) error {
 	streamEvery := fs.Duration("stream-interval", time.Second, "how often each stream shard is read")
 	proxies := fs.String("trusted-proxy", "", "comma-separated CIDRs of the reverse proxy in front, if any, whose X-Forwarded-For names the client: its last address, the one the proxy wrote")
 	l := server.DefaultLimits()
-	fs.IntVar(&l.MaxSize, "max-size", l.MaxSize, "cap on a ciphertext, bytes: a send reads its body to it. A whole number of its own padding blocks, at most the protocol's largest ciphertext (PROTOCOL.md §9.3, §11.10), or serve does not start")
-	fs.IntVar(&l.AccountMaxSize, "account-max-size", l.AccountMaxSize, "the most an account can lift --max-size to, bytes (up to --max-size: nothing). Held as --max-size is")
-	fs.IntVar(&l.MailboxCap, "mailbox-cap", l.MailboxCap, "messages per mailbox (0: off)")
-	fs.IntVar(&l.SendsPerDay, "sends-per-day", l.SendsPerDay, "sends per sender a day: one back each day divided by it, into a bucket of --sends-burst (0: off)")
-	fs.IntVar(&l.SendsBurst, "sends-burst", l.SendsBurst, "sends per sender at once: the bucket --sends-per-day refills")
-	fs.IntVar(&l.RenewalsPerDay, "renewals-per-day", l.RenewalsPerDay, "prekey renewals per mailbox a day, as --sends-per-day, into a bucket of --renewals-burst (0: off)")
-	fs.IntVar(&l.RenewalsBurst, "renewals-burst", l.RenewalsBurst, "prekey renewals per mailbox at once: the bucket --renewals-per-day refills")
-	fs.IntVar(&l.RetiredKept, "retired-kept", l.RetiredKept, "retired prekeys a mailbox record keeps, newest first (0: all live ones)")
-	fs.IntVar(&l.PollBurst, "poll-burst", l.PollBurst, "polls a mailbox may make at once (0: off)")
-	fs.DurationVar(&l.PollRefill, "poll-refill", l.PollRefill, "one more poll each")
-	fs.IntVar(&l.PollAfter, "poll-after", l.PollAfter, "poll interval told to clients, seconds")
-	fs.DurationVar(&l.MaxWait, "max-wait", l.MaxWait, "the longest a list is held for a change, whatever its wait asks: under the read timeout of a proxy in front (0: none held)")
-	fs.IntVar(&l.MaxLongPolls, "max-long-polls", l.MaxLongPolls, "long polls this process holds at once, one a mailbox; past it a list that asks to wait, of a mailbox that holds none, is answered 503 (0: none held)")
-	fs.IntVar(&l.MaxLongPollsPerRange, "max-long-polls-per-range", l.MaxLongPollsPerRange, "long polls this process holds at once for the callers of one IPv4 address or IPv6 /48; past it a list that asks to wait is answered 503 (0: off)")
-	fs.IntVar(&l.RegistrationsPerHour, "registrations-per-hour", l.RegistrationsPerHour, "registrations per IPv4 address or IPv6 /64 (0: off)")
-	fs.IntVar(&l.RangeRegistrationsPerHour, "range-registrations-per-hour", l.RangeRegistrationsPerHour, "registrations per IPv6 /48, beside --registrations-per-hour (0: off)")
-	fs.IntVar(&l.SendsPerMinutePerIP, "sends-per-minute-per-ip", l.SendsPerMinutePerIP, "pre-auth sends per IP (0: off)")
-	fs.IntVar(&l.MissesPerMinute, "misses-per-minute", l.MissesPerMinute, "calls per IP that named no mailbox or carried nothing that verified (0: off)")
-	fs.IntVar(&l.RequestBurst, "request-burst", l.RequestBurst, "per IP, at once: every call but a mailbox's own with a pass this process has checked, a new pass among them, and every request no route matches, the link page and the site's pages among them; a budget for floods alone (0: off)")
-	fs.DurationVar(&l.RequestRefill, "request-refill", l.RequestRefill, "one more such request each")
-	fs.IntVar(&l.ReceiveBurst, "receive-burst", l.ReceiveBurst, "new messages a mailbox takes at once, from all senders together; never off, or serve does not start")
-	fs.DurationVar(&l.ReceiveRefill, "receive-refill", l.ReceiveRefill, "one more new message each: at least "+server.ReceiveCeiling.String()+", the fastest any mailbox takes new messages, or serve does not start; an account lifts it to that")
-	fs.IntVar(&l.DrainBurst, "drain-burst", l.DrainBurst, "a mailbox's first fetches of held messages, at once: the new messages it takes out (0: off)")
-	fs.DurationVar(&l.DrainRefill, "drain-refill", l.DrainRefill, "one more first fetch each")
-	fs.IntVar(&l.CallBurst, "call-burst", l.CallBurst, "a mailbox's calls with its pass that no other budget counts, at once (0: off)")
-	fs.DurationVar(&l.CallRefill, "call-refill", l.CallRefill, "one more such call each")
-	fs.IntVar(&l.CertificatesPerDay, "certificates-per-day", l.CertificatesPerDay, "per mailbox a day, as --sends-per-day: renewals under a later certificate, but for one that replaces a revoked certificate, into a bucket of --certificates-burst (0: off)")
-	fs.IntVar(&l.CertificatesBurst, "certificates-burst", l.CertificatesBurst, "the bucket --certificates-per-day refills")
-	fs.IntVar(&l.CertificateRevocationsPerDay, "certificate-revocations-per-day", l.CertificateRevocationsPerDay, "per mailbox a day, as --sends-per-day: raises of its revocation of certificates, into a bucket of --certificate-revocations-burst (0: off)")
-	fs.IntVar(&l.CertificateRevocationsBurst, "certificate-revocations-burst", l.CertificateRevocationsBurst, "the bucket --certificate-revocations-per-day refills")
-	fs.DurationVar(&l.MaxCertificateLifetime, "max-certificate-lifetime", l.MaxCertificateLifetime, "the longest a certificate may run, valid-before less valid-after, when a mailbox's statement first takes it, in whole seconds, served as max_certificate_lifetime in GET /v1/; a renewal under the mailbox's current certificate is not held to it: above the message TTL and the hour together, or serve does not start")
-	fs.IntVar(&l.ACLEntries, "acl-entries", l.ACLEntries, "the most entries a mailbox's ACL holds, its two lists together: from 1 to the protocol's "+strconv.Itoa(protocol.MaxACLEntries)+", or serve does not start")
-	fs.DurationVar(&l.BodyTimeout, "body-timeout", l.BodyTimeout, "how long a request body, or each write of a response, may take before one more second for each --body-min-rate bytes of it moved; what a handler leaves of a body is read before the answer, to the deadline the handler's reads left, and the answer has this from then; also the longest wait for the one large read (0: off)")
-	fs.IntVar(&l.BodyMinRate, "body-min-rate", l.BodyMinRate, "bytes a second a body, or a write of a response, must keep up, as Apache's RequestReadTimeout MinRate; a write is credited in pieces of this many bytes, once each has gone (0: off)")
 	fs.IntVar(&l.HeadBytes, "max-header-bytes", l.HeadBytes, "the most of a request's head, its request line and headers, the server reads: what the longest call needs, its pass at the longest a pass can be, and no more; net/http answers a longer one 431 (0: net/http's default)")
 	fs.DurationVar(&l.HeadTimeout, "header-timeout", l.HeadTimeout, "how long a request's head, its request line and headers, may take to arrive before any handler sees it (0: off)")
 	adminSocket := fs.String("admin-socket", "", "a Unix socket for the operator's commands (dromas-server limits): 0600 from the moment this process makes it, never on the API's listener (empty: none)")
 	idle := fs.Duration("idle-timeout", 75*time.Second, "how long an idle keep-alive connection stays open (nginx's default as a server): above the idle timeout of a proxy in front, which may otherwise reuse a connection this one has just closed")
 	metricsListen := fs.String("metrics-listen", "", "address to serve the operator's metrics on, at /metrics in Prometheus' text format: a listener of its own, never the API's (empty: none)")
 	siteBackend := fs.String("site-backend", "", "the URL of a deployment's own web server, http or https and a host alone, which every request outside /v1/ and /to/ is passed to, as a reverse proxy passes it (empty: none; those paths are 404)")
+	limitsPath := fs.String("limits", "", "a file of the runtime-config directory (bind-mounted read-only as a directory, conventionally /config/), e.g. /config/limits.json: the limits, a JSON object of the members dromas-server limits default prints, each optional, over the defaults it prints. Read at start, or serve does not start; read again on SIGHUP and once a minute, and put in force when it differs and holds its form (empty: the defaults)")
 	versionPolicy := fs.String("version-policy", "", "a file of the runtime-config directory (bind-mounted read-only as a directory, conventionally /config/), e.g. /config/version-policy.json: the version policy, a JSON object of GET /v1/'s form with no capabilities and no max_certificate_lifetime, which are the server's own. Read at start, or serve does not start; read again on SIGHUP and once a minute, and put in force when it differs and holds its form (empty: no policy)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if err := certificateLifetime(l); err != nil {
-		return err
+	base := l // the defaults, with the startup-only flags
+	var limitsRead []byte
+	if *limitsPath != "" {
+		var err error
+		if l, limitsRead, err = server.ReadLimits(*limitsPath, base); err != nil {
+			return fmt.Errorf("--limits: %s: %w", *limitsPath, err)
+		}
 	}
 	var policy protocol.ServerDocument
 	var policyRead []byte
@@ -222,18 +111,6 @@ func serve(args []string) error {
 		if policy, policyRead, err = server.ReadVersionPolicy(*versionPolicy, l); err != nil {
 			return fmt.Errorf("--version-policy: %s: %w", *versionPolicy, err)
 		}
-	}
-	if err := sizeCaps(l); err != nil {
-		return err
-	}
-	if err := receiveRate(l); err != nil {
-		return err
-	}
-	if err := aclEntries(l); err != nil {
-		return err
-	}
-	if err := bursts(l); err != nil {
-		return err
 	}
 	logger := log.New(server.Redacting(os.Stderr), "", log.LstdFlags|log.LUTC)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -328,15 +205,25 @@ func serve(args []string) error {
 	}
 
 	api := server.New(cfg)
-	if *versionPolicy != "" {
-		// Reloaded on SIGHUP, as Prometheus reloads --config.file, and once
-		// a minute, for a mount that changes with no signal (a Kubernetes
-		// ConfigMap's symlink swap).
+	// Each runtime file is reloaded on SIGHUP, as Prometheus reloads
+	// --config.file, and once a minute, for a mount that changes with no
+	// signal (a Kubernetes ConfigMap's symlink swap). Each has a channel of its
+	// own: signal.Notify delivers a SIGHUP to every channel it was given.
+	for _, f := range []struct {
+		path, name string
+		reloader   func() *server.Reloader
+	}{
+		{*versionPolicy, "version policy", func() *server.Reloader { return api.VersionPolicy(*versionPolicy, policyRead) }},
+		{*limitsPath, "limits", func() *server.Reloader { return api.Limits(*limitsPath, limitsRead, base) }},
+	} {
+		if f.path == "" {
+			continue
+		}
 		hup := make(chan os.Signal, 1)
 		signal.Notify(hup, syscall.SIGHUP)
 		defer signal.Stop(hup)
-		go api.VersionPolicy(*versionPolicy, policyRead).Run(ctx, hup, server.ReloadEvery)
-		logger.Printf("version policy from %s: reloaded on SIGHUP and each %v", *versionPolicy, server.ReloadEvery)
+		go f.reloader().Run(ctx, hup, server.ReloadEvery)
+		logger.Printf("%s from %s: reloaded on SIGHUP and each %v", f.name, f.path, server.ReloadEvery)
 	}
 	if *adminSocket != "" {
 		l, err := listenAdmin(*adminSocket)
@@ -402,7 +289,7 @@ func serve(args []string) error {
 // net.Listen's default sends one every 15 s), as nginx leaves a listening
 // socket's to the operating system's default unless so_keepalive is set:
 // each phase of a connection here has a bound of its own, a flag
-// (--header-timeout, --body-timeout, --idle-timeout, --max-wait), which lets a
+// (--header-timeout, body_timeout, --idle-timeout, max_wait), which lets a
 // peer gone silent go, and a long poll holds nothing but its goroutine and
 // its connection.
 func listenAll(spec string) ([]net.Listener, error) {

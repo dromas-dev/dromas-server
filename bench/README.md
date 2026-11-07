@@ -16,7 +16,8 @@ The memory and item-size measurements, and what a pass costs to check the first 
 (cd bench/poll/cli && go build -o "$out/poll-cli" .)
 go build -o "$out/dromas-server" ./cmd/dromas-server
 (cd "$(go list -m -f '{{.Dir}}' github.com/dromas-dev/dromas-client)" && go build -o "$out/dromas" ./cmd/dromas)
-GOMAXPROCS=1 "$out/dromas-server" serve --dev --listen 127.0.0.1:18777 --poll-burst 0 2> "$out/server.log" &
+printf '{"poll_burst": 0}\n' > "$out/limits.json"
+GOMAXPROCS=1 "$out/dromas-server" serve --dev --listen 127.0.0.1:18777 --limits "$out/limits.json" 2> "$out/server.log" &
 SP=$(pgrep -f "$out/dromas-server serve")                      # the server's OWN pid, never $!
 printf 'base-dir = "%s"\nmail-dir = "%s/mail"\n' "$mailbox" "$mailbox" > "$out/poll.toml"
 export DROMAS_CONFIG=$out/poll.toml DROMAS_SERVER_URL=http://127.0.0.1:18777

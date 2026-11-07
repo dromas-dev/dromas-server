@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/dromas-dev/dromas-server/internal/server"
 )
 
 // listenAdmin listens on the Unix socket at path for the operator's
@@ -42,6 +44,15 @@ func limits(cmd string, args []string) error {
 	fs := flag.NewFlagSet("limits "+cmd, flag.ContinueOnError)
 	socket := fs.String("socket", "", "the running server's --admin-socket")
 	switch cmd {
+	case "default":
+		if err := fs.Parse(args); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 {
+			return errors.New("limits default takes no arguments")
+		}
+		_, err := os.Stdout.Write(server.LimitsFile(server.DefaultLimits()))
+		return err
 	case "clear":
 		ip := fs.String("ip", "", "the caller's address: an IPv4 address, or any IPv6 address of the /64 the limits count")
 		if err := fs.Parse(args); err != nil {
@@ -62,7 +73,7 @@ func limits(cmd string, args []string) error {
 		}
 		return adminCall(*socket, http.MethodGet, "/limits/top?limit="+url.QueryEscape(*limit)+"&n="+strconv.Itoa(*count), os.Stdout)
 	default:
-		return fmt.Errorf("limits %s: the commands are clear and top", cmd)
+		return fmt.Errorf("limits %s: the commands are default, clear and top", cmd)
 	}
 }
 

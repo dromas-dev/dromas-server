@@ -88,7 +88,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 	// read to the sender's own cap. Past the free cap's size, a read waits
 	// for the one allowance for large reads, which only a sender whose cap is
 	// larger ever takes.
-	free, limit := int64(s.limits.MaxSize), int64(lim.MaxSize)
+	free, limit := int64(s.limits().MaxSize), int64(lim.MaxSize)
 	tooLarge := fail(protocol.CodeTooLarge, "send less", "the ciphertext is over %d bytes", limitValue(lim.MaxSize))
 	if r.ContentLength > limit {
 		return tooLarge
@@ -103,8 +103,8 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 		// read is cut off by its own deadline (paced), and one waiting for
 		// it gives up after BodyTimeout.
 		var wait <-chan time.Time // nil, so never, with no bound set
-		if s.limits.BodyTimeout > 0 {
-			tm := time.NewTimer(s.limits.BodyTimeout)
+		if s.limits().BodyTimeout > 0 {
+			tm := time.NewTimer(s.limits().BodyTimeout)
 			defer tm.Stop()
 			wait = tm.C
 		}
@@ -392,7 +392,7 @@ type inFlight struct {
 // send checked between the two sees both and is refused one early, never
 // let past. A refusal is p.
 func (s *Server) reserveCaps(ctx context.Context, to protocol.Address) (release func(), p *problem, err error) {
-	if s.limits.MailboxCap == 0 {
+	if s.limits().MailboxCap == 0 {
 		return func() {}, nil, nil
 	}
 	// Load the mailbox first, so what is read under the lock is memory.
@@ -406,9 +406,9 @@ func (s *Server) reserveCaps(ctx context.Context, to protocol.Address) (release 
 	if err != nil {
 		return nil, nil, err
 	}
-	if n += f.mailbox[to]; n >= s.limits.MailboxCap {
+	if n += f.mailbox[to]; n >= s.limits().MailboxCap {
 		p := fail(protocol.CodeMailboxFull, "the mailbox is full: retry later", "the mailbox is full")
-		p.retryAfter = time.Duration(s.limits.PollAfter) * time.Second
+		p.retryAfter = time.Duration(s.limits().PollAfter) * time.Second
 		return nil, p, nil
 	}
 	if f.mailbox == nil {

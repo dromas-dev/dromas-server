@@ -18,16 +18,16 @@ const (
 )
 
 func (s *Server) aclBodyLimit() int64 {
-	return int64(s.limits.ACLEntries)*aclEntryBytes + aclBodyAllowance
+	return int64(s.limits().ACLEntries)*aclEntryBytes + aclBodyAllowance
 }
 
 // hintACL names what writes an ACL: the client does, from its own lists.
 const hintACL = "dromas peer allow and dromas peer block write this mailbox's ACL from its own lists"
 
-// aclTooLarge is the answer to an ACL over --acl-entries, by its entries or by
+// aclTooLarge is the answer to an ACL over acl_entries, by its entries or by
 // the body bound drawn from them.
 func (s *Server) aclTooLarge() *problem {
-	return fail(protocol.CodeTooLarge, "list fewer addresses: "+hintACL, "an ACL here holds at most %d entries, its two lists together", limitValue(s.limits.ACLEntries))
+	return fail(protocol.CodeTooLarge, "list fewer addresses: "+hintACL, "an ACL here holds at most %d entries, its two lists together", limitValue(s.limits().ACLEntries))
 }
 
 // putACL is PUT /v1/<address>/acl (with the pass): the mailbox's sender ACL,
@@ -73,7 +73,7 @@ func (s *Server) putACL(w http.ResponseWriter, r *http.Request) error {
 		}
 		return err
 	}
-	acl, err := protocol.CheckACL(&doc, s.limits.ACLEntries)
+	acl, err := protocol.CheckACL(&doc, s.limits().ACLEntries)
 	switch {
 	case errors.Is(err, protocol.ErrACLTooLarge):
 		return s.aclTooLarge()

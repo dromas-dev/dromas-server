@@ -54,7 +54,7 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	poll := strconv.Itoa(s.limits.PollAfter)
+	poll := strconv.Itoa(s.limits().PollAfter)
 	// A page after the first exists and carries no tag, so its
 	// preconditions are known before its page is read, and before its
 	// cursor is looked at: a false one is a poll like any other (PROTOCOL.md
@@ -105,7 +105,7 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
 	asked := wait > 0 && !hasCursor
 	var until time.Time
 	if asked {
-		until = time.Now().Add(min(wait, s.limits.MaxWait))
+		until = time.Now().Add(min(wait, s.limits().MaxWait))
 	}
 	// A long poll is counted once, by how its hold ended, however often it
 	// woke to the same page and was held again.
@@ -170,7 +170,7 @@ again:
 						why = "this server holds as many long polls from this address as it may"
 					}
 					p := fail(protocol.CodeUnavailable, "retry later", why)
-					p.retryAfter = time.Duration(s.limits.PollAfter) * time.Second
+					p.retryAfter = time.Duration(s.limits().PollAfter) * time.Second
 					return p
 				}
 				holding = true
@@ -287,13 +287,13 @@ func (s *Server) hold(a protocol.Address, rng string) (chan struct{}, string) {
 	s.holds.mu.Lock()
 	defer s.holds.mu.Unlock()
 	earlier, again := s.holds.held[a]
-	if n := s.limits.MaxLongPollsPerRange; n > 0 && s.holds.ranges[rng] >= n && (!again || earlier.rng != rng) {
+	if n := s.limits().MaxLongPollsPerRange; n > 0 && s.holds.ranges[rng] >= n && (!again || earlier.rng != rng) {
 		return nil, refusedRange
 	}
 	if again {
 		close(earlier.replaced)
 		s.holds.release(earlier.rng)
-	} else if s.holding.Load() >= int64(s.limits.MaxLongPolls) {
+	} else if s.holding.Load() >= int64(s.limits().MaxLongPolls) {
 		return nil, refusedPool
 	} else {
 		s.holding.Add(1)

@@ -263,7 +263,7 @@ func (s *Server) take(b *Mailbox, id *protocol.Identity, statement, sig []byte, 
 	if now.Before(b.Prekey.NotAfter) {
 		retired = append(retired, Retired{Type: b.Prekey.Type(), NotAfter: b.Prekey.NotAfter, KeyHash: sha256.Sum256([]byte(b.Prekey.Key))})
 	}
-	if n := s.limits.RetiredKept; n > 0 && len(retired) > n {
+	if n := s.limits().RetiredKept; n > 0 && len(retired) > n {
 		retired = retired[len(retired)-n:]
 	}
 	b.Retired = retired
@@ -310,7 +310,7 @@ func (s *Server) checkPrekey(id *protocol.Identity, statement, sig []byte, curre
 		return nil, nil, failErr(protocol.CodeBadKey, "sign a new prekey statement: dromas prekey renew", err)
 	}
 	if c := signer.Certificate(); c != nil && signerHash(id, signer) != current {
-		if limit := s.limits.maxCertificate(); uint64(max(c.Lifetime(), 0)/time.Second) > limit {
+		if limit := s.limits().maxCertificate(); uint64(max(c.Lifetime(), 0)/time.Second) > limit {
 			return nil, nil, fail(protocol.CodeCertificateTooLong, "certify a new working key for no longer than this server's maximum, max_certificate_lifetime in GET /v1/: dromas prekey renew",
 				"the certificate runs longer than this server takes one for, %d seconds", maxLifetimeValue(limit))
 		}

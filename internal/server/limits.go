@@ -158,21 +158,22 @@ func (l Limits) liftedReceives() time.Duration { return min(l.ReceiveRefill, Rec
 // cap bounds it.
 const uncappedPages = 1000
 
-// continuations is the allowance for list pages after the first, per mailbox. A
+// continuations is the size of the allowance for list pages after the first,
+// per mailbox, a burst and an interval. A
 // page after the first is not a poll (PROTOCOL.md §11.11), so it has its own:
 // two full mailboxes' worth of pages at once, and a full mailbox's worth back each
 // poll interval. A drain's pages are never refused (its fetches may be paced:
 // Limits.DrainBurst), and a cursor is no way around the poll rate. With no
 // poll limit there is none.
-func (l Limits) continuations() *buckets {
+func (l Limits) continuations() (n int, every time.Duration) {
 	if l.PollBurst == 0 || l.PollRefill <= 0 {
-		return newBuckets(string(protocol.QuotaPages), 0, 0)
+		return 0, 0
 	}
 	pages := (l.MailboxCap + pageSize - 1) / pageSize
 	if l.MailboxCap == 0 {
 		pages = uncappedPages
 	}
-	return newBuckets(string(protocol.QuotaPages), 2*pages, l.PollRefill/time.Duration(pages))
+	return 2 * pages, l.PollRefill / time.Duration(pages)
 }
 
 // buckets is a set of token buckets by key: n tokens, one back each
@@ -291,15 +292,26 @@ func (r *reservation) settle(back bool, now time.Time) {
 	bs.mu.Unlock()
 }
 
-// perPeriod is buckets of burst, refilled n per period: a number a day is one
+// perPeriod is the size of buckets of burst, refilled n per period, a burst
+// and an interval: a number a day is one
 // back each day divided by it, into a bucket that holds burst, as Let's
 // Encrypt sets a limit by its burst, count and period (Boulder's
 // ratelimits.Limit), never a window that empties at midnight. n == 0 is off.
-func perPeriod(name string, burst, n int, period time.Duration) *buckets {
+func perPeriod(burst, n int, period time.Duration) (int, time.Duration) {
 	if n == 0 || burst == 0 {
-		return newBuckets(name, 0, 0)
+		return 0, 0
 	}
-	return newBuckets(name, burst, period/time.Duration(n))
+	return burst, period / time.Duration(n)
+}
+
+// resize gives bs n tokens, one back each interval, from its next take on:
+// each key keeps the time its bucket is full again, and is read by the new
+// size, as Let's Encrypt's Boulder keeps a key's TAT alone and reads the
+// limit at each check (ratelimits/gcra.go).
+func (bs *buckets) resize(n int, every time.Duration) {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	bs.n, bs.every = n, every
 }
 
 // take takes one token for key at now. When none is left it returns how

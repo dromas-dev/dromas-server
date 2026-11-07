@@ -147,7 +147,7 @@ func (s *Server) leave(w http.ResponseWriter, r *http.Request) error {
 // whose account is gone has the server's. These are the volume levers
 // (LIMITS.md): what an account may lift.
 func (s *Server) limitsFor(ctx context.Context, b *Mailbox) (Limits, error) {
-	l := s.limits
+	l := s.limits()
 	if b.Account == "" {
 		return l, nil
 	}
@@ -169,7 +169,7 @@ func (s *Server) limitsFor(ctx context.Context, b *Mailbox) (Limits, error) {
 // or the one an account lifts it to. Each refill has buckets of its own
 // (LIMITS.md § Accounts).
 func (s *Server) receivesAt(l Limits) *buckets {
-	if l.ReceiveRefill == s.limits.ReceiveRefill {
+	if l.ReceiveRefill == s.limits().ReceiveRefill {
 		return s.receives
 	}
 	return s.lifted
