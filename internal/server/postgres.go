@@ -56,7 +56,7 @@ type pgBackend struct {
 
 	sweepEvery, sweepGrace time.Duration
 	syncEvery              time.Duration // how often the feed shows itself current
-	bodiesDir              *dirBodies // collected by the sweep, when bodies are on disk
+	bodiesDir              *dirBodies    // collected by the sweep, when bodies are on disk
 
 	apply   func(Change) // what Start was given
 	started atomic.Bool
