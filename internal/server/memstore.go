@@ -41,7 +41,7 @@ type memBackend struct {
 
 	mu          sync.Mutex
 	mailboxes   map[protocol.Address]*Mailbox     // each mailbox's record, with none of its revocations
-	revocations map[protocol.Address]*Revocations // each address's revocations item
+	revocations map[protocol.Address]*Revocations // each address's revocations row
 	messages    map[protocol.Address]map[[32]byte]*memMessage
 	accounts    map[string]*Account
 	keys        map[adoptKeyRef]*AdoptKey
@@ -312,7 +312,7 @@ func (s *memBackend) Retire(_ context.Context, mailbox protocol.Address, id [32]
 	return s.retireLocked(mailbox, id, received)
 }
 
-// DeleteMessage implements Backend: the body and the item go together.
+// DeleteMessage implements Backend: the body and the row go together.
 func (s *memBackend) DeleteMessage(ctx context.Context, mailbox protocol.Address, id [32]byte) (time.Time, error) {
 	return s.Retire(ctx, mailbox, id, time.Time{})
 }

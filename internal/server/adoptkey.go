@@ -9,8 +9,8 @@ import (
 )
 
 // An adopt key (PROTOCOL.md §11.16) lets a mailbox join an account. The server
-// keeps its SHA-256, as the key of the account's item for it, and never the
-// key, so a copy of the accounts table holds none, and a key is shown once,
+// keeps its SHA-256, as the key of its row in adopt_keys, and never the
+// key, so a copy of the database holds none, and a key is shown once,
 // when it is made. A secret of 112 bits or more is kept "in a hashed form
 // using an approved hashing function", with no salt (NIST SP 800-63B-4
 // §3.1.2.2):
@@ -18,7 +18,7 @@ import (
 //	K = "dra1_" + base64url(account ‖ secret), no padding
 //
 // with secret 32 random bytes. The account is in the key so that adopt reads
-// the key's item, (account, 0x04 ‖ SHA-256(K)), with one GetItem. The hash
+// the key's row, (account, SHA-256(K)), by its primary key. The hash
 // is no keyed hash: a key is taken only as itself, the hash's preimage, so
 // length extension gives nothing.
 const (

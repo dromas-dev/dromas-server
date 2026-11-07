@@ -223,7 +223,7 @@ func (s *Memory) applyRevocations(a protocol.Address, rv *Revocations) {
 }
 
 // forget drops what memory holds of an address whose record was deleted,
-// whose item does not read, or that a write whose outcome is unknown may
+// whose row does not read, or that a write whose outcome is unknown may
 // have changed (write), so that its next use reads it again. A deletion
 // from the feed may be of a record older than one this process has written
 // since: the read after it is what tells.
@@ -239,14 +239,14 @@ func (s *Memory) retired(mailbox protocol.Address, id [32]byte, received time.Ti
 }
 
 // apply applies one change of the backend's feed to memory: one rule for
-// each kind of change. An item whose image does not read is applied as one
+// each kind of change. A row whose image does not read is applied as one
 // gone, whatever its kind (dromas-dev/dromas-client#407 item 1): the
 // address forgotten, the account evicted, so that memory answers for none
 // of it, and its next use reads it, which fails, so nothing is served or
 // taken for it on what memory held before (dromas-dev/dromas-server#87).
 func (s *Memory) apply(c Change) {
 	if c.Err != nil {
-		s.logf("%s: an item that does not read, taken as gone: %v", c.Kind, c.Err)
+		s.logf("%s: a row that does not read, taken as gone: %v", c.Kind, c.Err)
 	}
 	gone := c.Gone || c.Err != nil
 	switch c.Kind {
@@ -448,14 +448,14 @@ func (s *Memory) Account(ctx context.Context, id string) (*Account, error) {
 	return a, nil
 }
 
-// Dedupe implements Store: the live message's item. A stale miss is caught by
+// Dedupe implements Store: the live message's row. A stale miss is caught by
 // PutMessage's conditional write.
 func (s *Memory) Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
 	return s.backend.Dedupe(ctx, mailbox, id)
 }
 
 // PutMessage implements Store: stored, the message's mark joins memory; met
-// by another send's live item of the same ciphertext, that item's header is
+// by another send's live row of the same ciphertext, that row's header is
 // returned.
 func (s *Memory) PutMessage(ctx context.Context, mailbox protocol.Address, h *Header, body []byte) (*Header, error) {
 	err := s.write(ofAddress(mailbox), func() error { return s.backend.PutMessage(ctx, mailbox, h, body) }, func() {
@@ -517,7 +517,7 @@ func (s *Memory) DeleteMessage(ctx context.Context, mailbox protocol.Address, id
 }
 
 // DeleteMessages implements Store (a revocation): every live message in the
-// mailbox, as acks, each out of memory as its item is deleted.
+// mailbox, as acks, each out of memory as its row is deleted.
 func (s *Memory) DeleteMessages(ctx context.Context, mailbox protocol.Address) error {
 	return s.write(ofAddress(mailbox), func() error {
 		return s.backend.DeleteAll(ctx, mailbox, func(id [32]byte, received time.Time) { s.retired(mailbox, id, received) })

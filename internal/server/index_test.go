@@ -51,7 +51,7 @@ func TestIndex(t *testing.T) {
 	t.Run("a set: inserts twice count once", func(t *testing.T) {
 		x := loaded(t, mailbox, mailboxRead{})
 		x.insert(mailbox, k1, now)
-		x.insert(mailbox, k1, now) // the stream's echo of our own write
+		x.insert(mailbox, k1, now) // the feed's echo of our own write
 		x.insert(mailbox, k2, now)
 		if n := x.count(mailbox, now); n != 2 || !x.holds(mailbox, k1.tag, now) || !x.holds(mailbox, k2.tag, now) {
 			t.Fatalf("count %d", n)
@@ -62,7 +62,7 @@ func TestIndex(t *testing.T) {
 		x := loaded(t, mailbox, mailboxRead{})
 		x.insert(mailbox, k1, now)
 		x.remove(mailbox, k1.tag, k1.exp, now, false) // our ack
-		x.insert(mailbox, k1, now)                    // the stream's late insert
+		x.insert(mailbox, k1, now)                    // the feed's late insert
 		if n := x.count(mailbox, now); n != 0 {
 			t.Fatal("the acked message came back")
 		}
@@ -72,7 +72,7 @@ func TestIndex(t *testing.T) {
 		}
 	})
 
-	t.Run("an ack of a message the stream has not shown yet", func(t *testing.T) {
+	t.Run("an ack of a message the feed has not shown yet", func(t *testing.T) {
 		x := loaded(t, mailbox, mailboxRead{})
 		x.remove(mailbox, k1.tag, k1.exp, now, false)
 		x.insert(mailbox, k1, now)
@@ -123,7 +123,7 @@ func TestIndex(t *testing.T) {
 	t.Run("a deletion takes the earliest of its id", func(t *testing.T) {
 		// The same ciphertext, posted again after an ack: the ack's
 		// deletion, which names the id alone, takes the first, whether
-		// this process acked it (a tomb) or the stream brought it (a mark),
+		// this process acked it (a tomb) or the feed brought it (a mark),
 		// and leaves the second, which this process stored before the
 		// deletion's echo.
 		again := mark{tag: k1.tag, id: k1.id, exp: k1.exp + 100}
@@ -135,13 +135,13 @@ func TestIndex(t *testing.T) {
 			}
 			x.insert(mailbox, again, now)
 			x.deleted(mailbox, k1.tag, now)
-			x.insert(mailbox, again, now) // the stream's insert of the second, after
+			x.insert(mailbox, again, now) // the feed's insert of the second, after
 			if n := x.count(mailbox, now); n != 1 || !x.holds(mailbox, k1.tag, now) || x.tombs(mailbox) != 0 {
 				t.Fatalf("acked by this process %v: count %d, tombs %d; want the second alone", ours, n, x.tombs(mailbox))
 			}
 		}
 		// A deletion after the first expired, by the TTL, finds only the
-		// second: it goes, and the stream's insert of it, which comes after
+		// second: it goes, and the feed's insert of it, which comes after
 		// the deletion, brings it back.
 		x := loaded(t, mailbox, mailboxRead{})
 		x.insert(mailbox, again, k1.exp)
@@ -331,7 +331,7 @@ func TestIndexLoad(t *testing.T) {
 }
 
 // Every change memory applies to a mailbox wakes the long polls on it, from
-// this process's writes and from the streams alike, since both pass
+// this process's writes and from the feed alike, since both pass
 // through apply; one mailbox's change wakes no other's (PROTOCOL.md §11.11).
 func TestEveryChangeToAMailboxWakesItsLongPolls(t *testing.T) {
 	t.Parallel()

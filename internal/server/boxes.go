@@ -577,7 +577,7 @@ const (
 // pass is.
 //
 // What is revoked is kept with or without a mailbox, in the address's
-// revocations item, for good: for a mailbox that is registered, swept by the
+// revocations row, for good: for a mailbox that is registered, swept by the
 // TTL or never registered. Keeping it for an address this server
 // holds nothing of is a record kept for good, so that one is counted as a
 // registration is, against its caller's address.

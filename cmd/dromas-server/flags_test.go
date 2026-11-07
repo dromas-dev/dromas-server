@@ -20,7 +20,7 @@ func TestAOneDashLongFlagIsRefused(t *testing.T) {
 	}{
 		{"serve -dev", func() error { return serve([]string{"-dev", "--listen", "127.0.0.1:0"}) }},
 		{"serve -listen", func() error { return serve([]string{"--dev", "-listen", "127.0.0.1:0"}) }},
-		{"account create -accounts-table", func() error { return account("create", []string{"-accounts-table", "t"}) }},
+		{"account create -id", func() error { return account("create", []string{"-id", "t"}) }},
 		{"limits clear -socket", func() error { return limits("clear", []string{"-socket", "s", "--ip", "192.0.2.1"}) }},
 		{"limits top -count", func() error {
 			return limits("top", []string{"--socket", "s", "--limit", "registrations", "-count", "1"})

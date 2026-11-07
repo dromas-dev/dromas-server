@@ -17,7 +17,7 @@ import (
 // process has used, its standing and one mark per live message.
 //
 // A mailbox is loaded on its first use (ensure), from the tables, and kept
-// current after that by this process's own writes and by the streams. A
+// current after that by this process's own writes and by the feed. A
 // change to a mailbox memory does not hold is dropped, since its first use reads
 // it; a change that arrives while the mailbox loads waits, and is applied after
 // the load, in order. Applying a change twice, or late, is harmless:
@@ -61,7 +61,7 @@ type mailboxMem struct {
 	// The record's version: when its mailbox registered, in unix ms, and its
 	// rev.
 	created, rev uint64
-	// What its identity revoked, from its revocations item: the address,
+	// What its identity revoked, from its revocations row: the address,
 	// and certificates through a serial (0: none). Neither is taken away.
 	revoked bool
 	through uint64
@@ -69,8 +69,8 @@ type mailboxMem struct {
 	// load may have read it before, so the mailbox is dropped after it.
 	stale bool
 	marks []mark
-	// tombs are messages this process removed whose removal the stream has
-	// not echoed yet: the stream's late insert must not bring them back. The
+	// tombs are messages this process removed whose removal the feed has
+	// not echoed yet: the feed's late insert must not bring them back. The
 	// echo clears one; so does its expiry, in case the echo came first.
 	tombs []mark
 }
@@ -174,7 +174,7 @@ func (x *index) ensure(ctx context.Context, a protocol.Address, read func() (mai
 
 // apply runs op on mailbox a: now if memory holds it, after its load if it is
 // loading, and not at all if memory does not hold it. Every change to a mailbox
-// passes here, a write of this process's and one from the streams, so here
+// passes here, a write of this process's and one from the feed, so here
 // every long poll on it is woken (changed).
 func (x *index) apply(a protocol.Address, op func(*mailboxMem)) {
 	sh := x.shard(a)
@@ -230,7 +230,7 @@ func (m *mailboxMem) prune(now uint64) {
 
 func same(a, b mark) bool { return a.tag == b.tag && a.exp == b.exp }
 
-// insert adds a live message, from this process's write or the stream. A
+// insert adds a live message, from this process's write or the feed. A
 // message with a tomb stays removed.
 func (x *index) insert(mailbox protocol.Address, k mark, now uint64) {
 	x.apply(mailbox, func(m *mailboxMem) {
@@ -247,7 +247,7 @@ func (x *index) insert(mailbox protocol.Address, k mark, now uint64) {
 }
 
 // remove removes a message. A removal by this process leaves a tomb until
-// the stream echoes it (echo true) or the message would have expired.
+// the feed echoes it (echo true) or the message would have expired.
 func (x *index) remove(mailbox protocol.Address, tag, exp, now uint64, echo bool) {
 	x.apply(mailbox, func(m *mailboxMem) {
 		m.prune(now)
@@ -262,16 +262,16 @@ func (x *index) remove(mailbox protocol.Address, tag, exp, now uint64, echo bool
 	})
 }
 
-// deleted removes a message whose item the stream says was deleted, which
+// deleted removes a message whose row the feed says was deleted, which
 // names its id and not its expiry: of the marks and tombs of its tag, the one
-// of the earliest expiry. A mailbox holds one item of an id at a time, and the
-// stream brings an item's changes in order, so that is the message whose item
+// of the earliest expiry. A mailbox holds one row of an id at a time, and the
+// feed brings a row's changes in order, so that is the message whose row
 // went; a tomb is this process's own removal of it, echoed. It reads wrong
 // where this process holds a later message of the same bytes when the
 // deletion arrives, one it stored or one its load of the mailbox read, after an
 // ack or the expiry of the first (dromas-dev/dromas-client#548 items 9,
 // 10): a mark it takes leaves the mailbox counted one short, and a long poll on
-// it answered an empty page, until the stream's insert of that message
+// it answered an empty page, until the feed's insert of that message
 // brings the mark back; a tomb it takes, of the later message this process
 // acked, lets that insert count a message that is gone, until its own
 // deletion arrives.
@@ -401,7 +401,7 @@ func (x *index) setStanding(a protocol.Address, st Standing, v version) {
 // loaded with no record is dropped instead, as forget drops one, so that its
 // next use reads it: it has no version to hold the image to, and the image
 // may be of a record this process deleted, its event behind the delete on
-// the stream. One loading is judged once its load is done, by what it read.
+// the feed. One loading is judged once its load is done, by what it read.
 func (x *index) imageStanding(a protocol.Address, st Standing, v version) {
 	sh := x.shard(a)
 	sh.mu.Lock()

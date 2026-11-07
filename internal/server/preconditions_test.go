@@ -277,7 +277,7 @@ func TestAFetchWithAFalsePreconditionLeavesTheMessageUnfetched(t *testing.T) {
 // A revocation's write holds what its request's preconditions held
 // (Expect): one that asks for revocations held where none are, or for none
 // where some are, is refused ErrStale and writes nothing, on the store the
-// tests run on, DynamoDB's where it is set.
+// tests run on, PostgreSQL's where it is set.
 func TestARevocationsWriteHoldsWhatItsPreconditionsHeld(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
