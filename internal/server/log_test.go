@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net"
@@ -229,5 +231,56 @@ func TestAFollowersPanicIsLoggedRedactedAndEndsTheProcess(t *testing.T) {
 	}
 	if !strings.Contains(logged.String(), "stream: panic") || strings.Contains(logged.String(), strings.Repeat("cd", 32)) {
 		t.Errorf("the panic's line: %q", logged.String())
+	}
+}
+
+// One value is one name under one key, whatever the case of its letters, and
+// the name is "#" and 16 hex characters (dromas-dev/dromas-server#203).
+func TestOneValueIsOneNameUnderOneKeyInAnyCase(t *testing.T) {
+	t.Parallel()
+	n := &logNamer{now: time.Now}
+	k, v := n.current(), "d_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdEfGhIjKlMnOpQrStUvWxYz01"
+	name := k.name([]byte(v))
+	if k.name([]byte(v)) != name || k.name([]byte(strings.ToUpper(v))) != name || k.name([]byte(strings.ToLower(v))) != name {
+		t.Errorf("one value took more than one name under one key: %s", name)
+	}
+	if len(name) != 17 || name[0] != '#' || strings.Trim(name[1:], "0123456789abcdef") != "" {
+		t.Errorf("a name is not # and 16 hex characters: %q", name)
+	}
+	if n.current() != k {
+		t.Error("a second line within the key's life took another key")
+	}
+}
+
+// Two keys give one value two names, and neither is a prefix of the value's
+// SHA-256, which anyone holding the value can compute (#203).
+func TestTwoKeysGiveTwoNamesAndNoneIsTheValuesSHA256(t *testing.T) {
+	t.Parallel()
+	v := []byte(strings.Repeat("ef", 32))
+	a, b := (&logNamer{now: time.Now}).current().name(v), (&logNamer{now: time.Now}).current().name(v)
+	if a == b {
+		t.Errorf("two keys named the value alike: %s", a)
+	}
+	sum := sha256.Sum256(v)
+	if plain := "#" + hex.EncodeToString(sum[:8]); a == plain || b == plain {
+		t.Errorf("a name is the value's SHA-256: %s", plain)
+	}
+}
+
+// The key is replaced once it has named values for a day, so a name matches
+// its value only within that day, and no later key matches it (#203).
+func TestTheKeyIsReplacedAfterADay(t *testing.T) {
+	t.Parallel()
+	clock := time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC)
+	n := &logNamer{now: func() time.Time { return clock }}
+	v := []byte(strings.Repeat("ab", 32))
+	first := n.current().name(v)
+	clock = clock.Add(logKeyLife - time.Second)
+	if got := n.current().name(v); got != first {
+		t.Errorf("the key was replaced within its day: %s, then %s", first, got)
+	}
+	clock = clock.Add(time.Second)
+	if got := n.current().name(v); got == first {
+		t.Errorf("the key named the value alike after a day: %s", got)
 	}
 }
