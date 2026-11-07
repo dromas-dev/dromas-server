@@ -30,6 +30,7 @@ type Limits struct {
 	RangeRegistrationsPerHour int // per IPv6 /48, beside the /64's (decided: 500, Let's Encrypt's ratio of the two, until measured)
 	SendsPerMinutePerIP       int // the pre-auth send rate per IP [tunable]
 	MissesPerMinute           int // per IP: reads of the mailboxes table that find no mailbox, and checks that fail (decided: 10 for now)
+	HeldListsPerRange         int // per IPv4 address or IPv6 /48: lists held at once, past which a held list is answered 503 (0: off); a last-resort clamp so one range cannot fill MaxHeldLists, never a limit of normal use (decided: 10,000, ten held mailboxes for each of the thousand subscribers the densest carrier NAT puts behind one address)
 
 	// Requests is the flood budget of an IPv4 address or IPv6 /64: every call
 	// with no pass and every request no route matches (decided: 100 at once,
@@ -105,6 +106,7 @@ func DefaultLimits() Limits {
 		PollAfter:                    60,
 		MaxWait:                      5 * time.Minute,
 		MaxHeldLists:                 50_000,
+		HeldListsPerRange:            10_000,
 		RenewalsPerDay:               5,
 		RenewalsBurst:                5,
 		RetiredKept:                  10,

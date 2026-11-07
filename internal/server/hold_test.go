@@ -175,6 +175,114 @@ func TestALaterHeldListOfTheSameMailboxTakesThePlaceOfTheEarlier(t *testing.T) {
 	holdingNow(t, e.server, 0)
 }
 
+// Past --held-lists-per-range, a list from that range that asks to wait is
+// answered 503 with Retry-After, and recorded refused_range, while the pool
+// has room; the lists held go on.
+func TestAHoldPastItsRangesShareIs503(t *testing.T) {
+	t.Parallel()
+	l := relaxed()
+	l.HeldListsPerRange = 1
+	e, m, _ := metered(t, l)
+	_, to, tag := emptyTag(e)
+	_, other, otherTag := emptyTag(e)
+	c := heldList(e, to, tag, "wait=60")
+	holdingNow(t, e.server, 1)
+	r := e.doWith("GET", other.path("/messages?wait=60"), nil, other.pass(1), "If-None-Match", otherTag)
+	e.want(r, http.StatusServiceUnavailable, protocol.CodeUnavailable)
+	if r.header.Get("Retry-After") == "" {
+		t.Error("a hold refused at its range's share carries no Retry-After")
+	}
+	if n := testutil.ToFloat64(m.held.WithLabelValues(refusedRange)); n != 1 {
+		t.Errorf("%v holds recorded %s, want 1", n, refusedRange)
+	}
+	e.server.StopHolds()
+	e.want((<-c).r, http.StatusNotModified, "")
+	holdingNow(t, e.server, 0)
+}
+
+// A range's share counts the lists held from it: a mailbox's later list from
+// the same range takes its earlier's place even at the share, one from a
+// full range is refused and leaves the earlier held, one from a range with
+// room moves the count to it, and a list's end gives its range's back.
+func TestARangesShareCountsTheListsHeldFromIt(t *testing.T) {
+	t.Parallel()
+	l := relaxed()
+	l.HeldListsPerRange = 1
+	e := newEnv(t, l)
+	_, a, _ := emptyTag(e)
+	_, b, _ := emptyTag(e)
+	s := e.server
+	first, why := s.hold(a.id.Address(), "192.0.2.1")
+	if why != "" {
+		t.Fatalf("the first hold of 192.0.2.1 was %s", why)
+	}
+	if _, why := s.hold(b.id.Address(), "192.0.2.1"); why != refusedRange {
+		t.Fatalf("a second mailbox's hold from a full range was %q, want %s", why, refusedRange)
+	}
+	again, why := s.hold(a.id.Address(), "192.0.2.1")
+	if why != "" {
+		t.Fatalf("a mailbox's later hold from its own full range was %s", why)
+	}
+	select {
+	case <-first:
+	default:
+		t.Fatal("the earlier hold was not ended by the later one")
+	}
+	other, why := s.hold(b.id.Address(), "2001:db8:1::/48")
+	if why != "" {
+		t.Fatalf("a hold from a range with room was %s", why)
+	}
+	if _, why := s.hold(a.id.Address(), "2001:db8:1::/48"); why != refusedRange {
+		t.Fatalf("a mailbox's later hold from another, full range was %q, want %s", why, refusedRange)
+	}
+	select {
+	case <-again:
+		t.Fatal("a refused hold ended the one it would have replaced")
+	default:
+	}
+	s.unhold(a.id.Address(), first) // replaced: gives nothing back
+	if _, why := s.hold(b.id.Address(), "192.0.2.1"); why != refusedRange {
+		t.Fatalf("a replaced hold's end gave its range back: %q", why)
+	}
+	s.unhold(a.id.Address(), again)
+	if _, why := s.hold(a.id.Address(), "192.0.2.1"); why != "" {
+		t.Fatalf("a hold's end did not give its range back: %s", why)
+	}
+	now, _ := s.hold(a.id.Address(), "192.0.2.1")
+	s.unhold(b.id.Address(), other)
+	if _, why := s.hold(a.id.Address(), "2001:db8:1::/48"); why != "" {
+		t.Fatalf("a mailbox's later hold from another range with room was %s", why)
+	}
+	select {
+	case <-now:
+	default:
+		t.Fatal("the earlier hold was not ended by the later one from another range")
+	}
+	if _, why := s.hold(b.id.Address(), "192.0.2.1"); why != "" {
+		t.Fatalf("a hold that moved to another range left its count in the first: %s", why)
+	}
+	if n := s.holding.Load(); n != 2 {
+		t.Fatalf("%d lists counted held, want 2", n)
+	}
+}
+
+// A caller's range is its IPv4 address or its IPv6 /48.
+func TestAHeldListsRangeIsItsIPv4AddressOrIPv6Slash48(t *testing.T) {
+	t.Parallel()
+	for host, want := range map[string]string{
+		"192.0.2.9":           "192.0.2.9",
+		"::ffff:192.0.2.9":    "192.0.2.9",
+		"2001:db8:1:2::3":     "2001:db8:1::/48",
+		"2001:db8:1:ffff::9":  "2001:db8:1::/48",
+		"fe80::1%eth0":        "fe80::/48",
+		"not an address here": "not an address here",
+	} {
+		if got := heldRange(host); got != want {
+			t.Errorf("heldRange(%q) = %q, want %q", host, got, want)
+		}
+	}
+}
+
 // When the server stops, every held list is answered 304 at once.
 func TestStoppingAnswersEveryHeldList(t *testing.T) {
 	t.Parallel()
