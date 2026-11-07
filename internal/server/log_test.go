@@ -19,7 +19,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodbstreams"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go/logging"
 	"github.com/dromas-dev/dromas-client/api/apitest"
 	"github.com/dromas-dev/dromas-client/protocol"
@@ -48,9 +48,9 @@ func (s errorWithURL) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox
 	return s.Store.Mailbox(ctx, a)
 }
 
-// deadS3 is the test store, but a send is stored by a store on DynamoDB whose S3
-// is a closed port: its PutMessage fails as a real S3 client does when it
-// cannot connect.
+// deadS3 is the test store, but a send is stored by a store whose bodies are
+// in an S3 at a closed port: its PutMessage fails as a real S3 client does
+// when it cannot connect.
 type deadS3 struct {
 	Store
 	d *Memory
@@ -83,10 +83,11 @@ func TestNoLogLineCarriesAnAddress(t *testing.T) {
 		t.Errorf("the log names the mailbox %d times, and holds it or the id in the clear:\n%s", lines, logged.String())
 	}
 
-	// A real S3 client's error, its URL as it writes it.
-	var sdk bytes.Buffer
-	d := NewDynamoStore(DynamoConfig{AWS: aws.Config{Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("k", "s", ""),
-		BaseEndpoint: aws.String("http://127.0.0.1:1"), RetryMaxAttempts: 1}, MailboxesTable: "b", MessagesTable: "m", AccountsTable: "a", Bucket: "bucket", Log: log.New(&sdk, "", 0)})
+	// A real S3 client's error, its URL as it writes it. The body is written
+	// before any statement, so the store's database is never reached.
+	d := newMemory(time.Now, 16, nil, nil)
+	d.backend = &pgBackend{now: d.clock, bodies: s3Bodies{newS3(aws.Config{Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("k", "s", ""),
+		BaseEndpoint: aws.String("http://127.0.0.1:1"), RetryMaxAttempts: 1}, func(o *s3.Options) { o.UsePathStyle = true }), "bucket"}}
 	logged.Reset()
 	e := newEnv(t, relaxed(), func(c *Config) { c.Store, c.Log = deadS3{c.Store, d}, log.New(&logged, "", 0) })
 	from, to := e.mailbox(), e.mailbox()
@@ -206,31 +207,6 @@ func TestTheAWSSDKsLinesAreRedacted(t *testing.T) {
 	AWSLogger(&logged).Logf(logging.Warn, "a response's Date: %s", run)
 	if strings.Contains(logged.String(), run) || !strings.Contains(logged.String(), logName([]byte(run))) {
 		t.Errorf("the SDK's line: %q", logged.String())
-	}
-}
-
-// panicStreams is a stream that panics, with a message id in its words.
-type panicStreams struct{ streamsAPI }
-
-func (panicStreams) DescribeStream(context.Context, *dynamodbstreams.DescribeStreamInput, ...func(*dynamodbstreams.Options)) (*dynamodbstreams.DescribeStreamOutput, error) {
-	panic("boom at " + strings.Repeat("cd", 32))
-}
-
-// A stream follower that panics is logged through the store's log, which
-// redacts, and ends the process as a lost place does, so a restart rebuilds
-// memory: never its words on stderr, past the redaction.
-func TestAFollowersPanicIsLoggedRedactedAndEndsTheProcess(t *testing.T) {
-	t.Parallel()
-	var logged bytes.Buffer
-	l := redacting(log.New(&logged, "", 0))
-	f := &feed{streams: panicStreams{}, interval: time.Hour, logf: l.Printf, shards: map[string]*shard{}}
-	var ended error
-	f.run(context.Background(), func(err error) { ended = err })
-	if ended == nil || !strings.Contains(ended.Error(), "panic") {
-		t.Fatalf("the follower's panic ended nothing: %v", ended)
-	}
-	if !strings.Contains(logged.String(), "stream: panic") || strings.Contains(logged.String(), strings.Repeat("cd", 32)) {
-		t.Errorf("the panic's line: %q", logged.String())
 	}
 }
 
