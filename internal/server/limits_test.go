@@ -75,6 +75,7 @@ func TestCursorIsNoWayAroundThePollRate(t *testing.T) {
 	l.PollBurst, l.PollRefill = 3, 50*time.Second
 	e := newEnv(t, l)
 	a, b := e.mailbox(), e.mailbox()
+	steady(t, e.store, b.Address())
 	e2, cs := counted(t, e, l)
 	tok := e2.pass(b)
 	list := func(c Cursor) reply {
@@ -167,6 +168,7 @@ func TestUnknownIDsStayInMemory(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	a, b := e.mailbox(), e.mailbox()
+	steady(t, e.store, b.Address())
 	e2, cs := counted(t, e, relaxed())
 	tok := e2.pass(b)
 	msg := func(method, id string) reply {

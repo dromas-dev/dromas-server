@@ -168,6 +168,45 @@ func sharedEnv(t *testing.T) (*env, *Memory) {
 func (s *Memory) pg() *pgBackend { return s.backend.(*pgBackend) }
 
 // onPg is the store as memory over the PostgreSQL backend, if it is.
+// fed waits until st's feed has applied every change committed before now:
+// the echoes of what the test has written, which, landing during a read,
+// keep that read's fill out of memory and cost the next use a read of its
+// own. A test that counts reads starts from there. In memory, no wait.
+func fed(t testing.TB, st Store) {
+	t.Helper()
+	s, ok := onPg(st)
+	if !ok {
+		return
+	}
+	now := time.Now().UnixNano()
+	for range 1000 {
+		if s.pg().synced.Load() >= now {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("after ten seconds the feed has not applied what was written before")
+}
+
+// steady is st with the feed's echoes of what the test wrote applied
+// (fed), and each of mailboxes held in memory again: a mailbox's own
+// registration and the feed's echo of it land in either order, and one
+// that lands first drops what memory held of the address, so its next use
+// reads it once. A test of what a mailbox's use reads in the steady state
+// starts from there.
+func steady(t testing.TB, st Store, mailboxes ...protocol.Address) {
+	t.Helper()
+	fed(t, st)
+	for _, a := range mailboxes {
+		if _, err := st.Mailbox(context.Background(), a); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.Count(context.Background(), a); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func onPg(st Store) (*Memory, bool) {
 	s, ok := st.(*Memory)
 	if !ok {

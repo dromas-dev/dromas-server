@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io/fs"
 	"log"
 	"math"
@@ -218,21 +219,28 @@ func (s *pgBackend) prepare(ctx context.Context) error {
 	}
 	db := stdlib.OpenDBFromPool(s.pool)
 	defer func() { _ = db.Close() }()
-	if err := migrate(ctx, db); err != nil {
+	if err := migrate(ctx, db, s.schema); err != nil {
 		return fmt.Errorf("postgres: migrations: %w", err)
 	}
 	return nil
 }
 
-// migrate applies the embedded migrations, one process at a time (goose's
-// session lock).
-func migrate(ctx context.Context, db *sql.DB) error {
-	locker, err := lock.NewPostgresSessionLocker()
+// migrate applies the embedded migrations, one process of a schema at a
+// time (goose's session lock, keyed by the schema), and takes the lock only
+// where one is pending (HasPending takes none), so the processes of a fleet
+// starting at once wait on nothing once the schema is up to date.
+func migrate(ctx context.Context, db *sql.DB, schema string) error {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte("dromas migrate " + schema))
+	locker, err := lock.NewPostgresSessionLocker(lock.WithLockID(int64(h.Sum64()>>1)), lock.WithLockTimeout(1, 60)) //nolint:gosec // 63 bits
 	if err != nil {
 		return err
 	}
 	p, err := goose.NewProvider(goose.DialectPostgres, db, migrationsFS(), goose.WithSessionLocker(locker))
 	if err != nil {
+		return err
+	}
+	if pending, err := p.HasPending(ctx); err != nil || !pending {
 		return err
 	}
 	_, err = p.Up(ctx)

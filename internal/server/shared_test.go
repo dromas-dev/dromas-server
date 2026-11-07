@@ -194,6 +194,7 @@ func adopt(t *testing.T, b *client.Mailbox, key string) string {
 // state, whose storage calls are counted.
 func counted(t *testing.T, e *env, l Limits) (*env, *countingStore) {
 	t.Helper()
+	fed(t, e.store)
 	cs := &countingStore{s: e.store}
 	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: cs, Limits: l, Now: e.clock.Now}).Handler()))
 	t.Cleanup(srv.Close)

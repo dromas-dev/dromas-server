@@ -866,6 +866,7 @@ func TestALeaderWhoHangsUpFailsNoLookup(t *testing.T) {
 	l := relaxed()
 	e := newEnv(t, l)
 	b := e.raw().register(protocol.MaxPrekeyLifetime)
+	fed(t, e.store)
 	st := &ctxMailbox{Store: e.store, d: time.Second}
 	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: st, Limits: l, Now: e.clock.Now}).Handler()))
 	t.Cleanup(srv.Close)
