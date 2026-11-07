@@ -52,12 +52,13 @@ echo "age: $(age --version)"
 port=$((20000 + RANDOM % 12768))   # below Linux's ephemeral ports (32768 up: ip_local_port_range), which an outgoing connection may hold
 if [ -n "${DROMAS_TEST_POSTGRES:-}" ]; then
   store=(--bodies-dir "$work/bodies" --names "127.0.0.1:$port")
+  "$work/dromas-server" migrate 2> "$work/server.log" || { echo "dromas-server migrate failed"; exit 1; }   # as a deploy runs it, before serve
 else
   store=(--dev --names "127.0.0.1:$port")   # --dev takes a pass made for any name without --names: with it, every pass's name is checked (PROTOCOL.md §8)
 fi
 echo "server: dromas-server serve ${store[*]:0:6}"
 printf '{"poll_burst": 0, "registrations_per_hour": 0}\n' > "$work/limits.json"   # every mailbox here registers from one address
-"$work/dromas-server" serve "${store[@]}" --listen "127.0.0.1:$port" --limits "$work/limits.json" 2> "$work/server.log" & srv=$!
+"$work/dromas-server" serve "${store[@]}" --listen "127.0.0.1:$port" --limits "$work/limits.json" 2>> "$work/server.log" & srv=$!
 export DR_SERVER_URL="http://127.0.0.1:$port" DROMAS_SERVER_URL="http://127.0.0.1:$port"
 for _ in $(seq 300); do   # up once the API answers other than 503 (loading)
   code=$(curl -s -o /dev/null -w '%{http_code}' "$DR_SERVER_URL/v1/d_$(printf 'a%.0s' $(seq 64))"); [ "$code" != 000 ] && [ "$code" != 503 ] && break; sleep 0.1

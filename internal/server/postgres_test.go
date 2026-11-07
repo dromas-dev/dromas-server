@@ -23,8 +23,13 @@ import (
 // finds its own. Name a database kept for tests, never one a running
 // dromas-server uses: it needs wal_level = logical, a role with REPLICATION,
 // and a replication slot and WAL sender for each store the tests run at once.
-// TestMain drops the run's schema and its publication, and removes its
-// bodies directory, once every test has run.
+// Each schema is migrated by that role (Migrate), as dromas-server migrate
+// does as the schema's owner, and every store runs as a role of the run's
+// own that owns nothing, as serve does: REPLICATION, and the grants
+// README.md names (pgURL), so a privilege the store needs and the
+// grants lack fails every test. The environment's role needs CREATEROLE.
+// TestMain drops the run's schemas and their publications, and the role,
+// and removes its bodies directory, once every test has run.
 
 func onPostgres() bool { return os.Getenv("DROMAS_TEST_POSTGRES") != "" }
 
@@ -72,6 +77,10 @@ func TestMain(m *testing.M) {
 				code = max(code, 1)
 			}
 		}
+		if err := dropRuntimeRole(); err != nil {
+			fmt.Fprintf(os.Stderr, "dropping the role %s: %v\n", appRole.name, err)
+			code = max(code, 1)
+		}
 		_ = os.RemoveAll(testBodies)
 	}
 	os.Exit(code)
@@ -111,6 +120,86 @@ func dropSchema(schema string) error {
 	return err
 }
 
+// The run's runtime role, made on first use.
+var appRole struct {
+	once           sync.Once
+	name, password string
+	err            error
+}
+
+// migrated is each schema's migration, once: a schema's grants, then
+// Migrate.
+var migrated sync.Map // schema → func() error
+
+// pgURL is the connection string of a store on schema, as the run's runtime
+// role, schema made and migrated first, its tables granted to the role by
+// the default privileges README.md names.
+func pgURL(t testing.TB, schema string) string {
+	t.Helper()
+	appRole.once.Do(func() {
+		appRole.name, appRole.password = "t_"+randomHex(6)+"_app", randomHex(16)
+		appRole.err = asTestRole(func(ctx context.Context, conn *pgx.Conn) error {
+			_, err := conn.Exec(ctx, "CREATE ROLE "+appRole.name+" LOGIN REPLICATION PASSWORD '"+appRole.password+"'")
+			return err
+		})
+	})
+	if appRole.err != nil {
+		t.Fatalf("the runtime role: %v", appRole.err)
+	}
+	once, _ := migrated.LoadOrStore(schema, sync.OnceValue(func() error {
+		err := asTestRole(func(ctx context.Context, conn *pgx.Conn) error {
+			for _, q := range []string{
+				"CREATE SCHEMA IF NOT EXISTS " + schema,
+				"GRANT USAGE ON SCHEMA " + schema + " TO " + appRole.name,
+				"ALTER DEFAULT PRIVILEGES IN SCHEMA " + schema + " GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO " + appRole.name,
+			} {
+				if _, err := conn.Exec(ctx, q); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		_, _, err = Migrate(ctx, "", schema, nil)
+		return err
+	}))
+	if err := once.(func() error)(); err != nil {
+		t.Fatalf("migrating %s: %v", schema, err)
+	}
+	return "user=" + appRole.name + " password=" + appRole.password
+}
+
+// asTestRole runs f on a connection as the role libpq's environment names.
+func asTestRole(f func(context.Context, *pgx.Conn) error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, "")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close(context.Background()) }()
+	return f(ctx, conn)
+}
+
+// dropRuntimeRole drops the run's runtime role, if it made one, once its
+// schemas are gone.
+func dropRuntimeRole() error {
+	if appRole.name == "" || appRole.err != nil {
+		return nil
+	}
+	return asTestRole(func(ctx context.Context, conn *pgx.Conn) error {
+		if _, err := conn.Exec(ctx, "DROP OWNED BY "+appRole.name); err != nil {
+			return err
+		}
+		_, err := conn.Exec(ctx, "DROP ROLE "+appRole.name)
+		return err
+	})
+}
+
 // startPostgres is a store on the run's schema, started, stopped when the
 // test ends.
 func startPostgres(t testing.TB, now func() time.Time) *Memory {
@@ -134,6 +223,7 @@ func startPostgresIn(t testing.TB, schema, bodies string, now func() time.Time, 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	c := PostgresConfig{
+		URL:          pgURL(t, schema),
 		Schema:       schema,
 		BodiesDir:    bodies,
 		Now:          now,

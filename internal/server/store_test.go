@@ -27,16 +27,13 @@ func recordRow(b *Mailbox) row {
 	r := row{
 		"addr": bytes.Clone(b.Addr[:]), "identity": b.Identity, "created": msTime(b.Created),
 		"statement": b.Statement, "statement_sig": b.Signature, "rank": numeric(b.Rank), "signer": bytes.Clone(b.Signer[:]),
-		"senders": sendersColumn(b), "retired": json.RawMessage(retiredColumn(b)), "acl": nil, "account": nil, "expires_at": nil, "rev": toInt(b.Rev),
+		"senders": sendersColumn(b), "retired": json.RawMessage(retiredColumn(b)), "acl": nil, "account": nil, "expires_at": expiresColumn(b), "rev": toInt(b.Rev),
 	}
 	if acl := aclColumn(b); acl != nil {
 		r["acl"] = json.RawMessage(acl)
 	}
 	if acc := accountColumn(b); acc != nil {
 		r["account"] = *acc
-	}
-	if exp := expiresColumn(b); exp != nil {
-		r["expires_at"] = *exp
 	}
 	return r
 }
@@ -593,7 +590,7 @@ func TestTheRecordAndTheRevocationsAreMemorys(t *testing.T) {
 }
 
 // A mailbox record this build cannot read whole is no record: one whose
-// stored identity or ACL does not read. Reading it is an error, so nothing is served or taken for the
+// stored identity or ACL does not read, or that lacks a column it reads. Reading it is an error, so nothing is served or taken for the
 // address, and its image on the feed makes memory forget the mailbox wherever
 // it holds it, loaded or loading, its record cached, or its address
 // remembered missing, rather than keep answering for it as it was
@@ -634,6 +631,9 @@ func TestARecordThatDoesNotReadIsRefused(t *testing.T) {
 	}
 	broken := at(rec.Rev+1, func(x row) { x["identity"] = []byte("not an identity document") })
 	badACL := at(rec.Rev+1, func(x row) { x["acl"] = []byte(`{"allow":"not a list"}`) })
+	// A schema that dropped a column this build reads, which a NULL must
+	// never stand for.
+	dropped := at(rec.Rev+1, func(x row) { delete(x, "acl") })
 	if _, _, err := decodeStanding(badACL); err != nil {
 		t.Fatalf("control: the standing of a record whose ACL does not read: %v", err)
 	}
@@ -645,7 +645,7 @@ func TestARecordThatDoesNotReadIsRefused(t *testing.T) {
 	for _, im := range []struct {
 		name string
 		it   row
-	}{{"a record whose identity does not read", broken}, {"a record whose ACL does not read", badACL}} {
+	}{{"a record whose identity does not read", broken}, {"a record whose ACL does not read", badACL}, {"a record without a column it reads", dropped}} {
 		if b, err := decodeMailbox(im.it); err == nil {
 			t.Fatalf("%s read as a record at rev %d", im.name, b.Rev)
 		}

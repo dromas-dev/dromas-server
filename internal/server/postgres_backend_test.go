@@ -249,10 +249,12 @@ func TestALostFeedIsNotReady(t *testing.T) {
 	}
 }
 
-// A row of the feed that does not read past its key, a column of a type
-// this build does not decode, is handed to memory as one that does not
-// read, so memory forgets what it held of it; never skipped, which would
-// leave memory answering from the row as it was.
+// A column of a type this build has no codec for, a later migration's, is
+// left out of the feed's row, which reads without it. A row that then does
+// not read past its key, here for every column a record reads, is handed
+// to memory as one that does not read, so memory forgets what it held of
+// it; never skipped, which would leave memory answering from the row as it
+// was.
 func TestAFeedRowThatDoesNotReadIsForgotten(t *testing.T) {
 	t.Parallel()
 	var got []Change
@@ -266,10 +268,15 @@ func TestAFeedRowThatDoesNotReadIsForgotten(t *testing.T) {
 	}
 	var a protocol.Address
 	a[0] = 7
-	f.change(1, &pglogrepl.TupleData{Columns: []*pglogrepl.TupleDataColumn{
+	tuple := &pglogrepl.TupleData{Columns: []*pglogrepl.TupleDataColumn{
 		{DataType: pglogrepl.TupleDataTypeBinary, Data: a[:]},
 		{DataType: pglogrepl.TupleDataTypeText, Data: []byte("happy")},
-	}}, nil, false)
+	}}
+	r, err := f.row(f.relations[1], tuple, nil)
+	if _, mood := r["mood"]; err != nil || mood || r["addr"] == nil {
+		t.Fatalf("a row with a column of a type no codec reads: %v, %v; want it read without that column", r, err)
+	}
+	f.change(1, tuple, nil, false)
 	if len(got) != 1 || got[0].Kind != RecordChange || got[0].Addr != a || got[0].Err == nil || got[0].Mailbox != nil {
 		t.Fatalf("the change handed over: %+v; want the address's record, as one that does not read", got)
 	}

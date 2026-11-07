@@ -29,14 +29,14 @@ CREATE TABLE mailboxes (
 	-- Checked at commit: an adopt's transaction refuses a spent key before
 	-- an account the key's row would have named is missing.
 	account text COLLATE "C" REFERENCES accounts (id) DEFERRABLE INITIALLY DEFERRED,
-	expires_at timestamptz,
+	expires_at timestamptz NOT NULL,
 	rev bigint NOT NULL CHECK (rev >= 1)
 -- A record of a few kB stays in its row, so a read takes no out-of-line
 -- fetch, and an update's old row, which REPLICA IDENTITY FULL logs, is
 -- the row alone.
 ) WITH (toast_tuple_target = 8160);
 CREATE INDEX mailboxes_account ON mailboxes (account) WHERE account IS NOT NULL;
-CREATE INDEX mailboxes_expires_at ON mailboxes (expires_at) WHERE expires_at IS NOT NULL;
+CREATE INDEX mailboxes_expires_at ON mailboxes (expires_at);
 -- An update's change carries every column: a record with a large ACL is
 -- stored partly out of line, and a column so stored that the update left
 -- alone is otherwise sent without its value.
@@ -72,13 +72,31 @@ CREATE INDEX messages_live ON messages (box, received_at, id) INCLUDE (size);
 CREATE INDEX messages_received_at ON messages (received_at);
 
 CREATE TABLE adopt_keys (
-	account text COLLATE "C" NOT NULL REFERENCES accounts (id) DEFERRABLE INITIALLY DEFERRED,
+	account text COLLATE "C" NOT NULL REFERENCES accounts (id),
 	hash bytea NOT NULL CHECK (octet_length(hash) = 32),
 	uses integer NOT NULL CHECK (uses >= 0),
 	expires_at timestamptz NOT NULL,
 	PRIMARY KEY (account, hash)
 );
 CREATE INDEX adopt_keys_expires_at ON adopt_keys (expires_at);
+
+-- What each column holds, for psql's \d+ (ARCHITECTURE.md § Storage).
+COMMENT ON TABLE accounts IS 'An account, which mailboxes join by an adopt key (PROTOCOL.md §11.16)';
+COMMENT ON TABLE mailboxes IS 'A mailbox''s record: its identity, its current statement and prekey, its ACL';
+COMMENT ON COLUMN mailboxes.addr IS 'The address: the SHA-384 of identity';
+COMMENT ON COLUMN mailboxes.statement IS 'The current statement, which carries the prekey; statement_sig its signature';
+COMMENT ON COLUMN mailboxes.rank IS 'The rank of the statement''s signer, a uint64: 0 for the identity, a certificate''s serial';
+COMMENT ON COLUMN mailboxes.signer IS 'The SHA-256 of the statement''s signing key''s wire bytes';
+COMMENT ON COLUMN mailboxes.senders IS 'The optional identity key types the mailbox takes senders of (PROTOCOL.md §7)';
+COMMENT ON COLUMN mailboxes.retired IS 'The retired prekeys still live: [{type, key_hash (hex), not_after (ms)}]';
+COMMENT ON COLUMN mailboxes.acl IS 'The ACL document, its text exactly as it was checked (json, not jsonb)';
+COMMENT ON COLUMN mailboxes.expires_at IS 'When the record may be swept: no prekey or certificate it took is live after';
+COMMENT ON COLUMN mailboxes.rev IS 'The record''s revision, raised by each write: the feed applies a record by it';
+COMMENT ON TABLE revocations IS 'An address''s revocations: of the address, of certificates through a serial, or both';
+COMMENT ON COLUMN revocations.through IS 'The serial, a uint64, through which every certificate is revoked';
+COMMENT ON TABLE messages IS 'A message''s header; its body is outside the database, under a key of box, id, received_at and nonce';
+COMMENT ON COLUMN messages.nonce IS 'Random to each send, in its body''s key';
+COMMENT ON TABLE adopt_keys IS 'An adopt key, by its SHA-256, and the uses it has left';
 
 -- The feed's publication, dromas_<schema>: the tables memory holds. A later
 -- migration changes it with ALTER PUBLICATION.

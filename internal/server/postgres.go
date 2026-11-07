@@ -4,14 +4,11 @@ import (
 	"cmp"
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
-	"io/fs"
 	"log"
 	"math"
 	"math/big"
@@ -28,8 +25,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
-	"github.com/pressly/goose/v3"
-	"github.com/pressly/goose/v3/lock"
 )
 
 // pgBackend is the durable backend (ARCHITECTURE.md § Storage): mailbox
@@ -115,18 +110,15 @@ const minServerVersion = 150000
 var migrations embed.FS
 
 // NewPostgresStore returns the store over PostgreSQL: Memory over the
-// PostgreSQL backend, its schema brought up to date, not ready until Start
-// returns. The pool is closed when ctx ends.
+// PostgreSQL backend, on a schema Migrate has brought up to date, not ready
+// until Start returns. The pool is closed when ctx ends.
 func NewPostgresStore(ctx context.Context, c PostgresConfig) (*Memory, error) {
 	if c.Bucket != "" && c.BodiesDir != "" {
 		return nil, errors.New("postgres: name a bucket or a bodies directory, not both")
 	}
-	schema := c.Schema
-	if schema == "" {
-		schema = "public"
-	}
-	if !pgIdent(schema) {
-		return nil, fmt.Errorf("postgres: schema %q is not a lowercase identifier", schema)
+	schema, err := schemaName(c.Schema)
+	if err != nil {
+		return nil, err
 	}
 	pc, err := pgxpool.ParseConfig(c.URL)
 	if err != nil {
@@ -200,57 +192,18 @@ func pgIdent(s string) bool {
 	return true
 }
 
-// prepare checks what the backend needs of the database and applies the
-// migrations, the feed's publication among them.
+// prepare checks what the backend needs of the database, and that the
+// schema is migrated (schemaReady): the backend applies no migration
+// (Migrate does) and changes no schema.
 func (s *pgBackend) prepare(ctx context.Context) error {
 	ctx, cancel := bounded(ctx)
 	defer cancel()
-	var version int
-	var walLevel string
-	if err := s.pool.QueryRow(ctx, "SELECT current_setting('server_version_num')::int, current_setting('wal_level')").Scan(&version, &walLevel); err != nil {
-		return fmt.Errorf("postgres: %w", err)
-	}
-	var missing []string
-	if version < minServerVersion {
-		missing = append(missing, fmt.Sprintf("PostgreSQL %d or later (this is %d)", minServerVersion/10000, version/10000))
-	}
-	if walLevel != "logical" {
-		missing = append(missing, fmt.Sprintf("wal_level = logical (it is %s)", walLevel))
-	}
-	if len(missing) > 0 {
-		return fmt.Errorf("postgres: dromas-server needs %s", strings.Join(missing, ", and "))
-	}
-	if _, err := s.pool.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS "+s.schema); err != nil && !isPgCode(err, "42P06", "23505") {
-		return fmt.Errorf("postgres: %w", err)
-	}
 	db := stdlib.OpenDBFromPool(s.pool)
 	defer func() { _ = db.Close() }()
-	if err := migrate(ctx, db, s.schema); err != nil {
-		return fmt.Errorf("postgres: migrations: %w", err)
-	}
-	return nil
-}
-
-// migrate applies the embedded migrations, one process of a schema at a
-// time (goose's session lock, keyed by the schema), and takes the lock only
-// where one is pending (HasPending takes none), so the processes of a fleet
-// starting at once wait on nothing once the schema is up to date.
-func migrate(ctx context.Context, db *sql.DB, schema string) error {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte("dromas migrate " + schema))
-	locker, err := lock.NewPostgresSessionLocker(lock.WithLockID(int64(h.Sum64()>>1)), lock.WithLockTimeout(1, 60)) //nolint:gosec // 63 bits
-	if err != nil {
+	if err := checkServer(ctx, db, s.log); err != nil {
 		return err
 	}
-	p, err := goose.NewProvider(goose.DialectPostgres, db, migrationsFS(), goose.WithSessionLocker(locker))
-	if err != nil {
-		return err
-	}
-	if pending, err := p.HasPending(ctx); err != nil || !pending {
-		return err
-	}
-	_, err = p.Up(ctx)
-	return err
+	return schemaReady(ctx, db, s.schema, s.log)
 }
 
 // isPgCode reports whether err is PostgreSQL's answer with one of codes.
@@ -359,14 +312,6 @@ func (s *pgBackend) write(ctx context.Context, fn func(context.Context, pgx.Tx) 
 	return pgOutcome(tx.Commit(ctx))
 }
 
-func migrationsFS() fs.FS {
-	sub, err := fs.Sub(migrations, "migrations")
-	if err != nil {
-		panic(err) // the embedded directory is always there
-	}
-	return sub
-}
-
 // exec runs one statement as one write, and returns the rows it changed.
 func (s *pgBackend) exec(ctx context.Context, sql string, args ...any) (int64, error) {
 	ctx, cancel := bounded(ctx)
@@ -422,7 +367,16 @@ func rawJSON(oid uint32, format int16, b []byte) json.RawMessage {
 	return json.RawMessage(slices.Clone(b))
 }
 
-func (r row) has(name string) bool { return r[name] != nil }
+// has reports whether the column name holds a value, not NULL; a row with
+// no such column is an error, never a NULL: a feed's row of a schema that
+// dropped a column this build reads (ARCHITECTURE.md § Storage).
+func (r row) has(name string) (bool, error) {
+	v, ok := r[name]
+	if !ok {
+		return false, fmt.Errorf("row: %s is missing", name)
+	}
+	return v != nil, nil
+}
 
 func (r row) bytes(name string) ([]byte, error) {
 	switch v := r[name].(type) {
@@ -608,13 +562,7 @@ func aclColumn(b *Mailbox) []byte {
 	return doc
 }
 
-func expiresColumn(b *Mailbox) *time.Time {
-	if b.Expires.IsZero() {
-		return nil
-	}
-	v := msTime(b.Expires)
-	return &v
-}
+func expiresColumn(b *Mailbox) time.Time { return msTime(b.Expires) }
 
 func sendersColumn(b *Mailbox) []string {
 	if b.SenderKeyTypes == nil {
@@ -655,7 +603,11 @@ func decodeStanding(r row) (Standing, uint64, error) {
 		return Standing{}, 0, err
 	}
 	st := Standing{State: Active, Key: key, Signer: signer, Rank: rank}
-	if r.has("account") {
+	inAccount, err := r.has("account")
+	if err != nil {
+		return Standing{}, 0, err
+	}
+	if inAccount {
 		acc, err := r.str("account")
 		if err != nil {
 			return Standing{}, 0, err
@@ -696,17 +648,19 @@ func decodeMailbox(r row) (*Mailbox, error) {
 	if b.Identity, err = r.bytes("identity"); err != nil {
 		return nil, err
 	}
-	if r.has("account") {
+	if st.InAccount {
 		if b.Account, err = r.str("account"); err != nil {
 			return nil, err
 		}
 	}
-	if r.has("expires_at") {
-		if b.Expires, err = r.time("expires_at"); err != nil {
-			return nil, err
-		}
+	if b.Expires, err = r.time("expires_at"); err != nil {
+		return nil, err
 	}
-	if r.has("acl") {
+	hasACL, err := r.has("acl")
+	if err != nil {
+		return nil, err
+	}
+	if hasACL {
 		if b.ACL, err = decodeACL(r); err != nil {
 			return nil, err
 		}
@@ -760,12 +714,20 @@ func decodeRevocations(r row) (*Revocations, error) {
 	if rv.Identity, err = r.bytes("identity"); err != nil {
 		return nil, err
 	}
-	if r.has("revocation") {
+	listed, err := r.has("revocation")
+	if err != nil {
+		return nil, err
+	}
+	if listed {
 		if rv.Address, err = r.bytes("revocation"); err != nil {
 			return nil, err
 		}
 	}
-	if r.has("through") {
+	certs, err := r.has("through")
+	if err != nil {
+		return nil, err
+	}
+	if certs {
 		if rv.Through, err = r.uint("through"); err != nil {
 			return nil, err
 		}
@@ -798,12 +760,12 @@ func (s *pgBackend) ReadAddress(ctx context.Context, a protocol.Address) (*Mailb
 	r := rows[0]
 	var rec *Mailbox
 	var rv *Revocations
-	if r.has("addr") {
+	if r["addr"] != nil {
 		if rec, err = decodeMailbox(r); err != nil {
 			return nil, nil, err
 		}
 	}
-	if r.has("r_identity") {
+	if r["r_identity"] != nil {
 		rr := row{"identity": r["r_identity"], "revocation": r["r_revocation"], "revoked_certs": r["r_revoked_certs"], "revoked_certs_sig": r["r_revoked_certs_sig"], "through": r["r_through"]}
 		if rv, err = decodeRevocations(rr); err != nil {
 			return nil, nil, err
