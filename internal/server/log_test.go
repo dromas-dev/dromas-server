@@ -215,13 +215,14 @@ func TestTheAWSSDKsLinesAreRedacted(t *testing.T) {
 // A feed whose apply panics, with a message id in its words, is logged
 // through the store's log, which redacts, and ends the process as a lost
 // place does, so a restart rebuilds memory: never its words on stderr, past
-// the redaction (pgFeed.run). The feed needs a session, so PostgreSQL.
+// the redaction (pgFeed.run). The feed needs a session, so PostgreSQL, in
+// a schema of the test's own, whose feed carries no other test's changes.
 func TestAFollowersPanicIsLoggedRedactedAndEndsTheProcess(t *testing.T) {
 	t.Parallel()
 	if !onPostgres() {
 		t.Skip("needs PostgreSQL: DROMAS_TEST_POSTGRES")
 	}
-	schema, bodies := testDatabase(t)
+	schema, bodies := "t_"+randomHex(6), t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	var mu sync.Mutex
