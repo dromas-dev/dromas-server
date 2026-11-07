@@ -26,7 +26,7 @@ type Limits struct {
 	RenewalsBurst  int           // per mailbox: the renewals it may make at once, the bucket RenewalsPerDay refills (decided: 5, as its number a day)
 	RetiredKept    int           // retired prekeys a mailbox record keeps for the new-key rule, newest first (decided: 10), so a record stays small
 
-	RegistrationsPerHour      int // per IPv4 address or IPv6 /64 [tunable]
+	RegistrationsPerHour      int // per IPv4 address or IPv6 /64, at once and an hour: a spike limit, which honest use meets once a mailbox (decided: 50, a household standing up dozens of agents at once)
 	RangeRegistrationsPerHour int // per IPv6 /48, beside the /64's (decided: 500, Let's Encrypt's ratio of the two, until measured)
 	SendsPerMinutePerIP       int // the pre-auth send rate per IP [tunable]
 	MissesPerMinute           int // per IP: reads of the mailboxes table that find no mailbox, and checks that fail (decided: 10 for now)
@@ -110,7 +110,7 @@ func DefaultLimits() Limits {
 		RenewalsPerDay:               5,
 		RenewalsBurst:                5,
 		RetiredKept:                  10,
-		RegistrationsPerHour:         10,
+		RegistrationsPerHour:         50,
 		RangeRegistrationsPerHour:    500,
 		MissesPerMinute:              10,
 		RequestBurst:                 100,
