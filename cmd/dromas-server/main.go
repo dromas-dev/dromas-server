@@ -181,6 +181,7 @@ func serve(args []string) error {
 	fs.IntVar(&l.PollAfter, "poll-after", l.PollAfter, "poll interval told to clients, seconds")
 	fs.DurationVar(&l.MaxWait, "max-wait", l.MaxWait, "the longest a list is held for a change, whatever its wait asks: under the read timeout of a proxy in front (0: none held)")
 	fs.IntVar(&l.MaxHeldLists, "max-held-lists", l.MaxHeldLists, "lists this process holds at once, one a mailbox; past it a list that asks to wait, of a mailbox that holds none, is answered 503 (0: none held)")
+	fs.IntVar(&l.HeldListsPerRange, "held-lists-per-range", l.HeldListsPerRange, "lists this process holds at once for the callers of one IPv4 address or IPv6 /48; past it a list that asks to wait is answered 503 (0: off)")
 	fs.IntVar(&l.RegistrationsPerHour, "registrations-per-hour", l.RegistrationsPerHour, "registrations per IPv4 address or IPv6 /64 (0: off)")
 	fs.IntVar(&l.RangeRegistrationsPerHour, "range-registrations-per-hour", l.RangeRegistrationsPerHour, "registrations per IPv6 /48, beside --registrations-per-hour (0: off)")
 	fs.IntVar(&l.SendsPerMinutePerIP, "sends-per-minute-per-ip", l.SendsPerMinutePerIP, "pre-auth sends per IP (0: off)")

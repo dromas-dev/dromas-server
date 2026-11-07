@@ -162,12 +162,18 @@ again:
 		tag = listTag(body)
 		if !until.IsZero() && time.Now().Before(until) && protocol.IfMatch(r.Header.Values("If-Match"), tag) && protocol.IfNoneMatch(r.Header.Values("If-None-Match"), tag) {
 			if !holding {
-				if replaced, holding = s.hold(mailbox); !holding {
-					s.metrics.heldEnded("refused")
-					p := fail(protocol.CodeUnavailable, "retry later", "this server holds as many lists as it may")
+				var refused string
+				if replaced, refused = s.hold(mailbox, heldRange(s.clientIP(r))); refused != "" {
+					s.metrics.heldEnded(refused)
+					why := "this server holds as many lists as it may"
+					if refused == refusedRange {
+						why = "this server holds as many lists from this address as it may"
+					}
+					p := fail(protocol.CodeUnavailable, "retry later", why)
 					p.retryAfter = time.Duration(s.limits.PollAfter) * time.Second
 					return p
 				}
+				holding = true
 			}
 			// An expiry is no change memory applies: the hold's timer ends
 			// at the mailbox's first, by the store's clock, if it comes before
@@ -236,34 +242,70 @@ const waitReadBound = 24 * time.Hour
 // holds is the list each mailbox has held (list): one a mailbox, the latest,
 // as the Telegram Bot API server holds one getUpdates a bot and a later one
 // ends the earlier (telegram-bot-api's Client::abort_long_poll). Each is its
-// channel, closed when a later list of the mailbox takes its place.
+// channel, closed when a later list of the mailbox takes its place, beside
+// the range of the caller that holds it (heldRange), and each range's count of
+// lists held.
 type holds struct {
-	mu   sync.Mutex
-	held map[protocol.Address]chan struct{}
+	mu     sync.Mutex
+	held   map[protocol.Address]heldEntry
+	ranges map[string]int
 }
 
-// hold holds a list of mailbox a, and returns the channel closed when a later
-// list of a takes its place. A list a holds already is answered at once, as
+// heldEntry is a list held: its channel, and its caller's range.
+type heldEntry struct {
+	replaced chan struct{}
+	rng      string
+}
+
+// How a list is refused a hold, as held_lists_total counts it: past
+// Limits.MaxHeldLists, or past Limits.HeldListsPerRange.
+const (
+	refusedPool  = "refused"
+	refusedRange = "refused_range"
+)
+
+// heldRange keys the held lists of a caller by its IPv4 address or its IPv6
+// /48, the range Let's Encrypt counts new accounts by: a clamp on the
+// densest address a crowd of honest callers shares, a carrier's NAT or a
+// site, never a limit of normal use (LIMITS.md).
+func heldRange(host string) string {
+	if k := rangeKey(host); k != "" {
+		return k
+	}
+	return ipKey(host)
+}
+
+// hold holds a list of mailbox a for a caller of range rng, and returns the
+// channel closed when a later list of a takes its place, or how it was
+// refused, counting nothing. A list a holds already is answered at once, as
 // PROTOCOL.md §11.11 lets a server answer sooner, and this one takes its
-// place in the count; any other is counted one more list held, and refused,
-// counting nothing, at Limits.MaxHeldLists.
-func (s *Server) hold(a protocol.Address) (chan struct{}, bool) {
+// place in the count; any other is counted one more list held, refused at
+// Limits.MaxHeldLists. Either is refused where rng holds
+// Limits.HeldListsPerRange lists already, the earlier's among them only
+// where it was held from rng too.
+func (s *Server) hold(a protocol.Address, rng string) (chan struct{}, string) {
 	s.holds.mu.Lock()
 	defer s.holds.mu.Unlock()
-	if earlier, ok := s.holds.held[a]; ok {
-		close(earlier)
+	earlier, again := s.holds.held[a]
+	if n := s.limits.HeldListsPerRange; n > 0 && s.holds.ranges[rng] >= n && (!again || earlier.rng != rng) {
+		return nil, refusedRange
+	}
+	if again {
+		close(earlier.replaced)
+		s.holds.release(earlier.rng)
 	} else if s.holding.Load() >= int64(s.limits.MaxHeldLists) {
-		return nil, false
+		return nil, refusedPool
 	} else {
 		s.holding.Add(1)
 		s.metrics.holding(1)
 	}
 	if s.holds.held == nil {
-		s.holds.held = map[protocol.Address]chan struct{}{}
+		s.holds.held, s.holds.ranges = map[protocol.Address]heldEntry{}, map[string]int{}
 	}
 	mine := make(chan struct{})
-	s.holds.held[a] = mine
-	return mine, true
+	s.holds.held[a] = heldEntry{replaced: mine, rng: rng}
+	s.holds.ranges[rng]++
+	return mine, ""
 }
 
 // unhold counts one list held fewer, unless a later list of mailbox a took
@@ -271,10 +313,18 @@ func (s *Server) hold(a protocol.Address) (chan struct{}, bool) {
 func (s *Server) unhold(a protocol.Address, mine chan struct{}) {
 	s.holds.mu.Lock()
 	defer s.holds.mu.Unlock()
-	if s.holds.held[a] == mine {
+	if h, ok := s.holds.held[a]; ok && h.replaced == mine {
 		delete(s.holds.held, a)
+		s.holds.release(h.rng)
 		s.holding.Add(-1)
 		s.metrics.holding(-1)
+	}
+}
+
+// release counts one list held fewer for range rng, under h.mu.
+func (h *holds) release(rng string) {
+	if h.ranges[rng]--; h.ranges[rng] <= 0 {
+		delete(h.ranges, rng)
 	}
 }
 

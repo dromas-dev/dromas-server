@@ -100,7 +100,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		holds: prometheus.NewGauge(prometheus.GaugeOpts{Namespace: ns, Name: "lists_held",
 			Help: "Lists held for a change now (PROTOCOL.md §11.11)."}),
 		held: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "held_lists_total",
-			Help: "Held lists, each once by how it ended: changed (the mailbox changed, or a message in it expired), waited (its wait passed), gone (the caller left), stopped (the server stopped), replaced (a later list of the same mailbox was held in its place), or refused (past --max-held-lists)."}, []string{"outcome"}),
+			Help: "Held lists, each once by how it ended: changed (the mailbox changed, or a message in it expired), waited (its wait passed), gone (the caller left), stopped (the server stopped), replaced (a later list of the same mailbox was held in its place), refused (past --max-held-lists), or refused_range (past --held-lists-per-range)."}, []string{"outcome"}),
 		// By the policy's verdict on the request's version, never the version
 		// itself, which the caller writes: Kubernetes counts requests to
 		// deprecated APIs the same way, apiserver_requested_deprecated_apis
