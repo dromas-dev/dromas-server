@@ -73,6 +73,10 @@ type Config struct {
 	// max_certificate_lifetime is Limits'. None: no floor, no deprecation,
 	// no sunset and no latest version.
 	Policy protocol.ServerDocument
+	// Shard is the part of the addresses this process answers for, when the
+	// reverse proxy in front routes each mailbox's calls by its address
+	// (owned). The zero Shard is every address.
+	Shard Shard
 }
 
 // Server is the API.
@@ -88,6 +92,7 @@ type Server struct {
 	ready   func() bool
 	proxies []netip.Prefix
 	names   []string
+	shard   Shard
 	// identityTypes are the identity key types a mailbox may register with.
 	identityTypes []string
 	site          http.Handler
@@ -153,6 +158,7 @@ func New(c Config) *Server {
 		ready:         c.Ready,
 		proxies:       c.TrustedProxies,
 		names:         c.Names,
+		shard:         c.Shard,
 		identityTypes: c.IdentityTypes,
 		metrics:       c.Metrics,
 		polls:         newBuckets(string(protocol.QuotaPolls), 0, 0),
@@ -295,7 +301,7 @@ const linkRoute = "GET " + protocol.LinkPath + "{addr}"
 func (s *Server) Handler() http.Handler {
 	api := http.NewServeMux()
 	for _, r := range s.routes() {
-		s.mount(api, r.pattern, r.pass, s.whenReady(s.handle(r.h)))
+		s.mount(api, r.pattern, r.pass, s.owned(s.whenReady(s.handle(r.h))))
 	}
 	link := http.NewServeMux()
 	s.mount(link, linkRoute, passNone, s.linkPage())
