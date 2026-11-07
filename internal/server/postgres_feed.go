@@ -24,7 +24,8 @@ import (
 // lost place, and the process restarts, which rebuilds memory.
 
 const (
-	// feedSyncEvery is how often the feed shows itself current: it reads
+	// feedSyncEvery is how often, by default, the feed shows itself current
+	// (PostgresConfig.SyncInterval): it reads
 	// the database's flushed WAL position at T, and is synced through T once
 	// the walsender's keepalive says it has decoded past it.
 	feedSyncEvery = time.Second
@@ -132,15 +133,15 @@ type pgFeed struct {
 	waiting *feedTarget // the position a keepalive must pass, until one does
 }
 
-// targets reads the flushed WAL position each feedSyncEvery, for run to
+// targets reads the flushed WAL position each syncEvery, for run to
 // ask about. The walsender sends flushed WAL only.
 func (f *pgFeed) targets(ctx context.Context) {
-	t := time.NewTicker(feedSyncEvery)
+	t := time.NewTicker(f.s.syncEvery)
 	defer t.Stop()
 	defer func() { _ = f.pos.Close(context.Background()) }()
 	for {
 		at := time.Now()
-		rctx, cancel := context.WithTimeout(ctx, feedSyncEvery)
+		rctx, cancel := context.WithTimeout(ctx, max(f.s.syncEvery, time.Second))
 		var lsn string
 		err := f.pos.QueryRow(rctx, "SELECT pg_current_wal_flush_lsn()::text").Scan(&lsn)
 		cancel()
@@ -153,7 +154,7 @@ func (f *pgFeed) targets(ctx context.Context) {
 		} else if ctx.Err() == nil {
 			f.s.logf("feed: reading the flushed WAL position: %v", err)
 			if f.pos.IsClosed() { // made again, so one lost connection is no lasting stall
-				cctx, cancel := context.WithTimeout(ctx, feedSyncEvery)
+				cctx, cancel := context.WithTimeout(ctx, max(f.s.syncEvery, time.Second))
 				if c, err := pgx.ConnectConfig(cctx, f.s.pool.Config().ConnConfig.Copy()); err == nil {
 					f.pos = c
 				}
@@ -189,7 +190,7 @@ func (f *pgFeed) run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		// Each feedSyncEvery: confirm what is applied, and ask for a
+		// Each syncEvery: confirm what is applied, and ask for a
 		// keepalive, which answers a position read since (heard) and shows
 		// the session alive while no change flows.
 		if now := time.Now(); !now.Before(nextStatus) {
@@ -202,7 +203,7 @@ func (f *pgFeed) run(ctx context.Context) {
 				f.lost(ctx, err)
 				return
 			}
-			nextStatus = now.Add(feedSyncEvery)
+			nextStatus = now.Add(f.s.syncEvery)
 		}
 		if time.Since(lastHeard) > feedUnsyncedAfter {
 			f.lost(ctx, errors.New("the walsender has answered nothing"))

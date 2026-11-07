@@ -102,6 +102,7 @@ func (e *env) mailbox() *client.Mailbox {
 	e.t.Helper()
 	b := e.heldMailbox()
 	landAll(e.t, b)
+	steady(e.t, e.store, b.Address())
 	return b
 }
 
@@ -137,6 +138,7 @@ func (e *env) certifiedMailbox() *client.Mailbox {
 		e.t.Fatalf("init under a certificate: %v", err)
 	}
 	landAll(e.t, b)
+	steady(e.t, e.store, b.Address())
 	return b
 }
 

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -54,6 +55,7 @@ type pgBackend struct {
 	fatal       func(error)
 
 	sweepEvery, sweepGrace time.Duration
+	syncEvery              time.Duration // how often the feed shows itself current
 	bodiesDir              *dirBodies // collected by the sweep, when bodies are on disk
 
 	apply   func(Change) // what Start was given
@@ -97,6 +99,9 @@ type PostgresConfig struct {
 	// disk collected; 0: never. SweepGrace is how long past its expiry a
 	// row is kept.
 	SweepInterval, SweepGrace time.Duration
+	// SyncInterval is how often the feed shows itself current (postgres_feed.go);
+	// 0: feedSyncEvery.
+	SyncInterval time.Duration
 	// Metrics, if set, count the caches' hits, misses and evictions, and how
 	// far behind the feed memory follows.
 	Metrics *Metrics
@@ -161,6 +166,7 @@ func NewPostgresStore(ctx context.Context, c PostgresConfig) (*Memory, error) {
 		fatal:       c.Fatal,
 		sweepEvery:  c.SweepInterval,
 		sweepGrace:  c.SweepGrace,
+		syncEvery:   cmp.Or(c.SyncInterval, feedSyncEvery),
 	}
 	switch {
 	case c.Bucket != "":

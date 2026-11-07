@@ -37,6 +37,12 @@ func TestAStoredListThatDoesNotParseIsAnError(t *testing.T) {
 	if err := e.store.Revoke(ctx, r.id.Address(), &Revocations{Identity: r.id.Document(), Certs: bad, CertsSig: []byte("x"), Through: 1}, ExpectAnything); err != nil {
 		t.Fatal(err)
 	}
+	if s, ok := onPg(e.store); ok {
+		// As a process meets the list that reads the record after it: one
+		// that held the mailbox before keeps what it applied of the write.
+		fed(t, s)
+		s.forget(r.id.Address())
+	}
 	for name, got := range map[string]reply{
 		"a list under the mailbox's certificate": e.do("GET", r.path("/messages"), nil, r.pass(n)),
 		"a send to the mailbox":                  e.sendTo(r, n, other, 1),

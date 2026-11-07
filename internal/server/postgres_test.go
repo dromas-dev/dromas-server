@@ -139,6 +139,7 @@ func startPostgresIn(t testing.TB, schema, bodies string, now func() time.Time, 
 		Now:          now,
 		MailboxCache: 100,
 		MaxConns:     4,
+		SyncInterval: 50 * time.Millisecond, // so fed waits a moment
 		Fatal:        func(err error) { t.Errorf("feed: %v", err) },
 	}
 	if with != nil {
@@ -196,9 +197,15 @@ func fed(t testing.TB, st Store) {
 // starts from there.
 func steady(t testing.TB, st Store, mailboxes ...protocol.Address) {
 	t.Helper()
+	if _, ok := onPg(st); !ok {
+		return
+	}
 	fed(t, st)
 	for _, a := range mailboxes {
-		if _, err := st.Mailbox(context.Background(), a); err != nil {
+		switch _, err := st.Mailbox(context.Background(), a); {
+		case errors.Is(err, ErrNotFound):
+			continue // not this store's: a test's server may be on another
+		case err != nil:
 			t.Fatal(err)
 		}
 		if _, err := st.Count(context.Background(), a); err != nil {

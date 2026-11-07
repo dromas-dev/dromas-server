@@ -435,6 +435,7 @@ func (r *raw) registerAt(serial uint64, d time.Duration) *raw {
 	r.e.t.Helper()
 	r.prekey(serial, r.e.clock.Now().Add(d), nil)
 	r.e.want(r.e.do("PUT", r.path(""), r.registration(serial), r.pass(serial)), 201, "")
+	steady(r.e.t, r.e.store, r.id.Address())
 	return r
 }
 
