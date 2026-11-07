@@ -46,6 +46,13 @@ type feed struct {
 	// showed one showed. Read by any goroutine (current).
 	synced atomic.Int64
 	clock  func() time.Time // what synced is read by; time.Now if nil
+
+	// heartbeat is how often each process writes the table's heartbeat
+	// (heartbeat.go), 0 for none; beat is the date of the newest one the
+	// follower has applied, or of its positioning, in unix ns. Read by any
+	// goroutine (current).
+	heartbeat time.Duration
+	beat      atomic.Int64
 }
 
 func (f *feed) now() time.Time {
@@ -63,9 +70,27 @@ func (f *feed) now() time.Time {
 func (f *feed) unsyncedAfter() time.Duration { return max(30*time.Second, 3*f.interval) }
 
 // current reports whether the follower has seen every change through a time
-// within unsyncedAfter of now.
+// within unsyncedAfter of now, and, with a heartbeat, has applied one dated
+// within unsyncedAfter and a heartbeat interval of now: an empty page
+// shows the pass's start whether the stream is idle or behind, and a
+// heartbeat written after a stall comes only once the follower has read
+// past it.
 func (f *feed) current(now time.Time) bool {
-	return now.Sub(time.Unix(0, f.synced.Load())) <= f.unsyncedAfter()
+	if now.Sub(time.Unix(0, f.synced.Load())) > f.unsyncedAfter() {
+		return false
+	}
+	return f.heartbeat <= 0 || now.Sub(time.Unix(0, f.beat.Load())) <= f.unsyncedAfter()+f.heartbeat
+}
+
+// heard records a heartbeat dated at, where it is the newest the follower
+// has applied.
+func (f *feed) heard(at time.Time) {
+	for {
+		old := f.beat.Load()
+		if at.UnixNano() <= old || f.beat.CompareAndSwap(old, at.UnixNano()) {
+			return
+		}
+	}
 }
 
 // once is one pass, which moves what the follower has shown to what the pass
@@ -185,6 +210,7 @@ func (f *feed) position(ctx context.Context, arn string) error {
 	}
 	f.listed = time.Now()
 	f.synced.Store(f.now().UnixNano())
+	f.beat.Store(f.now().UnixNano())
 	return nil
 }
 

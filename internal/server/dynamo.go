@@ -59,6 +59,7 @@ type dynamoBackend struct {
 
 	streams                       streamsAPI
 	interval                      time.Duration
+	heartbeatEvery                time.Duration // 0: no heartbeat
 	mailboxFeed, msgFeed, accFeed *feed
 	apply                         func(Change) // what Start was given
 	metrics                       *Metrics
@@ -80,7 +81,11 @@ type DynamoConfig struct {
 	// records, and as many mailboxes remembered as missing; 0: none.
 	MailboxCache   int
 	StreamInterval time.Duration // how often each stream shard is read
-	Log            *log.Logger   // nil: no log
+	// HeartbeatInterval is how often this process writes each table's
+	// heartbeat item, which shows each follower current (heartbeat.go); 0:
+	// none, and a follower is current by what its own reads show alone.
+	HeartbeatInterval time.Duration
+	Log               *log.Logger // nil: no log
 	// ConsistentReads makes every read strongly consistent, at twice the
 	// read units: for tests, which read back what they wrote within
 	// milliseconds. Otherwise only the reads that fill memory are, a mailbox's
@@ -110,21 +115,22 @@ func NewDynamoStore(c DynamoConfig) *Memory {
 		c.StreamInterval = time.Second
 	}
 	d := &dynamoBackend{
-		db:         dynamodb.NewFromConfig(c.AWS, func(o *dynamodb.Options) { o.APIOptions = append(o.APIOptions, bound) }),
-		s3:         newS3(c.AWS),
-		streams:    dynamodbstreams.NewFromConfig(c.AWS),
-		mailboxes:  c.MailboxesTable,
-		msgs:       c.MessagesTable,
-		accts:      c.AccountsTable,
-		bucket:     c.Bucket,
-		now:        s.clock,
-		log:        s.log,
-		consistent: c.ConsistentReads,
-		interval:   c.StreamInterval,
-		metrics:    c.Metrics,
-		fatal:      c.Fatal,
+		db:             dynamodb.NewFromConfig(c.AWS, func(o *dynamodb.Options) { o.APIOptions = append(o.APIOptions, bound) }),
+		s3:             newS3(c.AWS),
+		streams:        dynamodbstreams.NewFromConfig(c.AWS),
+		mailboxes:      c.MailboxesTable,
+		msgs:           c.MessagesTable,
+		accts:          c.AccountsTable,
+		bucket:         c.Bucket,
+		now:            s.clock,
+		log:            s.log,
+		consistent:     c.ConsistentReads,
+		interval:       c.StreamInterval,
+		heartbeatEvery: c.HeartbeatInterval,
+		metrics:        c.Metrics,
+		fatal:          c.Fatal,
 	}
-	d.mailboxFeed, d.msgFeed, d.accFeed = d.newFeed("mailboxes", mailboxStreamChange), d.newFeed("messages", msgStreamChange), d.newFeed("accounts", accountStreamChange)
+	d.mailboxFeed, d.msgFeed, d.accFeed = d.newFeed("mailboxes", "addr", mailboxStreamChange), d.newFeed("messages", "box", msgStreamChange), d.newFeed("accounts", "account", accountStreamChange)
 	s.backend = d
 	return s
 }
@@ -173,21 +179,28 @@ func (s *dynamoBackend) logf(format string, args ...any) {
 	}
 }
 
-// newFeed is the follower of a table's stream, which hands each change,
-// as change decodes it, to what Start was given.
-func (s *dynamoBackend) newFeed(table string, change func(stypes.Record) (Change, error)) *feed {
-	applied := func(r stypes.Record) {
-		switch c, err := change(r); {
-		case err != nil:
-			s.logf("%s: skipping a record whose key does not read: %v", table, err)
-		case c.Kind != 0 && s.apply != nil:
-			s.apply(c)
+// newFeed is the follower of a table's stream, whose partition key is named
+// pk, which hands each change, as change decodes it, to what Start was
+// given, and takes each heartbeat as the date it shows the follower current
+// through.
+func (s *dynamoBackend) newFeed(table, pk string, change func(stypes.Record) (Change, error)) *feed {
+	f := &feed{streams: s.streams, interval: s.interval, heartbeat: s.heartbeatEvery, logf: s.logf, shards: map[string]*shard{}}
+	f.apply = func(r stypes.Record) {
+		if at, ok := heartbeatOf(r, pk); ok {
+			f.heard(at)
+		} else {
+			switch c, err := change(r); {
+			case err != nil:
+				s.logf("%s: skipping a record whose key does not read: %v", table, err)
+			case c.Kind != 0 && s.apply != nil:
+				s.apply(c)
+			}
 		}
 		if r.Dynamodb != nil && r.Dynamodb.ApproximateCreationDateTime != nil {
 			s.metrics.applied(table, *r.Dynamodb.ApproximateCreationDateTime, s.now())
 		}
 	}
-	return &feed{streams: s.streams, interval: s.interval, apply: applied, logf: s.logf, shards: map[string]*shard{}}
+	return f
 }
 
 // Start implements Backend: it positions a follower on every open shard of
@@ -216,6 +229,9 @@ func (s *dynamoBackend) Start(ctx context.Context, apply func(Change)) error {
 	}
 	for _, x := range feeds {
 		go x.f.run(ctx, lostPlace)
+	}
+	if s.heartbeatEvery > 0 {
+		go s.beat(ctx)
 	}
 	s.ready.Store(true)
 	return nil

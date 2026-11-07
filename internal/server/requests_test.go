@@ -139,6 +139,7 @@ func TestEveryStoreCallSendsAWSWhatItSentBefore(t *testing.T) {
 		{"AdoptKey", func() { _, _ = s.AdoptKey(ctx, "an account", [32]byte{0xad, 7}) }},
 		{"Adopt", func() { c := cloneMailbox(rec); _ = s.Adopt(ctx, c, "an account", [32]byte{0xad, 7}) }},
 		{"Leave", func() { c := cloneMailbox(rec); c.Account = "an account"; _ = s.Leave(ctx, c) }},
+		{"Heartbeat", func() { _ = s.dynamo().heartbeat(ctx, now) }},
 	}
 	for _, c := range calls {
 		mu.Lock()

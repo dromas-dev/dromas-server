@@ -83,6 +83,7 @@ func serve(args []string) error {
 	region := fs.String("region", "us-east-1", "the AWS region")
 	mailboxCache := fs.Int("mailbox-cache", server.DefaultMailboxCache, "mailbox records held in memory, for sends and reads of a mailbox")
 	streamEvery := fs.Duration("stream-interval", time.Second, "how often each stream shard is read")
+	heartbeatEvery := fs.Duration("heartbeat-interval", 15*time.Second, "how often this process writes each table's heartbeat item, a timestamp that shows each stream follower current: one write a table each interval; a follower is current only while the newest heartbeat it applied, from any process, is within its unsynced bound and this interval of now (0: none)")
 	shard := fs.String("shard", "", "I/N: this process answers only for the mailboxes of shard I of N, N a power of two up to 64, when the reverse proxy in front sends each mailbox's calls to one process by its address: shard I is the addresses whose first character after d_ has a base64url value v with v*N/64 == I; any other mailbox's call is answered 503 (empty: every mailbox)")
 	proxies := fs.String("trusted-proxy", "", "comma-separated CIDRs of the reverse proxy in front, if any, whose X-Forwarded-For names the client: its last address, the one the proxy wrote")
 	l := server.DefaultLimits()
@@ -182,16 +183,17 @@ func serve(args []string) error {
 		cfg.Metrics.InstrumentAWS(&awsCfg)
 		fatal := make(chan error, 1)
 		store := server.NewDynamoStore(server.DynamoConfig{
-			AWS:            awsCfg,
-			MailboxesTable: *mailboxes,
-			MessagesTable:  *msgs,
-			AccountsTable:  *accts,
-			Bucket:         *bucket,
-			MailboxCache:   *mailboxCache,
-			StreamInterval: *streamEvery,
-			Log:            logger,
-			Fatal:          func(err error) { fatal <- err },
-			Metrics:        cfg.Metrics,
+			AWS:               awsCfg,
+			MailboxesTable:    *mailboxes,
+			MessagesTable:     *msgs,
+			AccountsTable:     *accts,
+			Bucket:            *bucket,
+			MailboxCache:      *mailboxCache,
+			StreamInterval:    *streamEvery,
+			HeartbeatInterval: *heartbeatEvery,
+			Log:               logger,
+			Fatal:             func(err error) { fatal <- err },
+			Metrics:           cfg.Metrics,
 		})
 		cfg.Store, cfg.Ready = store, store.Ready
 		start = func() error {
