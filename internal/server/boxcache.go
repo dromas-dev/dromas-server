@@ -17,7 +17,7 @@ import (
 // What it holds never goes back to before a write this process has applied
 // (dromas-dev/dromas-server#12, #41, #95, #96). It counts the writes to
 // each shard of its keys, and a write is counted and applied in one step
-// under its lock (write), from this process or the stream, once the write
+// under its lock (write), from this process or the feed, once the write
 // has committed. A read takes its shard's count, a token, before it reads
 // (begin); its copy is put in one step under the lock (fill), where the
 // cache holds the key, every write since applied to it, or else only while
@@ -181,7 +181,7 @@ func (c *recCache[K, V]) insertLocked(k K, v V) {
 	}
 }
 
-// write records a write to k, made by this process or seen on the stream
+// write records a write to k, made by this process or seen on the feed
 // once it committed, and applies it, in one step under the lock: it counts
 // the write in k's shard, so that a read begun before it puts nothing for a
 // key not held (fill, missed), ends k's memory of a miss, and holds for k
@@ -272,7 +272,7 @@ func (c *recCache[K, V]) missed(k K, tok token, now time.Time) {
 }
 
 // missTTL is how long a mailbox the table did not hold is remembered as missing.
-// A write to the mailbox, by this process or seen on the stream, ends it sooner.
+// A write to the mailbox, by this process or seen on the feed, ends it sooner.
 const missTTL = 30 * time.Second
 
 // missCache remembers the keys a read found missing, briefly, so that naming

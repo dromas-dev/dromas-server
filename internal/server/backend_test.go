@@ -415,7 +415,7 @@ func TestEveryWriteOfTheBackendReachesMemoryByItsOutcome(t *testing.T) {
 // applied or of an outcome unknown, as backendWrites makes each (held to
 // the interface's methods by TestEveryWriteOfTheBackendReachesMemoryByIts
 // Outcome); and every kind of change the backend's feed hands memory, its
-// item as it now is, gone, and one that does not read. Each kind is here:
+// row as it now is, gone, and one that does not read. Each kind is here:
 // one added and not here fails.
 func TestEveryChangeMemoryAppliesToAMailboxWakesItsLongPolls(t *testing.T) {
 	t.Parallel()
@@ -499,7 +499,7 @@ func TestEveryChangeMemoryAppliesToAMailboxWakesItsLongPolls(t *testing.T) {
 	}
 }
 
-// An item of the backend's that does not read is applied as one gone,
+// A row of the backend's that does not read is applied as one gone,
 // whatever its kind: the address forgotten, the record cache and the index
 // both, or the account evicted, each counted so that a read begun before it
 // puts nothing (dromas-dev/dromas-client#407 item 1). Each kind's item
@@ -528,7 +528,7 @@ func TestAnItemThatDoesNotReadIsGoneWhateverItsKind(t *testing.T) {
 		t.Run(k.String(), func(t *testing.T) {
 			c, ok := cases[k]
 			if !ok {
-				t.Fatalf("no item of kind %d that does not read", k)
+				t.Fatalf("no row of kind %d that does not read", k)
 			}
 			w := newHeldWorld(t, false)
 			table, r := c(w)
@@ -544,7 +544,7 @@ func TestAnItemThatDoesNotReadIsGoneWhateverItsKind(t *testing.T) {
 				}
 				w.s.accCache.fill(&Account{ID: w.acct, Rev: 1}, atok)
 				if _, ok := w.s.accCache.get(w.acct); ok {
-					t.Error("a read of the account begun before the item puts its copy after it")
+					t.Error("a read of the account begun before the row puts its copy after it")
 				}
 				return
 			}
@@ -556,7 +556,7 @@ func TestAnItemThatDoesNotReadIsGoneWhateverItsKind(t *testing.T) {
 			}
 			w.s.cache.fill(w.rec, tok)
 			if _, ok := w.s.Known(w.a); ok {
-				t.Error("a read of the address begun before the item puts its copy after it")
+				t.Error("a read of the address begun before the row puts its copy after it")
 			}
 		})
 	}

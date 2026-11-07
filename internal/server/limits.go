@@ -22,7 +22,7 @@ type Limits struct {
 	MaxWait        time.Duration // the longest a list is held, whatever its wait asks (PROTOCOL.md §11.11) [tunable]
 	MaxLongPolls   int           // long polls this process holds at once, one a mailbox; past it a long poll of a mailbox that holds none is answered 503 (0: none held) [tunable]
 	AccountMaxSize int           // the most an account lifts MaxSize to, so what a send reads first; up to MaxSize, nothing
-	RenewalsPerDay int           // prekey renewals per mailbox, a number a day as SendsPerDay (decided: 5), so no mailbox can spend the mailboxes table's write capacity
+	RenewalsPerDay int           // prekey renewals per mailbox, a number a day as SendsPerDay (decided: 5), so no mailbox can fill the mailboxes table's writes (each one WAL and a feed change on every process)
 	RenewalsBurst  int           // per mailbox: the renewals it may make at once, the bucket RenewalsPerDay refills (decided: 5, as its number a day)
 	RetiredKept    int           // retired prekeys a mailbox record keeps for the new-key rule, newest first (decided: 10), so a record stays small
 
@@ -31,7 +31,7 @@ type Limits struct {
 	SendsPerMinutePerIP       int // the pre-auth send rate per IP [tunable]
 	RangeSendsPerMinute       int // per IPv6 /48, beside the /64's [tunable]
 	MissesPerMinute           int // per IP: reads of the mailboxes table that find no mailbox, and checks that fail (decided: 10 for now)
-	RangeMissesPerMinute      int // per IPv6 /48, beside the /64's: a last-resort clamp on reads of the provisioned mailboxes table that every caller shares (decided: 100, ten /64s' worth; honest calls rarely miss)
+	RangeMissesPerMinute      int // per IPv6 /48, beside the /64's: a last-resort clamp on reads of the mailboxes table that every caller shares (decided: 100, ten /64s' worth; honest calls rarely miss)
 	MaxLongPollsPerRange      int // per IPv4 address or IPv6 /48: long polls held at once, past which a long poll is answered 503 (0: off); a last-resort clamp so one range cannot fill MaxLongPolls, never a limit of normal use (decided: 10,000, ten held mailboxes for each of the thousand subscribers the densest carrier NAT puts behind one address)
 
 	// MaxBodiesBeforePass is how many request bodies the calls of one IPv4

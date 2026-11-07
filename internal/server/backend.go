@@ -21,8 +21,8 @@ import (
 //   - applied: it returns nil (and what it returns beside);
 //   - refused, as the store stated, of a write it did not make: ErrExists,
 //     ErrStale, ErrNotFound, ErrKeyRefused, a send's body not stored
-//     (errNotStored), a send that met another's item (duplicate, with that
-//     item's header), or errRefused (refused);
+//     (errNotStored), a send that met another's row (duplicate, with that
+//     row's header), or errRefused (refused);
 //   - unknown, which may have applied: ErrUnknown, wrapping its cause. Any
 //     other error is taken as unknown too.
 //
@@ -70,8 +70,8 @@ type Backend interface {
 	// Revoke keeps what the identity of address a revoked (Store.Revoke),
 	// and returns the address's revocations as they now are; ErrStale if a
 	// revocation of certificates through as high a serial was stored first,
-	// or if the address's revocations item is not what want asks: there, or
-	// not. The item exists only holding a revocation, since none is written
+	// or if the address's revocations row is not what want asks: there, or
+	// not. The row exists only holding a revocation, since none is written
 	// that holds neither, so that is whether any is held.
 	Revoke(ctx context.Context, a protocol.Address, rv *Revocations, want Expect) (*Revocations, error)
 	// Adopt moves mailbox b, at b.Rev, into account, spending a use of the
@@ -84,7 +84,7 @@ type Backend interface {
 	CreateAccount(ctx context.Context, a *Account) error
 	// PutAdoptKey stores a new adopt key's state, or returns ErrExists.
 	PutAdoptKey(ctx context.Context, k *AdoptKey) error
-	// PutMessage stores a message: its body, then its item. A live item of
+	// PutMessage stores a message: its body, then its row. A live row of
 	// another send of the id refuses it (duplicate).
 	PutMessage(ctx context.Context, mailbox protocol.Address, h *Header, body []byte) error
 	// Retire deletes a live message's row, so it leaves the list and
@@ -95,12 +95,12 @@ type Backend interface {
 	// DeleteMessage acks a message: it is retired, then its body goes.
 	DeleteMessage(ctx context.Context, mailbox protocol.Address, id [32]byte) (time.Time, error)
 	// DeleteAll deletes, as acks do, every live message in a mailbox, and hands
-	// each retired as its item is deleted. A message already gone is no
+	// each retired as its row is deleted. A message already gone is no
 	// error.
 	DeleteAll(ctx context.Context, mailbox protocol.Address, retired func(id [32]byte, received time.Time)) error
 
 	// Start hands every change to what the backend keeps, from then on, to
-	// apply: in order for each item, and at least once. It returns once the
+	// apply: in order for each row, and at least once. It returns once the
 	// feed is followed, and the feed ends with ctx.
 	Start(ctx context.Context, apply func(Change)) error
 	// Ready reports whether the feed is followed.
@@ -120,7 +120,7 @@ const (
 	RecordChange ChangeKind = iota + 1
 	// RevocationsChange is an address's revocations.
 	RevocationsChange
-	// MessageChange is a message's item.
+	// MessageChange is a message's row.
 	MessageChange
 	// AccountChange is an account's record.
 	AccountChange
@@ -128,8 +128,8 @@ const (
 )
 
 // Change is one change to what a backend keeps, as its feed hands it over:
-// what the item now holds, decoded by the backend, or that it is gone. An
-// item that does not read is carried with Err, and applied as one gone,
+// what the row now holds, decoded by the backend, or that it is gone. A
+// row that does not read is carried with Err, and applied as one gone,
 // whatever its kind: memory then holds nothing of it, and its next use
 // reads it again (dromas-dev/dromas-client#407 item 1).
 type Change struct {
@@ -138,14 +138,14 @@ type Change struct {
 	Addr protocol.Address
 	// AccountID is the account's id.
 	AccountID string
-	// Gone is an item deleted.
+	// Gone is a row deleted.
 	Gone bool
-	// Err is an item whose image does not read.
+	// Err is a row whose image does not read.
 	Err error
 
 	Mailbox     *Mailbox     // RecordChange
 	Revocations *Revocations // RevocationsChange
-	Header      *Header      // MessageChange: of an item deleted, its ID alone
+	Header      *Header      // MessageChange: of a row deleted, its ID alone
 	Live        bool         // MessageChange: in the list
 	Account     *Account     // AccountChange
 }

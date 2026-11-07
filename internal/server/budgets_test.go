@@ -838,7 +838,7 @@ func TestLookupsOfOneAddressShareARead(t *testing.T) {
 
 // ctxMailbox is the test store, but its record cache always misses, so that
 // every lookup reads, and each read of a mailbox's record waits d or until its
-// context ends, as DynamoStore's GetItem does.
+// context ends, as the PostgreSQL backend's statements do.
 type ctxMailbox struct {
 	Store
 	reads atomic.Int64

@@ -33,7 +33,7 @@ const (
 )
 
 // Mailbox is what a server holds of an address: its mailbox's record, if it has
-// one, and what its identity revoked, if anything, which is kept in an item
+// one, and what its identity revoked, if anything, which is kept in a row
 // of its own (Revocations) with or without a mailbox. A revocation of the
 // address is the State whatever the record says.
 type Mailbox struct {
@@ -71,7 +71,7 @@ type Mailbox struct {
 	// Account is the account the mailbox belongs to, or "" (PROTOCOL.md §11.16).
 	// Only Adopt and Leave change it.
 	Account string
-	// What the identity revoked, from the address's revocations item
+	// What the identity revoked, from the address's revocations row
 	// (Revocations): kept for good and served to whoever asks.
 	//
 	// Revocation is the identity's signature that revoked the address
@@ -150,7 +150,7 @@ const (
 	ExpectNone
 )
 
-// Revocations is what an address's identity has revoked, as kept in an item
+// Revocations is what an address's identity has revoked, as kept in a row
 // of its own beside the mailbox's record, mailbox or none (PROTOCOL.md §10.1, §10.2):
 // the revocation of the address once, and the highest revocation of its
 // certificates. Nothing in it is ever taken away, so two copies merge to the
@@ -468,7 +468,7 @@ func unknown(err error) error {
 	return fmt.Errorf("%w: %w", ErrUnknown, err)
 }
 
-// duplicate is a send's refusal, stated by the store: the live message item
+// duplicate is a send's refusal, stated by the store: the live message row
 // of another send of the same ciphertext was there first, and h is its
 // header. A send answers from it (ARCHITECTURE.md § Storage).
 type duplicate struct{ h *Header }
@@ -483,7 +483,7 @@ func isRefusal(err error) bool {
 }
 
 // errNotStored is a send's error that the store states left nothing stored:
-// its body's PUT failed, before its item was written, whatever S3 answered
+// its body's PUT failed, before its row was written, whatever S3 answered
 // (dromas-dev/dromas-server#90).
 var errNotStored = errors.New("not stored")
 
@@ -530,11 +530,11 @@ func bounded(ctx context.Context) (context.Context, context.CancelFunc) {
 func ms(t time.Time) uint64 { return uint64(t.UnixMilli()) } //nolint:gosec // times after 1970
 
 // fromMs reads a time this server wrote as milliseconds since 1970: a value
-// past the largest int64 is no time it writes, so a broken item or key, and
+// past the largest int64 is no time it writes, so a broken row or key, and
 // never a time that wraps.
 func fromMs(v uint64) (time.Time, error) {
 	if v > math.MaxInt64 {
-		return time.Time{}, fmt.Errorf("item: %d is no time in milliseconds", v)
+		return time.Time{}, fmt.Errorf("row: %d is no time in milliseconds", v)
 	}
 	return time.UnixMilli(int64(v)).UTC(), nil
 }
@@ -620,7 +620,7 @@ type Store interface {
 	// DeleteMailbox deletes a's record, and keeps its revocations.
 	DeleteMailbox(ctx context.Context, a protocol.Address) error
 	// Revoke keeps what the identity of address a revoked, mailbox or none, in
-	// the address's revocations item: rv's revocation of the address, kept
+	// the address's revocations row: rv's revocation of the address, kept
 	// once, and its revocation of certificates, which only one through a
 	// higher serial replaces: ErrStale if one through as high a serial was
 	// stored first, or if the address's revocations are not what want asks
@@ -644,7 +644,7 @@ type Store interface {
 	// and otherwise whole, as a fetch answers a range (PROTOCOL.md §11.12).
 	// So a fetch that resumes reads only the rest from where a body is kept.
 	Message(ctx context.Context, mailbox protocol.Address, id [32]byte, from int64) (*Header, []byte, error)
-	// DeleteMessage acks a message: its body goes, then its item, and
+	// DeleteMessage acks a message: its body goes, then its row, and
 	// nothing of it is kept (PROTOCOL.md §13). ErrNotFound if it is not
 	// live.
 	DeleteMessage(ctx context.Context, mailbox protocol.Address, id [32]byte) error
