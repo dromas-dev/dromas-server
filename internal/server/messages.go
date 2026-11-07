@@ -107,7 +107,7 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
 	if asked {
 		until = time.Now().Add(min(wait, s.limits.MaxWait))
 	}
-	// A list held is counted once, by how its hold ended, however often it
+	// A long poll is counted once, by how its hold ended, however often it
 	// woke to the same page and was held again.
 	holding, ended := false, ""
 	var replaced chan struct{}
@@ -163,11 +163,11 @@ again:
 		if !until.IsZero() && time.Now().Before(until) && protocol.IfMatch(r.Header.Values("If-Match"), tag) && protocol.IfNoneMatch(r.Header.Values("If-None-Match"), tag) {
 			if !holding {
 				var refused string
-				if replaced, refused = s.hold(mailbox, heldRange(s.clientIP(r))); refused != "" {
+				if replaced, refused = s.hold(mailbox, longPollRange(s.clientIP(r))); refused != "" {
 					s.metrics.heldEnded(refused)
-					why := "this server holds as many lists as it may"
+					why := "this server holds as many long polls as it may"
 					if refused == refusedRange {
-						why = "this server holds as many lists from this address as it may"
+						why = "this server holds as many long polls from this address as it may"
 					}
 					p := fail(protocol.CodeUnavailable, "retry later", why)
 					p.retryAfter = time.Duration(s.limits.PollAfter) * time.Second
@@ -243,32 +243,32 @@ const waitReadBound = 24 * time.Hour
 // as the Telegram Bot API server holds one getUpdates a bot and a later one
 // ends the earlier (telegram-bot-api's Client::abort_long_poll). Each is its
 // channel, closed when a later list of the mailbox takes its place, beside
-// the range of the caller that holds it (heldRange), and each range's count of
-// lists held.
+// the range of the caller that holds it (longPollRange), and each range's count of
+// long polls.
 type holds struct {
 	mu     sync.Mutex
-	held   map[protocol.Address]heldEntry
+	held   map[protocol.Address]longPollEntry
 	ranges map[string]int
 }
 
-// heldEntry is a list held: its channel, and its caller's range.
-type heldEntry struct {
+// longPollEntry is a long poll: its channel, and its caller's range.
+type longPollEntry struct {
 	replaced chan struct{}
 	rng      string
 }
 
-// How a list is refused a hold, as held_lists_total counts it: past
-// Limits.MaxHeldLists, or past Limits.HeldListsPerRange.
+// How a list is refused a hold, as long_polls_total counts it: past
+// Limits.MaxLongPolls, or past Limits.MaxLongPollsPerRange.
 const (
 	refusedPool  = "refused"
 	refusedRange = "refused_range"
 )
 
-// heldRange keys the held lists of a caller by its IPv4 address or its IPv6
+// longPollRange keys the long polls of a caller by its IPv4 address or its IPv6
 // /48, the range Let's Encrypt counts new accounts by: a clamp on the
 // densest address a crowd of honest callers shares, a carrier's NAT or a
 // site, never a limit of normal use (LIMITS.md).
-func heldRange(host string) string {
+func longPollRange(host string) string {
 	if k := rangeKey(host); k != "" {
 		return k
 	}
@@ -279,36 +279,36 @@ func heldRange(host string) string {
 // channel closed when a later list of a takes its place, or how it was
 // refused, counting nothing. A list a holds already is answered at once, as
 // PROTOCOL.md §11.11 lets a server answer sooner, and this one takes its
-// place in the count; any other is counted one more list held, refused at
-// Limits.MaxHeldLists. Either is refused where rng holds
-// Limits.HeldListsPerRange lists already, the earlier's among them only
+// place in the count; any other is counted one more long poll, refused at
+// Limits.MaxLongPolls. Either is refused where rng holds
+// Limits.MaxLongPollsPerRange lists already, the earlier's among them only
 // where it was held from rng too.
 func (s *Server) hold(a protocol.Address, rng string) (chan struct{}, string) {
 	s.holds.mu.Lock()
 	defer s.holds.mu.Unlock()
 	earlier, again := s.holds.held[a]
-	if n := s.limits.HeldListsPerRange; n > 0 && s.holds.ranges[rng] >= n && (!again || earlier.rng != rng) {
+	if n := s.limits.MaxLongPollsPerRange; n > 0 && s.holds.ranges[rng] >= n && (!again || earlier.rng != rng) {
 		return nil, refusedRange
 	}
 	if again {
 		close(earlier.replaced)
 		s.holds.release(earlier.rng)
-	} else if s.holding.Load() >= int64(s.limits.MaxHeldLists) {
+	} else if s.holding.Load() >= int64(s.limits.MaxLongPolls) {
 		return nil, refusedPool
 	} else {
 		s.holding.Add(1)
 		s.metrics.holding(1)
 	}
 	if s.holds.held == nil {
-		s.holds.held, s.holds.ranges = map[protocol.Address]heldEntry{}, map[string]int{}
+		s.holds.held, s.holds.ranges = map[protocol.Address]longPollEntry{}, map[string]int{}
 	}
 	mine := make(chan struct{})
-	s.holds.held[a] = heldEntry{replaced: mine, rng: rng}
+	s.holds.held[a] = longPollEntry{replaced: mine, rng: rng}
 	s.holds.ranges[rng]++
 	return mine, ""
 }
 
-// unhold counts one list held fewer, unless a later list of mailbox a took
+// unhold counts one long poll fewer, unless a later list of mailbox a took
 // the place of the one whose channel is mine.
 func (s *Server) unhold(a protocol.Address, mine chan struct{}) {
 	s.holds.mu.Lock()
@@ -321,14 +321,14 @@ func (s *Server) unhold(a protocol.Address, mine chan struct{}) {
 	}
 }
 
-// release counts one list held fewer for range rng, under h.mu.
+// release counts one long poll fewer for range rng, under h.mu.
 func (h *holds) release(rng string) {
 	if h.ranges[rng]--; h.ranges[rng] <= 0 {
 		delete(h.ranges, rng)
 	}
 }
 
-// StopHolds answers every list held, now and from now on, at once: for
+// StopHolds answers every long poll, now and from now on, at once: for
 // http.Server.RegisterOnShutdown, so the clients list again at once and
 // Shutdown waits for none of them.
 func (s *Server) StopHolds() { s.stopOnce.Do(func() { close(s.stopping) }) }

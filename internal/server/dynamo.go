@@ -52,7 +52,7 @@ type dynamoBackend struct {
 	log       *log.Logger
 
 	// consistent makes every read strongly consistent; otherwise only the
-	// reads that fill memory, and a held list's page, are
+	// reads that fill memory, and a long poll's page, are
 	// (DynamoConfig.ConsistentReads).
 	consistent bool
 

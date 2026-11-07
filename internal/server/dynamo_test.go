@@ -334,7 +334,7 @@ func TestTwoProcesses(t *testing.T) {
 	took := waitFor("the ack reaching the first process", func() bool { return count(e.store) == 0 })
 	t.Logf("an ack on the second process reached the first in %s", took)
 
-	// A list held on the other process is woken by a send stored on this
+	// A long poll on the other process is woken by a send stored on this
 	// one, through the stream (PROTOCOL.md §11.11).
 	list := "/v1/" + b.Address().String() + "/messages"
 	tag := e2.do(http.MethodGet, list, nil, tok()).header.Get("ETag")
@@ -343,11 +343,11 @@ func TestTwoProcesses(t *testing.T) {
 	go func() { woke <- e2.doWith(http.MethodGet, list+"?wait=60", nil, pass, "If-None-Match", tag) }()
 	time.Sleep(300 * time.Millisecond)
 	start := time.Now()
-	id = idOf(t, send(t, a, b, "woke a list held elsewhere"))
+	id = idOf(t, send(t, a, b, "woke a long poll elsewhere"))
 	if r := <-woke; r.status != http.StatusOK || !strings.Contains(string(r.body), `"count":1`) {
-		t.Fatalf("the list held on the other process: %d %s", r.status, r.body)
+		t.Fatalf("the long poll on the other process: %d %s", r.status, r.body)
 	}
-	t.Logf("a send on the first process woke a list held on the second in %s", time.Since(start))
+	t.Logf("a send on the first process woke a long poll on the second in %s", time.Since(start))
 	if r := e2.do(http.MethodDelete, list+"/"+hexID(id), nil, tok()); r.status != http.StatusNoContent {
 		t.Fatalf("ack on the other process: %d %s", r.status, r.body)
 	}
