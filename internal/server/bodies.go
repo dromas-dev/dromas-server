@@ -162,10 +162,16 @@ func (b dirBodies) path(key string) string { return filepath.Join(b.root, filepa
 func (b dirBodies) Put(_ context.Context, key string, body []byte) error {
 	p := b.path(key)
 	dir := filepath.Dir(p)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
+	var f *os.File
+	var err error
+	for range 2 { // collect may take the directory, empty, between the two
+		if err = os.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
+		if f, err = os.CreateTemp(dir, ".put-*"); !errors.Is(err, fs.ErrNotExist) {
+			break
+		}
 	}
-	f, err := os.CreateTemp(dir, ".put-*")
 	if err != nil {
 		return err
 	}

@@ -22,18 +22,18 @@ func NewMemStore(now func() time.Time) *Memory {
 	return s
 }
 
-// memBackend keeps what a store keeps in maps, as the DynamoDB backend
-// keeps it in tables: each write has the outcome its DynamoDB write would
-// have, and each change it makes goes to its feed. Expired messages vanish
-// at their ExpiresAt, as reads of the tables judge expiry. A mailbox's record stays past its Expires, as one in DynamoDB does
-// until the TTL deletes it, which may be days after: a test stands in for
-// the TTL with DeleteMailbox, which is the delete the TTL makes.
+// memBackend keeps what a store keeps in maps, as the PostgreSQL backend
+// keeps it in tables: each write has the outcome its statement would have,
+// and each change it makes goes to its feed. Expired messages vanish at
+// their ExpiresAt, as reads of the tables judge expiry. A mailbox's record
+// stays past its Expires, as a row does until the sweep deletes it: a test
+// stands in for the sweep with DeleteMailbox, which is the delete it makes.
 //
 // Its feed hands each change a write made to apply at the start of the
 // backend's next write, in the order the writes were made, on that write's
 // goroutine (deliver). So the change comes after its writer has applied the
-// write's outcome to memory, as DynamoDB's stream brings a write back a
-// second or two after it, and no test waits on a goroutine for it. Reads
+// write's outcome to memory, as the feed brings a write back after it
+// commits, and no test waits on a goroutine for it. Reads
 // hand nothing over, so a read's token sees no write the read did not make
 // room for.
 type memBackend struct {
@@ -229,7 +229,7 @@ func (s *memBackend) Dedupe(_ context.Context, mailbox protocol.Address, id [32]
 }
 
 // PutMessage implements Backend: a live message of the id refuses it, as
-// the condition of DynamoDB's write does.
+// the send's conditional insert does.
 func (s *memBackend) PutMessage(_ context.Context, mailbox protocol.Address, h *Header, body []byte) error {
 	s.deliver()
 	s.mu.Lock()
@@ -289,7 +289,7 @@ func (s *memBackend) Message(_ context.Context, mailbox protocol.Address, id [32
 }
 
 // retireLocked deletes a live message, its body with it, and records the
-// change: a deletion, which names the id alone, as DynamoDB's stream does.
+// change: a deletion, which names the id alone, as the feed's does.
 // The caller holds mu.
 func (s *memBackend) retireLocked(mailbox protocol.Address, id [32]byte) (time.Time, error) {
 	m, ok := s.live(mailbox)[id]
@@ -389,7 +389,7 @@ func (s *memBackend) AdoptKey(_ context.Context, account string, hash [32]byte) 
 }
 
 // Adopt implements Backend: the record and the key's use in one step, as
-// DynamoDB's transaction.
+// the PostgreSQL backend's transaction.
 func (s *memBackend) Adopt(_ context.Context, b *Mailbox, account string, key [32]byte) error {
 	s.deliver()
 	s.mu.Lock()

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -116,7 +117,7 @@ type pgFeed struct {
 
 	mu      sync.Mutex
 	next    *feedTarget // the newest position read, not yet asked about
-	waiting *feedTarget // the position asked about at each wake, until a keepalive passes it
+	waiting *feedTarget // the position a keepalive must pass, until one does
 }
 
 // targets reads the flushed WAL position each feedSyncEvery, for run to
@@ -147,32 +148,47 @@ func (f *pgFeed) targets(ctx context.Context) {
 	}
 }
 
-// run follows the stream until ctx ends or the session is lost. Each wake,
-// at most feedSyncEvery apart, it confirms what it has applied, and asks
-// for a keepalive at once when there is a new position to ask about; the
-// deadline also finds a session gone half-open, which answers nothing.
+// run follows the stream until ctx ends or the session is lost, applying
+// each change as it arrives: memory's apply takes its locks briefly and
+// never waits on I/O. A session that answers nothing for feedUnsyncedAfter,
+// keepalives asked for included, is gone half-open.
 func (f *pgFeed) run(ctx context.Context) {
 	defer func() { _ = f.conn.Close(context.Background()) }()
+	// A panic here would end the process with its words on stderr, past the
+	// redaction: it is logged through the store's log, which redacts, and
+	// ends the process as a lost place does, so a restart rebuilds memory.
+	defer func() {
+		if p := recover(); p != nil {
+			f.s.logf("feed: panic: %v\n%s", p, debug.Stack())
+			f.lost(ctx, fmt.Errorf("panic: %v", p))
+		}
+	}()
 	lastHeard := time.Now()
+	var nextStatus time.Time
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		f.mu.Lock()
-		if f.waiting == nil {
-			f.waiting, f.next = f.next, nil
-		}
-		ask := f.waiting != nil
-		f.mu.Unlock()
-		if err := pglogrepl.SendStandbyStatusUpdate(ctx, f.conn, pglogrepl.StandbyStatusUpdate{WALWritePosition: f.applied, ReplyRequested: ask}); err != nil {
-			f.lost(ctx, err)
-			return
+		// Each feedSyncEvery: confirm what is applied, and ask for a
+		// keepalive, which answers a position read since (heard) and shows
+		// the session alive while no change flows.
+		if now := time.Now(); !now.Before(nextStatus) {
+			f.mu.Lock()
+			if f.waiting == nil {
+				f.waiting, f.next = f.next, nil
+			}
+			f.mu.Unlock()
+			if err := pglogrepl.SendStandbyStatusUpdate(ctx, f.conn, pglogrepl.StandbyStatusUpdate{WALWritePosition: f.applied, ReplyRequested: true}); err != nil {
+				f.lost(ctx, err)
+				return
+			}
+			nextStatus = now.Add(feedSyncEvery)
 		}
 		if time.Since(lastHeard) > feedUnsyncedAfter {
 			f.lost(ctx, errors.New("the walsender has answered nothing"))
 			return
 		}
-		rctx, cancel := context.WithTimeout(ctx, feedSyncEvery)
+		rctx, cancel := context.WithDeadline(ctx, nextStatus)
 		msg, err := f.conn.ReceiveMessage(rctx)
 		cancel()
 		if err != nil {

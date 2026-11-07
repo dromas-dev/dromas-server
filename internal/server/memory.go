@@ -16,7 +16,7 @@ import (
 // mailbox and account records serve sends and reads of a mailbox (recCache). Every
 // write goes through one function (write), which applies its outcome, and
 // every change the backend's feed hands over goes through one (apply). It
-// is the one implementation of Store, whatever the backend: NewDynamoStore
+// is the one implementation of Store, whatever the backend: NewPostgresStore
 // and NewMemStore make it.
 type Memory struct {
 	backend Backend
@@ -270,7 +270,7 @@ func (s *Memory) apply(c Change) {
 		// A view held of the address with no record, read since its record
 		// was deleted, has no version to hold an image to: the image may be
 		// of the record deleted, its event behind this process's delete on
-		// the stream. The view is dropped, and the next use reads the address
+		// the feed. The view is dropped, and the next use reads the address
 		// (dromas-dev/dromas-server#169).
 		img := s.cache.image(c.Mailbox)
 		s.cache.write(c.Addr, func(cur *Mailbox, held, missing bool) (*Mailbox, bool) {
@@ -476,9 +476,8 @@ func (s *Memory) List(ctx context.Context, mailbox protocol.Address, after *Curs
 	return s.backend.List(ctx, mailbox, after, limit, consistent)
 }
 
-// Message implements Store. A live message whose body is gone (a
-// half-finished ack, or a body the lifecycle rule took early) is retired and
-// answered as gone.
+// Message implements Store. A live message whose body is gone (errNoBody)
+// is retired and answered as gone.
 func (s *Memory) Message(ctx context.Context, mailbox protocol.Address, id [32]byte, from int64) (*Header, []byte, error) {
 	h, body, err := s.backend.Message(ctx, mailbox, id, from)
 	if errors.Is(err, errNoBody) {

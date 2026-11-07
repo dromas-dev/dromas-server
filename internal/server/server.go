@@ -532,7 +532,7 @@ func (s *Server) dated(h http.Handler) http.Handler {
 }
 
 // whenReady answers 503 while the store cannot show that its memory is
-// current: until it is loaded, and while a stream follower is unsynced. A
+// current: until it is loaded, and while the feed is unsynced. A
 // poll answered then could read a count of zero that is not true.
 func (s *Server) whenReady(h http.Handler) http.Handler {
 	if s.ready == nil {

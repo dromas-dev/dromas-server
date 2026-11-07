@@ -172,9 +172,9 @@ func (l Limits) ceiling() int { return max(l.MaxSize, l.AccountMaxSize) }
 // ReceiveCeiling is the shortest refill of any mailbox's budget of new messages: no
 // mailbox takes new messages faster than one each, ten a second, whatever its account
 // lifts, and dromas-server serve does not start with flags that would (decided).
-// A mailbox's messages are one item collection of the messages
-// table, which its LSI holds to 10 GB on one partition, and every message
-// leaves an item there until it expires (ARCHITECTURE.md § Storage).
+// Every message is a row and a body until it is acked or expires, so the
+// ceiling bounds what one mailbox adds to the store (ARCHITECTURE.md
+// § Storage).
 const ReceiveCeiling = time.Second / 10
 
 // liftedReceives is the refill of new messages an account lifts a mailbox's to.
