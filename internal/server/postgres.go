@@ -12,6 +12,7 @@ import (
 	"log"
 	"math"
 	"math/big"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -251,10 +252,14 @@ func (s *pgBackend) logf(format string, args ...any) {
 
 func (s *pgBackend) nowMs() uint64 { return ms(s.now()) }
 
-// liveFrom is the lowest received_at a live message has at now: one
+// liveFrom is the earliest received_at a live message has at now: one
 // received at or before now − Retention has expired, though the sweep may
 // not have deleted it yet (ttlMs, protocol.Retention).
-func (s *pgBackend) liveFrom() int64 { return toInt(s.nowMs() - ttlMs + 1) }
+func (s *pgBackend) liveFrom() time.Time { return time.UnixMilli(toInt(s.nowMs() - ttlMs + 1)).UTC() }
+
+// msTime is t as the tables keep a time: to the millisecond, as memory
+// compares it (ms).
+func msTime(t time.Time) time.Time { return t.UTC().Truncate(time.Millisecond) }
 
 // crashed is a step of a two-step write failing as a crash there would.
 func (s *pgBackend) crashed(step string) error {
@@ -350,22 +355,51 @@ func rowsOf(rows pgx.Rows, err error) ([]row, error) {
 		if err != nil {
 			return nil, err
 		}
+		raw := rows.RawValues()
 		r := make(row, len(vals))
 		for i, f := range fields {
 			r[f.Name] = vals[i]
+			if vals[i] != nil && isJSONType(f.DataTypeOID) {
+				r[f.Name] = rawJSON(f.DataTypeOID, f.Format, raw[i])
+			}
 		}
 		out = append(out, r)
 	}
 	return out, rows.Err()
 }
 
+// isJSONType reports whether oid is json or jsonb, which a row holds as
+// the document's text (rawJSON), never as pgx decodes it: the ACL is read
+// by the protocol's own rules, from its exact text.
+func isJSONType(oid uint32) bool { return oid == pgtype.JSONOID || oid == pgtype.JSONBOID }
+
+// rawJSON is a json or jsonb value's text, from the bytes of either format:
+// jsonb's binary format is a version byte, 1, then the text.
+func rawJSON(oid uint32, format int16, b []byte) json.RawMessage {
+	if oid == pgtype.JSONBOID && format == pgtype.BinaryFormatCode && len(b) > 0 && b[0] == 1 {
+		b = b[1:]
+	}
+	return json.RawMessage(slices.Clone(b))
+}
+
 func (r row) has(name string) bool { return r[name] != nil }
 
 func (r row) bytes(name string) ([]byte, error) {
-	if v, ok := r[name].([]byte); ok {
+	switch v := r[name].(type) {
+	case []byte:
+		return v, nil
+	case json.RawMessage:
 		return v, nil
 	}
 	return nil, fmt.Errorf("row: %s is missing or not bytes", name)
+}
+
+// time reads a timestamptz.
+func (r row) time(name string) (time.Time, error) {
+	if v, ok := r[name].(time.Time); ok {
+		return v.UTC(), nil
+	}
+	return time.Time{}, fmt.Errorf("row: %s is missing or not a time", name)
 }
 
 func (r row) address(name string) (protocol.Address, error) {
@@ -452,15 +486,6 @@ func numericUint(n pgtype.Numeric) (uint64, bool) {
 	return v.Uint64(), true
 }
 
-// millis reads a time this server wrote as ms since 1970 (fromMs).
-func (r row) millis(name string) (time.Time, error) {
-	n, err := r.uint(name)
-	if err != nil {
-		return time.Time{}, err
-	}
-	return fromMs(n)
-}
-
 // count reads a count no larger than the largest int32.
 func (r row) count(name string) (int, error) {
 	n, err := r.uint(name)
@@ -502,16 +527,11 @@ func (r row) strings(name string) ([]string, error) {
 	return nil, fmt.Errorf("row: %s is missing or not a text array", name)
 }
 
-// json reads a jsonb column into v: pgx hands it over decoded, so it is
-// encoded again and read with the protocol's rules.
+// json reads a json or jsonb column into v.
 func (r row) json(name string, v any) error {
-	raw, ok := r[name]
-	if !ok || raw == nil {
-		return fmt.Errorf("row: %s is missing", name)
-	}
-	b, err := json.Marshal(raw)
-	if err != nil {
-		return fmt.Errorf("row: %s: %w", name, err)
+	b, ok := r[name].(json.RawMessage)
+	if !ok {
+		return fmt.Errorf("row: %s is missing or not JSON", name)
 	}
 	return json.Unmarshal(b, v)
 }
@@ -519,7 +539,7 @@ func (r row) json(name string, v any) error {
 // The mailbox record.
 
 // mailboxCols are a mailbox record's columns, as ReadAddress reads them.
-const mailboxCols = "m.addr, m.identity, m.created, m.state, m.statement, m.statement_sig, m.rank, m.signer, m.senders, m.retired, m.acl, m.account, m.expires_at, m.rev"
+const mailboxCols = "m.addr, m.identity, m.created, m.statement, m.statement_sig, m.rank, m.signer, m.senders, m.retired, m.acl, m.account, m.expires_at, m.rev"
 
 // retiredJSON is a retired prekey as the retired column keeps it.
 type retiredJSON struct {
@@ -548,11 +568,11 @@ func aclColumn(b *Mailbox) []byte {
 	return doc
 }
 
-func expiresColumn(b *Mailbox) *int64 {
+func expiresColumn(b *Mailbox) *time.Time {
 	if b.Expires.IsZero() {
 		return nil
 	}
-	v := toInt(ms(b.Expires))
+	v := msTime(b.Expires)
 	return &v
 }
 
@@ -571,15 +591,9 @@ func accountColumn(b *Mailbox) *string {
 }
 
 // decodeStanding reads from a mailbox record what memory holds of it, at its
-// rev. Listed is the revocations' to say (index.standing).
+// rev: a record is active, and Listed is the revocations' to say
+// (index.standing).
 func decodeStanding(r row) (Standing, uint64, error) {
-	state, err := r.str("state")
-	if err != nil {
-		return Standing{}, 0, err
-	}
-	if State(state) != Active { // a record is written active and no other way
-		return Standing{}, 0, fmt.Errorf("row: a record's state is %q, not %q", state, Active)
-	}
 	doc, err := r.bytes("identity")
 	if err != nil {
 		return Standing{}, 0, err
@@ -600,7 +614,7 @@ func decodeStanding(r row) (Standing, uint64, error) {
 	if err != nil {
 		return Standing{}, 0, err
 	}
-	st := Standing{State: State(state), Key: key, Signer: signer, Rank: rank}
+	st := Standing{State: Active, Key: key, Signer: signer, Rank: rank}
 	if r.has("account") {
 		acc, err := r.str("account")
 		if err != nil {
@@ -648,7 +662,7 @@ func decodeMailbox(r row) (*Mailbox, error) {
 		}
 	}
 	if r.has("expires_at") {
-		if b.Expires, err = r.millis("expires_at"); err != nil {
+		if b.Expires, err = r.time("expires_at"); err != nil {
 			return nil, err
 		}
 	}
@@ -663,7 +677,7 @@ func decodeMailbox(r row) (*Mailbox, error) {
 	if b.Signature, err = r.bytes("statement_sig"); err != nil {
 		return nil, err
 	}
-	if b.Created, err = r.millis("created"); err != nil {
+	if b.Created, err = r.time("created"); err != nil {
 		return nil, err
 	}
 	if b.Prekey, err = protocol.ParsePrekey(b.Statement); err != nil {
@@ -760,9 +774,12 @@ func (s *pgBackend) ReadAddress(ctx context.Context, a protocol.Address) (*Mailb
 
 // CreateMailbox implements Backend.
 func (s *pgBackend) CreateMailbox(ctx context.Context, b *Mailbox) error {
-	n, err := s.exec(ctx, `INSERT INTO mailboxes (addr, identity, created, state, statement, statement_sig, rank, signer, senders, retired, acl, account, expires_at, rev)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) ON CONFLICT (addr) DO NOTHING`,
-		b.Addr[:], b.Identity, toInt(ms(b.Created)), string(b.State), b.Statement, b.Signature, numeric(b.Rank), b.Signer[:], sendersColumn(b), retiredColumn(b), aclColumn(b), accountColumn(b), expiresColumn(b), toInt(b.Rev))
+	if err := b.writable(); err != nil {
+		return refused(err)
+	}
+	n, err := s.exec(ctx, `INSERT INTO mailboxes (addr, identity, created, statement, statement_sig, rank, signer, senders, retired, acl, account, expires_at, rev)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT (addr) DO NOTHING`,
+		b.Addr[:], b.Identity, msTime(b.Created), b.Statement, b.Signature, numeric(b.Rank), b.Signer[:], sendersColumn(b), retiredColumn(b), aclColumn(b), accountColumn(b), expiresColumn(b), toInt(b.Rev))
 	if err != nil {
 		return err
 	}
@@ -775,10 +792,13 @@ func (s *pgBackend) CreateMailbox(ctx context.Context, b *Mailbox) error {
 // UpdateMailbox implements Backend: every column that can change, if the
 // record is still at b.Rev. The ACL is only set: no route removes one.
 func (s *pgBackend) UpdateMailbox(ctx context.Context, b *Mailbox) error {
-	n, err := s.exec(ctx, `UPDATE mailboxes SET state = $2, statement = $3, statement_sig = $4, rank = $5, signer = $6, senders = $7, retired = $8,
-		acl = COALESCE($9, acl), expires_at = $10, rev = rev + 1
-		WHERE addr = $1 AND rev = $11`,
-		b.Addr[:], string(b.State), b.Statement, b.Signature, numeric(b.Rank), b.Signer[:], sendersColumn(b), retiredColumn(b), aclColumn(b), expiresColumn(b), toInt(b.Rev))
+	if err := b.writable(); err != nil {
+		return refused(err)
+	}
+	n, err := s.exec(ctx, `UPDATE mailboxes SET statement = $2, statement_sig = $3, rank = $4, signer = $5, senders = $6, retired = $7,
+		acl = COALESCE($8, acl), expires_at = $9, rev = rev + 1
+		WHERE addr = $1 AND rev = $10`,
+		b.Addr[:], b.Statement, b.Signature, numeric(b.Rank), b.Signer[:], sendersColumn(b), retiredColumn(b), aclColumn(b), expiresColumn(b), toInt(b.Rev))
 	if err != nil {
 		return err
 	}
@@ -852,7 +872,7 @@ func decodeHeader(r row) (*Header, error) {
 	if err != nil {
 		return nil, err
 	}
-	recv, err := r.uint("received_at")
+	recv, err := r.time("received_at")
 	if err != nil {
 		return nil, err
 	}
@@ -860,7 +880,7 @@ func decodeHeader(r row) (*Header, error) {
 	if err != nil {
 		return nil, err
 	}
-	return header(id, size, recv)
+	return header(id, size, ms(recv))
 }
 
 // header is a message's header from its id, its size and when it was
@@ -916,7 +936,7 @@ func (s *pgBackend) list(ctx context.Context, mailbox protocol.Address, after *C
 	args := []any{mailbox[:], s.liveFrom()}
 	if after != nil {
 		q += ` AND (received_at, id) > ($3, $4)`
-		args = append(args, toInt(ms(after.ReceivedAt)), after.ID[:])
+		args = append(args, msTime(after.ReceivedAt), after.ID[:])
 	}
 	q += ` ORDER BY received_at, id`
 	if limit > 0 {
@@ -947,6 +967,7 @@ func (s *pgBackend) list(ctx context.Context, mailbox protocol.Address, after *C
 func (s *pgBackend) PutMessage(ctx context.Context, mailbox protocol.Address, h *Header, body []byte) error {
 	recv := ms(h.ReceivedAt)
 	key := bodyKey(mailbox, h.ID, recv)
+	at := time.UnixMilli(toInt(recv)).UTC()
 	bctx, cancel := bounded(ctx)
 	err := s.bodies.Put(bctx, key, body)
 	cancel()
@@ -958,11 +979,11 @@ func (s *pgBackend) PutMessage(ctx context.Context, mailbox protocol.Address, h 
 	}
 	var orig *Header
 	err = s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		rows, err := rowsOf(tx.Query(ctx, `INSERT INTO messages (box, id, size, received_at, expires_at) VALUES ($1, $2, $3, $4, $5)
-			ON CONFLICT (box, id) DO UPDATE SET size = EXCLUDED.size, received_at = EXCLUDED.received_at, expires_at = EXCLUDED.expires_at
-			WHERE messages.received_at < $6
+		rows, err := rowsOf(tx.Query(ctx, `INSERT INTO messages (box, id, size, received_at) VALUES ($1, $2, $3, $4)
+			ON CONFLICT (box, id) DO UPDATE SET size = EXCLUDED.size, received_at = EXCLUDED.received_at
+			WHERE messages.received_at < $5
 			RETURNING received_at`,
-			mailbox[:], h.ID[:], h.Size, toInt(recv), toInt(recv+ttlMs), s.liveFrom()))
+			mailbox[:], h.ID[:], h.Size, at, s.liveFrom()))
 		if err != nil || len(rows) > 0 {
 			return err
 		}
@@ -1001,7 +1022,7 @@ func (s *pgBackend) Retire(ctx context.Context, mailbox protocol.Address, id [32
 }
 
 func (s *pgBackend) retire(ctx context.Context, mailbox protocol.Address, id [32]byte) (string, time.Time, error) {
-	var recv uint64
+	var recv time.Time
 	err := s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := rowsOf(tx.Query(ctx, `DELETE FROM messages WHERE box = $1 AND id = $2 AND received_at >= $3 RETURNING received_at`, mailbox[:], id[:], s.liveFrom()))
 		if err != nil {
@@ -1010,7 +1031,7 @@ func (s *pgBackend) retire(ctx context.Context, mailbox protocol.Address, id [32
 		if len(rows) == 0 {
 			return ErrNotFound
 		}
-		if recv, err = rows[0].uint("received_at"); err != nil {
+		if recv, err = rows[0].time("received_at"); err != nil {
 			return unknown(fmt.Errorf("applied, and its answer does not read: %w", err))
 		}
 		return nil
@@ -1018,11 +1039,7 @@ func (s *pgBackend) retire(ctx context.Context, mailbox protocol.Address, id [32
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	t, err := fromMs(recv)
-	if err != nil {
-		return "", time.Time{}, unknown(fmt.Errorf("applied, and its answer does not read: %w", err))
-	}
-	return bodyKey(mailbox, id, recv), t, nil
+	return bodyKey(mailbox, id, ms(recv)), recv, nil
 }
 
 // DeleteMessage implements Backend (ack): the row, then the body. A body
@@ -1065,7 +1082,7 @@ func (s *pgBackend) Message(ctx context.Context, mailbox protocol.Address, id [3
 func (s *pgBackend) DeleteAll(ctx context.Context, mailbox protocol.Address, retired func([32]byte, time.Time)) error {
 	type gone struct {
 		id   [32]byte
-		recv uint64
+		recv time.Time
 	}
 	var took []gone
 	err := s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
@@ -1079,7 +1096,7 @@ func (s *pgBackend) DeleteAll(ctx context.Context, mailbox protocol.Address, ret
 			if err != nil {
 				return unknown(fmt.Errorf("applied, and its answer does not read: %w", err))
 			}
-			recv, err := r.uint("received_at")
+			recv, err := r.time("received_at")
 			if err != nil {
 				return unknown(fmt.Errorf("applied, and its answer does not read: %w", err))
 			}
@@ -1092,11 +1109,8 @@ func (s *pgBackend) DeleteAll(ctx context.Context, mailbox protocol.Address, ret
 	}
 	keys := make([]string, 0, len(took))
 	for _, g := range took {
-		t, err := fromMs(g.recv)
-		if err == nil {
-			retired(g.id, t)
-		}
-		keys = append(keys, bodyKey(mailbox, g.id, g.recv))
+		retired(g.id, g.recv)
+		keys = append(keys, bodyKey(mailbox, g.id, ms(g.recv)))
 	}
 	dctx, cancel := bounded(ctx)
 	defer cancel()
@@ -1153,7 +1167,7 @@ func (s *pgBackend) CreateAccount(ctx context.Context, a *Account) error {
 // PutAdoptKey implements Backend.
 func (s *pgBackend) PutAdoptKey(ctx context.Context, k *AdoptKey) error {
 	n, err := s.exec(ctx, `INSERT INTO adopt_keys (account, hash, uses, expires_at) VALUES ($1, $2, $3, $4) ON CONFLICT (account, hash) DO NOTHING`,
-		k.Account, k.Hash[:], k.Uses, toInt(ms(k.Expires)))
+		k.Account, k.Hash[:], k.Uses, msTime(k.Expires))
 	if err != nil {
 		return err
 	}
@@ -1178,7 +1192,7 @@ func (s *pgBackend) AdoptKey(ctx context.Context, account string, hash [32]byte)
 	if err != nil {
 		return nil, err
 	}
-	exp, err := rows[0].millis("expires_at")
+	exp, err := rows[0].time("expires_at")
 	if err != nil {
 		return nil, err
 	}
@@ -1196,7 +1210,7 @@ func (s *pgBackend) Adopt(ctx context.Context, b *Mailbox, account string, key [
 		if tag.RowsAffected() == 0 {
 			return ErrStale
 		}
-		tag, err = tx.Exec(ctx, `UPDATE adopt_keys SET uses = uses - 1 WHERE account = $1 AND hash = $2 AND uses >= 1 AND expires_at > $3`, account, key[:], toInt(s.nowMs()))
+		tag, err = tx.Exec(ctx, `UPDATE adopt_keys SET uses = uses - 1 WHERE account = $1 AND hash = $2 AND uses >= 1 AND expires_at > $3`, account, key[:], msTime(s.now()))
 		if err != nil {
 			return err
 		}

@@ -352,6 +352,10 @@ func (f *pgFeed) row(r *pglogrepl.RelationMessage, tuple, old *pglogrepl.TupleDa
 		default:
 			return nil, fmt.Errorf("%s: a value of kind %q", name, col.DataType)
 		}
+		if isJSONType(oid) {
+			out[name] = rawJSON(oid, format, col.Data)
+			continue
+		}
 		typ, ok := f.types.TypeForOID(oid)
 		if !ok {
 			return nil, fmt.Errorf("%s: a column of type %d, which this build does not read", name, oid)
