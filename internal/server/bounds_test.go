@@ -1,18 +1,21 @@
 package server
 
-// The bound of every call to AWS the store makes, and of each read a send's
-// shared call makes apart from its request (dromas-dev/dromas-server#91).
-// awsfake_test.go has the fake of AWS.
+// The bound of every call the store's backend makes, and of each read a
+// send's shared call makes apart from its request
+// (dromas-dev/dromas-server#91).
 
 import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
+	"maps"
+	"net"
 	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,190 +24,230 @@ import (
 
 	"filippo.io/age"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodbstreams"
-	stypes "github.com/aws/aws-sdk-go-v2/service/dynamodbstreams/types"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/dromas-dev/dromas-client/protocol"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// streamOp is the prefix of a DynamoDB Streams operation's name, as the fake
-// of AWS sees it.
-const streamOp = "DynamoDBStreams_20120810."
+// newRecord is a registered mailbox's record, from the suite's store.
+func newRecord(t *testing.T) *Mailbox {
+	t.Helper()
+	e := newEnv(t, relaxed())
+	r := e.raw().register(protocol.MaxPrekeyLifetime)
+	b, err := e.store.Mailbox(t.Context(), r.id.Address())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
 
-// Every call the DynamoDB backend makes to AWS ends at storeTimeout, on a
-// context its caller handed it with no deadline and no end, against a
-// DynamoDB, its streams and an S3 that never answer: the reads as the
-// writes, whoever calls them, and a stream follower's
-// (dromas-dev/dromas-server#91). The bound is in one place for each
-// client (bound, boundedStreams), not at each call
-// (dromas-dev/dromas-client#411 item 4). Where a call comes after
-// another, the fake answers the first and holds the one named: a delete of
-// a mailbox's messages reaches its delete of the bodies so.
-func TestEveryCallToAWSEndsAtItsBound(t *testing.T) {
+// silentDatabase is a listener that takes every connection and answers
+// nothing on it, as a database gone silent does: its address, and what
+// closes it and its connections.
+func silentDatabase(t *testing.T) (string, func()) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var conns []net.Conn
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, c)
+			mu.Unlock()
+		}
+	}()
+	return ln.Addr().String(), func() {
+		_ = ln.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range conns {
+			_ = c.Close()
+		}
+	}
+}
+
+// silentBackend is the PostgreSQL backend on a database that never
+// answers, its bodies in a directory.
+func silentBackend(t *testing.T) *pgBackend {
+	t.Helper()
+	addr, closeDB := silentDatabase(t)
+	url := "postgres://dromas@" + addr + "/dromas?sslmode=disable"
+	pc, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.NewWithConfig(context.Background(), pc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc, err := pgconn.ParseConfig(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc.RuntimeParams["replication"] = "database"
+	t.Cleanup(pool.Close)
+	t.Cleanup(closeDB) // first, so the pool's dials end and its Close returns
+	return &pgBackend{pool: pool, replication: rc, schema: "public", publication: "dromas_public", bodies: &dirBodies{t.TempDir()}, now: time.Now}
+}
+
+// silentS3 is bodies in a bucket of an S3 that answers nothing, or, where
+// stall is set, answers a read's status, its headers and two bytes of the
+// three it says the body has, and then nothing.
+func silentS3(t *testing.T, stall bool) s3Bodies {
+	t.Helper()
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if stall {
+			w.Header().Set("Content-Length", "3")
+			_, _ = w.Write([]byte("ab"))
+			w.(http.Flusher).Flush()
+		}
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+		// Never an answer, even as the test ends: a handler that returned
+		// would answer 200 with no body, which the SDK reads as a success.
+		if c, _, err := w.(http.Hijacker).Hijack(); err == nil {
+			_ = c.Close()
+		}
+	}))
+	t.Cleanup(func() { close(release); srv.Close() })
+	cfg := aws.Config{Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("AKIDFAKE", "fake", ""), BaseEndpoint: aws.String(srv.URL)}
+	return s3Bodies{newS3(cfg, func(o *s3.Options) { o.UsePathStyle = true }), "bodies"}
+}
+
+// Every call the PostgreSQL backend makes ends at its bound, on a context
+// its caller handed it with no deadline and no end, against a database and
+// an S3 that never answer: every method of the Backend, held to the
+// interface's methods, the sweep's, and each call to the bodies in S3
+// (dromas-dev/dromas-server#91). The bound is in one place for each client
+// (bounded, and bound for S3), not at each call
+// (dromas-dev/dromas-client#411 item 4); Start's, which waits for the feed's
+// slot, is feedStartWithin. Where a call comes after another, the first is
+// answered: a send's body is written, and a read's status and the first of
+// its bytes come, before the call held.
+func TestEveryCallOfTheBackendEndsAtItsBound(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("long: -short skips it; scripts/check.sh full and CI run it")
 	}
-	_, _, mailbox := heldRecord(t)
-	hang := answer{hang: true}
+	mailbox := newRecord(t)
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	msg := &Header{ID: [32]byte{7}, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
-	// answered is a 200 whose body is v as JSON (itemJSON writes an item).
-	answered := func(v any) answer {
-		b, err := json.Marshal(v)
-		if err != nil {
-			t.Fatal(err)
+	methods := map[string]func(context.Context, Backend) error{
+		"ReadAddress": func(ctx context.Context, b Backend) error { _, _, err := b.ReadAddress(ctx, mailbox.Addr); return err },
+		"ReadLive":    func(ctx context.Context, b Backend) error { _, err := b.ReadLive(ctx, mailbox.Addr); return err },
+		"List": func(ctx context.Context, b Backend) error {
+			_, err := b.List(ctx, mailbox.Addr, nil, 10, false)
+			return err
+		},
+		"Message": func(ctx context.Context, b Backend) error {
+			_, _, err := b.Message(ctx, mailbox.Addr, msg.ID, 0)
+			return err
+		},
+		"Dedupe":        func(ctx context.Context, b Backend) error { _, err := b.Dedupe(ctx, mailbox.Addr, msg.ID); return err },
+		"Account":       func(ctx context.Context, b Backend) error { _, err := b.Account(ctx, "acct"); return err },
+		"AdoptKey":      func(ctx context.Context, b Backend) error { _, err := b.AdoptKey(ctx, "acct", [32]byte{1}); return err },
+		"CreateMailbox": func(ctx context.Context, b Backend) error { return b.CreateMailbox(ctx, cloneMailbox(mailbox)) },
+		"UpdateMailbox": func(ctx context.Context, b Backend) error { return b.UpdateMailbox(ctx, cloneMailbox(mailbox)) },
+		"DeleteMailbox": func(ctx context.Context, b Backend) error { return b.DeleteMailbox(ctx, mailbox.Addr) },
+		"Revoke": func(ctx context.Context, b Backend) error {
+			_, err := b.Revoke(ctx, mailbox.Addr, &Revocations{Identity: mailbox.Identity, Address: []byte("r")}, ExpectAnything)
+			return err
+		},
+		"Adopt": func(ctx context.Context, b Backend) error {
+			return b.Adopt(ctx, cloneMailbox(mailbox), "acct", [32]byte{1})
+		},
+		"Leave":         func(ctx context.Context, b Backend) error { return b.Leave(ctx, cloneMailbox(mailbox)) },
+		"CreateAccount": func(ctx context.Context, b Backend) error { return b.CreateAccount(ctx, &Account{ID: "acct"}) },
+		"PutAdoptKey": func(ctx context.Context, b Backend) error {
+			return b.PutAdoptKey(ctx, &AdoptKey{Account: "acct", Hash: [32]byte{1}, Uses: 1, Expires: now.Add(time.Hour)})
+		},
+		"PutMessage": func(ctx context.Context, b Backend) error { return b.PutMessage(ctx, mailbox.Addr, msg, []byte("abc")) },
+		"Retire":     func(ctx context.Context, b Backend) error { _, err := b.Retire(ctx, mailbox.Addr, msg.ID); return err },
+		"DeleteMessage": func(ctx context.Context, b Backend) error {
+			_, err := b.DeleteMessage(ctx, mailbox.Addr, msg.ID)
+			return err
+		},
+		"DeleteAll": func(ctx context.Context, b Backend) error {
+			return b.DeleteAll(ctx, mailbox.Addr, func([32]byte, time.Time) {})
+		},
+		"Start": func(ctx context.Context, b Backend) error { return b.Start(ctx, func(Change) {}) },
+	}
+	bt := reflect.TypeFor[Backend]()
+	for i := range bt.NumMethod() {
+		if name := bt.Method(i).Name; methods[name] == nil && name != "Ready" { // Ready makes no call
+			t.Errorf("the Backend's %s has no case here", name)
 		}
-		return answer{status: http.StatusOK, body: string(b)}
 	}
-	// first answers the first call of op with a, and holds every other.
-	first := func(op string, a answer) func(string, int, []byte) answer {
-		return func(o string, n int, _ []byte) answer {
-			if o == op && n == 1 {
-				return a
-			}
-			return hang
+	type call struct {
+		name  string
+		bound time.Duration
+		run   func(context.Context) error
+	}
+	var calls []call
+	for _, name := range slices.Sorted(maps.Keys(methods)) {
+		bound := storeTimeout
+		if name == "Start" {
+			bound = feedStartWithin
 		}
+		b := silentBackend(t)
+		calls = append(calls, call{name, bound, func(ctx context.Context) error { return methods[name](ctx, b) }})
 	}
-	// What a table's stream answers: its description, and one open shard.
-	described := answered(map[string]any{"Table": map[string]any{"LatestStreamArn": "fake-stream",
-		"StreamSpecification": map[string]any{"StreamEnabled": true, "StreamViewType": "NEW_IMAGE"}}})
-	oneShard := answered(map[string]any{"StreamDescription": map[string]any{"Shards": []any{
-		map[string]any{"ShardId": "s", "SequenceNumberRange": map[string]any{"StartingSequenceNumber": "0"}}}}})
-	s3ok := func(method string, _ int) answer {
-		if method == http.MethodDelete {
-			return answer{status: http.StatusNoContent}
-		}
-		return answer{status: http.StatusOK}
-	}
-	cases := []struct {
-		name   string
-		dynamo func(string, int, []byte) answer // nil: every call is held
-		s3     func(string, int) answer         // nil: every call is held
-		call   func(context.Context, *Memory) error
-	}{
-		{name: "Mailbox", call: func(ctx context.Context, s *Memory) error { _, err := s.Mailbox(ctx, protocol.Address{5}); return err }},
-		{name: "a load's read of the record", call: func(ctx context.Context, s *Memory) error { _, err := s.Count(ctx, mailbox.Addr); return err }},
-		{name: "a load's read of the live index", dynamo: first("Query", answered(map[string]any{"Items": []any{itemJSON(mailboxItem(mailbox))}, "Count": 1, "ScannedCount": 1})),
-			call: func(ctx context.Context, s *Memory) error { _, err := s.Count(ctx, mailbox.Addr); return err }},
-		{name: "Dedupe", call: func(ctx context.Context, s *Memory) error { _, err := s.Dedupe(ctx, mailbox.Addr, msg.ID); return err }},
-		{name: "List", call: func(ctx context.Context, s *Memory) error {
-			_, err := s.List(ctx, mailbox.Addr, nil, 10, false)
-			return err
-		}},
-		{name: "Message's read of the item", call: func(ctx context.Context, s *Memory) error {
-			_, _, err := s.Message(ctx, mailbox.Addr, msg.ID, 0)
-			return err
-		}},
-		{name: "Message's read of the body", dynamo: first("GetItem", answered(map[string]any{"Item": itemJSON(msgItem(mailbox.Addr, msg))})),
-			call: func(ctx context.Context, s *Memory) error {
-				_, _, err := s.Message(ctx, mailbox.Addr, msg.ID, 0)
-				return err
-			}},
-		{name: "Message's read of the body's bytes", dynamo: first("GetItem", answered(map[string]any{"Item": itemJSON(msgItem(mailbox.Addr, msg))})),
-			s3: func(string, int) answer { return answer{status: http.StatusOK, body: "ab", stall: true} },
-			call: func(ctx context.Context, s *Memory) error {
-				_, _, err := s.Message(ctx, mailbox.Addr, msg.ID, 0)
-				return err
-			}},
-		{name: "Account", call: func(ctx context.Context, s *Memory) error { _, err := s.Account(ctx, "acct"); return err }},
-		{name: "AdoptKey", call: func(ctx context.Context, s *Memory) error {
-			_, err := s.AdoptKey(ctx, "acct", [32]byte{1})
-			return err
-		}},
-		{name: "CreateAccount", call: func(ctx context.Context, s *Memory) error { return s.CreateAccount(ctx, &Account{ID: "acct"}) }},
-		{name: "PutAdoptKey", call: func(ctx context.Context, s *Memory) error {
-			return s.PutAdoptKey(ctx, &AdoptKey{Account: "acct", Hash: [32]byte{1}, Uses: 1, Expires: now.Add(time.Hour)})
-		}},
-		{name: "CreateMailbox", call: func(ctx context.Context, s *Memory) error { return s.CreateMailbox(ctx, cloneMailbox(mailbox)) }},
-		{name: "UpdateMailbox", call: func(ctx context.Context, s *Memory) error { return s.UpdateMailbox(ctx, cloneMailbox(mailbox)) }},
-		{name: "DeleteMailbox", call: func(ctx context.Context, s *Memory) error { return s.DeleteMailbox(ctx, mailbox.Addr) }},
-		{name: "Revoke", call: func(ctx context.Context, s *Memory) error {
-			return s.Revoke(ctx, mailbox.Addr, &Revocations{Identity: mailbox.Identity, Address: []byte("r")}, ExpectAnything)
-		}},
-		{name: "PutMessage's body", call: func(ctx context.Context, s *Memory) error {
-			_, err := s.PutMessage(ctx, mailbox.Addr, msg, []byte("abc"))
-			return err
-		}},
-		{name: "PutMessage's item", s3: s3ok, call: func(ctx context.Context, s *Memory) error {
-			_, err := s.PutMessage(ctx, mailbox.Addr, msg, []byte("abc"))
-			return err
-		}},
-		{name: "DeleteMessage's body", call: func(ctx context.Context, s *Memory) error { return s.DeleteMessage(ctx, mailbox.Addr, msg.ID) }},
-		{name: "DeleteMessage's item", s3: s3ok, call: func(ctx context.Context, s *Memory) error { return s.DeleteMessage(ctx, mailbox.Addr, msg.ID) }},
-		{name: "DeleteMessages", call: func(ctx context.Context, s *Memory) error { return s.DeleteMessages(ctx, mailbox.Addr) }},
-		{name: "DeleteMessages' delete of the bodies", dynamo: first("Query", answered(map[string]any{"Items": []any{itemJSON(msgItem(mailbox.Addr, msg))}, "Count": 1, "ScannedCount": 1})),
-			call: func(ctx context.Context, s *Memory) error { return s.DeleteMessages(ctx, mailbox.Addr) }},
-		{name: "Adopt", call: func(ctx context.Context, s *Memory) error {
-			return s.Adopt(ctx, cloneMailbox(mailbox), "acct", [32]byte{1})
-		}},
-		{name: "Leave", call: func(ctx context.Context, s *Memory) error { return s.Leave(ctx, cloneMailbox(mailbox)) }},
-		{name: "Start's DescribeTable", call: func(ctx context.Context, s *Memory) error { return s.Start(ctx) }},
-		{name: "a stream's DescribeStream", dynamo: first("DescribeTable", described),
-			call: func(ctx context.Context, s *Memory) error { return s.Start(ctx) }},
-		{name: "a stream's GetShardIterator at the start", dynamo: func(op string, n int, b []byte) answer {
-			if op == streamOp+"DescribeStream" && n == 1 {
-				return oneShard
-			}
-			return first("DescribeTable", described)(op, n, b)
-		}, call: func(ctx context.Context, s *Memory) error { return s.Start(ctx) }},
-		{name: "a stream's GetShardIterator in a read", call: func(ctx context.Context, s *Memory) error {
-			s.dynamo().mailboxFeed.arn = "fake-stream"
-			return s.dynamo().mailboxFeed.read(ctx, &shard{id: "s", seq: "1"})
-		}},
-		{name: "a stream's GetRecords", call: func(ctx context.Context, s *Memory) error {
-			s.dynamo().mailboxFeed.arn = "fake-stream"
-			return s.dynamo().mailboxFeed.read(ctx, &shard{id: "s", iter: aws.String("i")})
-		}},
-	}
-	// Every call at once, each on a fake of its own, then each judged.
+	sweep := silentBackend(t)
+	put, get, del, stalled := silentS3(t, false), silentS3(t, false), silentS3(t, false), silentS3(t, true)
+	calls = append(calls,
+		call{"the sweep's batch", storeTimeout, func(ctx context.Context) error { return sweep.sweepTable(ctx, "messages") }},
+		call{"a body's write to S3", storeTimeout, func(ctx context.Context) error { return put.Put(ctx, "k", []byte("abc")) }},
+		call{"a body's read from S3", storeTimeout, func(ctx context.Context) error { _, err := get.Get(ctx, "k", 0, 3); return err }},
+		call{"a body's bytes from S3", storeTimeout, func(ctx context.Context) error { _, err := stalled.Get(ctx, "k", 0, 3); return err }},
+		call{"bodies' delete from S3", storeTimeout, func(ctx context.Context) error { return del.Delete(ctx, "k") }},
+	)
+	// Every call at once, then each judged by its end, waited for until its
+	// bound and 3 s after they began.
 	type result struct {
 		err  error
 		took time.Duration
 	}
-	ended := make([]chan result, len(cases))
-	for i, c := range cases {
-		f := newFakeAWS()
-		f.dynamo, f.s3 = c.dynamo, c.s3
-		if f.dynamo == nil {
-			f.dynamo = func(string, int, []byte) answer { return hang }
-		}
-		if f.s3 == nil {
-			f.s3 = func(string, int) answer { return hang }
-		}
-		s := fakeStore(t, f)
+	began := time.Now()
+	ended := make([]chan result, len(calls))
+	for i, c := range calls {
 		ended[i] = make(chan result, 1)
 		go func() {
 			start := time.Now()
-			err := c.call(context.WithoutCancel(t.Context()), s)
+			err := c.run(context.WithoutCancel(t.Context()))
 			ended[i] <- result{err, time.Since(start)}
 		}()
 	}
-	// Each is waited for until storeTimeout and 3 s after they began, and a
-	// call that ended by then is judged by its end, however long the calls
-	// judged before it waited.
-	deadline := time.NewTimer(storeTimeout + 3*time.Second)
-	defer deadline.Stop()
-	late := false
-	for i, c := range cases {
+	for i, c := range calls {
 		t.Run(c.name, func(t *testing.T) {
+			wait := time.NewTimer(time.Until(began.Add(c.bound + 3*time.Second)))
+			defer wait.Stop()
 			var r result
 			ok := false
-			select {
+			select { // a call that has ended is judged by its end, however long the calls judged before it waited
 			case r = <-ended[i]:
 				ok = true
 			default:
-				if !late {
-					select {
-					case r = <-ended[i]:
-						ok = true
-					case <-deadline.C:
-						late = true
-					}
+				select {
+				case r = <-ended[i]:
+					ok = true
+				case <-wait.C:
 				}
 			}
 			switch {
 			case !ok:
-				t.Errorf("still waiting after storeTimeout and 3 s: a call to AWS that never answers is not bounded by storeTimeout")
+				t.Errorf("still waiting after %v and 3 s: a call that is never answered is not bounded by %v", c.bound, c.bound)
 			case !errors.Is(r.err, context.DeadlineExceeded):
 				t.Errorf("ended after %v by %v, not by its bound", r.took.Round(100*time.Millisecond), r.err)
 			default:
@@ -235,8 +278,9 @@ func TestABodysBoundEndsWhenItIsClosed(t *testing.T) {
 }
 
 // hangingDedupe holds the dedupe read of one id until its context ends or
-// the test lets it go, as a GetItem on a connection that went silent does
-// (an AWS SDK call ends with its context, and by default with nothing else).
+// the test lets it go, as a read on a connection that went silent does (a
+// call to the database ends with its context, and by default with nothing
+// else).
 // It records the deadline that read was handed, and the one a lookup's read
 // of address probe was.
 type hangingDedupe struct {
@@ -353,7 +397,7 @@ func TestAPostsSharedReadEndsAtItsBound(t *testing.T) {
 }
 
 // holdDedupe holds the next dedupe read until its context ends or the test
-// lets it go, as a GetItem on a connection that went silent does.
+// lets it go, as a read on a connection that went silent does.
 type holdDedupe struct {
 	Store
 	hold    atomic.Bool
@@ -511,74 +555,5 @@ func TestEveryReadOfASendsSharedCallIsBounded(t *testing.T) {
 		if !ok || d <= 0 || d > storeTimeout {
 			t.Errorf("the send's %s read, made apart from its request, is handed deadline %v (made %v); want at most %v", read, d, ok, storeTimeout)
 		}
-	}
-}
-
-// boundedFirstRead is a stream whose first GetRecords records the deadline
-// it was handed and fails as a call that reached it does.
-type boundedFirstRead struct {
-	*fakeStream
-	mu       sync.Mutex
-	read     bool
-	deadline time.Duration
-}
-
-func (b *boundedFirstRead) GetRecords(ctx context.Context, in *dynamodbstreams.GetRecordsInput, opts ...func(*dynamodbstreams.Options)) (*dynamodbstreams.GetRecordsOutput, error) {
-	b.mu.Lock()
-	first := !b.read
-	if first {
-		b.read, b.deadline = true, deadlineOf(ctx)
-	}
-	b.mu.Unlock()
-	if first {
-		return nil, context.DeadlineExceeded
-	}
-	return b.fakeStream.GetRecords(ctx, in, opts...)
-}
-
-// A stream follower's read is handed a bound of its own, and one that ends
-// there is no lost place: the follower logs it and reads the shard again at
-// its next pass, as after any failed read (dromas-dev/dromas-server#91).
-func TestAFollowersReadEndedAtItsBoundIsReadAgain(t *testing.T) {
-	t.Parallel()
-	fs, f, s, mailbox, now := feedFixture(t)
-	b := &boundedFirstRead{fakeStream: fs}
-	var mu sync.Mutex
-	var logged []string
-	f.streams, f.interval = b, 10*time.Millisecond
-	f.logf = func(format string, args ...any) {
-		mu.Lock()
-		defer mu.Unlock()
-		logged = append(logged, fmt.Sprintf(format, args...))
-	}
-	fs.open("a", "")
-	if err := f.position(t.Context(), "arn"); err != nil {
-		t.Fatal(err)
-	}
-	fs.write("a", msgEvent(stypes.OperationTypeInsert, mailbox, 1, now))
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	var lost atomic.Value
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		f.run(ctx, func(err error) { lost.Store(err) })
-	}()
-	for until := time.Now().Add(2 * time.Second); s.countOf(mailbox) == 0 && time.Now().Before(until); {
-		time.Sleep(10 * time.Millisecond)
-	}
-	cancel()
-	<-done
-	b.mu.Lock()
-	d := b.deadline
-	b.mu.Unlock()
-	mu.Lock()
-	defer mu.Unlock()
-	t.Logf("the first read's deadline %v (-1: none); logged %q; the record applied %v; lost %v", d, logged, s.countOf(mailbox) == 1, lost.Load())
-	if d <= 0 || d > storeTimeout {
-		t.Errorf("the follower's read is handed deadline %v; want at most %v", d, storeTimeout)
-	}
-	if lost.Load() != nil || s.countOf(mailbox) != 1 || len(logged) == 0 {
-		t.Errorf("after a read that ended at its bound the follower lost its place %v, applied the record %v, logged %d lines; want it read again", lost.Load(), s.countOf(mailbox) == 1, len(logged))
 	}
 }
