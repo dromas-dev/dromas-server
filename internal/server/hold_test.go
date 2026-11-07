@@ -24,9 +24,9 @@ func emptyTag(e *env) (*raw, *raw, string) {
 	return from, to, r.header.Get("ETag")
 }
 
-// heldList lists to's first page asking to wait, in a goroutine: its reply
+// longPoll lists to's first page asking to wait, in a goroutine: its reply
 // and how long it took come on the channel.
-func heldList(e *env, to *raw, tag, query string) <-chan struct {
+func longPoll(e *env, to *raw, tag, query string) <-chan struct {
 	r    reply
 	took time.Duration
 } {
@@ -46,30 +46,30 @@ func heldList(e *env, to *raw, tag, query string) <-chan struct {
 	return c
 }
 
-// A held list is answered the moment the mailbox changes: here, a send stored
+// A long poll is answered the moment the mailbox changes: here, a send stored
 // by this process (PROTOCOL.md §11.11).
-func TestAHeldListIsAnsweredWhenAMessageArrives(t *testing.T) {
+func TestALongPollIsAnsweredWhenAMessageArrives(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	from, to, tag := emptyTag(e)
-	c := heldList(e, to, tag, "wait=60")
+	c := longPoll(e, to, tag, "wait=60")
 	time.Sleep(300 * time.Millisecond)
 	select {
 	case got := <-c:
-		t.Fatalf("the held list was answered %d before anything changed", got.r.status)
+		t.Fatalf("the long poll was answered %d before anything changed", got.r.status)
 	default:
 	}
 	e.want(e.do("POST", to.path("/messages"), to.sealed(1, ciphertextTo(t, to)), from.pass(1)), http.StatusCreated, "")
 	got := <-c
 	e.want(got.r, http.StatusOK, "")
 	if got.took > 10*time.Second || got.r.header.Get("ETag") == tag {
-		t.Fatalf("the held list took %v, tag %q", got.took, got.r.header.Get("ETag"))
+		t.Fatalf("the long poll took %v, tag %q", got.took, got.r.header.Get("ETag"))
 	}
 }
 
-// With nothing new, a held list is answered 304 once --max-wait passes,
+// With nothing new, a long poll is answered 304 once --max-wait passes,
 // whatever longer wait it asked; it is one poll.
-func TestAHeldListWithNothingNewIs304AtMaxWait(t *testing.T) {
+func TestALongPollWithNothingNewIs304AtMaxWait(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	l.MaxWait = time.Second
@@ -77,13 +77,13 @@ func TestAHeldListWithNothingNewIs304AtMaxWait(t *testing.T) {
 	e := newEnv(t, l)
 	_, to, tag := emptyTag(e)
 	before := debts(e.server, e.clock.Now())
-	got := <-heldList(e, to, tag, "wait=60")
+	got := <-longPoll(e, to, tag, "wait=60")
 	e.want(got.r, http.StatusNotModified, "")
 	if got.took < l.MaxWait || got.took > l.MaxWait+5*time.Second || got.r.header.Get("ETag") != tag || got.r.header.Get("Retry-After") == "" {
-		t.Fatalf("the held list took %v, tag %q, Retry-After %q", got.took, got.r.header.Get("ETag"), got.r.header.Get("Retry-After"))
+		t.Fatalf("the long poll took %v, tag %q, Retry-After %q", got.took, got.r.header.Get("ETag"), got.r.header.Get("Retry-After"))
 	}
 	if p := debts(e.server, e.clock.Now())[string(protocol.QuotaPolls)] - before[string(protocol.QuotaPolls)]; p != 1 {
-		t.Errorf("a held list spent %d polls, want 1", p)
+		t.Errorf("a long poll spent %d polls, want 1", p)
 	}
 }
 
@@ -94,7 +94,7 @@ func TestAWaitWithNothingToWaitForIsAnsweredAtOnce(t *testing.T) {
 	e := newEnv(t, relaxed())
 	_, to, tag := emptyTag(e)
 	for _, c := range []struct{ tag, query string }{{"", "wait=60"}, {`"another"`, "wait=60"}, {tag, "wait=0"}} {
-		got := <-heldList(e, to, c.tag, c.query)
+		got := <-longPoll(e, to, c.tag, c.query)
 		if got.took > 5*time.Second {
 			t.Errorf("If-None-Match %q, %s: answered after %v", c.tag, c.query, got.took)
 		}
@@ -112,16 +112,16 @@ func TestAWaitOfAnotherFormIsRefused(t *testing.T) {
 	}
 }
 
-// Past --max-held-lists, a list of another mailbox that asks to wait is
-// answered 503 with Retry-After, and the lists held go on.
+// Past --max-long-polls, a list of another mailbox that asks to wait is
+// answered 503 with Retry-After, and the long polls go on.
 func TestAHoldPastTheCapIs503(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.MaxHeldLists = 1
+	l.MaxLongPolls = 1
 	e := newEnv(t, l)
 	_, to, tag := emptyTag(e)
 	_, other, otherTag := emptyTag(e)
-	c := heldList(e, to, tag, "wait=60")
+	c := longPoll(e, to, tag, "wait=60")
 	holdingNow(t, e.server, 1)
 	r := e.doWith("GET", other.path("/messages?wait=60"), nil, other.pass(1), "If-None-Match", otherTag)
 	e.want(r, http.StatusServiceUnavailable, protocol.CodeUnavailable)
@@ -137,16 +137,16 @@ func TestAHoldPastTheCapIs503(t *testing.T) {
 
 // A mailbox holds one list: a later one that asks to wait is held in its
 // place, the earlier is answered 304 at once and recorded replaced, and the
-// pair is counted one list held, even at --max-held-lists.
-func TestALaterHeldListOfTheSameMailboxTakesThePlaceOfTheEarlier(t *testing.T) {
+// pair is counted one long poll, even at --max-long-polls.
+func TestALaterLongPollOfTheSameMailboxTakesThePlaceOfTheEarlier(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.MaxHeldLists = 1
+	l.MaxLongPolls = 1
 	e, m, _ := metered(t, l)
 	_, to, tag := emptyTag(e)
-	first := heldList(e, to, tag, "wait=60")
+	first := longPoll(e, to, tag, "wait=60")
 	holdingNow(t, e.server, 1)
-	second := heldList(e, to, tag, "wait=60")
+	second := longPoll(e, to, tag, "wait=60")
 	var got struct {
 		r    reply
 		took time.Duration
@@ -175,17 +175,17 @@ func TestALaterHeldListOfTheSameMailboxTakesThePlaceOfTheEarlier(t *testing.T) {
 	holdingNow(t, e.server, 0)
 }
 
-// Past --held-lists-per-range, a list from that range that asks to wait is
+// Past --max-long-polls-per-range, a list from that range that asks to wait is
 // answered 503 with Retry-After, and recorded refused_range, while the pool
-// has room; the lists held go on.
+// has room; the long polls go on.
 func TestAHoldPastItsRangesShareIs503(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.HeldListsPerRange = 1
+	l.MaxLongPollsPerRange = 1
 	e, m, _ := metered(t, l)
 	_, to, tag := emptyTag(e)
 	_, other, otherTag := emptyTag(e)
-	c := heldList(e, to, tag, "wait=60")
+	c := longPoll(e, to, tag, "wait=60")
 	holdingNow(t, e.server, 1)
 	r := e.doWith("GET", other.path("/messages?wait=60"), nil, other.pass(1), "If-None-Match", otherTag)
 	e.want(r, http.StatusServiceUnavailable, protocol.CodeUnavailable)
@@ -200,14 +200,14 @@ func TestAHoldPastItsRangesShareIs503(t *testing.T) {
 	holdingNow(t, e.server, 0)
 }
 
-// A range's share counts the lists held from it: a mailbox's later list from
+// A range's share counts the long polls from it: a mailbox's later list from
 // the same range takes its earlier's place even at the share, one from a
 // full range is refused and leaves the earlier held, one from a range with
 // room moves the count to it, and a list's end gives its range's back.
 func TestARangesShareCountsTheListsHeldFromIt(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.HeldListsPerRange = 1
+	l.MaxLongPollsPerRange = 1
 	e := newEnv(t, l)
 	_, a, _ := emptyTag(e)
 	_, b, _ := emptyTag(e)
@@ -267,7 +267,7 @@ func TestARangesShareCountsTheListsHeldFromIt(t *testing.T) {
 }
 
 // A caller's range is its IPv4 address or its IPv6 /48.
-func TestAHeldListsRangeIsItsIPv4AddressOrIPv6Slash48(t *testing.T) {
+func TestALongPollsRangeIsItsIPv4AddressOrIPv6Slash48(t *testing.T) {
 	t.Parallel()
 	for host, want := range map[string]string{
 		"192.0.2.9":           "192.0.2.9",
@@ -277,24 +277,24 @@ func TestAHeldListsRangeIsItsIPv4AddressOrIPv6Slash48(t *testing.T) {
 		"fe80::1%eth0":        "fe80::/48",
 		"not an address here": "not an address here",
 	} {
-		if got := heldRange(host); got != want {
-			t.Errorf("heldRange(%q) = %q, want %q", host, got, want)
+		if got := longPollRange(host); got != want {
+			t.Errorf("longPollRange(%q) = %q, want %q", host, got, want)
 		}
 	}
 }
 
-// When the server stops, every held list is answered 304 at once.
-func TestStoppingAnswersEveryHeldList(t *testing.T) {
+// When the server stops, every long poll is answered 304 at once.
+func TestStoppingAnswersEveryLongPoll(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	_, to, tag := emptyTag(e)
-	c := heldList(e, to, tag, "wait=60")
+	c := longPoll(e, to, tag, "wait=60")
 	time.Sleep(300 * time.Millisecond)
 	e.server.StopHolds()
 	got := <-c
 	e.want(got.r, http.StatusNotModified, "")
 	if got.took > 5*time.Second {
-		t.Fatalf("a held list took %v to answer once the server stopped", got.took)
+		t.Fatalf("a long poll took %v to answer once the server stopped", got.took)
 	}
 	if n := e.server.holding.Load(); n != 0 {
 		t.Fatalf("%d lists still counted held", n)
@@ -307,16 +307,16 @@ func holdingNow(t *testing.T, s *Server, n int64) {
 	deadline := time.Now().Add(5 * time.Second)
 	for s.holding.Load() != n {
 		if time.Now().After(deadline) {
-			t.Fatalf("%d lists held, want %d", s.holding.Load(), n)
+			t.Fatalf("%d long polls, want %d", s.holding.Load(), n)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 }
 
 // A message's expiry is no change memory applies, and it changes the page:
-// a list held on a page that holds the message is answered as it expires,
+// a long poll on a page that holds the message is answered as it expires,
 // not at --max-wait (PROTOCOL.md §11.11).
-func TestAHeldListIsAnsweredWhenAMessageExpires(t *testing.T) {
+func TestALongPollIsAnsweredWhenAMessageExpires(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	l.MaxWait = 4 * time.Second
@@ -331,13 +331,13 @@ func TestAHeldListIsAnsweredWhenAMessageExpires(t *testing.T) {
 		t.Fatalf("control: the page does not hold the message: %s", r.body)
 	}
 	tag := r.header.Get("ETag")
-	c := heldList(e, to, tag, "wait=60")
+	c := longPoll(e, to, tag, "wait=60")
 	holdingNow(t, e.server, 1)
 	e.clock.Add(left) // it expires now, by the server's clock
 	got := <-c
 	e.want(got.r, http.StatusOK, "")
 	if got.took >= l.MaxWait-time.Second || got.r.header.Get("ETag") == tag || !bytes.Contains(got.r.body, []byte(`"count":0`)) {
-		t.Fatalf("the held list was answered after %v, tag %q, %s; want the empty page as the message expired", got.took, got.r.header.Get("ETag"), got.r.body)
+		t.Fatalf("the long poll was answered after %v, tag %q, %s; want the empty page as the message expired", got.took, got.r.header.Get("ETag"), got.r.body)
 	}
 }
 
@@ -352,10 +352,10 @@ func (b laggingList) List(ctx context.Context, mailbox protocol.Address, after *
 	return b.memBackend.List(ctx, mailbox, after, limit, consistent)
 }
 
-// The page of a list asked to wait is read strongly consistent: a held list
+// The page of a list asked to wait is read strongly consistent: a long poll
 // woken by a send is answered a page that holds it, never one that lags the
 // count, whose tag a client could hold on with no later change to wake it.
-func TestAHeldListIsAnsweredAPageThatHoldsWhatWokeIt(t *testing.T) {
+func TestALongPollIsAnsweredAPageThatHoldsWhatWokeIt(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed(), func(c *Config) {
 		m := newMemory(c.Now, DefaultMailboxCache, nil, nil)
@@ -367,7 +367,7 @@ func TestAHeldListIsAnsweredAPageThatHoldsWhatWokeIt(t *testing.T) {
 		c.Store, c.Ready = m, b.Ready
 	})
 	from, to, tag := emptyTag(e)
-	c := heldList(e, to, tag, "wait=60")
+	c := longPoll(e, to, tag, "wait=60")
 	holdingNow(t, e.server, 1)
 	e.want(e.do("POST", to.path("/messages"), to.sealed(1, ciphertextTo(t, to)), from.pass(1)), http.StatusCreated, "")
 	got := <-c
@@ -384,10 +384,10 @@ func TestAHeldListIsAnsweredAPageThatHoldsWhatWokeIt(t *testing.T) {
 	}
 }
 
-// A held list woken by changes that leave its page as it was is held again:
-// it is one poll, and one held list, counted once by how it ended, and it is
+// A long poll woken by changes that leave its page as it was is held again:
+// it is one poll, and one long poll, counted once by how it ended, and it is
 // no longer counted held once answered.
-func TestAHeldListWokenToTheSamePageIsOnePollAndOneHold(t *testing.T) {
+func TestALongPollWokenToTheSamePageIsOnePollAndOneHold(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	l.MaxWait = 2 * time.Second
@@ -395,7 +395,7 @@ func TestAHeldListWokenToTheSamePageIsOnePollAndOneHold(t *testing.T) {
 	e, m, _ := metered(t, l)
 	_, to, tag := emptyTag(e)
 	before := debts(e.server, e.clock.Now())
-	c := heldList(e, to, tag, "wait=60")
+	c := longPoll(e, to, tag, "wait=60")
 	holdingNow(t, e.server, 1)
 	mem := e.store.(*Memory)
 	for range 3 {
@@ -405,20 +405,20 @@ func TestAHeldListWokenToTheSamePageIsOnePollAndOneHold(t *testing.T) {
 	got := <-c
 	e.want(got.r, http.StatusNotModified, "")
 	if p := debts(e.server, e.clock.Now())[string(protocol.QuotaPolls)] - before[string(protocol.QuotaPolls)]; p != 1 {
-		t.Errorf("a held list woken three times spent %d polls, want 1", p)
+		t.Errorf("a long poll woken three times spent %d polls, want 1", p)
 	}
 	changed, waited := testutil.ToFloat64(m.held.WithLabelValues("changed")), testutil.ToFloat64(m.held.WithLabelValues("waited"))
 	if changed != 0 || waited != 1 {
-		t.Errorf("one held list, woken three times to the same page: held_lists_total changed=%v waited=%v, want waited=1 alone", changed, waited)
+		t.Errorf("one long poll, woken three times to the same page: long_polls_total changed=%v waited=%v, want waited=1 alone", changed, waited)
 	}
 	if n := e.server.holding.Load(); n != 0 {
 		t.Errorf("%d lists still counted held", n)
 	}
 }
 
-// A caller that leaves a held list is no longer counted held, and is
+// A caller that leaves a long poll is no longer counted held, and is
 // recorded as nginx records it, 499 with nothing sent, never as a 503.
-func TestACallerThatLeavesAHeldListIsReleasedAndRecordedGone(t *testing.T) {
+func TestACallerThatLeavesALongPollIsReleasedAndRecordedGone(t *testing.T) {
 	t.Parallel()
 	e, m, _ := metered(t, relaxed())
 	_, to, tag := emptyTag(e)
@@ -444,10 +444,10 @@ func TestACallerThatLeavesAHeldListIsReleasedAndRecordedGone(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if g, u := gone(), testutil.ToFloat64(m.requests.WithLabelValues(route, "503", string(protocol.CodeUnavailable))); g != 1 || u != 0 {
-		t.Errorf("a caller that left a held list: requests_total 499=%v, 503=%v; want 499 once", g, u)
+		t.Errorf("a caller that left a long poll: requests_total 499=%v, 503=%v; want 499 once", g, u)
 	}
 	if g := testutil.ToFloat64(m.held.WithLabelValues("gone")); g != 1 {
-		t.Errorf("held_lists_total{gone}=%v, want 1", g)
+		t.Errorf("long_polls_total{gone}=%v, want 1", g)
 	}
 }
 
@@ -465,14 +465,14 @@ func (s *failingCount) Count(ctx context.Context, mailbox protocol.Address) (int
 	return s.Store.Count(ctx, mailbox)
 }
 
-// A held list whose read after a wake fails is answered 503, and is no
+// A long poll whose read after a wake fails is answered 503, and is no
 // longer counted held.
-func TestAHeldListWhoseReadFailsIsReleased(t *testing.T) {
+func TestALongPollWhoseReadFailsIsReleased(t *testing.T) {
 	t.Parallel()
 	var fc *failingCount
 	e := newEnv(t, relaxed(), func(c *Config) { fc = &failingCount{Store: c.Store}; c.Store = fc })
 	_, to, tag := emptyTag(e)
-	c := heldList(e, to, tag, "wait=60")
+	c := longPoll(e, to, tag, "wait=60")
 	holdingNow(t, e.server, 1)
 	fc.fail.Store(true)
 	e.store.(*Memory).idx.setRevocations(to.id.Address(), false, 0) // wakes it
@@ -483,9 +483,9 @@ func TestAHeldListWhoseReadFailsIsReleased(t *testing.T) {
 	}
 }
 
-// The API's HTTP server answers every held list 304 when it shuts down, so
+// The API's HTTP server answers every long poll 304 when it shuts down, so
 // Shutdown waits for none of them.
-func TestShuttingTheAPIServerDownAnswersEveryHeldList(t *testing.T) {
+func TestShuttingTheAPIServerDownAnswersEveryLongPoll(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	_, to, tag := emptyTag(e)
@@ -515,9 +515,9 @@ func TestShuttingTheAPIServerDownAnswersEveryHeldList(t *testing.T) {
 	defer cancel()
 	start := time.Now()
 	if err := srv.Shutdown(ctx); err != nil {
-		t.Fatalf("Shutdown under a held list: %v after %v", err, time.Since(start))
+		t.Fatalf("Shutdown under a long poll: %v after %v", err, time.Since(start))
 	}
 	if status := <-answered; status != http.StatusNotModified {
-		t.Fatalf("the held list was answered %d, want 304", status)
+		t.Fatalf("the long poll was answered %d, want 304", status)
 	}
 }

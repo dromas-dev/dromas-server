@@ -680,14 +680,14 @@ func TestEveryWriteOfTheBackendReachesMemoryByItsOutcome(t *testing.T) {
 	}
 }
 
-// Every change memory applies to a mailbox wakes the lists held on it
+// Every change memory applies to a mailbox wakes the long polls on it
 // (PROTOCOL.md §11.11): every write of the Backend that targets a mailbox,
 // applied or of an outcome unknown, as backendWrites makes each (held to
 // the interface's methods by TestEveryWriteOfTheBackendReachesMemoryByIts
 // Outcome); and every kind of change the backend's feed hands memory, its
 // item as it now is, gone, and one that does not read. Each kind is here:
 // one added and not here fails.
-func TestEveryChangeMemoryAppliesToAMailboxWakesItsHeldLists(t *testing.T) {
+func TestEveryChangeMemoryAppliesToAMailboxWakesItsLongPolls(t *testing.T) {
 	t.Parallel()
 	woken := func(c <-chan struct{}) bool {
 		select {
@@ -715,7 +715,7 @@ func TestEveryChangeMemoryAppliesToAMailboxWakesItsHeldLists(t *testing.T) {
 				w.f.set(name, f)
 				_, _ = c.run(ctx, w)
 				if !woken(held) {
-					t.Error("a list held on the mailbox is not woken")
+					t.Error("a long poll on the mailbox is not woken")
 				}
 			})
 		}
@@ -762,7 +762,7 @@ func TestEveryChangeMemoryAppliesToAMailboxWakesItsHeldLists(t *testing.T) {
 				held := w.s.Changed(w.a)
 				w.s.apply(changes(w)[name])
 				if !woken(held) {
-					t.Error("a list held on the mailbox is not woken")
+					t.Error("a long poll on the mailbox is not woken")
 				}
 			})
 		}

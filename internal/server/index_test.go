@@ -330,10 +330,10 @@ func TestIndexLoad(t *testing.T) {
 	})
 }
 
-// Every change memory applies to a mailbox wakes the lists held on it, from
+// Every change memory applies to a mailbox wakes the long polls on it, from
 // this process's writes and from the streams alike, since both pass
 // through apply; one mailbox's change wakes no other's (PROTOCOL.md §11.11).
-func TestEveryChangeToAMailboxWakesItsHeldLists(t *testing.T) {
+func TestEveryChangeToAMailboxWakesItsLongPolls(t *testing.T) {
 	t.Parallel()
 	var mailbox, other protocol.Address
 	mailbox[0], other[0] = 7, 7 // one shard
@@ -369,7 +369,7 @@ func TestEveryChangeToAMailboxWakesItsHeldLists(t *testing.T) {
 				t.Fatalf("after the change: this mailbox's list woken %v, the other's %v", woken(c), woken(d))
 			}
 			if woken(x.changed(mailbox)) {
-				t.Fatal("a list held after the change is woken by it")
+				t.Fatal("a long poll after the change is woken by it")
 			}
 		})
 	}

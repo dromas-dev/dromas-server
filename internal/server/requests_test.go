@@ -124,7 +124,7 @@ func TestEveryStoreCallSendsAWSWhatItSentBefore(t *testing.T) {
 		{"Dedupe", func() { _, _ = s.Dedupe(ctx, mailbox, id) }},
 		{"PutMessage", func() { _, _ = s.PutMessage(ctx, mailbox, h, []byte("a ciphertext")) }},
 		{"List, from the start", func() { _, _ = s.List(ctx, mailbox, nil, 50, false) }},
-		{"List, from the start, strongly consistent (a held list's)", func() { _, _ = s.List(ctx, mailbox, nil, 50, true) }},
+		{"List, from the start, strongly consistent (a long poll's)", func() { _, _ = s.List(ctx, mailbox, nil, 50, true) }},
 		{"List, after a cursor", func() { _, _ = s.List(ctx, mailbox, &Cursor{ReceivedAt: received, ID: id}, 50, false) }},
 		{"Message, whole", func() { _, _, _ = s.Message(ctx, mailbox, id, 0) }},
 		{"Message, from byte 40", func() { _, _, _ = s.Message(ctx, mailbox, id, 40) }},

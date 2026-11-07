@@ -20,7 +20,7 @@ type Limits struct {
 	PollRefill     time.Duration // one more poll each (decided: 50 s; once a minute is stated); also one more such fetch
 	PollAfter      int           // seconds, told to clients (decided: 60)
 	MaxWait        time.Duration // the longest a list is held, whatever its wait asks (PROTOCOL.md §11.11) [tunable]
-	MaxHeldLists   int           // lists this process holds at once, one a mailbox; past it a held list of a mailbox that holds none is answered 503 (0: none held) [tunable]
+	MaxLongPolls   int           // long polls this process holds at once, one a mailbox; past it a long poll of a mailbox that holds none is answered 503 (0: none held) [tunable]
 	AccountMaxSize int           // the most an account lifts MaxSize to, so what a send reads first; up to MaxSize, nothing
 	RenewalsPerDay int           // prekey renewals per mailbox, a number a day as SendsPerDay (decided: 5), so no mailbox can spend the mailboxes table's write capacity
 	RenewalsBurst  int           // per mailbox: the renewals it may make at once, the bucket RenewalsPerDay refills (decided: 5, as its number a day)
@@ -30,7 +30,7 @@ type Limits struct {
 	RangeRegistrationsPerHour int // per IPv6 /48, beside the /64's (decided: 500, Let's Encrypt's ratio of the two, until measured)
 	SendsPerMinutePerIP       int // the pre-auth send rate per IP [tunable]
 	MissesPerMinute           int // per IP: reads of the mailboxes table that find no mailbox, and checks that fail (decided: 10 for now)
-	HeldListsPerRange         int // per IPv4 address or IPv6 /48: lists held at once, past which a held list is answered 503 (0: off); a last-resort clamp so one range cannot fill MaxHeldLists, never a limit of normal use (decided: 10,000, ten held mailboxes for each of the thousand subscribers the densest carrier NAT puts behind one address)
+	MaxLongPollsPerRange      int // per IPv4 address or IPv6 /48: long polls held at once, past which a long poll is answered 503 (0: off); a last-resort clamp so one range cannot fill MaxLongPolls, never a limit of normal use (decided: 10,000, ten held mailboxes for each of the thousand subscribers the densest carrier NAT puts behind one address)
 
 	// Requests is the flood budget of an IPv4 address or IPv6 /64: every call
 	// with no pass and every request no route matches (decided: 100 at once,
@@ -105,8 +105,8 @@ func DefaultLimits() Limits {
 		PollRefill:                   50 * time.Second,
 		PollAfter:                    60,
 		MaxWait:                      5 * time.Minute,
-		MaxHeldLists:                 50_000,
-		HeldListsPerRange:            10_000,
+		MaxLongPolls:                 50_000,
+		MaxLongPollsPerRange:         10_000,
 		RenewalsPerDay:               5,
 		RenewalsBurst:                5,
 		RetiredKept:                  10,

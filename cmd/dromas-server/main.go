@@ -180,8 +180,8 @@ func serve(args []string) error {
 	fs.DurationVar(&l.PollRefill, "poll-refill", l.PollRefill, "one more poll each")
 	fs.IntVar(&l.PollAfter, "poll-after", l.PollAfter, "poll interval told to clients, seconds")
 	fs.DurationVar(&l.MaxWait, "max-wait", l.MaxWait, "the longest a list is held for a change, whatever its wait asks: under the read timeout of a proxy in front (0: none held)")
-	fs.IntVar(&l.MaxHeldLists, "max-held-lists", l.MaxHeldLists, "lists this process holds at once, one a mailbox; past it a list that asks to wait, of a mailbox that holds none, is answered 503 (0: none held)")
-	fs.IntVar(&l.HeldListsPerRange, "held-lists-per-range", l.HeldListsPerRange, "lists this process holds at once for the callers of one IPv4 address or IPv6 /48; past it a list that asks to wait is answered 503 (0: off)")
+	fs.IntVar(&l.MaxLongPolls, "max-long-polls", l.MaxLongPolls, "long polls this process holds at once, one a mailbox; past it a list that asks to wait, of a mailbox that holds none, is answered 503 (0: none held)")
+	fs.IntVar(&l.MaxLongPollsPerRange, "max-long-polls-per-range", l.MaxLongPollsPerRange, "long polls this process holds at once for the callers of one IPv4 address or IPv6 /48; past it a list that asks to wait is answered 503 (0: off)")
 	fs.IntVar(&l.RegistrationsPerHour, "registrations-per-hour", l.RegistrationsPerHour, "registrations per IPv4 address or IPv6 /64 (0: off)")
 	fs.IntVar(&l.RangeRegistrationsPerHour, "range-registrations-per-hour", l.RangeRegistrationsPerHour, "registrations per IPv6 /48, beside --registrations-per-hour (0: off)")
 	fs.IntVar(&l.SendsPerMinutePerIP, "sends-per-minute-per-ip", l.SendsPerMinutePerIP, "pre-auth sends per IP (0: off)")
@@ -403,7 +403,7 @@ func serve(args []string) error {
 // socket's to the operating system's default unless so_keepalive is set:
 // each phase of a connection here has a bound of its own, a flag
 // (--header-timeout, --body-timeout, --idle-timeout, --max-wait), which lets a
-// peer gone silent go, and a held list holds nothing but its goroutine and
+// peer gone silent go, and a long poll holds nothing but its goroutine and
 // its connection.
 func listenAll(spec string) ([]net.Listener, error) {
 	var ls []net.Listener

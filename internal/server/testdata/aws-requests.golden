@@ -400,7 +400,7 @@ Query {
  "ProjectionExpression": "#l, #s",
  "TableName": "msgs"
 }
-## List, from the start, strongly consistent (a held list's)
+## List, from the start, strongly consistent (a long poll's)
 Query {
  "ConsistentRead": true,
  "ExpressionAttributeNames": {

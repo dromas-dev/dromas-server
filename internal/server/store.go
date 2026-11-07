@@ -579,14 +579,14 @@ type Store interface {
 	// answers for: Known, then Mailbox (ARCHITECTURE.md § Memory).
 	Held(a protocol.Address) (st Standing, ok bool)
 	// Changed returns a channel closed at mailbox a's next change in memory, by
-	// a write of this process or one the streams bring: what a held list
+	// a write of this process or one the streams bring: what a long poll
 	// waits on (PROTOCOL.md §11.11). It reads nothing.
 	Changed(a protocol.Address) <-chan struct{}
 	// NextExpiry returns when the first of mailbox a's messages in memory
 	// expires, by the store's clock, with no read: past, for one that
 	// expired since the mailbox was last read; zero for a mailbox with none, or one
 	// memory has not loaded. An expiry is no change memory applies, so a
-	// held list waits until it, and no longer (PROTOCOL.md §11.11).
+	// long poll waits until it, and no longer (PROTOCOL.md §11.11).
 	NextExpiry(a protocol.Address) time.Time
 	// Mailbox returns what is held of an address (view): its mailbox's record and
 	// its identity's revocations, or ErrNotFound if neither.

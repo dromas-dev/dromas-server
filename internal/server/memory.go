@@ -470,7 +470,7 @@ func (s *Memory) PutMessage(ctx context.Context, mailbox protocol.Address, h *He
 
 // List implements Store: a page read eventually consistent just after a
 // write may miss it while memory's count has it, and a client lists at every
-// poll, so the next one has it; a held list's, which no later change may
+// poll, so the next one has it; a long poll's, which no later change may
 // wake, is read strongly consistent (Server.list).
 func (s *Memory) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error) {
 	return s.backend.List(ctx, mailbox, after, limit, consistent)

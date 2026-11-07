@@ -175,7 +175,7 @@ func (x *index) ensure(ctx context.Context, a protocol.Address, read func() (mai
 // apply runs op on mailbox a: now if memory holds it, after its load if it is
 // loading, and not at all if memory does not hold it. Every change to a mailbox
 // passes here, a write of this process's and one from the streams, so here
-// every list held on it is woken (changed).
+// every long poll on it is woken (changed).
 func (x *index) apply(a protocol.Address, op func(*mailboxMem)) {
 	sh := x.shard(a)
 	sh.mu.Lock()
@@ -191,7 +191,7 @@ func (x *index) apply(a protocol.Address, op func(*mailboxMem)) {
 }
 
 // changed returns a channel closed at mailbox a's next change in memory: a
-// list held on it waits on it, taken before it reads the mailbox, so no change
+// long poll on it waits on it, taken before it reads the mailbox, so no change
 // is missed between the two (PROTOCOL.md §11.11).
 func (x *index) changed(a protocol.Address) <-chan struct{} {
 	sh := x.shard(a)
@@ -205,7 +205,7 @@ func (x *index) changed(a protocol.Address) <-chan struct{} {
 	return c
 }
 
-// woke wakes every list held on mailbox a. The shard's lock is held.
+// woke wakes every long poll on mailbox a. The shard's lock is held.
 func (sh *indexShard) woke(a protocol.Address) {
 	if c := sh.wake[a]; c != nil {
 		close(c)
@@ -270,7 +270,7 @@ func (x *index) remove(mailbox protocol.Address, tag, exp, now uint64, echo bool
 // where this process holds a later message of the same bytes when the
 // deletion arrives, one it stored or one its load of the mailbox read, after an
 // ack or the expiry of the first (dromas-dev/dromas-client#548 items 9,
-// 10): a mark it takes leaves the mailbox counted one short, and a list held on
+// 10): a mark it takes leaves the mailbox counted one short, and a long poll on
 // it answered an empty page, until the stream's insert of that message
 // brings the mark back; a tomb it takes, of the later message this process
 // acked, lets that insert count a message that is gone, until its own

@@ -97,10 +97,10 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Help: "How old the last record applied from each table's stream was when it was applied: how far behind memory follows."}, []string{"table"}),
 		collections: prometheus.NewHistogram(prometheus.HistogramOpts{Namespace: ns, Name: "item_collection_estimate_bytes",
 			Help: "After each message written, the upper bound of DynamoDB's estimate of its mailbox's item collection, the mailbox's items and their LSI entries, at 2^30 bytes a GB: past 10 GB, the mailbox takes no more messages.", Buckets: gigabytes}),
-		holds: prometheus.NewGauge(prometheus.GaugeOpts{Namespace: ns, Name: "lists_held",
-			Help: "Lists held for a change now (PROTOCOL.md §11.11)."}),
-		held: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "held_lists_total",
-			Help: "Held lists, each once by how it ended: changed (the mailbox changed, or a message in it expired), waited (its wait passed), gone (the caller left), stopped (the server stopped), replaced (a later list of the same mailbox was held in its place), refused (past --max-held-lists), or refused_range (past --held-lists-per-range)."}, []string{"outcome"}),
+		holds: prometheus.NewGauge(prometheus.GaugeOpts{Namespace: ns, Name: "long_polls_held",
+			Help: "Long polls held now (PROTOCOL.md §11.11)."}),
+		held: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "long_polls_total",
+			Help: "Long polls, each once by how it ended: changed (the mailbox changed, or a message in it expired), waited (its wait passed), gone (the caller left), stopped (the server stopped), replaced (a later list of the same mailbox was held in its place), refused (past --max-long-polls), or refused_range (past --max-long-polls-per-range)."}, []string{"outcome"}),
 		// By the policy's verdict on the request's version, never the version
 		// itself, which the caller writes: Kubernetes counts requests to
 		// deprecated APIs the same way, apiserver_requested_deprecated_apis
@@ -251,7 +251,7 @@ func (m *Metrics) list(continues bool) {
 	m.lists.WithLabelValues(kind).Inc()
 }
 
-// holding counts a list held (n 1) or no longer held (n -1).
+// holding counts a long poll (n 1) or no longer held (n -1).
 func (m *Metrics) holding(n float64) {
 	if m == nil {
 		return
@@ -259,7 +259,7 @@ func (m *Metrics) holding(n float64) {
 	m.holds.Add(n)
 }
 
-// heldEnded counts how a held list ended.
+// heldEnded counts how a long poll ended.
 func (m *Metrics) heldEnded(outcome string) {
 	if m == nil {
 		return

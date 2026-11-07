@@ -9,7 +9,7 @@ import (
 )
 
 // A connection --listen accepts sends no TCP keep-alive probes: SO_KEEPALIVE
-// is off on it, read from the socket itself. A held list holds nothing but
+// is off on it, read from the socket itself. A long poll holds nothing but
 // its goroutine and its connection, and each phase of a connection has a
 // bound of its own. Control: net.Listen's own connection has it on.
 func TestAnAcceptedConnectionSendsNoKeepAlive(t *testing.T) {
