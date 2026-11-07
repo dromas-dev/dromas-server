@@ -62,14 +62,15 @@ func startDynamo(t *testing.T, now func() time.Time) *Memory {
 		t.Fatal(err)
 	}
 	s := NewDynamoStore(DynamoConfig{
-		AWS:            cfg,
-		MailboxesTable: os.Getenv("DROMAS_TEST_MAILBOXES_TABLE"),
-		MessagesTable:  os.Getenv("DROMAS_TEST_MESSAGES_TABLE"),
-		AccountsTable:  os.Getenv("DROMAS_TEST_ACCOUNTS_TABLE"),
-		Bucket:         os.Getenv("DROMAS_TEST_BUCKET"),
-		Now:            now,
-		MailboxCache:   100,
-		StreamInterval: 200 * time.Millisecond,
+		AWS:               cfg,
+		MailboxesTable:    os.Getenv("DROMAS_TEST_MAILBOXES_TABLE"),
+		MessagesTable:     os.Getenv("DROMAS_TEST_MESSAGES_TABLE"),
+		AccountsTable:     os.Getenv("DROMAS_TEST_ACCOUNTS_TABLE"),
+		Bucket:            os.Getenv("DROMAS_TEST_BUCKET"),
+		Now:               now,
+		MailboxCache:      100,
+		StreamInterval:    200 * time.Millisecond,
+		HeartbeatInterval: 200 * time.Millisecond,
 		// The tests read back what they wrote within milliseconds.
 		ConsistentReads: true,
 		Fatal:           func(err error) { t.Errorf("stream: %v", err) },
@@ -1076,5 +1077,28 @@ func TestDynamoObservesTheItemCollection(t *testing.T) {
 	send(t, a, b, "sized")
 	if err := testutil.CollectAndCompare(m.collections, strings.NewReader(collectionsWant(1)), "dromas_server_item_collection_estimate_bytes"); err != nil {
 		t.Error(err)
+	}
+}
+
+// Each table's heartbeat comes back through its stream to its follower, so a
+// follower on an idle table is shown current by it.
+func TestTheHeartbeatComesBackThroughEachStream(t *testing.T) {
+	t.Parallel()
+	if !onAWS() {
+		t.Skip("needs the AWS tables: DROMAS_TEST_MESSAGES_TABLE and the three beside it (awsTestNames)")
+	}
+	s := startDynamo(t, time.Now)
+	started := time.Now()
+	d := s.dynamo()
+	for _, tb := range d.beatTables() {
+		for wait := time.Now().Add(10 * time.Second); tb.f.beat.Load() <= started.UnixNano(); time.Sleep(50 * time.Millisecond) {
+			if time.Now().After(wait) {
+				t.Fatalf("no heartbeat back through the %s stream in 10 s", tb.table)
+			}
+		}
+		t.Logf("a heartbeat back through the %s stream %s after the start", tb.table, time.Unix(0, tb.f.beat.Load()).Sub(started).Round(time.Millisecond))
+	}
+	if !s.Ready() {
+		t.Error("not ready, every heartbeat back")
 	}
 }

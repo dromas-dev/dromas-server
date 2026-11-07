@@ -734,3 +734,46 @@ UpdateItem {
  "TableName": "mailboxes",
  "UpdateExpression": "REMOVE #acct SET #rev = :new"
 }
+## Heartbeat
+PutItem {
+ "Item": {
+  "addr": {
+   "B": "AA=="
+  },
+  "at": {
+   "N": "1792843200000"
+  },
+  "sk": {
+   "B": "AA=="
+  }
+ },
+ "TableName": "mailboxes"
+}
+PutItem {
+ "Item": {
+  "at": {
+   "N": "1792843200000"
+  },
+  "box": {
+   "B": "AA=="
+  },
+  "id": {
+   "B": "AA=="
+  }
+ },
+ "TableName": "msgs"
+}
+PutItem {
+ "Item": {
+  "account": {
+   "B": "AA=="
+  },
+  "at": {
+   "N": "1792843200000"
+  },
+  "sk": {
+   "B": "AA=="
+  }
+ },
+ "TableName": "accounts"
+}
