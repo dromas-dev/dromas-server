@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -106,8 +107,8 @@ func TestTheSweepDeletesWhatHasExpired(t *testing.T) {
 		t.Fatal(err)
 	}
 	// More expired messages than one batch deletes.
-	exec(`INSERT INTO messages (box, id, size, received_at)
-		SELECT $1, sha256(i::text::bytea), 3, $2 FROM generate_series(1, $3::int) i`, kept[:], past, 2*sweepBatch+1)
+	exec(`INSERT INTO messages (box, id, size, received_at, nonce)
+		SELECT $1, sha256(i::text::bytea), 3, $2, '\x0000000000000000' FROM generate_series(1, $3::int) i`, kept[:], past, 2*sweepBatch+1)
 	if err := s.backend.CreateAccount(ctx, &Account{ID: "acct", Rev: 1}); err != nil {
 		t.Fatal(err)
 	}
@@ -162,14 +163,20 @@ func TestTheBodiesDirectoryCollectsOldBodies(t *testing.T) {
 	}
 	var oldBox, newBox protocol.Address
 	oldBox[0], newBox[0] = 1, 2
-	oldKey, newKey := bodyKey(oldBox, [32]byte{1}, 1000), bodyKey(newBox, [32]byte{2}, 2000)
+	now := time.Now()
+	// Judged by the time its key names, whatever the file's own: a body
+	// written just now under an old send's key goes, and a new send's stays.
+	oldKey, newKey := bodyKey(oldBox, [32]byte{1}, ms(now.Add(-2*time.Hour)), []byte{1}), bodyKey(newBox, [32]byte{2}, ms(now), []byte{2})
 	for _, k := range []string{oldKey, newKey} {
 		if err := d.Put(ctx, k, []byte("ciphertext")); err != nil {
 			t.Fatal(err)
 		}
 	}
-	now := time.Now()
-	if err := d.root.Chtimes(oldKey, now.Add(-2*time.Hour), now.Add(-2*time.Hour)); err != nil {
+	// A file that is no body's key, a write a crash left, by its own time.
+	if err := d.root.WriteFile("stray", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.root.Chtimes("stray", now.Add(-2*time.Hour), now.Add(-2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.collect(now.Add(-time.Hour)); err != nil {
@@ -180,6 +187,9 @@ func TestTheBodiesDirectoryCollectsOldBodies(t *testing.T) {
 	}
 	if body, err := d.Get(ctx, newKey, 0, 0); err != nil || string(body) != "ciphertext" {
 		t.Errorf("a body written after the cutoff: %q %v; want it kept", body, err)
+	}
+	if _, err := d.root.Stat("stray"); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("a file that is no key, written before the cutoff: %v; want it gone", err)
 	}
 	for range 3 { // one directory a pass, from the deepest
 		if err := d.collect(now.Add(-time.Hour)); err != nil {

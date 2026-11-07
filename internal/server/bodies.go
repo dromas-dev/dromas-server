@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"path"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -39,11 +41,22 @@ type bodies interface {
 }
 
 // bodyKey is where a send's body is kept: its mailbox's address in its text
-// form, the id, and when it was received, in ms. The same ciphertext sent
-// again is a new key, so no write or delete of one send's body ever meets
-// another's.
-func bodyKey(mailbox protocol.Address, id [32]byte, receivedMs uint64) string {
-	return mailbox.String() + "/" + hexID(id) + "/" + strconv.FormatUint(receivedMs, 10)
+// form, the id, when it was received, in ms, and a nonce random to the send.
+// Every send is its own key, so no write or delete of one send's body ever
+// meets another's.
+func bodyKey(mailbox protocol.Address, id [32]byte, receivedMs uint64, nonce []byte) string {
+	return mailbox.String() + "/" + hexID(id) + "/" + strconv.FormatUint(receivedMs, 10) + "." + hex.EncodeToString(nonce)
+}
+
+// keyReceived reads when a body's send was received, from its key's last
+// element; false for a name that is no body's key.
+func keyReceived(name string) (time.Time, bool) {
+	ms, _, ok := strings.Cut(path.Base(name), ".")
+	n, err := strconv.ParseInt(ms, 10, 64)
+	if !ok || err != nil || n < 0 {
+		return time.Time{}, false
+	}
+	return time.UnixMilli(n), true
 }
 
 // newS3 is an S3 client on cfg, each call bounded (bound).
@@ -235,9 +248,11 @@ func (b *dirBodies) Delete(_ context.Context, keys ...string) error {
 	return nil
 }
 
-// collect deletes every body last written before cutoff, and the
-// directories left empty: an orphan, or a body whose message has expired.
-// Several processes may collect one directory at once.
+// collect deletes every body whose send was received before cutoff, by
+// its key, and every other file last written before it (a write a crash
+// left), and the directories left empty: an orphan, or a body whose
+// message has expired. cutoff is the database's clock's, so no process's
+// clock decides. Several processes may collect one directory at once.
 func (b *dirBodies) collect(cutoff time.Time) error {
 	return fs.WalkDir(b.root.FS(), ".", func(p string, d fs.DirEntry, err error) error {
 		switch {
@@ -251,14 +266,18 @@ func (b *dirBodies) collect(cutoff time.Time) error {
 			}
 			return nil
 		}
-		info, err := d.Info()
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil
+		at, ok := keyReceived(p)
+		if !ok {
+			info, err := d.Info()
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			at = info.ModTime()
 		}
-		if err != nil {
-			return err
-		}
-		if info.ModTime().Before(cutoff) {
+		if at.Before(cutoff) {
 			if err := b.root.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return err
 			}

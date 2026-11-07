@@ -481,7 +481,11 @@ func (s *Memory) List(ctx context.Context, mailbox protocol.Address, after *Curs
 func (s *Memory) Message(ctx context.Context, mailbox protocol.Address, id [32]byte, from int64) (*Header, []byte, error) {
 	h, body, err := s.backend.Message(ctx, mailbox, id, from)
 	if errors.Is(err, errNoBody) {
-		if err := s.retire(ctx, mailbox, id); err != nil && !errors.Is(err, ErrNotFound) {
+		var at time.Time
+		if h != nil {
+			at = h.ReceivedAt // that row alone: a send of the same bytes since is another
+		}
+		if err := s.retire(ctx, mailbox, id, at); err != nil && !errors.Is(err, ErrNotFound) {
 			return nil, nil, err
 		}
 		return nil, nil, ErrNotFound
@@ -494,10 +498,10 @@ func (s *Memory) Message(ctx context.Context, mailbox protocol.Address, id [32]b
 
 // retire deletes a live message's row, so it leaves the list, and takes it
 // out of memory. ErrNotFound if it is not live.
-func (s *Memory) retire(ctx context.Context, mailbox protocol.Address, id [32]byte) error {
+func (s *Memory) retire(ctx context.Context, mailbox protocol.Address, id [32]byte, at time.Time) error {
 	var received time.Time
 	return s.write(ofAddress(mailbox), func() (err error) {
-		received, err = s.backend.Retire(ctx, mailbox, id)
+		received, err = s.backend.Retire(ctx, mailbox, id, at)
 		return err
 	}, func() { s.retired(mailbox, id, received) })
 }

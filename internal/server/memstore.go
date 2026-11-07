@@ -291,9 +291,9 @@ func (s *memBackend) Message(_ context.Context, mailbox protocol.Address, id [32
 // retireLocked deletes a live message, its body with it, and records the
 // change: a deletion, which names the id alone, as the feed's does.
 // The caller holds mu.
-func (s *memBackend) retireLocked(mailbox protocol.Address, id [32]byte) (time.Time, error) {
+func (s *memBackend) retireLocked(mailbox protocol.Address, id [32]byte, received time.Time) (time.Time, error) {
 	m, ok := s.live(mailbox)[id]
-	if !ok {
+	if !ok || !received.IsZero() && !m.h.ReceivedAt.Equal(received) {
 		return time.Time{}, ErrNotFound
 	}
 	delete(s.messages[mailbox], id)
@@ -305,16 +305,16 @@ func (s *memBackend) retireLocked(mailbox protocol.Address, id [32]byte) (time.T
 }
 
 // Retire implements Backend.
-func (s *memBackend) Retire(_ context.Context, mailbox protocol.Address, id [32]byte) (time.Time, error) {
+func (s *memBackend) Retire(_ context.Context, mailbox protocol.Address, id [32]byte, received time.Time) (time.Time, error) {
 	s.deliver()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.retireLocked(mailbox, id)
+	return s.retireLocked(mailbox, id, received)
 }
 
 // DeleteMessage implements Backend: the body and the item go together.
 func (s *memBackend) DeleteMessage(ctx context.Context, mailbox protocol.Address, id [32]byte) (time.Time, error) {
-	return s.Retire(ctx, mailbox, id)
+	return s.Retire(ctx, mailbox, id, time.Time{})
 }
 
 // DeleteAll implements Backend.
@@ -327,7 +327,7 @@ func (s *memBackend) DeleteAll(_ context.Context, mailbox protocol.Address, reti
 	var out []taken
 	s.mu.Lock()
 	for id := range s.live(mailbox) {
-		if received, err := s.retireLocked(mailbox, id); err == nil {
+		if received, err := s.retireLocked(mailbox, id, time.Time{}); err == nil {
 			out = append(out, taken{id, received})
 		}
 	}

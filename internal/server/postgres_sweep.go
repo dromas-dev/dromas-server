@@ -42,9 +42,16 @@ func (s *pgBackend) sweep(ctx context.Context) {
 			}
 		}
 		if s.bodiesDir != nil {
-			// A body is written at its row's received_at: the grace covers
-			// a clock behind.
-			if err := s.bodiesDir.collect(time.Now().Add(-retention - s.sweepGrace)); err != nil && ctx.Err() == nil {
+			// By the database's clock, as the rows' sweep: a body's key
+			// names when its send was received.
+			var now time.Time
+			rctx, cancel := bounded(ctx)
+			err := s.pool.QueryRow(rctx, "SELECT now()").Scan(&now)
+			cancel()
+			if err == nil {
+				err = s.bodiesDir.collect(now.Add(-retention - s.sweepGrace))
+			}
+			if err != nil && ctx.Err() == nil {
 				s.logf("sweep: the bodies directory: %v", err)
 			}
 		}

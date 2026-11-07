@@ -64,6 +64,8 @@ CREATE TABLE messages (
 	id bytea NOT NULL CHECK (octet_length(id) = 32),
 	size integer NOT NULL CHECK (size BETWEEN 0 AND 16777216), -- protocol.MaxCiphertext
 	received_at timestamptz NOT NULL,
+	-- Random to each send, in its body's key (bodyKey).
+	nonce bytea NOT NULL CHECK (octet_length(nonce) = 8),
 	PRIMARY KEY (box, id)
 ) WITH (autovacuum_vacuum_scale_factor = 0.01, autovacuum_vacuum_insert_scale_factor = 0.01, autovacuum_vacuum_cost_delay = 0);
 CREATE INDEX messages_live ON messages (box, received_at, id) INCLUDE (size);

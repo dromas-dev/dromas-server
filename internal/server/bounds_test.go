@@ -174,7 +174,10 @@ func TestEveryCallOfTheBackendEndsAtItsBound(t *testing.T) {
 			return b.PutAdoptKey(ctx, &AdoptKey{Account: "acct", Hash: [32]byte{1}, Uses: 1, Expires: now.Add(time.Hour)})
 		},
 		"PutMessage": func(ctx context.Context, b Backend) error { return b.PutMessage(ctx, mailbox.Addr, msg, []byte("abc")) },
-		"Retire":     func(ctx context.Context, b Backend) error { _, err := b.Retire(ctx, mailbox.Addr, msg.ID); return err },
+		"Retire": func(ctx context.Context, b Backend) error {
+			_, err := b.Retire(ctx, mailbox.Addr, msg.ID, time.Time{})
+			return err
+		},
 		"DeleteMessage": func(ctx context.Context, b Backend) error {
 			_, err := b.DeleteMessage(ctx, mailbox.Addr, msg.ID)
 			return err

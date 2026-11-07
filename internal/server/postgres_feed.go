@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pglogrepl"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -72,20 +73,30 @@ func (s *pgBackend) Start(ctx context.Context, apply func(Change)) error {
 		_ = conn.Close(context.Background())
 		return fmt.Errorf("postgres: the feed: %w", err)
 	}
-	f := &pgFeed{s: s, conn: conn, applied: from, relations: map[uint32]*pglogrepl.RelationMessage{}, types: pgtype.NewMap()}
-	began := time.Now()
-	go f.run(ctx)
-	go f.targets(ctx)
-	if s.sweepEvery > 0 {
-		go s.sweep(ctx)
+	// The flushed position is read on a connection of its own, so a pool
+	// every request holds never makes the feed look behind.
+	pos, err := pgx.ConnectConfig(sctx, s.pool.Config().ConnConfig.Copy())
+	if err != nil {
+		_ = conn.Close(context.Background())
+		return fmt.Errorf("postgres: the feed's position reader: %w", err)
 	}
+	fctx, stop := context.WithCancel(ctx)
+	f := &pgFeed{s: s, conn: conn, pos: pos, applied: from, relations: map[uint32]*pglogrepl.RelationMessage{}, types: pgtype.NewMap()}
+	began := time.Now()
+	go f.run(fctx)
+	go f.targets(fctx)
 	for {
 		if s.synced.Load() >= began.UnixNano() {
 			s.started.Store(true)
+			if s.sweepEvery > 0 {
+				go s.sweep(fctx)
+			}
+			context.AfterFunc(ctx, stop)
 			return nil
 		}
 		select {
 		case <-sctx.Done():
+			stop() // ends run and targets, and their connections
 			return fmt.Errorf("postgres: the feed did not catch up: %w", sctx.Err())
 		case <-time.After(10 * time.Millisecond):
 		}
@@ -108,6 +119,7 @@ func randomHex(n int) string {
 type pgFeed struct {
 	s       *pgBackend
 	conn    *pgconn.PgConn
+	pos     *pgx.Conn     // targets' own
 	applied pglogrepl.LSN // every change up to it is applied: what each status update confirms
 	inTxn   bool
 	made    time.Time // the commit time of the transaction being applied
@@ -125,11 +137,12 @@ type pgFeed struct {
 func (f *pgFeed) targets(ctx context.Context) {
 	t := time.NewTicker(feedSyncEvery)
 	defer t.Stop()
+	defer func() { _ = f.pos.Close(context.Background()) }()
 	for {
 		at := time.Now()
 		rctx, cancel := context.WithTimeout(ctx, feedSyncEvery)
 		var lsn string
-		err := f.s.pool.QueryRow(rctx, "SELECT pg_current_wal_flush_lsn()::text").Scan(&lsn)
+		err := f.pos.QueryRow(rctx, "SELECT pg_current_wal_flush_lsn()::text").Scan(&lsn)
 		cancel()
 		if err == nil {
 			if pos, err := pglogrepl.ParseLSN(lsn); err == nil {
@@ -139,6 +152,13 @@ func (f *pgFeed) targets(ctx context.Context) {
 			}
 		} else if ctx.Err() == nil {
 			f.s.logf("feed: reading the flushed WAL position: %v", err)
+			if f.pos.IsClosed() { // made again, so one lost connection is no lasting stall
+				cctx, cancel := context.WithTimeout(ctx, feedSyncEvery)
+				if c, err := pgx.ConnectConfig(cctx, f.s.pool.Config().ConnConfig.Copy()); err == nil {
+					f.pos = c
+				}
+				cancel()
+			}
 		}
 		select {
 		case <-ctx.Done():

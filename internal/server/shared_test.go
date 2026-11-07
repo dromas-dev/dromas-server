@@ -371,10 +371,10 @@ func (f *faults) PutMessage(ctx context.Context, mailbox protocol.Address, h *He
 	return f.write("PutMessage", func() error { return f.Backend.PutMessage(ctx, mailbox, h, body) })
 }
 
-func (f *faults) Retire(ctx context.Context, mailbox protocol.Address, id [32]byte) (time.Time, error) {
+func (f *faults) Retire(ctx context.Context, mailbox protocol.Address, id [32]byte, received time.Time) (time.Time, error) {
 	var at time.Time
 	err := f.write("Retire", func() (err error) {
-		at, err = f.Backend.Retire(ctx, mailbox, id)
+		at, err = f.Backend.Retire(ctx, mailbox, id, received)
 		return err
 	})
 	return at, err

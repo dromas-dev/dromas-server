@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"embed"
 	"encoding/hex"
@@ -126,6 +127,9 @@ func NewPostgresStore(ctx context.Context, c PostgresConfig) (*Memory, error) {
 		return nil, fmt.Errorf("postgres: %w", err)
 	}
 	pc.ConnConfig.RuntimeParams["search_path"] = schema
+	// A write is answered once its WAL is flushed, which the feed's
+	// "synced through" reads (postgres_feed.go): never later.
+	pc.ConnConfig.RuntimeParams["synchronous_commit"] = "on"
 	if c.MaxConns > 0 {
 		pc.MaxConns = c.MaxConns
 	}
@@ -134,6 +138,11 @@ func NewPostgresStore(ctx context.Context, c PostgresConfig) (*Memory, error) {
 		return nil, fmt.Errorf("postgres: %w", err)
 	}
 	rc.RuntimeParams["replication"] = "database"
+	if rc.RuntimeParams["application_name"] == "" {
+		// The feed's walsender by name: never one that
+		// synchronous_standby_names takes for a standby.
+		rc.RuntimeParams["application_name"] = "dromas-server feed"
+	}
 	pool, err := pgxpool.NewWithConfig(ctx, pc)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: %w", err)
@@ -285,7 +294,8 @@ func numeric(v uint64) pgtype.Numeric {
 // pgOutcome is the one reading of what PostgreSQL answered a write, as one
 // of the three outcomes (Backend). err nil: applied. An answer of the
 // database's own is a statement it rolled back, a transaction's statement or
-// its COMMIT included, so a refusal stated; so is a write pgx never sent:
+// its COMMIT included, so a refusal stated, when it is an ERROR; so is a
+// write pgx never sent:
 // one whose connection was never made (pgconn.ConnectError), or that pgx
 // marks safe to retry (pgconn.SafeToRetry). Anything else is unknown: an
 // answer lost, a context that ended mid-statement, a COMMIT with no
@@ -296,7 +306,21 @@ func pgOutcome(err error) error {
 	}
 	var pe *pgconn.PgError
 	var ce *pgconn.ConnectError
-	if errors.As(err, &pe) || errors.As(err, &ce) || pgconn.SafeToRetry(err) {
+	if errors.As(err, &pe) {
+		// Only an ERROR rolls its statement back: a FATAL or a PANIC can
+		// come after the commit (xact.c: "cannot abort transaction %u, it
+		// was already committed"), and a connection's end (08, 57P) leaves
+		// it open.
+		sev := pe.SeverityUnlocalized
+		if sev == "" {
+			sev = pe.Severity
+		}
+		if sev == "ERROR" && !strings.HasPrefix(pe.Code, "08") && !strings.HasPrefix(pe.Code, "57P") {
+			return refused(err)
+		}
+		return unknown(err)
+	}
+	if errors.As(err, &ce) || pgconn.SafeToRetry(err) {
 		return refused(err)
 	}
 	return unknown(err)
@@ -846,7 +870,7 @@ func (s *pgBackend) Revoke(ctx context.Context, a protocol.Address, rv *Revocati
 		q = `INSERT INTO revocations (` + revocationCols + `) VALUES ($1, $2, $3, $4, $5, $6)
 			ON CONFLICT (addr) DO UPDATE SET ` + set + ` WHERE ` + higher + ` RETURNING ` + revocationCols
 	}
-	var held *Revocations
+	var got row
 	err := s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := rowsOf(tx.Query(ctx, q, a[:], rv.Identity, addrRev, certs, certsSig, through))
 		if err != nil {
@@ -855,13 +879,15 @@ func (s *pgBackend) Revoke(ctx context.Context, a protocol.Address, rv *Revocati
 		if len(rows) == 0 {
 			return ErrStale // one through as high a serial is held, or the row is not what want asks
 		}
-		if held, err = decodeRevocations(rows[0]); err != nil {
-			return unknown(fmt.Errorf("applied, and its answer does not read: %w", err))
-		}
+		got = rows[0]
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	held, err := decodeRevocations(got)
+	if err != nil {
+		return nil, unknown(fmt.Errorf("applied, and its answer does not read: %w", err))
 	}
 	return held, nil
 }
@@ -899,25 +925,39 @@ func header(id [32]byte, size int, recv uint64) (*Header, error) {
 	return &Header{ID: id, Size: size, ReceivedAt: received, ExpiresAt: expires}, nil
 }
 
-// getMsg reads a live message's row; ErrNotFound if there is none or it
-// has expired.
-func (s *pgBackend) getMsg(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
+// getMsg reads a live message's row, and its body's key; ErrNotFound if
+// there is none or it has expired.
+func (s *pgBackend) getMsg(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, string, error) {
 	ctx, cancel := bounded(ctx)
 	defer cancel()
-	rows, err := rowsOf(s.pool.Query(ctx, `SELECT id, size, received_at FROM messages WHERE box = $1 AND id = $2 AND received_at >= $3`, mailbox[:], id[:], s.liveFrom()))
+	rows, err := rowsOf(s.pool.Query(ctx, `SELECT id, size, received_at, nonce FROM messages WHERE box = $1 AND id = $2 AND received_at >= $3`, mailbox[:], id[:], s.liveFrom()))
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if len(rows) == 0 {
-		return nil, ErrNotFound // the sweep deletes an expired one later
+		return nil, "", ErrNotFound // the sweep deletes an expired one later
 	}
-	return decodeHeader(rows[0])
+	return msgOf(mailbox, rows[0])
+}
+
+// msgOf reads a message's row: its header, and its body's key.
+func msgOf(mailbox protocol.Address, r row) (*Header, string, error) {
+	h, err := decodeHeader(r)
+	if err != nil {
+		return nil, "", err
+	}
+	nonce, err := r.bytes("nonce")
+	if err != nil {
+		return nil, "", err
+	}
+	return h, bodyKey(mailbox, h.ID, ms(h.ReceivedAt), nonce), nil
 }
 
 // Dedupe implements Backend: the live message's row. A miss a send makes
 // at once is caught by PutMessage's conditional write.
 func (s *pgBackend) Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
-	return s.getMsg(ctx, mailbox, id)
+	h, _, err := s.getMsg(ctx, mailbox, id)
+	return h, err
 }
 
 // ReadLive implements Backend: the mailbox's live messages, oldest first.
@@ -962,14 +1002,15 @@ func (s *pgBackend) list(ctx context.Context, mailbox protocol.Address, after *C
 
 // PutMessage implements Backend (ARCHITECTURE.md § Storage): the body, then
 // the row, if no live one has this id. A crash after the body leaves an
-// orphan, collected by age, and the retry writes both again under a key of
-// its own. A body that fails stores nothing (errNotStored). A row met
-// instead, an expired one aside, which the write replaces, hands back its
-// header: another post's of the same bytes in the same millisecond is this
-// one's to the byte, so the write is applied; another's is a duplicate.
+// orphan, collected by age. A body that fails stores nothing
+// (errNotStored). A live row met instead, an expired one aside, which the
+// write replaces, is a duplicate, whose header is handed back; the body just
+// put, under a key of this send's own, is deleted.
 func (s *pgBackend) PutMessage(ctx context.Context, mailbox protocol.Address, h *Header, body []byte) error {
 	recv := ms(h.ReceivedAt)
-	key := bodyKey(mailbox, h.ID, recv)
+	nonce := make([]byte, 8)
+	_, _ = rand.Read(nonce) // never fails
+	key := bodyKey(mailbox, h.ID, recv, nonce)
 	at := time.UnixMilli(toInt(recv)).UTC()
 	bctx, cancel := bounded(ctx)
 	err := s.bodies.Put(bctx, key, body)
@@ -980,34 +1021,33 @@ func (s *pgBackend) PutMessage(ctx context.Context, mailbox protocol.Address, h 
 	if err := s.crashed("put: after the body"); err != nil {
 		return err
 	}
-	var orig *Header
+	var met row
 	err = s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		rows, err := rowsOf(tx.Query(ctx, `INSERT INTO messages (box, id, size, received_at) VALUES ($1, $2, $3, $4)
-			ON CONFLICT (box, id) DO UPDATE SET size = EXCLUDED.size, received_at = EXCLUDED.received_at
-			WHERE messages.received_at < $5
+		rows, err := rowsOf(tx.Query(ctx, `INSERT INTO messages (box, id, size, received_at, nonce) VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (box, id) DO UPDATE SET size = EXCLUDED.size, received_at = EXCLUDED.received_at, nonce = EXCLUDED.nonce
+			WHERE messages.received_at < $6
 			RETURNING received_at`,
-			mailbox[:], h.ID[:], h.Size, at, s.liveFrom()))
+			mailbox[:], h.ID[:], h.Size, at, nonce, s.liveFrom()))
 		if err != nil || len(rows) > 0 {
 			return err
 		}
 		// The row met is locked by the statement, so it is read as it is.
-		rows, err = rowsOf(tx.Query(ctx, `SELECT id, size, received_at FROM messages WHERE box = $1 AND id = $2`, mailbox[:], h.ID[:]))
+		rows, err = rowsOf(tx.Query(ctx, `SELECT id, size, received_at, nonce FROM messages WHERE box = $1 AND id = $2`, mailbox[:], h.ID[:]))
 		if err != nil {
 			return err
 		}
 		if len(rows) == 0 {
 			return unknown(errors.New("the row its insert met is gone"))
 		}
-		if orig, err = decodeHeader(rows[0]); err != nil {
-			return unknown(fmt.Errorf("the row its insert met does not read: %w", err))
-		}
+		met = rows[0]
 		return nil
 	})
-	switch {
-	case err != nil:
+	if err != nil || met == nil {
 		return err
-	case orig == nil || orig.ReceivedAt.Equal(h.ReceivedAt):
-		return nil
+	}
+	orig, _, err := msgOf(mailbox, met)
+	if err != nil {
+		return unknown(fmt.Errorf("the row its insert met does not read: %w", err))
 	}
 	dctx, cancel := bounded(ctx)
 	defer cancel()
@@ -1017,38 +1057,47 @@ func (s *pgBackend) PutMessage(ctx context.Context, mailbox protocol.Address, h 
 	return duplicate{orig}
 }
 
-// Retire implements Backend: the row is deleted, if it is live, and nothing
-// of the message is kept but a body, collected by age.
-func (s *pgBackend) Retire(ctx context.Context, mailbox protocol.Address, id [32]byte) (time.Time, error) {
-	_, recv, err := s.retire(ctx, mailbox, id)
+// Retire implements Backend: the row is deleted, if it is live and, where
+// received is not zero, the one received then, and nothing of the message is
+// kept but a body, collected by age.
+func (s *pgBackend) Retire(ctx context.Context, mailbox protocol.Address, id [32]byte, received time.Time) (time.Time, error) {
+	_, recv, err := s.retire(ctx, mailbox, id, received)
 	return recv, err
 }
 
-func (s *pgBackend) retire(ctx context.Context, mailbox protocol.Address, id [32]byte) (string, time.Time, error) {
-	var recv time.Time
+func (s *pgBackend) retire(ctx context.Context, mailbox protocol.Address, id [32]byte, received time.Time) (string, time.Time, error) {
+	var at *time.Time
+	if !received.IsZero() {
+		t := msTime(received)
+		at = &t
+	}
+	var got row
 	err := s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		rows, err := rowsOf(tx.Query(ctx, `DELETE FROM messages WHERE box = $1 AND id = $2 AND received_at >= $3 RETURNING received_at`, mailbox[:], id[:], s.liveFrom()))
+		rows, err := rowsOf(tx.Query(ctx, `DELETE FROM messages WHERE box = $1 AND id = $2 AND received_at >= $3
+			AND ($4::timestamptz IS NULL OR received_at = $4) RETURNING id, size, received_at, nonce`, mailbox[:], id[:], s.liveFrom(), at))
 		if err != nil {
 			return err
 		}
 		if len(rows) == 0 {
 			return ErrNotFound
 		}
-		if recv, err = rows[0].time("received_at"); err != nil {
-			return unknown(fmt.Errorf("applied, and its answer does not read: %w", err))
-		}
+		got = rows[0]
 		return nil
 	})
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	return bodyKey(mailbox, id, ms(recv)), recv, nil
+	h, key, err := msgOf(mailbox, got)
+	if err != nil {
+		return "", time.Time{}, unknown(fmt.Errorf("applied, and its answer does not read: %w", err))
+	}
+	return key, h.ReceivedAt, nil
 }
 
 // DeleteMessage implements Backend (ack): the row, then the body. A body
 // not deleted is left to be collected.
 func (s *pgBackend) DeleteMessage(ctx context.Context, mailbox protocol.Address, id [32]byte) (time.Time, error) {
-	key, recv, err := s.retire(ctx, mailbox, id)
+	key, recv, err := s.retire(ctx, mailbox, id, time.Time{})
 	if err != nil {
 		return recv, err
 	}
@@ -1064,15 +1113,18 @@ func (s *pgBackend) DeleteMessage(ctx context.Context, mailbox protocol.Address,
 }
 
 // Message implements Backend. A live message whose body is gone is
-// errNoBody.
+// errNoBody, with its header, whose received_at its retire names.
 func (s *pgBackend) Message(ctx context.Context, mailbox protocol.Address, id [32]byte, from int64) (*Header, []byte, error) {
-	h, err := s.getMsg(ctx, mailbox, id)
+	h, key, err := s.getMsg(ctx, mailbox, id)
 	if err != nil {
 		return nil, nil, err
 	}
 	ctx, cancel := bounded(ctx)
 	defer cancel()
-	body, err := s.bodies.Get(ctx, bodyKey(mailbox, id, ms(h.ReceivedAt)), from, h.Size)
+	body, err := s.bodies.Get(ctx, key, from, h.Size)
+	if errors.Is(err, errNoBody) {
+		return h, nil, err
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1083,42 +1135,33 @@ func (s *pgBackend) Message(ctx context.Context, mailbox protocol.Address, id [3
 // are, its rows in one statement, then their bodies. A message stored
 // before it is in it.
 func (s *pgBackend) DeleteAll(ctx context.Context, mailbox protocol.Address, retired func([32]byte, time.Time)) error {
-	type gone struct {
-		id   [32]byte
-		recv time.Time
-	}
-	var took []gone
+	var got []row
 	err := s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		took = nil
-		rows, err := rowsOf(tx.Query(ctx, `DELETE FROM messages WHERE box = $1 AND received_at >= $2 RETURNING id, received_at`, mailbox[:], s.liveFrom()))
-		if err != nil {
-			return err
-		}
-		for _, r := range rows {
-			id, err := r.hash("id")
-			if err != nil {
-				return unknown(fmt.Errorf("applied, and its answer does not read: %w", err))
-			}
-			recv, err := r.time("received_at")
-			if err != nil {
-				return unknown(fmt.Errorf("applied, and its answer does not read: %w", err))
-			}
-			took = append(took, gone{id, recv})
-		}
-		return nil
+		rows, err := rowsOf(tx.Query(ctx, `DELETE FROM messages WHERE box = $1 AND received_at >= $2 RETURNING id, size, received_at, nonce`, mailbox[:], s.liveFrom()))
+		got = rows
+		return err
 	})
 	if err != nil {
 		return err
 	}
-	keys := make([]string, 0, len(took))
-	for _, g := range took {
-		retired(g.id, g.recv)
-		keys = append(keys, bodyKey(mailbox, g.id, ms(g.recv)))
+	keys := make([]string, 0, len(got))
+	var bad error
+	for _, r := range got {
+		h, key, err := msgOf(mailbox, r)
+		if err != nil {
+			bad = err
+			continue
+		}
+		retired(h.ID, h.ReceivedAt)
+		keys = append(keys, key)
 	}
 	dctx, cancel := bounded(ctx)
 	defer cancel()
 	if err := s.bodies.Delete(dctx, keys...); err != nil {
 		s.logf("a mailbox's deleted messages' bodies were left to be collected: %v", err)
+	}
+	if bad != nil {
+		return unknown(fmt.Errorf("applied, and a row of its answer does not read: %w", bad))
 	}
 	return nil
 }

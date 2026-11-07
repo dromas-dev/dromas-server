@@ -235,7 +235,7 @@ func backendWrites() map[string]backendWrite {
 			return ""
 		}},
 		"Retire": {on: onMailbox, run: func(ctx context.Context, w *heldWorld) (*Header, error) {
-			return nil, w.s.retire(ctx, w.a, w.msgs[0].ID)
+			return nil, w.s.retire(ctx, w.a, w.msgs[0].ID, time.Time{})
 		}, refusals: []error{ErrNotFound}, applied: func(w *heldWorld) string {
 			if n := w.marks(); n != 1 {
 				return fmt.Sprintf("the index counts %d messages, want 1", n)

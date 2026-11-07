@@ -85,7 +85,7 @@ func TestTheSameBytesAfterAnAckAreANewMessage(t *testing.T) {
 	send(t, a, b, "once")
 	e.setMiddle(nil)
 	id := sha256.Sum256(sent.ciphertext)
-	if cols := slices.Sorted(maps.Keys(s.storedMsg(t, b.Address(), id))); !slices.Equal(cols, []string{"box", "id", "received_at", "size"}) {
+	if cols := slices.Sorted(maps.Keys(s.storedMsg(t, b.Address(), id))); !slices.Equal(cols, []string{"box", "id", "nonce", "received_at", "size"}) {
 		t.Fatalf("a message's row holds %v", cols)
 	}
 	first := s.bodyKeyOf(t, b.Address(), id)

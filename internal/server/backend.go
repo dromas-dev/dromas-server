@@ -45,7 +45,8 @@ type Backend interface {
 	List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error)
 	// Message returns a live message and its body, from byte from on where
 	// from is inside it, above 0 and below its Size, and otherwise whole; or
-	// ErrNotFound; or errNoBody for a live item whose body is gone.
+	// ErrNotFound; or errNoBody, with the header, for a live row whose body
+	// is gone.
 	Message(ctx context.Context, mailbox protocol.Address, id [32]byte, from int64) (*Header, []byte, error)
 	// Dedupe returns the header of the live message mailbox holds with this
 	// id, or ErrNotFound.
@@ -86,11 +87,12 @@ type Backend interface {
 	// PutMessage stores a message: its body, then its item. A live item of
 	// another send of the id refuses it (duplicate).
 	PutMessage(ctx context.Context, mailbox protocol.Address, h *Header, body []byte) error
-	// Retire deletes a live message's item, so it leaves the list and
+	// Retire deletes a live message's row, so it leaves the list and
 	// nothing of it is kept, and returns when it was received; ErrNotFound
-	// if it is not live.
-	Retire(ctx context.Context, mailbox protocol.Address, id [32]byte) (time.Time, error)
-	// DeleteMessage acks a message: its body goes, then it is retired.
+	// if it is not live, or, where received is not zero, if the live one
+	// was received at another time: a send of the same bytes since.
+	Retire(ctx context.Context, mailbox protocol.Address, id [32]byte, received time.Time) (time.Time, error)
+	// DeleteMessage acks a message: it is retired, then its body goes.
 	DeleteMessage(ctx context.Context, mailbox protocol.Address, id [32]byte) (time.Time, error)
 	// DeleteAll deletes, as acks do, every live message in a mailbox, and hands
 	// each retired as its item is deleted. A message already gone is no

@@ -35,13 +35,13 @@ func (unsent) Error() string       { return "a statement's error" }
 func (u unsent) SafeToRetry() bool { return bool(u) }
 
 // What PostgreSQL answered a write is read as one of the three outcomes
-// (pgOutcome): an answer of the database's own is a statement it rolled
-// back, so a refusal stated, and so is a write pgx states it never sent;
-// an answer lost, a context that ended mid-statement, or any other error
-// leaves open whether the write was applied. So too pgx's own errors: a
-// call to a port where no database listens, which pgx does not state as
-// unsent, so unknown; and, on PostgreSQL, a statement it refused and one
-// whose context ended while it ran.
+// (pgOutcome): an ERROR of the database's own is a statement it rolled
+// back, so a refusal stated, and so is a write pgx never sent, one whose
+// connection was never made among them; a FATAL or a PANIC, which can follow
+// a commit, an ERROR that ends the connection, an answer lost, a context
+// that ended mid-statement, or any other error leaves open whether the write
+// was applied. On PostgreSQL, also a statement it refused and one whose
+// context ended while it ran.
 func TestWhatPostgreSQLAnsweredAWriteIsOneOutcome(t *testing.T) {
 	t.Parallel()
 	type outcome struct {
@@ -50,8 +50,13 @@ func TestWhatPostgreSQLAnsweredAWriteIsOneOutcome(t *testing.T) {
 		refused bool
 	}
 	cases := []outcome{
-		{"an answer of the database's own", &pgconn.PgError{Code: "23505"}, true},
-		{"one wrapped", fmt.Errorf("the insert: %w", &pgconn.PgError{Code: "40001"}), true},
+		{"an ERROR of the database's own", &pgconn.PgError{Severity: "ERROR", SeverityUnlocalized: "ERROR", Code: "23505"}, true},
+		{"one wrapped", fmt.Errorf("the insert: %w", &pgconn.PgError{Severity: "ERROR", Code: "40001"}), true},
+		{"an ERROR in another language", &pgconn.PgError{Severity: "FEHLER", SeverityUnlocalized: "ERROR", Code: "23505"}, true},
+		{"a FATAL, which may follow a commit", &pgconn.PgError{Severity: "FATAL", SeverityUnlocalized: "FATAL", Code: "XX000"}, false},
+		{"a PANIC: a commit that could not abort", &pgconn.PgError{Severity: "PANIC", SeverityUnlocalized: "PANIC", Code: "XX000"}, false},
+		{"an ERROR that ends the connection", &pgconn.PgError{Severity: "ERROR", Code: "57P01"}, false},
+		{"an ERROR of the connection", &pgconn.PgError{Severity: "ERROR", Code: "08006"}, false},
 		{"a write pgx never sent", unsent(true), true},
 		{"control: an error pgx may have sent", unsent(false), false},
 		{"a context that ended mid-statement", context.DeadlineExceeded, false},
@@ -97,13 +102,11 @@ func injected(t *testing.T, l Limits) (*env, *faults) {
 	return e, f
 }
 
-// A send's write that meets its own row, as a second attempt of a write
-// whose answer was lost meets what the first wrote (the same message,
-// received in the same millisecond), is stored, and memory holds one mark of
-// it (pgBackend.PutMessage). The control: a live row of the same id received
-// at another time is another send's, a duplicate, whose header is handed
-// back.
-func TestAPutThatMeetsItsOwnRowIsStored(t *testing.T) {
+// A send's write that meets a live row of the same id, received in the same
+// millisecond or at another time, is another send's: a duplicate, whose
+// header is handed back, and memory holds one mark of the message
+// (pgBackend.PutMessage). Every send's row is its own, by its nonce.
+func TestAPutThatMeetsALiveRowIsADuplicate(t *testing.T) {
 	t.Parallel()
 	if !onPostgres() {
 		t.Skip("needs PostgreSQL: DROMAS_TEST_POSTGRES")
@@ -115,8 +118,8 @@ func TestAPutThatMeetsItsOwnRowIsStored(t *testing.T) {
 		later  time.Duration // the second write's time, after the first's
 		stored bool
 	}{
-		{"the same millisecond", 0, true},
-		{"control: a second later", time.Second, false},
+		{"the same millisecond", 0, false},
+		{"a second later", time.Second, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			to := protocol.Address{0x0e, byte(c.later / time.Second)}

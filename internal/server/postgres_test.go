@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"sync"
 	"testing"
@@ -229,11 +230,31 @@ func (s *Memory) bodyKeyOf(t *testing.T, mailbox protocol.Address, id [32]byte) 
 	if r == nil {
 		t.Fatalf("no row of the message %s", hexID(id))
 	}
-	recv, err := r.time("received_at")
+	_, key, err := msgOf(mailbox, r)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return bodyKey(mailbox, id, ms(recv))
+	return key
+}
+
+// bodiesOf is the keys of the bodies kept of mailbox's messages, in a
+// directory of bodies.
+func (s *Memory) bodiesOf(t *testing.T, mailbox protocol.Address) []string {
+	t.Helper()
+	var keys []string
+	err := fs.WalkDir(s.pg().bodiesDir.root.FS(), mailbox.String(), func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			keys = append(keys, p)
+		}
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return keys
 }
 
 // hasBody reports whether a body is kept under key.

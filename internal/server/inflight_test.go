@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -662,22 +663,14 @@ func TestADuplicatesWriteDeletesNoBody(t *testing.T) {
 	if err := s.backend.PutMessage(ctx, mailbox, first, body); err != nil {
 		t.Fatal(err)
 	}
-	firstKey := bodyKey(mailbox, id, ms(first.ReceivedAt))
-	if err := s.backend.PutMessage(ctx, mailbox, at(first.ReceivedAt), body); err != nil {
-		t.Errorf("the same send in the same millisecond: %v; want it applied", err)
-	}
-	if !s.hasBody(t, firstKey) {
-		t.Fatal("the same send in the same millisecond deleted the body")
-	}
-	later := at(now)
-	var dup duplicate
-	if err := s.backend.PutMessage(ctx, mailbox, later, body); !errors.As(err, &dup) || dup.h.ID != id || !dup.h.ReceivedAt.Equal(first.ReceivedAt) {
-		t.Fatalf("a duplicate's write: %v; want the original's header", err)
-	}
-	if !s.hasBody(t, firstKey) {
-		t.Error("a duplicate deleted the original's body")
-	}
-	if s.hasBody(t, bodyKey(mailbox, id, ms(later.ReceivedAt))) {
-		t.Error("a duplicate left the body it put")
+	firstKey := s.bodyKeyOf(t, mailbox, id)
+	for _, again := range []*Header{at(first.ReceivedAt), at(now)} { // in the same millisecond, and later
+		var dup duplicate
+		if err := s.backend.PutMessage(ctx, mailbox, again, body); !errors.As(err, &dup) || dup.h.ID != id || !dup.h.ReceivedAt.Equal(first.ReceivedAt) {
+			t.Fatalf("a duplicate's write at %v: %v; want the original's header", again.ReceivedAt, err)
+		}
+		if keys := s.bodiesOf(t, mailbox); !slices.Equal(keys, []string{firstKey}) {
+			t.Errorf("after a duplicate at %v the bodies are %v; want the original's alone, %s", again.ReceivedAt, keys, firstKey)
+		}
 	}
 }

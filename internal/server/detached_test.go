@@ -245,7 +245,7 @@ func TestACountIsKeptWhenItsWriteMayHaveBeenApplied(t *testing.T) {
 		{"an answer lost", put(pgOutcome(io.ErrUnexpectedEOF)), true},
 		{"applied, then its answer lost", injected(unknownAfter), true},
 		{"an error of no kind its backend states", injected(unknownBefore), true},
-		{"a refusal PostgreSQL stated", put(pgOutcome(&pgconn.PgError{Code: "40001"})), false},
+		{"a refusal PostgreSQL stated", put(pgOutcome(&pgconn.PgError{Severity: "ERROR", Code: "40001"})), false},
 		{"a write pgx never sent", put(pgOutcome(unsent(true))), false},
 		{"a refusal of the body", injected(refusedBefore), false},
 		{"a stale record", func() error { return ErrStale }, false},
