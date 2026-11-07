@@ -83,6 +83,7 @@ func serve(args []string) error {
 	region := fs.String("region", "us-east-1", "the AWS region")
 	mailboxCache := fs.Int("mailbox-cache", server.DefaultMailboxCache, "mailbox records held in memory, for sends and reads of a mailbox")
 	streamEvery := fs.Duration("stream-interval", time.Second, "how often each stream shard is read")
+	shard := fs.String("shard", "", "I/N: this process answers only for the mailboxes of shard I of N, N a power of two up to 64, when the reverse proxy in front sends each mailbox's calls to one process by its address: shard I is the addresses whose first character after d_ has a base64url value v with v*N/64 == I; any other mailbox's call is answered 503 (empty: every mailbox)")
 	proxies := fs.String("trusted-proxy", "", "comma-separated CIDRs of the reverse proxy in front, if any, whose X-Forwarded-For names the client: its last address, the one the proxy wrote")
 	l := server.DefaultLimits()
 	fs.IntVar(&l.HeadBytes, "max-header-bytes", l.HeadBytes, "the most of a request's head, its request line and headers, the server reads: what the longest call needs, its pass at the longest a pass can be, and no more; net/http answers a longer one 431 (0: net/http's default)")
@@ -128,6 +129,12 @@ func serve(args []string) error {
 		return err
 	}
 	cfg.Names = serving
+	if cfg.Shard, err = server.ParseShard(*shard); err != nil {
+		return fmt.Errorf("--shard: %w", err)
+	}
+	if cfg.Shard.N > 1 {
+		logger.Printf("shard %s: answering only for its mailboxes", cfg.Shard)
+	}
 	for _, t := range strings.Split(*idTypes, ",") {
 		if t = strings.TrimSpace(t); t == "" {
 			continue
