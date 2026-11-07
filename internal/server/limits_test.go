@@ -2,15 +2,12 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/dromas-dev/dromas-client/api/apitest"
 	"github.com/dromas-dev/dromas-client/protocol"
 )
 
@@ -67,8 +64,6 @@ func TestContinuationAllowance(t *testing.T) {
 		t.Fatal("no poll limit, and a page limit")
 	}
 }
-
-
 
 // A cursor is no way around the poll rate: with nothing after it, a list is
 // a poll, answered from memory; with something after it, it is a
@@ -281,10 +276,11 @@ func TestANewMailboxIsUsedWhateverItsAddressMissed(t *testing.T) {
 }
 
 // A missing mailbox that memory remembers is answered from memory: never refused,
-// never counted, and no call to storage. Only the store on AWS remembers one.
+// never counted, and no call to storage. Only the store on PostgreSQL
+// remembers one.
 func TestARememberedMissIsFree(t *testing.T) {
 	t.Parallel()
-	e, _ := dynamoEnv(t)
+	e, _ := sharedEnv(t)
 	l := relaxed()
 	l.MissesPerMinute = 1
 	e2, cs := counted(t, e, l)
@@ -463,11 +459,11 @@ func TestMissCache(t *testing.T) {
 	}
 }
 
-// On DynamoDB, a mailbox a read did not find is remembered as missing until it
-// is written.
+// On PostgreSQL, a mailbox a read did not find is remembered as missing until
+// it is written.
 func TestMissingMailboxIsRememberedUntilItIsWritten(t *testing.T) {
 	t.Parallel()
-	e, s := dynamoEnv(t)
+	e, s := sharedEnv(t)
 	ctx := context.Background()
 	r := e.raw()
 	a := r.id.Address()

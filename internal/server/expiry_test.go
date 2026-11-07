@@ -10,9 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/dromas-dev/dromas-client/api/apitest"
 	"github.com/dromas-dev/dromas-client/protocol"
 )
@@ -87,10 +84,10 @@ func TestARecordExpiresWhenNothingOfTheMailboxIsValid(t *testing.T) {
 	}
 }
 
-// Once the TTL has deleted a mailbox's record, the mailbox is forgotten: its
+// Once the sweep has deleted a mailbox's record, the mailbox is forgotten: its
 // renewal is answered as for no mailbox, and it registers anew, its ACL and its
 // account gone with the old one. What its identity revoked stays. A test
-// makes the delete the TTL makes.
+// makes the delete the sweep makes.
 func TestAForgottenMailboxRegistersAnew(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -119,7 +116,7 @@ func TestAForgottenMailboxRegistersAnew(t *testing.T) {
 }
 
 // The feed's image of a record this process has deleted since, its event
-// behind the delete on the stream, brings back nothing: not the record onto
+// behind the delete on the feed, brings back nothing: not the record onto
 // the view of the address read since, which holds its revocations alone, nor
 // its standing. The mailbox registers anew (dromas-dev/dromas-server#169).
 func TestALateImageOfADeletedRecordBringsNothingBack(t *testing.T) {
@@ -156,29 +153,32 @@ func TestALateImageOfADeletedRecordBringsNothingBack(t *testing.T) {
 	e.want(e.do("PUT", r.path(""), r.registration(3), r.pass(3)), 201, "")
 }
 
-// In DynamoDB a mailbox's record carries its expiry as the TTL attribute, in
-// seconds, and nothing its identity revoked, which is the item beside it
-// (sk 0x01); a revocation of the address deletes the record and keeps the
-// item. AWS only.
-func TestTheRecordAndTheRevocationsAreTwoItems(t *testing.T) {
+// A mailbox's record carries its expiry, in ms, and nothing its identity
+// revoked, which is a row of the revocations table; a revocation of the
+// address deletes the record and keeps that row, which has no expiry.
+// PostgreSQL only.
+func TestTheRecordAndTheRevocationsAreTwoRows(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	e, s := dynamoEnv(t)
+	e, s := sharedEnv(t)
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
+	a := r.id.Address()
 	e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), 200, "")
-	get := func(key map[string]types.AttributeValue) item {
+	revsOf := func() row {
 		t.Helper()
-		out, err := s.dynamo().db.GetItem(ctx, &dynamodb.GetItemInput{TableName: &s.dynamo().mailboxes, Key: key, ConsistentRead: aws.Bool(true)})
+		rows, err := rowsOf(s.pool().Query(ctx, `SELECT * FROM revocations WHERE addr = $1`, a[:]))
 		if err != nil {
 			t.Fatal(err)
 		}
-		return out.Item
+		if len(rows) == 0 {
+			return nil
+		}
+		return rows[0]
 	}
-	recKey, revsKey := mailboxKey(r.id.Address()), revocationsKey(r.id.Address())
-	rec, revs := get(recKey), get(revsKey)
-	b, _ := e.stands(r.id.Address())
-	if exp, err := rec.uint("expires_at"); err != nil || exp != uint64(b.Expires.Unix()) {
-		t.Fatalf("the record's TTL attribute is %d (%v), want %d", exp, err, b.Expires.Unix())
+	rec, revs := s.storedRecord(t, a), revsOf()
+	b, _ := e.stands(a)
+	if exp, err := rec.uint("expires_at"); err != nil || exp != ms(b.Expires) {
+		t.Fatalf("the record's expires_at is %d (%v), want %d", exp, err, ms(b.Expires))
 	}
 	for _, name := range []string{"revocation", "revoked_certs", "revoked_certs_sig", "through"} {
 		if _, ok := rec[name]; ok {
@@ -186,40 +186,40 @@ func TestTheRecordAndTheRevocationsAreTwoItems(t *testing.T) {
 		}
 	}
 	if through, err := revs.uint("through"); err != nil || through != 1 {
-		t.Fatalf("the revocations item: through %d, %v", through, err)
+		t.Fatalf("the revocations row: through %d, %v", through, err)
 	}
 	if _, ok := revs["expires_at"]; ok {
-		t.Error("the revocations item has an expiry")
+		t.Error("the revocations row has an expiry")
 	}
-	rev, err := protocol.SignRevocation(r.signer, r.id.Address())
+	rev, err := protocol.SignRevocation(r.signer, a)
 	if err != nil {
 		t.Fatal(err)
 	}
 	e.want(e.do("PUT", r.path("/revocations"), protocol.Revocations{Identity: r.id.Document(), Revocation: rev}, ""), 201, "")
-	if get(recKey) != nil {
+	if s.storedRecord(t, a) != nil {
 		t.Error("the revocation of the address left the mailbox's record")
 	}
-	if revs = get(revsKey); revs == nil {
-		t.Fatal("the revocation of the address left no revocations item")
+	if revs = revsOf(); revs == nil {
+		t.Fatal("the revocation of the address left no revocations row")
 	}
-	if _, ok := revs["revocation"]; !ok {
-		t.Error("the revocations item does not keep the revocation of the address")
+	if !revs.has("revocation") {
+		t.Error("the revocations row does not keep the revocation of the address")
 	}
 }
 
-// A second process that holds a mailbox learns from the stream what another
+// A second process that holds a mailbox learns from the feed what another
 // wrote: a revocation of the mailbox's certificates, after which it still
 // takes the identity's pass, and the revocation of its address, each answered
-// from its memory once it arrives. AWS only.
+// from its memory once it arrives. PostgreSQL only.
 func TestASecondProcessLearnsWhatIsRevoked(t *testing.T) {
 	t.Parallel()
-	e, _ := dynamoEnv(t)
-	other := startDynamo(t, e.clock.Now)
+	e, _ := sharedEnv(t)
+	other := startPostgres(t, e.clock.Now)
 	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: other, Limits: relaxed(), Now: e.clock.Now, Ready: other.Ready}).Handler()))
 	defer srv.Close()
 	e2 := &env{t: t, clock: e.clock, srv: srv}
 	// within waits up to ten seconds for the second process to answer as
-	// want: the stream is read every 200 ms.
+	// want, through the feed.
 	within := func(what string, call func() reply, status int, code protocol.Code) {
 		t.Helper()
 		var r reply
@@ -273,8 +273,8 @@ func (b *readsCounted) ReadLive(ctx context.Context, mailbox protocol.Address) (
 // A second process in the window a revocation of an address opens there
 // (dromas-dev/dromas-client#365, #505): it holds the mailbox, its record cache
 // has lost the record, as --mailbox-cache's LRU does under load, and its feed
-// brings the image of the revocations item before the purge's deletion of
-// the record, two items whose changes DynamoDB Streams orders each alone.
+// brings the image of the revocations row before the purge's deletion of
+// the record, two statements one after the other.
 // In the window its poll is 410 revoked from memory, with no read, and
 // carries no record (revokedAt), and the read of the mailbox is 410 with the
 // record. Once the deletion comes, the poll reads the address and carries

@@ -3,8 +3,9 @@ package server
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
+	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -17,8 +18,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/dromas-dev/dromas-client/api/apitest"
 	"github.com/dromas-dev/dromas-client/protocol"
 )
@@ -198,12 +197,12 @@ func TestPUTsDuringARevocationsDeleteStartNoOther(t *testing.T) {
 	}
 }
 
-// On DynamoDB: a write of an id whose message was acked is a new message, whatever
-// a dedupe read before it found: the ack deleted the item, so the write's
-// condition passes, and its item and its body are stored and served.
+// On PostgreSQL: a write of an id whose message was acked is a new message,
+// whatever a dedupe read before it found: the ack deleted the row, so the
+// write's insert meets none, and its row and its body are stored and served.
 func TestAPutAfterAnAckIsStored(t *testing.T) {
 	t.Parallel()
-	e, s := dynamoEnv(t)
+	e, s := sharedEnv(t)
 	ctx := context.Background()
 	a, b := e.mailbox(), e.mailbox()
 	body := []byte("acked, then posted again")
@@ -218,7 +217,7 @@ func TestAPutAfterAnAckIsStored(t *testing.T) {
 	if err != nil || orig != nil {
 		t.Fatalf("the write after the ack: %v, %v; want it stored", orig, err)
 	}
-	if !s.listed(t, b.Address(), id) || !s.bodyExists(t, b.Address(), id) {
+	if s.storedMsg(t, b.Address(), id) == nil || !s.bodyExists(t, b.Address(), id) {
 		t.Fatal("the write after the ack is not listed, or its body not kept")
 	}
 	if got, body, err := s.Message(ctx, b.Address(), id, 0); err != nil || !got.ReceivedAt.Equal(now) || string(body) != "the same id again" {
@@ -641,68 +640,44 @@ func TestASenderChangedBetweenItsPassAndItsRecordIsRefused(t *testing.T) {
 	}
 }
 
-// cannedAWS answers S3's PutObject and DeleteObject, and DynamoDB's PutItem
-// with a failed condition carrying item, and records each call.
-type cannedAWS struct {
-	mu    sync.Mutex
-	calls []string
-	item  string // the ConditionalCheckFailedException's Item, as JSON
-}
-
-func (c *cannedAWS) Do(r *http.Request) (*http.Response, error) {
-	if r.Body != nil {
-		_, _ = io.Copy(io.Discard, r.Body)
-	}
-	target := r.Header.Get("X-Amz-Target")
-	c.mu.Lock()
-	c.calls = append(c.calls, strings.TrimSpace(r.Method+" "+target+" "+r.URL.Path))
-	c.mu.Unlock()
-	status, body, ctype := http.StatusOK, "", "application/xml"
-	switch {
-	case strings.HasSuffix(target, ".PutItem"):
-		status, ctype = http.StatusBadRequest, "application/x-amz-json-1.0"
-		body = `{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException","message":"The conditional request failed","Item":` + c.item + `}`
-	case target != "":
-		return nil, fmt.Errorf("cannedAWS: no answer for %s", target)
-	case r.Method == http.MethodDelete:
-		status = http.StatusNoContent
-	}
-	return &http.Response{StatusCode: status, Status: http.StatusText(status), Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
-		Header: http.Header{"Content-Type": {ctype}, "X-Amzn-Requestid": {"t"}, "Etag": {`"e"`}},
-		Body:   io.NopCloser(strings.NewReader(body)), Request: r}, nil
-}
-
-// The DynamoDB backend's PutMessage, in process against canned answers: a
-// duplicate whose PutItem finds the id's item live answers with its header,
-// and deletes no body: the one it put is that message's, the same bytes
-// (dromas-dev/dromas-server#16, #92).
+// The PostgreSQL backend's PutMessage of an id a live message holds: a
+// duplicate, received later, answers with that message's header and deletes
+// only the body it put, under its own key, never the original's
+// (dromas-dev/dromas-server#16, #92); one received in the same millisecond,
+// the same bytes under the same key, is the original's write, applied, and
+// deletes nothing.
 func TestADuplicatesWriteDeletesNoBody(t *testing.T) {
 	t.Parallel()
+	_, s := sharedEnv(t)
+	ctx := context.Background()
 	var mailbox protocol.Address
-	mailbox[0] = 1
+	_, _ = rand.Read(mailbox[:]) // a mailbox of this test's own in the run's schema
 	body := []byte("the same bytes")
 	id := [32]byte{3}
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	recv := ms(now) - 1000
-	b64 := base64.StdEncoding.EncodeToString
-	it := fmt.Sprintf(`{"box":{"B":%q},"id":{"B":%q},"size":{"N":"%d"},"received_at":{"N":"%d"},"expires_at":{"N":"%d"},"live":{"B":%q}}`,
-		b64(mailbox[:]), b64(id[:]), len(body), recv, ttlSeconds(recv+ttlMs), b64(liveKey(recv, id)))
-	fake := &cannedAWS{item: it}
-	var logged bytes.Buffer
-	s := NewDynamoStore(DynamoConfig{AWS: aws.Config{Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "x", ""),
-		HTTPClient: fake, BaseEndpoint: aws.String("http://127.0.0.1:1")}, MailboxesTable: "b", MessagesTable: "m", AccountsTable: "a", Bucket: "s", Log: log.New(&logged, "", 0)})
-	h := &Header{ID: id, Size: len(body), ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
-	orig, err := s.PutMessage(context.Background(), mailbox, h, body)
-	fake.mu.Lock()
-	calls := append([]string(nil), fake.calls...)
-	fake.mu.Unlock()
-	t.Logf("calls %q; logged %q", calls, logged.String())
-	if err != nil || orig == nil || orig.ID != id || ms(orig.ReceivedAt) != recv {
-		t.Fatalf("a duplicate's write: %+v, %v; want the original's header", orig, err)
+	at := func(t time.Time) *Header {
+		return &Header{ID: id, Size: len(body), ReceivedAt: t, ExpiresAt: t.Add(protocol.Retention)}
 	}
-	for _, call := range calls {
-		if strings.HasPrefix(call, "DELETE ") {
-			t.Errorf("a duplicate that found the item live deleted %s", call)
-		}
+	first := at(now.Add(-time.Second))
+	if err := s.backend.PutMessage(ctx, mailbox, first, body); err != nil {
+		t.Fatal(err)
+	}
+	firstKey := bodyKey(mailbox, id, ms(first.ReceivedAt))
+	if err := s.backend.PutMessage(ctx, mailbox, at(first.ReceivedAt), body); err != nil {
+		t.Errorf("the same send in the same millisecond: %v; want it applied", err)
+	}
+	if !s.hasBody(t, firstKey) {
+		t.Fatal("the same send in the same millisecond deleted the body")
+	}
+	later := at(now)
+	var dup duplicate
+	if err := s.backend.PutMessage(ctx, mailbox, later, body); !errors.As(err, &dup) || dup.h.ID != id || !dup.h.ReceivedAt.Equal(first.ReceivedAt) {
+		t.Fatalf("a duplicate's write: %v; want the original's header", err)
+	}
+	if !s.hasBody(t, firstKey) {
+		t.Error("a duplicate deleted the original's body")
+	}
+	if s.hasBody(t, bodyKey(mailbox, id, ms(later.ReceivedAt))) {
+		t.Error("a duplicate left the body it put")
 	}
 }
