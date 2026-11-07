@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -309,6 +310,44 @@ func TestARevocationsWriteHoldsWhatItsPreconditionsHeld(t *testing.T) {
 	}
 	if held, err := protocol.ParseRevokedCertificates(b.RevokedCerts); err != nil || held.Through != 3 {
 		t.Errorf("held through %v: %v, want 3", held, err)
+	}
+}
+
+// A revocation of the address is kept whatever is beside it (PROTOCOL.md
+// §11.15): beside a revocation of certificates through a lower serial than
+// the one held, which a process whose memory is behind may send on, it is
+// written, and the certificates' revocation held stays. The lower one alone
+// brings nothing, and is ErrStale.
+func TestARevocationOfTheAddressIsKeptBesideALowerOneOfCertificates(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, relaxed())
+	ctx := t.Context()
+	r := e.raw()
+	a := r.id.Address()
+	through := func(n uint64) *Revocations {
+		c := r.certs(n)
+		return &Revocations{Identity: c.Identity, Certs: c.RevokedCertificates, CertsSig: c.RevokedCertificatesSignature, Through: n}
+	}
+	if err := e.store.Revoke(ctx, a, through(3), ExpectAnything); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.store.Revoke(ctx, a, through(2), ExpectAnything); !errors.Is(err, ErrStale) {
+		t.Errorf("control: a lower revocation of certificates alone: %v, want %v", err, ErrStale)
+	}
+	both := through(2)
+	both.Address = []byte("the address's revocation")
+	if err := e.store.Revoke(ctx, a, both, ExpectAnything); err != nil {
+		t.Fatalf("a revocation of the address beside a lower one of certificates: %v", err)
+	}
+	b, err := e.store.Mailbox(ctx, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(b.Revocation, both.Address) {
+		t.Errorf("the address's revocation held: %q, want %q", b.Revocation, both.Address)
+	}
+	if held, err := protocol.ParseRevokedCertificates(b.RevokedCerts); err != nil || held.Through != 3 {
+		t.Errorf("certificates held through %v: %v, want 3, as before", held, err)
 	}
 }
 

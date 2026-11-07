@@ -23,6 +23,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/dromas-dev/dromas-client/protocol"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -78,6 +79,19 @@ func TestWhatPostgreSQLAnsweredAWriteIsOneOutcome(t *testing.T) {
 		defer cancel()
 		_, err = pool.Exec(ctx, `SELECT pg_sleep(5)`)
 		cases = append(cases, outcome{"a statement whose context ended while it ran", err, false})
+		// A role the database does not know: its FATAL at the connection's
+		// start comes wrapped in a ConnectError, and nothing was sent.
+		stranger, err := pgxpool.New(t.Context(), "user=nobody_"+randomHex(4)+" password=x")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(stranger.Close)
+		_, err = stranger.Exec(t.Context(), `DELETE FROM mailboxes`)
+		var pe *pgconn.PgError
+		if !errors.As(err, &pe) || pe.Severity != "FATAL" {
+			t.Fatalf("control: a login the database refuses: %v; want its FATAL", err)
+		}
+		cases = append(cases, outcome{"a login the database refused", err, true})
 	}
 	if got := pgOutcome(nil); got != nil {
 		t.Errorf("applied: %v", got)
@@ -90,6 +104,41 @@ func TestWhatPostgreSQLAnsweredAWriteIsOneOutcome(t *testing.T) {
 				t.Errorf("%v is read as %v: refused %v, mayHaveApplied %v; want refused %v", c.err, got, isRefusal(got), mayHaveApplied(got), c.refused)
 			}
 		})
+	}
+}
+
+// A write whose context ends while it waits for a connection of the pool
+// was never sent: a refusal, not an unknown outcome.
+func TestAWriteThatNeverLeftThePoolIsRefused(t *testing.T) {
+	t.Parallel()
+	if !onPostgres() {
+		t.Skip("needs PostgreSQL: DROMAS_TEST_POSTGRES")
+	}
+	pc, err := pgxpool.ParseConfig("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pc.MaxConns = 1
+	pool, err := pgxpool.NewWithConfig(t.Context(), pc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	held, err := pool.Acquire(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Release()
+	s := &pgBackend{pool: pool}
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	for name, err := range map[string]error{
+		"write": s.write(ctx, func(context.Context, pgx.Tx) error { return nil }),
+		"exec":  func() error { _, err := s.exec(ctx, `SELECT 1`); return err }(),
+	} {
+		if !isRefusal(err) || mayHaveApplied(err) || !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("%s waiting for the pool past its deadline: %v (refused %v, mayHaveApplied %v); want a refusal", name, err, isRefusal(err), mayHaveApplied(err))
+		}
 	}
 }
 

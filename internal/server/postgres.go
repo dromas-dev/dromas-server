@@ -55,7 +55,7 @@ type pgBackend struct {
 
 	apply   func(Change) // what Start was given
 	started atomic.Bool
-	synced  atomic.Int64 // the wall time, in ns, through which the feed has applied every change
+	synced  atomic.Int64 // the time (monoNanos) through which the feed has applied every change; 0, never
 
 	// crash, in tests, fails a write of two steps between them, as a
 	// crash there would leave it: "put: after the body", "ack: after the
@@ -273,6 +273,13 @@ func pgOutcome(err error) error {
 	}
 	var pe *pgconn.PgError
 	var ce *pgconn.ConnectError
+	// A connection never made sent nothing, whatever the database said
+	// to refuse it: a FATAL at its start (57P03, starting up or shutting
+	// down; 53300, too many connections; 28P01, a password refused)
+	// comes wrapped in it.
+	if errors.As(err, &ce) || pgconn.SafeToRetry(err) {
+		return refused(err)
+	}
 	if errors.As(err, &pe) {
 		// Only an ERROR rolls its statement back: a FATAL or a PANIC can
 		// come after the commit (xact.c: "cannot abort transaction %u, it
@@ -287,10 +294,19 @@ func pgOutcome(err error) error {
 		}
 		return unknown(err)
 	}
-	if errors.As(err, &ce) || pgconn.SafeToRetry(err) {
-		return refused(err)
-	}
 	return unknown(err)
+}
+
+// acquire is a connection of the pool for one write. Nothing of the write
+// is sent before it returns, so its error is a refusal, whatever it reads
+// as: a connection the database refused, or a context that ended while the
+// write waited in the pool's queue.
+func (s *pgBackend) acquire(ctx context.Context) (*pgxpool.Conn, error) {
+	c, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return nil, refused(err)
+	}
+	return c, nil
 }
 
 // write runs fn in one transaction and reads its outcome: an error fn
@@ -298,9 +314,14 @@ func pgOutcome(err error) error {
 func (s *pgBackend) write(ctx context.Context, fn func(context.Context, pgx.Tx) error) error {
 	ctx, cancel := bounded(ctx)
 	defer cancel()
-	tx, err := s.pool.Begin(ctx)
+	c, err := s.acquire(ctx)
 	if err != nil {
-		return pgOutcome(err)
+		return err
+	}
+	defer c.Release()
+	tx, err := c.Begin(ctx)
+	if err != nil {
+		return refused(err) // the transaction never began: none of fn was sent
 	}
 	if err := fn(ctx, tx); err != nil {
 		_ = tx.Rollback(ctx)
@@ -316,7 +337,12 @@ func (s *pgBackend) write(ctx context.Context, fn func(context.Context, pgx.Tx) 
 func (s *pgBackend) exec(ctx context.Context, sql string, args ...any) (int64, error) {
 	ctx, cancel := bounded(ctx)
 	defer cancel()
-	tag, err := s.pool.Exec(ctx, sql, args...)
+	c, err := s.acquire(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer c.Release()
+	tag, err := c.Exec(ctx, sql, args...)
 	if err != nil {
 		return 0, pgOutcome(err)
 	}
@@ -817,9 +843,11 @@ func (s *pgBackend) DeleteMailbox(ctx context.Context, a protocol.Address) error
 }
 
 // Revoke implements Backend: one statement on the address's revocations row,
-// which keeps the revocation of the address once, takes a revocation of
-// certificates only through a higher serial than the one it holds, and,
-// where want asks it, only where the row exists, or only where it does not.
+// which keeps the revocation of the address once, whatever is beside it
+// (PROTOCOL.md §11.15), takes a revocation of certificates only through a
+// higher serial than the one it holds, is ErrStale where it brings neither,
+// and, where want asks it, writes only where the row exists, or only where
+// it does not.
 func (s *pgBackend) Revoke(ctx context.Context, a protocol.Address, rv *Revocations, want Expect) (*Revocations, error) {
 	var addrRev, certs, certsSig []byte
 	if len(rv.Address) > 0 {
@@ -829,11 +857,14 @@ func (s *pgBackend) Revoke(ctx context.Context, a protocol.Address, rv *Revocati
 	if rv.Through > 0 {
 		certs, certsSig, through = rv.Certs, rv.CertsSig, numeric(rv.Through)
 	}
+	// higher guards the certificates' columns alone; the row is written
+	// where the write brings a revocation of the address or a higher one.
+	const higher = `($6::numeric IS NOT NULL AND (revocations.through IS NULL OR revocations.through < $6::numeric))`
 	const set = `revocation = COALESCE(revocations.revocation, $3),
-		revoked_certs = CASE WHEN $6::numeric IS NULL THEN revocations.revoked_certs ELSE $4 END,
-		revoked_certs_sig = CASE WHEN $6::numeric IS NULL THEN revocations.revoked_certs_sig ELSE $5 END,
-		through = COALESCE($6::numeric, revocations.through)`
-	const higher = `($6::numeric IS NULL OR revocations.through IS NULL OR revocations.through < $6::numeric)`
+		revoked_certs = CASE WHEN ` + higher + ` THEN $4 ELSE revocations.revoked_certs END,
+		revoked_certs_sig = CASE WHEN ` + higher + ` THEN $5 ELSE revocations.revoked_certs_sig END,
+		through = CASE WHEN ` + higher + ` THEN $6::numeric ELSE revocations.through END`
+	const brings = `($3::bytea IS NOT NULL OR ` + higher + `)`
 	var q string
 	switch want {
 	case ExpectNone:
@@ -841,10 +872,10 @@ func (s *pgBackend) Revoke(ctx context.Context, a protocol.Address, rv *Revocati
 	case ExpectHeld:
 		// $2, the identity, is the row's already: named so that every
 		// statement takes the same six arguments.
-		q = `UPDATE revocations SET ` + set + ` WHERE addr = $1 AND $2::bytea IS NOT NULL AND ` + higher + ` RETURNING ` + revocationCols
+		q = `UPDATE revocations SET ` + set + ` WHERE addr = $1 AND $2::bytea IS NOT NULL AND ` + brings + ` RETURNING ` + revocationCols
 	default:
 		q = `INSERT INTO revocations (` + revocationCols + `) VALUES ($1, $2, $3, $4, $5, $6)
-			ON CONFLICT (addr) DO UPDATE SET ` + set + ` WHERE ` + higher + ` RETURNING ` + revocationCols
+			ON CONFLICT (addr) DO UPDATE SET ` + set + ` WHERE ` + brings + ` RETURNING ` + revocationCols
 	}
 	var got row
 	err := s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
@@ -853,7 +884,7 @@ func (s *pgBackend) Revoke(ctx context.Context, a protocol.Address, rv *Revocati
 			return err
 		}
 		if len(rows) == 0 {
-			return ErrStale // one through as high a serial is held, or the row is not what want asks
+			return ErrStale // it brings nothing the row lacks, or the row is not what want asks
 		}
 		got = rows[0]
 		return nil
