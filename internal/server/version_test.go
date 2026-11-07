@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -306,7 +307,8 @@ func TestARetiredVersionIsAnsweredBeforeRouting(t *testing.T) {
 // was given, with no capability, to any caller with no pass, whatever its
 // version, a retired one among them, with Date and Cache-Control: no-store
 // as every answer under /v1/; its HEAD is the same without content. A
-// server given no policy answers its empty lists.
+// server given no policy answers its empty lists, and every document names
+// the implementation.
 func TestTheDocumentIsThePolicy(t *testing.T) {
 	t.Parallel()
 	e, _ := versionsEnv(t, relaxed())
@@ -339,7 +341,8 @@ func TestTheDocumentIsThePolicy(t *testing.T) {
 	l.MaxCertificateLifetime = 50*24*time.Hour + 1500*time.Millisecond // served in whole seconds
 	bare := newEnv(t, l)
 	got := bare.do("GET", protocol.DocumentPath, nil, "")
-	if want := fmt.Sprintf(`{"deprecations":[],"sunsets":[],"capabilities":[],"max_certificate_lifetime":%d}`, 50*24*3600+1); got.status != http.StatusOK || strings.TrimSpace(string(got.body)) != want {
+	server, _ := json.Marshal(implementation)
+	if want := fmt.Sprintf(`{"deprecations":[],"sunsets":[],"capabilities":[],"max_certificate_lifetime":%d,"server":%s}`, 50*24*3600+1, server); got.status != http.StatusOK || strings.TrimSpace(string(got.body)) != want {
 		t.Errorf("no policy: %d %s, want %s", got.status, got.body, want)
 	}
 	if got.header.Get(protocol.DeprecationHeader) != "" || got.header.Get(protocol.SunsetHeader) != "" {
@@ -396,6 +399,34 @@ func TestTheVersionMetricCountsEachState(t *testing.T) {
 	for k := range counts(t, reg, "dromas_server_version_requests_total") {
 		if strings.Contains(k, "1.") || strings.Contains(k, "2.0") {
 			t.Errorf("a series names a version: %s", k)
+		}
+	}
+}
+
+// The document names the implementation that answers: dromas-server, the
+// version and the revision Go records in the binary, "(devel)" where it
+// records no version, and no revision where it records none
+// (dromas-dev/dromas-server#205).
+func TestTheDocumentNamesTheImplementation(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, relaxed())
+	var d protocol.ServerDocument
+	if err := protocol.Unmarshal(e.do("GET", "/v1/", nil, "").body, &d); err != nil || d.Server == nil || *d.Server != *implementation {
+		t.Fatalf("GET /v1/ names %+v (%v), want %+v", d.Server, err, implementation)
+	}
+	release := &debug.BuildInfo{Main: debug.Module{Version: "v0.5.1"}, Settings: []debug.BuildSetting{{Key: "vcs", Value: "git"}, {Key: "vcs.revision", Value: "c4258bc37344474025fe2c2d6420476eb617450a"}}}
+	for _, c := range []struct {
+		bi   *debug.BuildInfo
+		ok   bool
+		want protocol.Implementation
+	}{
+		{release, true, protocol.Implementation{Name: "dromas-server", Version: "v0.5.1", Revision: "c4258bc37344474025fe2c2d6420476eb617450a"}},
+		{&debug.BuildInfo{Main: debug.Module{Version: "(devel)"}}, true, protocol.Implementation{Name: "dromas-server", Version: "(devel)"}},
+		{&debug.BuildInfo{}, true, protocol.Implementation{Name: "dromas-server", Version: "(devel)"}},
+		{nil, false, protocol.Implementation{Name: "dromas-server", Version: "(devel)"}},
+	} {
+		if got := implementationOf(c.bi, c.ok); *got != c.want {
+			t.Errorf("from %+v: %+v, want %+v", c.bi, *got, c.want)
 		}
 	}
 }

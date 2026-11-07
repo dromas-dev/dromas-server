@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"runtime/debug"
 	"time"
 
 	"github.com/dromas-dev/dromas-client/protocol"
@@ -19,10 +20,12 @@ const (
 )
 
 // policyOf is the server's document with the version policy d, as the
-// server keeps and answers it: each list written, empty or not, and the
-// longest certificate it takes, l's setting (protocol.ServerDocument).
+// server keeps and answers it: each list written, empty or not, the
+// longest certificate it takes, l's setting, and the implementation that
+// answers (protocol.ServerDocument).
 func policyOf(d protocol.ServerDocument, l Limits) protocol.ServerDocument {
 	d.MaxCertificateLifetime = l.maxCertificate()
+	d.Server = implementation
 	if d.Deprecations == nil {
 		d.Deprecations = []protocol.Scheduled{}
 	}
@@ -33,6 +36,32 @@ func policyOf(d protocol.ServerDocument, l Limits) protocol.ServerDocument {
 		d.Capabilities = []protocol.Capability{}
 	}
 	return d
+}
+
+// implementation is what the server's document names as the implementation
+// that answers (PROTOCOL.md §11.18): dromas-server, its module's version and
+// the source revision it was built from, as Go records them in the binary
+// (runtime/debug.ReadBuildInfo). A build of a release tag records the tag
+// and its commit; a build Go records no version of is "(devel)", as Go
+// writes one, and one that records no revision names none.
+var implementation = implementationOf(debug.ReadBuildInfo())
+
+// implementationOf is the implementation bi records, ok false where the
+// binary carries no build info.
+func implementationOf(bi *debug.BuildInfo, ok bool) *protocol.Implementation {
+	im := &protocol.Implementation{Name: "dromas-server", Version: "(devel)"}
+	if !ok {
+		return im
+	}
+	if bi.Main.Version != "" {
+		im.Version = bi.Main.Version
+	}
+	for _, s := range bi.Settings {
+		if s.Key == "vcs.revision" {
+			im.Revision = s.Value
+		}
+	}
+	return im
 }
 
 // versioned puts what the policy says of a request's version
