@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -208,6 +210,68 @@ func TestTheAWSSDKsLinesAreRedacted(t *testing.T) {
 	if strings.Contains(logged.String(), run) || !strings.Contains(logged.String(), logName([]byte(run))) {
 		t.Errorf("the SDK's line: %q", logged.String())
 	}
+}
+
+// A feed whose apply panics, with a message id in its words, is logged
+// through the store's log, which redacts, and ends the process as a lost
+// place does, so a restart rebuilds memory: never its words on stderr, past
+// the redaction (pgFeed.run). The feed needs a session, so PostgreSQL.
+func TestAFollowersPanicIsLoggedRedactedAndEndsTheProcess(t *testing.T) {
+	t.Parallel()
+	if !onPostgres() {
+		t.Skip("needs PostgreSQL: DROMAS_TEST_POSTGRES")
+	}
+	schema, bodies := testDatabase(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	var mu sync.Mutex
+	var logged bytes.Buffer
+	ended := make(chan error, 1)
+	s, err := NewPostgresStore(ctx, PostgresConfig{
+		URL: os.Getenv("DROMAS_TEST_POSTGRES"), Schema: schema, BodiesDir: bodies, MaxConns: 2,
+		Log:   log.New(lockedWriter{&mu, &logged}, "", 0),
+		Fatal: func(err error) { ended <- err },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strings.Repeat("cd", 32)
+	if err := s.pg().Start(ctx, func(Change) { panic("boom at " + id) }); err != nil {
+		t.Fatal(err)
+	}
+	acct, err := NewAccountID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pg().CreateAccount(ctx, &Account{ID: acct, Rev: 1}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-ended:
+		mu.Lock()
+		defer mu.Unlock()
+		t.Logf("ended: %v", err)
+		if !strings.Contains(err.Error(), "panic") {
+			t.Errorf("the feed's panic ended it as %v", err)
+		}
+		if !strings.Contains(logged.String(), "feed: panic") || strings.Contains(logged.String(), id) {
+			t.Errorf("the panic's line: %q", logged.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the feed's panic did not end it")
+	}
+}
+
+// lockedWriter is w under mu.
+type lockedWriter struct {
+	mu *sync.Mutex
+	w  io.Writer
+}
+
+func (l lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }
 
 // One value is one name under one key, whatever the case of its letters, and

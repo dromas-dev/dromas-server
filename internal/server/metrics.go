@@ -74,9 +74,9 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		lists: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "lists_total",
 			Help: "Lists taken, by kind: a poll, or a page after the first of a drain."}, []string{"kind"}),
 		store: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "store_calls_total",
-			Help: "Calls to AWS, retries included, by service, operation and outcome: ok, not_found, throttled or error."}, []string{"service", "operation", "outcome"}),
+			Help: "Calls to S3, where messages' bodies are kept in a bucket, retries included, by service (S3), operation (the S3 operation: PutObject, GetObject, DeleteObjects) and outcome: ok, not_found, throttled or error."}, []string{"service", "operation", "outcome"}),
 		storeTime: prometheus.NewHistogramVec(prometheus.HistogramOpts{Namespace: ns, Name: "store_call_duration_seconds",
-			Help: "How long a call to AWS took, its retries included, by service and operation.", Buckets: seconds}, []string{"service", "operation"}),
+			Help: "How long a call to S3, for messages' bodies, took, its retries included, by service (S3) and operation (the S3 operation).", Buckets: seconds}, []string{"service", "operation"}),
 		caches: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "cache_events_total",
 			Help: "The record caches, by cache (mailboxes, accounts, missing) and event (hit, miss, eviction)."}, []string{"cache", "event"}),
 		largeRead: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "large_reads_total",
@@ -88,7 +88,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		conns: prometheus.NewGauge(prometheus.GaugeOpts{Namespace: ns, Name: "connections_open",
 			Help: "Connections open on the API's listener."}),
 		streamAge: prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: ns, Name: "stream_record_age_seconds",
-			Help: "How old the last record applied from each table's stream was when it was applied: how far behind memory follows."}, []string{"table"}),
+			Help: "How old the last change the feed applied to each table was when it was applied, from its transaction's commit time, by table (mailboxes, revocations, messages, accounts): how far behind memory follows."}, []string{"table"}),
 		holds: prometheus.NewGauge(prometheus.GaugeOpts{Namespace: ns, Name: "long_polls_held",
 			Help: "Long polls held now (PROTOCOL.md §11.11)."}),
 		held: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "long_polls_total",
@@ -315,7 +315,8 @@ func (m *Metrics) misrouted() {
 	m.misroutes.Inc()
 }
 
-// applied records the age of a record applied from table's stream.
+// applied records the age of a change the feed applied to table: from made,
+// its transaction's commit time, to now.
 func (m *Metrics) applied(table string, made time.Time, now time.Time) {
 	if m == nil || made.IsZero() {
 		return
@@ -355,7 +356,7 @@ func (m *Metrics) InstrumentAWS(cfg *aws.Config) {
 	})
 }
 
-// storeOutcome names how a call to AWS ended, from a fixed set: never the
+// storeOutcome names how a call to S3 ended, from a fixed set: never the
 // error's own code, which is AWS's to add to.
 func storeOutcome(err error) string {
 	var ae smithy.APIError
