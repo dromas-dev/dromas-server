@@ -23,8 +23,8 @@
 # local age is older than 1.3, the client module's own (its go.mod's tool, built by go tool) goes first in PATH.
 # Needs: go, bash ≥ 4, ssh-keygen, curl, jq, sha256sum, sha384sum, openssl, base64, od, GNU date (passof's date -d). Run from anywhere:
 #   test/interop.sh            SCRIPT=<path> overrides the dromas.sh it sources.
-# With DROMAS_TEST_MAILBOXES_TABLE, DROMAS_TEST_MESSAGES_TABLE, DROMAS_TEST_ACCOUNTS_TABLE and DROMAS_TEST_BUCKET set, the server runs on those tables and
-# that bucket instead of --dev: tables and a bucket kept for tests, never the ones a running server uses.
+# With DROMAS_TEST_POSTGRES set, dromas-server runs on PostgreSQL instead of --dev, the database libpq's environment names (PGHOST,
+# PGDATABASE, PGUSER, PGPASSWORD and the rest), its bodies in the work dir: a database kept for tests, never a running dromas-server's.
 # The work dir is mktemp -d's, under $TMPDIR or /tmp, its own for each run. A run that passes deletes it, since it may be
 # on tmpfs (memory) and it holds two builds; one that fails leaves it to look at, and names it.
 set -uo pipefail
@@ -50,8 +50,8 @@ age-keygen -pq > /dev/null 2>&1 || PATH=$(cd "$client" && dirname "$(go tool -n 
 age-keygen -pq > /dev/null 2>&1 || { echo "no age that makes post-quantum keys"; exit 1; }
 echo "age: $(age --version)"
 port=$((20000 + RANDOM % 12768))   # below Linux's ephemeral ports (32768 up: ip_local_port_range), which an outgoing connection may hold
-if [ -n "${DROMAS_TEST_MESSAGES_TABLE:-}" ]; then
-  store=(--mailboxes-table "$DROMAS_TEST_MAILBOXES_TABLE" --messages-table "$DROMAS_TEST_MESSAGES_TABLE" --accounts-table "$DROMAS_TEST_ACCOUNTS_TABLE" --bucket "$DROMAS_TEST_BUCKET" --names "127.0.0.1:$port")
+if [ -n "${DROMAS_TEST_POSTGRES:-}" ]; then
+  store=(--bodies-dir "$work/bodies" --names "127.0.0.1:$port")
 else
   store=(--dev --names "127.0.0.1:$port")   # --dev takes a pass made for any name without --names: with it, every pass's name is checked (PROTOCOL.md §8)
 fi

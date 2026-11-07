@@ -13,8 +13,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	dtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -31,14 +30,6 @@ func (e *env) sent(r reply) string {
 		e.t.Fatal(err)
 	}
 	return rc.ID
-}
-
-// metered is a test server whose metrics are m, on a registry of their own.
-func metered(t *testing.T, l Limits) (*env, *Metrics, *prometheus.Registry) {
-	t.Helper()
-	reg := prometheus.NewRegistry()
-	m := NewMetrics(reg)
-	return newEnv(t, l, func(c *Config) { c.Metrics = m }), m, reg
 }
 
 // The metrics count what the server does and refuses (dromas-dev/dromas-server#59):
@@ -127,90 +118,40 @@ func TestMetricsCarryNoCallerValue(t *testing.T) {
 }
 
 // Every call to AWS is counted by its service, operation and outcome, from a
-// fixed set, and timed with its retries (Metrics.InstrumentAWS).
+// fixed set, and timed with its retries (Metrics.InstrumentAWS): S3's, where
+// bodies are kept, a body read, one missing and one throttled.
 func TestMetricsCountTheStoresCalls(t *testing.T) {
 	t.Parallel()
-	refuse := true
+	var answer atomic.Int32 // the status S3 answers
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/x-amz-json-1.0")
-		if refuse {
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"__type":"com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException","message":"the condition failed"}`))
+		status := int(answer.Load())
+		code := map[int]string{http.StatusNotFound: "NoSuchKey", http.StatusServiceUnavailable: "SlowDown"}[status]
+		if code == "" {
+			_, _ = w.Write([]byte("abc"))
 			return
 		}
-		_, _ = w.Write([]byte(`{}`))
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(status)
+		_, _ = fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?><Error><Code>%s</Code><Message>%s</Message></Error>`, code, code)
 	}))
 	t.Cleanup(srv.Close)
 	m := NewMetrics(prometheus.NewRegistry())
 	cfg := aws.Config{Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("k", "s", ""), BaseEndpoint: aws.String(srv.URL), RetryMaxAttempts: 1}
 	m.InstrumentAWS(&cfg)
-	db := dynamodb.NewFromConfig(cfg)
-	put := func() error {
-		_, err := db.PutItem(context.Background(), &dynamodb.PutItemInput{TableName: aws.String("t"), Item: map[string]dtypes.AttributeValue{"pk": &dtypes.AttributeValueMemberS{Value: "x"}}})
-		return err
+	b := s3Bodies{newS3(cfg, func(o *s3.Options) { o.UsePathStyle = true }), "bodies"}
+	for _, status := range []int{http.StatusOK, http.StatusNotFound, http.StatusServiceUnavailable} {
+		answer.Store(int32(status))
+		_, err := b.Get(context.Background(), "k", 0, 3)
+		if (err == nil) != (status == http.StatusOK) {
+			t.Fatalf("a read answered %d: %v", status, err)
+		}
 	}
-	if err := put(); err == nil {
-		t.Fatal("the refused put succeeded")
-	}
-	refuse = false
-	if err := put(); err != nil {
-		t.Fatal(err)
-	}
-	for outcome, want := range map[string]float64{"conditional": 1, "ok": 1, "error": 0} {
-		if got := testutil.ToFloat64(m.store.WithLabelValues("DynamoDB", "PutItem", outcome)); got != want {
-			t.Errorf("PutItem %s: %v, want %v", outcome, got, want)
+	for outcome, want := range map[string]float64{"ok": 1, "not_found": 1, "throttled": 1, "error": 0} {
+		if got := testutil.ToFloat64(m.store.WithLabelValues("S3", "GetObject", outcome)); got != want {
+			t.Errorf("GetObject %s: %v, want %v", outcome, got, want)
 		}
 	}
 	if got := testutil.CollectAndCount(m.storeTime); got != 1 {
 		t.Errorf("the calls' times: %d series, want 1", got)
-	}
-}
-
-// collectionsWant is the exposition of dromas_server_item_collection_estimate_bytes
-// after one observation of gb, DynamoDB's GB.
-func collectionsWant(gb float64) string {
-	const name = "dromas_server_item_collection_estimate_bytes"
-	var b strings.Builder
-	fmt.Fprintf(&b, "# HELP %s After each message written, the upper bound of DynamoDB's estimate of its mailbox's item collection, the mailbox's items and their LSI entries, at 2^30 bytes a GB: past 10 GB, the mailbox takes no more messages.\n# TYPE %s histogram\n", name, name)
-	for _, le := range gigabytes {
-		n := 0
-		if gb*(1<<30) <= le {
-			n = 1
-		}
-		fmt.Fprintf(&b, "%s_bucket{le=\"%g\"} %d\n", name, le, n)
-	}
-	fmt.Fprintf(&b, "%s_bucket{le=\"+Inf\"} 1\n%s_sum %g\n%s_count 1\n", name, name, gb*(1<<30), name)
-	return b.String()
-}
-
-// A message write asks DynamoDB for the size of its mailbox's item collection,
-// and the upper bound of the estimate is observed, in GB: AWS's advice for a
-// table with an LSI, whose item collections are capped at 10 GB. The fake's
-// answer is made up, so the test holds the conversion at 2^30 bytes a GB,
-// not AWS's unit, which AWS does not state (gigabytes).
-func TestMetricsObserveTheItemCollectionAMessageWriteGrew(t *testing.T) {
-	t.Parallel()
-	f := newFakeAWS()
-	var asked atomic.Bool
-	f.dynamo = func(op string, _ int, body []byte) answer {
-		if op != "PutItem" {
-			return answer{status: http.StatusOK, body: "{}"}
-		}
-		asked.Store(strings.Contains(string(body), `"ReturnItemCollectionMetrics":"SIZE"`))
-		return answer{status: http.StatusOK, body: `{"ItemCollectionMetrics":{"ItemCollectionKey":{"box":{"B":"BA=="}},"SizeEstimateRangeGB":[8.0,9.0]}}`}
-	}
-	s := fakeStore(t, f)
-	m := NewMetrics(prometheus.NewRegistry())
-	s.dynamo().metrics = m
-	now := time.Now().UTC().Truncate(time.Millisecond)
-	h := &Header{ID: [32]byte{7}, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
-	if _, err := s.PutMessage(t.Context(), protocol.Address{4}, h, []byte("abc")); err != nil {
-		t.Fatal(err)
-	}
-	if !asked.Load() {
-		t.Error("the message write did not ask for its item collection's size")
-	}
-	if err := testutil.CollectAndCompare(m.collections, strings.NewReader(collectionsWant(9)), "dromas_server_item_collection_estimate_bytes"); err != nil {
-		t.Error(err)
 	}
 }

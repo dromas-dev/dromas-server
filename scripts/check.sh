@@ -4,7 +4,7 @@
 # CI runs `full` here against its own commit, through a go.work).
 #
 #   scripts/check.sh         quick: gofmt, vet and the tests -short keeps, while working
-#   scripts/check.sh full    CI's test job: gofmt, vet, every test, the skip check, test/interop.sh
+#   scripts/check.sh full    CI's test job: gofmt, vet, every test (in memory, then on PostgreSQL), the skip check, test/interop.sh
 #   scripts/check.sh push    full, then golangci-lint and govulncheck: before a push
 #   scripts/check.sh vuln    govulncheck alone, at the version pinned here
 #
@@ -27,9 +27,11 @@ if [ -n "$darwin" ] && command -v brew > /dev/null; then
 fi
 unset DROMAS_CONFIG DROMAS_PROFILE DR_HOME DR_MAILBOX # no test may meet a real mailbox
 
-# On the in-memory store the AWS tests and the cost measurement skip; any
-# other skip fails `full`.
-allowed=(-e 'needs the AWS tables' -e 'set DROMAS_COST=1 to measure')
+# `full` runs every test on the in-memory store, where the tests that need a
+# shared store with a feed skip, then, with DROMAS_TEST_POSTGRES set (and
+# libpq's environment naming a database kept for tests), every test again on
+# PostgreSQL, where none may; any other skip fails it.
+allowed=()
 if [ -n "$darwin" ]; then allowed+=(-e 'macOS loopback buffers'); fi
 
 fail() { # an annotation on GitHub's page, a line on a terminal
@@ -42,8 +44,9 @@ fmt() {
   if [ -n "$out" ]; then fail "not gofmt'd: $out"; return 1; fi
 }
 
-alltests() {
-  local dir status
+alltests() { # [a skip's text to allow]...
+  local dir status ok=("${allowed[@]}")
+  for a in "$@"; do ok+=(-e "$a"); done
   dir=$(mktemp -d)
   set +e
   go test -tags "$tags" -count=1 -timeout 20m -json ./... | tee "$dir/test.json" | jq -rj --unbuffered 'select(.Action == "output") | .Output'
@@ -54,7 +57,7 @@ alltests() {
       | select(test("^ +[^ ]+\\.go:[0-9]+: ")) | sub("^ +"; "") | rtrimstr("\n")] | join(" "))' \
     "$dir/test.json" > "$dir/skips"
   echo "Skipped:"; cat "$dir/skips"
-  if grep -v -F "${allowed[@]}" "$dir/skips"; then
+  if { [ ${#ok[@]} -eq 0 ] && grep . "$dir/skips"; } || { [ ${#ok[@]} -gt 0 ] && grep -v -F "${ok[@]}" "$dir/skips"; }; then
     fail "the tests above skipped, and this machine has every tool they need"
     rm -rf "$dir"
     return 1
@@ -66,7 +69,8 @@ alltests() {
 full() {
   fmt
   go vet ./...
-  alltests
+  DROMAS_TEST_POSTGRES='' alltests 'needs PostgreSQL'
+  if [ -n "${DROMAS_TEST_POSTGRES-}" ]; then alltests; fi
   test/interop.sh
 }
 

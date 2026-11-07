@@ -1,20 +1,21 @@
 // Command dromas-server is the dromas.dev server.
 //
-//	dromas-server serve --mailboxes-table T --messages-table T --accounts-table T --bucket B --names NAMES [--listen addr] [options] [limits]
+//	dromas-server serve (--bucket B | --bodies-dir DIR) --names NAMES [--listen addr] [options] [limits]
 //	dromas-server serve --dev [--listen addr] [limits]
-//	dromas-server account create --accounts-table T [--id NAME] [--unmetered]
-//	dromas-server account key --accounts-table T --account ID --uses N --ttl D
-//	dromas-server account drop --mailboxes-table T --accounts-table T --account ID --mailbox ADDR
+//	dromas-server account create [--id NAME] [--unmetered]
+//	dromas-server account key --account ID --uses N --ttl D
+//	dromas-server account drop --account ID --mailbox ADDR
 //	dromas-server limits clear --socket PATH --ip ADDR
 //
-// The first keeps state in three DynamoDB tables, mailboxes, messages and
-// accounts, and an S3 Express One Zone directory bucket (ARCHITECTURE.md § Storage),
-// with AWS credentials from the usual chain; it answers 503 until its stream
-// followers are positioned, loads each mailbox into memory on its first use, and
-// exits if a stream follower loses its place, since a restart rebuilds
-// memory.
+// The first keeps state in PostgreSQL, found as libpq finds a database, by
+// its environment (PGHOST, PGDATABASE, PGUSER, PGPASSWORD, PGSERVICE and the
+// rest), and messages' bodies in an S3 bucket,
+// with AWS credentials from the usual chain, or a directory (ARCHITECTURE.md
+// § Storage); it answers 503 until its feed is followed, loads each mailbox
+// into memory on its first use, and exits if the feed loses its place, since
+// a restart rebuilds memory.
 //
-// --dev keeps everything in memory, with no AWS: the honest server every
+// --dev keeps everything in memory, with no database: the honest server every
 // client tests against. Nothing survives a restart.
 // It takes a pass made for any name, unless --names is given.
 //
@@ -27,7 +28,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	flag "github.com/spf13/pflag"
 	"log"
 	"net"
 	"net/http"
@@ -39,6 +39,9 @@ import (
 	"syscall"
 	"time"
 
+	flag "github.com/spf13/pflag"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/dromas-dev/dromas-client/protocol"
 	"github.com/dromas-dev/dromas-server/internal/server"
@@ -58,7 +61,7 @@ func main() {
 	case len(os.Args) >= 3 && os.Args[1] == "limits":
 		err = limits(os.Args[2], os.Args[3:])
 	default:
-		fmt.Fprintln(os.Stderr, "usage: dromas-server serve (--mailboxes-table T --messages-table T --accounts-table T --bucket B --names NAMES | --dev) [--listen addr] [--limits FILE] [options]")
+		fmt.Fprintln(os.Stderr, "usage: dromas-server serve ((--bucket B | --bodies-dir DIR) --names NAMES | --dev) [--listen addr] [--limits FILE] [options]")
 		fmt.Fprintln(os.Stderr, "       dromas-server account (create | key | drop) [flags]")
 		fmt.Fprintln(os.Stderr, "       dromas-server limits default")
 		fmt.Fprintln(os.Stderr, "       dromas-server limits clear --socket PATH --ip ADDR")
@@ -72,18 +75,16 @@ func main() {
 
 func serve(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	dev := fs.Bool("dev", false, "keep everything in memory, with no AWS")
+	dev := fs.Bool("dev", false, "keep everything in memory, with no database")
 	listen := fs.String("listen", "127.0.0.1:8080", "comma-separated TCP addresses to listen on, each served alike: a reverse proxy in front spreads its connections across several, and each is one more range of its ephemeral ports")
-	mailboxes := fs.String("mailboxes-table", "", "the DynamoDB table of mailboxes")
-	msgs := fs.String("messages-table", "", "the DynamoDB table of messages")
-	accts := fs.String("accounts-table", "", "the DynamoDB table of accounts")
-	bucket := fs.String("bucket", "", "the S3 Express One Zone directory bucket")
+	bucket := fs.String("bucket", "", "the S3 bucket that keeps messages' bodies, a directory bucket or a general purpose one, with a lifecycle rule that deletes what is older than the message TTL")
+	bodiesDir := fs.String("bodies-dir", "", "the directory that keeps messages' bodies, in place of --bucket: shared by several processes only on one host or a shared filesystem")
+	sweepEvery := fs.Duration("sweep-interval", 10*time.Minute, "how often the rows past their expiry are deleted, one process at a time, and bodies under --bodies-dir past the message TTL collected (0: never)")
+	sweepGrace := fs.Duration("sweep-grace", time.Hour, "how long past its expiry, by the database's clock, a row is kept before the sweep deletes it")
 	names := fs.String("names", "", "comma-separated names clients call this server by: the host of its URL, lowercase, with a port only when that is neither 80 nor 443; a pass is taken only for one of them")
 	idTypes := fs.String("identity-types", strings.Join(protocol.IdentityTypes(), ","), "comma-separated identity key types a mailbox may register with, of those this build verifies; "+protocol.IdentityEd25519+" is always one of them")
-	region := fs.String("region", "us-east-1", "the AWS region")
+	region := fs.String("region", "us-east-1", "the AWS region of --bucket")
 	mailboxCache := fs.Int("mailbox-cache", server.DefaultMailboxCache, "mailbox records held in memory, for sends and reads of a mailbox")
-	streamEvery := fs.Duration("stream-interval", time.Second, "how often each stream shard is read")
-	heartbeatEvery := fs.Duration("heartbeat-interval", 15*time.Second, "how often this process writes each table's heartbeat item, a timestamp that shows each stream follower current: one write a table each interval; a follower is current only while the newest heartbeat it applied, from any process, is within its unsynced bound and this interval of now (0: none)")
 	shard := fs.String("shard", "", "I/N: this process answers only for the mailboxes of shard I of N, N a power of two up to 64, when the reverse proxy in front sends each mailbox's calls to one process by its address: shard I is the addresses whose first character after d_ has a base64url value v with v*N/64 == I; any other mailbox's call is answered 503 (empty: every mailbox)")
 	proxies := fs.String("trusted-proxy", "", "comma-separated CIDRs of the reverse proxy in front, if any, whose X-Forwarded-For names the client: its last address, the one the proxy wrote")
 	l := server.DefaultLimits()
@@ -168,40 +169,46 @@ func serve(args []string) error {
 	var start func() error
 	switch {
 	case *dev:
-		if *mailboxes != "" || *msgs != "" || *accts != "" || *bucket != "" {
-			return errors.New("--dev takes no tables or --bucket")
+		if *bucket != "" || *bodiesDir != "" {
+			return errors.New("--dev takes no --bucket or --bodies-dir")
 		}
 		cfg.Store = server.NewMemStore(time.Now)
 		logger.Printf("dromas-server --dev on %s (in memory: nothing survives a restart)", *listen)
-	case *mailboxes == "" || *msgs == "" || *accts == "" || *bucket == "" || len(cfg.Names) == 0:
-		return errors.New("name --mailboxes-table, --messages-table, --accounts-table, --bucket and --names, or run --dev")
+	case (*bucket == "") == (*bodiesDir == "") || len(cfg.Names) == 0:
+		return errors.New("name --bucket or --bodies-dir, and --names, or run --dev")
 	default:
-		awsCfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(*region), config.WithLogger(server.AWSLogger(os.Stderr)))
+		pc := server.PostgresConfig{
+			Bucket:        *bucket,
+			BodiesDir:     *bodiesDir,
+			MailboxCache:  *mailboxCache,
+			SweepInterval: *sweepEvery,
+			SweepGrace:    *sweepGrace,
+			Log:           logger,
+			Metrics:       cfg.Metrics,
+		}
+		where := "bodies in " + *bodiesDir
+		if *bucket != "" {
+			awsCfg, err := loadAWS(ctx, *region)
+			if err != nil {
+				return err
+			}
+			cfg.Metrics.InstrumentAWS(&awsCfg)
+			pc.AWS = awsCfg
+			where = "bodies in bucket " + *bucket
+		}
+		fatal := make(chan error, 1)
+		pc.Fatal = func(err error) { fatal <- err }
+		store, err := server.NewPostgresStore(ctx, pc)
 		if err != nil {
 			return err
 		}
-		cfg.Metrics.InstrumentAWS(&awsCfg)
-		fatal := make(chan error, 1)
-		store := server.NewDynamoStore(server.DynamoConfig{
-			AWS:               awsCfg,
-			MailboxesTable:    *mailboxes,
-			MessagesTable:     *msgs,
-			AccountsTable:     *accts,
-			Bucket:            *bucket,
-			MailboxCache:      *mailboxCache,
-			StreamInterval:    *streamEvery,
-			HeartbeatInterval: *heartbeatEvery,
-			Log:               logger,
-			Fatal:             func(err error) { fatal <- err },
-			Metrics:           cfg.Metrics,
-		})
 		cfg.Store, cfg.Ready = store, store.Ready
 		start = func() error {
 			t := time.Now()
 			if err := store.Start(ctx); err != nil {
-				return fmt.Errorf("following %s, %s and %s: %w", *mailboxes, *msgs, *accts, err)
+				return fmt.Errorf("following the database: %w", err)
 			}
-			logger.Printf("following the streams of %s, %s and %s (ready in %s); mailboxes load on first use", *mailboxes, *msgs, *accts, time.Since(t).Round(time.Millisecond))
+			logger.Printf("following the database (ready in %s); mailboxes load on first use", time.Since(t).Round(time.Millisecond))
 			go func() {
 				if err := <-fatal; err != nil {
 					logger.Printf("%v: exiting, so a restart rebuilds memory", err)
@@ -210,7 +217,7 @@ func serve(args []string) error {
 			}()
 			return nil
 		}
-		logger.Printf("dromas-server on %s: tables %s, %s and %s, bucket %s", *listen, *mailboxes, *msgs, *accts, *bucket)
+		logger.Printf("dromas-server on %s: PostgreSQL, %s", *listen, where)
 	}
 
 	api := server.New(cfg)
@@ -338,4 +345,10 @@ func serverNames(list string) ([]string, error) {
 		names = append(names, n)
 	}
 	return names, nil
+}
+
+// loadAWS is the AWS configuration of --bucket: credentials from the usual
+// chain, and the SDK's own lines written through the redaction (AWSLogger).
+func loadAWS(ctx context.Context, region string) (aws.Config, error) {
+	return config.LoadDefaultConfig(ctx, config.WithRegion(region), config.WithLogger(server.AWSLogger(os.Stderr)))
 }

@@ -16,7 +16,7 @@ import (
 // mailbox and account records serve sends and reads of a mailbox (recCache). Every
 // write goes through one function (write), which applies its outcome, and
 // every change the backend's feed hands over goes through one (apply). It
-// is the one implementation of Store, whatever the backend: NewDynamoStore
+// is the one implementation of Store, whatever the backend: NewPostgresStore
 // and NewMemStore make it.
 type Memory struct {
 	backend Backend
@@ -253,8 +253,8 @@ func (s *Memory) apply(c Change) {
 	case RecordChange:
 		// A record's image refreshes the record cache and the standing,
 		// where they hold an older record; one this build cannot read, such
-		// as one in a state it never writes or whose ACL does not read, is
-		// forgotten, as its removal is.
+		// as one whose identity or ACL does not read, is forgotten, as its
+		// removal is.
 		var st Standing
 		var err error
 		if !gone {
@@ -270,7 +270,7 @@ func (s *Memory) apply(c Change) {
 		// A view held of the address with no record, read since its record
 		// was deleted, has no version to hold an image to: the image may be
 		// of the record deleted, its event behind this process's delete on
-		// the stream. The view is dropped, and the next use reads the address
+		// the feed. The view is dropped, and the next use reads the address
 		// (dromas-dev/dromas-server#169).
 		img := s.cache.image(c.Mailbox)
 		s.cache.write(c.Addr, func(cur *Mailbox, held, missing bool) (*Mailbox, bool) {
@@ -476,13 +476,16 @@ func (s *Memory) List(ctx context.Context, mailbox protocol.Address, after *Curs
 	return s.backend.List(ctx, mailbox, after, limit, consistent)
 }
 
-// Message implements Store. A live message whose body is gone (a
-// half-finished ack, or a body the lifecycle rule took early) is retired and
-// answered as gone.
+// Message implements Store. A live message whose body is gone (errNoBody)
+// is retired and answered as gone.
 func (s *Memory) Message(ctx context.Context, mailbox protocol.Address, id [32]byte, from int64) (*Header, []byte, error) {
 	h, body, err := s.backend.Message(ctx, mailbox, id, from)
 	if errors.Is(err, errNoBody) {
-		if err := s.retire(ctx, mailbox, id); err != nil && !errors.Is(err, ErrNotFound) {
+		var at time.Time
+		if h != nil {
+			at = h.ReceivedAt // that row alone: a send of the same bytes since is another
+		}
+		if err := s.retire(ctx, mailbox, id, at); err != nil && !errors.Is(err, ErrNotFound) {
 			return nil, nil, err
 		}
 		return nil, nil, ErrNotFound
@@ -493,19 +496,18 @@ func (s *Memory) Message(ctx context.Context, mailbox protocol.Address, id [32]b
 	return h, body, nil
 }
 
-// retire deletes a live message's item, so it leaves the list, and takes it
+// retire deletes a live message's row, so it leaves the list, and takes it
 // out of memory. ErrNotFound if it is not live.
-func (s *Memory) retire(ctx context.Context, mailbox protocol.Address, id [32]byte) error {
+func (s *Memory) retire(ctx context.Context, mailbox protocol.Address, id [32]byte, at time.Time) error {
 	var received time.Time
 	return s.write(ofAddress(mailbox), func() (err error) {
-		received, err = s.backend.Retire(ctx, mailbox, id)
+		received, err = s.backend.Retire(ctx, mailbox, id, at)
 		return err
 	}, func() { s.retired(mailbox, id, received) })
 }
 
-// DeleteMessage implements Store (ack): the body, then the item. Both steps
-// are safe to repeat, so a crash between them is finished by the client's
-// next ack, and a fetch in between finds no body and retires it.
+// DeleteMessage implements Store (ack): the row, then the body. A crash
+// between them leaves a body no row names, which goes by age.
 func (s *Memory) DeleteMessage(ctx context.Context, mailbox protocol.Address, id [32]byte) error {
 	var received time.Time
 	return s.write(ofAddress(mailbox), func() (err error) {

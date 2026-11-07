@@ -11,15 +11,15 @@ import (
 	"testing"
 	"time"
 
-	"filippo.io/age"
 	"github.com/dromas-dev/dromas-client/protocol"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // heldTillGone holds a write, while armed, until its request's context has
 // ended, then makes it and returns the error its own context gives, as the
-// AWS SDK does when its caller goes after the request went out. The
-// in-memory store ignores contexts, so this is what shows whose context a
-// write runs on.
+// store's database client does when its caller goes after the statement
+// went out. The in-memory store ignores contexts, so this is what shows whose
+// context a write runs on.
 type heldTillGone struct {
 	Store
 	armed   atomic.Bool
@@ -56,19 +56,6 @@ func (h *heldTillGone) UpdateMailbox(ctx context.Context, b *Mailbox) error {
 		return err
 	}
 	return ctx.Err()
-}
-
-// sealFor is an age file sealed to raw mailbox to's prekey of the given serial.
-func sealFor(t *testing.T, to *raw, serial uint64) []byte {
-	t.Helper()
-	var ct bytes.Buffer
-	w, err := age.Encrypt(&ct, to.keys[serial].Recipient())
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _ = io.WriteString(w, `{"v":1}`)
-	_ = w.Close()
-	return ct.Bytes()
 }
 
 // A write runs to its end however its caller goes, and what it changed is
@@ -207,50 +194,60 @@ func (s *failPut) PutMessage(ctx context.Context, mailbox protocol.Address, h *H
 	return s.Store.PutMessage(ctx, mailbox, h, body)
 }
 
+// answering is a backend whose sends' writes answer err, and write nothing.
+type answering struct {
+	Backend
+	err error
+}
+
+func (b answering) PutMessage(context.Context, protocol.Address, *Header, []byte) error {
+	return b.err
+}
+
 // A count reserved for a write is kept when the write may have been applied,
-// whatever error it returned, and given back only for a refusal the store or
-// AWS stated (dromas-dev/dromas-server#14, #90): a send whose write timed
-// out, or met a fault of AWS's own, or whose backend answered an error it
-// states nothing of, spends its send a day; one AWS throttled, or refused
-// for the call itself, or whose body's PUT failed before its item, does
-// not. Each error is the one the store returns when the fake of AWS answers
-// so, as the SDK makes it, or when its backend answers so (faults).
+// whatever error it returned, and given back only for a refusal the store
+// stated (dromas-dev/dromas-server#14, #90): a send whose write met a
+// timeout mid-statement, lost its answer, was applied and then lost it, or
+// whose backend answered an error it states nothing of, spends its send a
+// day; one PostgreSQL refused, or pgx never sent, or whose body's PUT failed
+// before its row, does not. Each error is the one the store returns when its
+// backend answers so: PostgreSQL's as pgOutcome reads it, or the injector's
+// (faults).
 func TestACountIsKeptWhenItsWriteMayHaveBeenApplied(t *testing.T) {
 	t.Parallel()
-	every := func(a answer) func(string, int, []byte) answer { return func(string, int, []byte) answer { return a } }
-	everyS3 := func(a answer) func(string, int) answer { return func(string, int) answer { return a } }
-	// put is the error of a send's PutMessage on ctx when AWS answers so.
-	put := func(ctx context.Context, dynamo func(string, int, []byte) answer, s3 func(string, int) answer) func() error {
+	ctx := context.WithoutCancel(t.Context())
+	// put is the error of a send's PutMessage when its backend answers err.
+	put := func(err error) func() error {
 		return func() error {
-			f := newFakeAWS()
-			f.dynamo, f.s3 = dynamo, s3
+			s := NewMemStore(time.Now)
+			s.backend = answering{s.backend, err}
 			now := time.Now().UTC().Truncate(time.Millisecond)
-			h := &Header{ID: [32]byte{7}, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}
-			_, err := fakeStore(t, f).PutMessage(ctx, protocol.Address{4}, h, []byte("abc"))
+			_, err := s.PutMessage(ctx, protocol.Address{4}, &Header{ID: [32]byte{7}, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}, []byte("abc"))
 			return err
 		}
 	}
-	ctx := context.WithoutCancel(t.Context())
-	short, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
-	defer cancel()
+	// injected is the error of a send's PutMessage when the injector makes it x.
+	injected := func(x fault) func() error {
+		return func() error {
+			s := NewMemStore(time.Now)
+			injectFaults(s).set("PutMessage", x)
+			now := time.Now().UTC().Truncate(time.Millisecond)
+			_, err := s.PutMessage(ctx, protocol.Address{4}, &Header{ID: [32]byte{7}, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}, []byte("abc"))
+			return err
+		}
+	}
 	cases := []struct {
 		name string
 		err  func() error
 		kept bool
 	}{
-		{"a timeout", put(short, every(answer{hang: true}), nil), true},
-		{"a fault of AWS's own", put(ctx, every(answer500), nil), true},
-		{"an error of no kind its backend states", func() error {
-			s := NewMemStore(time.Now)
-			injectFaults(s).set("PutMessage", unknownBefore)
-			now := time.Now().UTC().Truncate(time.Millisecond)
-			_, err := s.PutMessage(ctx, protocol.Address{4}, &Header{ID: [32]byte{7}, Size: 3, ReceivedAt: now, ExpiresAt: now.Add(protocol.Retention)}, []byte("abc"))
-			return err
-		}, true},
-		{"a throttle", put(ctx, every(answerPTEE), nil), false},
-		{"a refusal of the call", put(ctx, every(answer{status: http.StatusBadRequest, body: dynErr("ValidationException", "")}), nil), false},
-		{"a refusal of the body", put(ctx, nil, everyS3(answer{status: http.StatusForbidden, body: s3Err("AccessDenied")})), false},
-		{"a fault of AWS's own at the body", put(ctx, nil, everyS3(answer{status: http.StatusInternalServerError, body: s3Err("InternalError")})), false},
+		{"a timeout mid-statement", put(pgOutcome(context.DeadlineExceeded)), true},
+		{"an answer lost", put(pgOutcome(io.ErrUnexpectedEOF)), true},
+		{"applied, then its answer lost", injected(unknownAfter), true},
+		{"an error of no kind its backend states", injected(unknownBefore), true},
+		{"a refusal PostgreSQL stated", put(pgOutcome(&pgconn.PgError{Severity: "ERROR", Code: "40001"})), false},
+		{"a write pgx never sent", put(pgOutcome(unsent(true))), false},
+		{"a refusal of the body", injected(refusedBefore), false},
 		{"a stale record", func() error { return ErrStale }, false},
 	}
 	errs := make([]error, len(cases))
@@ -274,7 +271,7 @@ func TestACountIsKeptWhenItsWriteMayHaveBeenApplied(t *testing.T) {
 			s.err = nil
 			s.mu.Unlock()
 			got := e.sendTo(to, 1, from, 1)
-			t.Logf("the write's error: %v (%s); the next send %d %s", errs[i], faultOf(errs[i]), got.status, got.code())
+			t.Logf("the write's error: %v; the next send %d %s", errs[i], got.status, got.code())
 			if (got.status == http.StatusTooManyRequests) != c.kept {
 				t.Errorf("the next send %d %s; want the count kept %v", got.status, got.code(), c.kept)
 			}

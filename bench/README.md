@@ -8,8 +8,6 @@ Measured 2026-10-10 unless dated otherwise: 2× Neoverse-V2, Go 1.26.6, standard
 | `crypto/base64_test.go` | **A TEST, not a benchmark:** Go's `encoding/base64` decodes 76-column-wrapped base64 (LF and CRLF) to the exact bytes | `cd bench/crypto && go test -run TestWrappedBase64DecodesExactly -v .` |
 | `poll/` | **A whole empty poll over loopback HTTP, against a real `dromas-server serve --dev`: 33 to 34 µs of server CPU with a pass the server remembers** (measured 2026-10-13; 40,000 polls, keep-alive, 0 errors, three runs). The same run with a 62-byte bearer token in place of the pass: 31 to 32 µs. `poll/srv`, a model with nothing but an HMAC check and a map lookup: ~19 µs (measured 2026-10-10) | below |
 
-The memory and item-size measurements, and what a pass costs to check the first time and after, are `internal/server/cost_test.go` (`DROMAS_COST=1 go test ./internal/server -run TestCost -v`).
-
 **Running `poll/` against the real server** (build into a scratch directory, here `$out`; `$mailbox` is a new, empty directory for a mailbox's state):
 
 ```sh

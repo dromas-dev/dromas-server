@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -20,37 +19,6 @@ import (
 // pass, and the address goes on. The server keeps the highest one and serves
 // it in every read of the mailbox, takes no pass and no prekey statement under a
 // revoked certificate, and sends nobody to a prekey under one.
-
-// certs is the revocation of r's certificates through a serial, signed by its
-// identity, in the record that carries it; r signs every statement after it
-// under a certificate (raw.certified).
-func (r *raw) certs(through uint64) protocol.Revocations {
-	r.e.t.Helper()
-	r.underCertificates = true
-	l, err := protocol.NewRevokedCertificates(r.id.Address(), through)
-	if err != nil {
-		r.e.t.Fatal(err)
-	}
-	sig, err := protocol.SignRevokedCertificates(r.signer, l)
-	if err != nil {
-		r.e.t.Fatal(err)
-	}
-	return protocol.Revocations{Identity: r.id.Document(), RevokedCertificates: l.Statement(), RevokedCertificatesSignature: sig}
-}
-
-// sendTo posts an age file sealed to to's statement of the given serial,
-// naming it, with a pass by the signer of from's statement fromSerial.
-func (e *env) sendTo(to *raw, serial uint64, from *raw, fromSerial uint64) reply {
-	e.t.Helper()
-	var ct bytes.Buffer
-	w, err := age.Encrypt(&ct, to.keys[serial].Recipient())
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	_, _ = io.WriteString(w, `{"v":1}`)
-	_ = w.Close()
-	return e.do("POST", to.path("/messages"), to.sealed(serial, ct.Bytes()), from.pass(fromSerial))
-}
 
 // A stored revocation of certificates that does not parse is an error
 // wherever it is read, never "nothing revoked": nothing this server writes
@@ -68,6 +36,12 @@ func TestAStoredListThatDoesNotParseIsAnError(t *testing.T) {
 	bad := []byte("not a revocation of certificates\n")
 	if err := e.store.Revoke(ctx, r.id.Address(), &Revocations{Identity: r.id.Document(), Certs: bad, CertsSig: []byte("x"), Through: 1}, ExpectAnything); err != nil {
 		t.Fatal(err)
+	}
+	if s, ok := onPg(e.store); ok {
+		// As a process meets the list that reads the record after it: one
+		// that held the mailbox before keeps what it applied of the write.
+		fed(t, s)
+		s.forget(r.id.Address())
 	}
 	for name, got := range map[string]reply{
 		"a list under the mailbox's certificate": e.do("GET", r.path("/messages"), nil, r.pass(n)),
@@ -412,15 +386,15 @@ func TestAPrekeyAtTheHighestSerialDoesNotEndTheAddress(t *testing.T) {
 // starts later serves the same one and refuses the same pass: nothing about a
 // revoked certificate lives only in the memory of the process that took the
 // revocation. It takes the identity's pass, which no revocation of
-// certificates covers. AWS only: the in-memory store has one process.
+// certificates covers. PostgreSQL only: the in-memory store has one process.
 func TestARevocationOfCertificatesOutlivesTheProcess(t *testing.T) {
 	t.Parallel()
-	e, _ := dynamoEnv(t)
+	e, _ := sharedEnv(t)
 	r := e.raw().certified().register(protocol.MaxPrekeyLifetime)
 	rec := r.certs(1)
 	e.want(e.do("PUT", r.path("/revocations"), rec, ""), 200, "")
 
-	later := startDynamo(t, e.clock.Now) // its memory holds nothing of the mailbox
+	later := startPostgres(t, e.clock.Now) // its memory holds nothing of the mailbox
 	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: later, Limits: relaxed(), Now: e.clock.Now, Ready: later.Ready}).Handler()))
 	defer srv.Close()
 	e2 := &env{t: t, clock: e.clock, srv: srv}
@@ -444,7 +418,7 @@ func TestARevocationOfCertificatesOutlivesTheProcess(t *testing.T) {
 }
 
 // A revocation of certificates is kept apart from the mailbox's record, in its
-// address's revocations item, which nothing but a higher one replaces. What
+// address's revocations row, which nothing but a higher one replaces. What
 // memory holds of a loaded mailbox and the mailbox read whole say the same of it:
 // whether it covers the mailbox's current certificate. The record carries none
 // of it.
@@ -482,9 +456,15 @@ func TestTheStandingKnowsTheRevokedCertificates(t *testing.T) {
 		if c.through != 0 && (len(b.RevokedCerts) == 0 || len(b.RevokedCertsSig) == 0) {
 			t.Errorf("case %d: the mailbox is read without its revocation of certificates", i)
 		}
-		for _, name := range []string{"revocation", "revoked_certs", "revoked_certs_sig", "through"} {
-			if _, ok := mailboxItem(b)[name]; ok {
-				t.Errorf("case %d: the record carries %s", i, name)
+		rows := []row{recordRow(b)}
+		if s, ok := onPg(e.store); ok {
+			rows = append(rows, s.storedRecord(t, r.id.Address()))
+		}
+		for _, rec := range rows {
+			for _, name := range []string{"revocation", "revoked_certs", "revoked_certs_sig", "through"} {
+				if _, ok := rec[name]; ok {
+					t.Errorf("case %d: the record carries %s", i, name)
+				}
 			}
 		}
 	}

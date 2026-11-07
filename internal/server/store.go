@@ -63,7 +63,7 @@ type Mailbox struct {
 	Retired []Retired
 	Rev     uint64 // the record's revision, 0 with no record; a write must name the one it read
 	Created time.Time
-	// Expires is when the record may go: DynamoDB's TTL deletes it some time
+	// Expires is when the record may go: the sweep deletes it some time
 	// after (PROTOCOL.md §13). Every registration and renewal raises it to
 	// when nothing the mailbox has published is valid any more, and nothing
 	// lowers it (keep). Zero: never.
@@ -206,7 +206,7 @@ func (b *Mailbox) revocations() (*Revocations, error) {
 // with its identity's revocations rv, or nil. It is nil if neither is held.
 // A revocation of the address makes the state Revoked, whatever the record
 // says: a registration that raced the revocation leaves a record that is
-// never served, and its TTL takes it.
+// never served, and the sweep takes it at its expiry.
 func view(a protocol.Address, rec *Mailbox, rv *Revocations) *Mailbox {
 	if rec == nil && rv == nil {
 		return nil
@@ -449,10 +449,9 @@ var (
 )
 
 // errRefused marks a backend's error as a refusal it stated, of a write it
-// did not make: AWS's throttle or its answer of 4xx to the call itself, or
-// a step of a multi-step write that failed before its item's write, and
-// changed nothing memory holds (an ack's body not deleted, a delete of a
-// mailbox's messages that deleted no body).
+// did not make: a statement the database answered with an error and rolled
+// back, or one never sent (pgOutcome), or a step of a multi-step write that
+// failed before its row's write, and changed nothing memory holds.
 var errRefused = errors.New("refused")
 
 // refused is err, marked as a refusal stated (errRefused).
@@ -487,7 +486,7 @@ var errNotStored = errors.New("not stored")
 
 // version is a record's place in its address's history: the time its mailbox
 // registered, to the millisecond as the store keeps it, then its rev. A mailbox
-// registered again once the TTL took its record starts at rev 1 again, and
+// registered again once the sweep took its record starts at rev 1 again, and
 // later (dromas-dev/dromas-client#407 item 2). It is the one comparison
 // of two records of an address: the record cache's (putLocked, image,
 // mergeViews) and the index's (setStanding). An account's has its rev
@@ -507,8 +506,8 @@ func versionOf(b *Mailbox) version {
 	return version{ms(b.Created), b.Rev}
 }
 
-// storeTimeout bounds each call to AWS the store makes, a read as a write,
-// whatever context its caller hands it (bound, boundedStreams), and each
+// storeTimeout bounds each call to the database and to S3 the store makes,
+// a read as a write, whatever context its caller hands it (bounded, bound), and each
 // read that a call shared by several callers makes apart from the request
 // that started it: a lookup's read of a mailbox's record (Server.lead) and the
 // reads of a send's steps 6 to 9 (Server.deliver).
@@ -516,7 +515,7 @@ const storeTimeout = 10 * time.Second
 
 // bounded is ctx bounded by storeTimeout: for a read that callers share,
 // made apart from their requests, on any store (Server.deliver), and for
-// each call of the stream follower (boundedStreams). A handler hands every
+// each statement of the PostgreSQL backend. A handler hands every
 // store write a context apart from its request (detached), so that what a
 // write changed is counted and reaches memory whenever the write was made
 // (dromas-dev/dromas-server#14), and a call that callers share reads on
@@ -581,15 +580,15 @@ func cloneAccount(a *Account) *Account {
 
 // Store is the server's state: mailbox records, message headers and bodies,
 // and what a poll needs of them in memory. Its
-// one implementation is Memory, over a Backend: DynamoDB and S3 Express
-// (NewDynamoStore), or maps in this process (NewMemStore, the dev server).
+// one implementation is Memory, over a Backend: PostgreSQL
+// (NewPostgresStore), or maps in this process (NewMemStore, the dev server).
 type Store interface {
 	// Held returns the standing of a mailbox memory holds, with no read. ok is
 	// false for a mailbox this process has not loaded, which only its record
 	// answers for: Known, then Mailbox (ARCHITECTURE.md § Memory).
 	Held(a protocol.Address) (st Standing, ok bool)
 	// Changed returns a channel closed at mailbox a's next change in memory, by
-	// a write of this process or one the streams bring: what a long poll
+	// a write of this process or one the feed brings: what a long poll
 	// waits on (PROTOCOL.md §11.11). It reads nothing.
 	Changed(a protocol.Address) <-chan struct{}
 	// NextExpiry returns when the first of mailbox a's messages in memory

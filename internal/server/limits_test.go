@@ -2,15 +2,12 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/dromas-dev/dromas-client/api/apitest"
 	"github.com/dromas-dev/dromas-client/protocol"
 )
 
@@ -68,25 +65,6 @@ func TestContinuationAllowance(t *testing.T) {
 	}
 }
 
-// counted is a second server on e's store and keys, with its own limits'
-// state, whose storage calls are counted.
-func counted(t *testing.T, e *env, l Limits) (*env, *countingStore) {
-	t.Helper()
-	cs := &countingStore{s: e.store}
-	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: cs, Limits: l, Now: e.clock.Now}).Handler()))
-	t.Cleanup(srv.Close)
-	return &env{t: t, clock: e.clock, srv: srv}, cs
-}
-
-func listOf(t *testing.T, r reply) protocol.MessageList {
-	t.Helper()
-	var l protocol.MessageList
-	if err := json.Unmarshal(r.body, &l); err != nil {
-		t.Fatalf("%d %s: %v", r.status, r.body, err)
-	}
-	return l
-}
-
 // A cursor is no way around the poll rate: with nothing after it, a list is
 // a poll, answered from memory; with something after it, it is a
 // continuation, which has its own allowance.
@@ -97,6 +75,7 @@ func TestCursorIsNoWayAroundThePollRate(t *testing.T) {
 	l.PollBurst, l.PollRefill = 3, 50*time.Second
 	e := newEnv(t, l)
 	a, b := e.mailbox(), e.mailbox()
+	steady(t, e.store, b.Address())
 	e2, cs := counted(t, e, l)
 	tok := e2.pass(b)
 	list := func(c Cursor) reply {
@@ -189,6 +168,7 @@ func TestUnknownIDsStayInMemory(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	a, b := e.mailbox(), e.mailbox()
+	steady(t, e.store, b.Address())
 	e2, cs := counted(t, e, relaxed())
 	tok := e2.pass(b)
 	msg := func(method, id string) reply {
@@ -298,10 +278,11 @@ func TestANewMailboxIsUsedWhateverItsAddressMissed(t *testing.T) {
 }
 
 // A missing mailbox that memory remembers is answered from memory: never refused,
-// never counted, and no call to storage. Only the store on AWS remembers one.
+// never counted, and no call to storage. Only the store on PostgreSQL
+// remembers one.
 func TestARememberedMissIsFree(t *testing.T) {
 	t.Parallel()
-	e, _ := dynamoEnv(t)
+	e, _ := sharedEnv(t)
 	l := relaxed()
 	l.MissesPerMinute = 1
 	e2, cs := counted(t, e, l)
@@ -480,11 +461,11 @@ func TestMissCache(t *testing.T) {
 	}
 }
 
-// On DynamoDB, a mailbox a read did not find is remembered as missing until it
-// is written.
+// On PostgreSQL, a mailbox a read did not find is remembered as missing until
+// it is written.
 func TestMissingMailboxIsRememberedUntilItIsWritten(t *testing.T) {
 	t.Parallel()
-	e, s := dynamoEnv(t)
+	e, s := sharedEnv(t)
 	ctx := context.Background()
 	r := e.raw()
 	a := r.id.Address()

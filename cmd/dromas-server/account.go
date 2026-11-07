@@ -5,10 +5,8 @@ import (
 	"errors"
 	"fmt"
 	flag "github.com/spf13/pflag"
-	"os"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/dromas-dev/dromas-client/protocol"
 	"github.com/dromas-dev/dromas-server/internal/server"
 )
@@ -16,8 +14,6 @@ import (
 // account runs one operator command on accounts (PROTOCOL.md §11.16).
 func account(cmd string, args []string) error {
 	fs := flag.NewFlagSet("account "+cmd, flag.ContinueOnError)
-	region := fs.String("region", "us-east-1", "the AWS region")
-	accts := fs.String("accounts-table", "", "the DynamoDB table of accounts")
 	var run func(context.Context, *server.Memory) error
 	switch cmd {
 	case "create":
@@ -63,13 +59,12 @@ func account(cmd string, args []string) error {
 			return nil
 		}
 	case "drop":
-		fs.String("mailboxes-table", "", "the DynamoDB table of mailboxes")
 		id := fs.String("account", "", "the account to drop the mailbox from")
 		addr := fs.String("mailbox", "", "the mailbox's address")
 		run = func(ctx context.Context, s *server.Memory) error {
 			a, err := protocol.ParseAddress(*addr)
-			if fs.Lookup("mailboxes-table").Value.String() == "" || *id == "" || err != nil {
-				return errors.New("name --mailboxes-table, --account and --mailbox (an address)")
+			if *id == "" || err != nil {
+				return errors.New("name --account and --mailbox (an address)")
 			}
 			b, err := s.Mailbox(ctx, a)
 			if err != nil {
@@ -86,17 +81,11 @@ func account(cmd string, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *accts == "" {
-		return errors.New("name --accounts-table")
-	}
-	ctx := context.Background()
-	awsCfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(*region), config.WithLogger(server.AWSLogger(os.Stderr)))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s, err := server.NewPostgresStore(ctx, server.PostgresConfig{})
 	if err != nil {
 		return err
 	}
-	mailboxesTable := ""
-	if f := fs.Lookup("mailboxes-table"); f != nil {
-		mailboxesTable = f.Value.String()
-	}
-	return run(ctx, server.NewDynamoStore(server.DynamoConfig{AWS: awsCfg, MailboxesTable: mailboxesTable, AccountsTable: *accts, ConsistentReads: true}))
+	return run(ctx, s)
 }

@@ -25,29 +25,6 @@ func revocationPath(a protocol.Address) string { return "/v1/" + a.String() + "/
 
 func mailboxPath(a protocol.Address) string { return "/v1/" + a.String() }
 
-// held is the revocation record a read of a mailbox (GET /v1/<address>) shows,
-// read as a client reads it: the 200's revocation of certificates, or the
-// 410's record. Nil when it shows none.
-func held(t *testing.T, r reply) *protocol.Revocations {
-	t.Helper()
-	switch r.status {
-	case 200:
-		var b protocol.MailboxResponse
-		if err := protocol.Unmarshal(r.body, &b); err != nil {
-			t.Fatalf("the read of a mailbox: %v: %s", err, r.body)
-		}
-		return b.Record()
-	case 410:
-		var p protocol.Problem
-		if err := protocol.Unmarshal(r.body, &p); err != nil {
-			t.Fatalf("the read of a revoked mailbox: %v: %s", err, r.body)
-		}
-		return p.Record
-	}
-	t.Fatalf("the read of a mailbox: %d %s", r.status, r.body)
-	return nil
-}
-
 // recordOf is the record a 410 carries as it was written, and its members.
 func recordOf(t *testing.T, r reply) ([]byte, map[string]json.RawMessage) {
 	t.Helper()
@@ -59,16 +36,6 @@ func recordOf(t *testing.T, r reply) ([]byte, map[string]json.RawMessage) {
 		t.Fatalf("no record in %s", r.body)
 	}
 	return p.Record, members
-}
-
-// record is a mailbox's own revocation, as its owner makes it.
-func record(t *testing.T, b *client.Mailbox) *protocol.Revocations {
-	t.Helper()
-	rec, err := b.Revocation(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return rec
 }
 
 func TestRevocation(t *testing.T) {
@@ -249,7 +216,7 @@ func TestARevocationIsKeptWithNoMailbox(t *testing.T) {
 	// read of the mailbox answers as if it had never been registered, and its
 	// revocations are served (dromas-dev/dromas-server#80).
 	d := e.raw().register(protocol.MaxPrekeyLifetime)
-	if err := e.store.DeleteMailbox(t.Context(), d.id.Address()); err != nil { // as the TTL deletes it
+	if err := e.store.DeleteMailbox(t.Context(), d.id.Address()); err != nil { // as the sweep deletes it
 		t.Fatal(err)
 	}
 	forgotten := d.certs(1)
@@ -454,18 +421,18 @@ func mustJSONBytes(t *testing.T, b []byte) []byte {
 	return j[1 : len(j)-1]
 }
 
-// The revocation is in the address's revocations item, so a process that starts later, or
+// The revocation is in the address's revocations row, so a process that starts later, or
 // another one beside this, serves the same proof and the same 410: nothing
 // about a revoked mailbox lives only in the memory of the process that took the
-// revocation. AWS only: the in-memory store has one process.
+// revocation. PostgreSQL only: the in-memory store has one process.
 func TestARevocationOutlivesTheProcess(t *testing.T) {
 	t.Parallel()
-	e, _ := dynamoEnv(t)
+	e, _ := sharedEnv(t)
 	a := e.mailbox()
 	rec := record(t, a)
 	e.want(e.do("PUT", revocationPath(a.Address()), rec, ""), 201, "")
 
-	later := startDynamo(t, e.clock.Now) // its memory holds nothing of A
+	later := startPostgres(t, e.clock.Now) // its memory holds nothing of A
 	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: later, Limits: relaxed(), Now: e.clock.Now, Ready: later.Ready}).Handler()))
 	defer srv.Close()
 	e2 := &env{t: t, clock: e.clock, srv: srv}
@@ -592,7 +559,7 @@ func TestARevocationRetriedAfterAFailedDeleteDeletes(t *testing.T) {
 // A revocation of the address deletes every message in its mailbox from the
 // store, as acks do (PROTOCOL.md §13): read from the backend, strongly
 // consistent, not from memory's count, which the revocation's own retires
-// set; and on DynamoDB, every body from the bucket.
+// set; and on PostgreSQL, every body from the bodies directory.
 func TestARevocationDeletesEveryMessageFromTheStore(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -609,6 +576,13 @@ func TestARevocationDeletesEveryMessageFromTheStore(t *testing.T) {
 	if live, err := s.backend.ReadLive(ctx, a.Address()); err != nil || len(live) != len(ids) {
 		t.Fatalf("before the revocation the store holds %d messages for A (%v), want %d", len(live), err, len(ids))
 	}
+	_, onPG := onPg(s)
+	keys := map[[32]byte]string{}
+	for _, id := range ids {
+		if onPG {
+			keys[id] = s.bodyKeyOf(t, a.Address(), id)
+		}
+	}
 	e.want(e.do("PUT", revocationPath(a.Address()), record(t, a), ""), 201, "")
 	live, err := s.backend.ReadLive(ctx, a.Address())
 	if err != nil {
@@ -621,8 +595,8 @@ func TestARevocationDeletesEveryMessageFromTheStore(t *testing.T) {
 		if _, _, err := s.backend.Message(ctx, a.Address(), id, 0); !errors.Is(err, ErrNotFound) {
 			t.Errorf("after the revocation a message of A's reads %v, want ErrNotFound", err)
 		}
-		if onAWS() && s.bodyExists(t, a.Address(), id) {
-			t.Errorf("after the revocation a body of A's is in the bucket")
+		if onPG && s.hasBody(t, keys[id]) {
+			t.Errorf("after the revocation a body of A's is in the bodies directory")
 		}
 	}
 }

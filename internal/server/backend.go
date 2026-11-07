@@ -12,8 +12,9 @@ import (
 // durable operations only. Memory, the one Store, holds over it what a poll
 // needs, and applies to that what each write and each change did
 // (ARCHITECTURE.md § Storage). A backend maps its storage to these
-// operations and their three outcomes, and nothing else: dynamoBackend
-// (DynamoDB and S3 Express) and memBackend (maps in this process).
+// operations and their three outcomes, and nothing else: pgBackend
+// (PostgreSQL, bodies in S3 or a directory) and memBackend (maps in this
+// process).
 //
 // Each write has exactly one of three outcomes, read in one place
 // (Memory.write):
@@ -25,11 +26,12 @@ import (
 //   - unknown, which may have applied: ErrUnknown, wrapping its cause. Any
 //     other error is taken as unknown too.
 //
-// A write of several steps is one operation, whose outcome is its item's
-// write: a send writes its body, then its item; an ack deletes its body,
-// then its item; DeleteAll finds a mailbox's messages, deletes their bodies,
-// then each item, and hands each it took to retired as it lands. A step that fails before the item's write is
-// a refusal: it changed nothing a reader of the list sees.
+// A write of several steps is one operation, whose outcome is its row's
+// write: a send writes its body, then its row, and a body that fails is a
+// refusal, which changed nothing a reader of the list sees; an ack deletes
+// its row, then its body; DeleteAll deletes a mailbox's live rows, hands
+// each to retired, then deletes their bodies. A body left by a crash after
+// its row's delete is an orphan, which goes by age.
 type Backend interface {
 	// ReadAddress reads what is held of address a, strongly consistent:
 	// its mailbox's record and its identity's revocations, each nil if absent.
@@ -43,7 +45,8 @@ type Backend interface {
 	List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error)
 	// Message returns a live message and its body, from byte from on where
 	// from is inside it, above 0 and below its Size, and otherwise whole; or
-	// ErrNotFound; or errNoBody for a live item whose body is gone.
+	// ErrNotFound; or errNoBody, with the header, for a live row whose body
+	// is gone.
 	Message(ctx context.Context, mailbox protocol.Address, id [32]byte, from int64) (*Header, []byte, error)
 	// Dedupe returns the header of the live message mailbox holds with this
 	// id, or ErrNotFound.
@@ -84,11 +87,12 @@ type Backend interface {
 	// PutMessage stores a message: its body, then its item. A live item of
 	// another send of the id refuses it (duplicate).
 	PutMessage(ctx context.Context, mailbox protocol.Address, h *Header, body []byte) error
-	// Retire deletes a live message's item, so it leaves the list and
+	// Retire deletes a live message's row, so it leaves the list and
 	// nothing of it is kept, and returns when it was received; ErrNotFound
-	// if it is not live.
-	Retire(ctx context.Context, mailbox protocol.Address, id [32]byte) (time.Time, error)
-	// DeleteMessage acks a message: its body goes, then it is retired.
+	// if it is not live, or, where received is not zero, if the live one
+	// was received at another time: a send of the same bytes since.
+	Retire(ctx context.Context, mailbox protocol.Address, id [32]byte, received time.Time) (time.Time, error)
+	// DeleteMessage acks a message: it is retired, then its body goes.
 	DeleteMessage(ctx context.Context, mailbox protocol.Address, id [32]byte) (time.Time, error)
 	// DeleteAll deletes, as acks do, every live message in a mailbox, and hands
 	// each retired as its item is deleted. A message already gone is no
@@ -103,8 +107,8 @@ type Backend interface {
 	Ready() bool
 }
 
-// errNoBody is a live message's item whose body is gone: a half-finished
-// ack, or a body the lifecycle rule took early. Memory retires it.
+// errNoBody is a live message's row whose body is gone: a lifecycle rule
+// run early, or a bodies directory restored without it. Memory retires it.
 var errNoBody = errors.New("the message's body is gone")
 
 // ChangeKind is what a Change is a change to.

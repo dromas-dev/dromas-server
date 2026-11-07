@@ -39,7 +39,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04, ubuntu-26.04]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -48,13 +48,34 @@ jobs:
         with:
           go-version: stable
           check-latest: true
+      - name: postgres
+        # The test database: logical replication on, a replication slot and a
+        # WAL sender for each store the tests run at once. A job's services
+        # take no server options, so it is started here (docker run).
+        run: |
+          docker run -d --name postgres -e POSTGRES_PASSWORD=dromas -e POSTGRES_DB=dromas_test -p 127.0.0.1:5432:5432 \
+            postgres:18 -c wal_level=logical -c max_replication_slots=200 -c max_wal_senders=200 -c max_connections=1000
+          # Over TCP: the image's first start runs its initialisation on a
+          # server that listens on the Unix socket alone, then restarts.
+          for _ in $(seq 60); do docker exec postgres pg_isready -h 127.0.0.1 -U postgres -d dromas_test && break; sleep 1; done
+          docker exec postgres pg_isready -h 127.0.0.1 -U postgres -d dromas_test
       - name: tools
         run: |
           go version; ssh -V; jq --version; curl --version | head -1; bash --version | head -1
           go list -m github.com/dromas-dev/dromas-client
+          docker exec postgres postgres --version
       - name: check
-        # gofmt, vet, every test (a skip fails the job, but the AWS tests' and
-        # the cost measurement's), and test/interop.sh: scripts/check.sh, which a laptop runs too.
+        # gofmt, vet, every test in memory and again on PostgreSQL (a skip
+        # fails the job, but the shared-store tests' in memory), and
+        # test/interop.sh on PostgreSQL: scripts/check.sh, which a laptop runs too.
+        env:
+          DROMAS_TEST_POSTGRES: "1"
+          PGHOST: 127.0.0.1
+          PGPORT: "5432"
+          PGUSER: postgres
+          PGPASSWORD: dromas
+          PGDATABASE: dromas_test
+          PGSSLMODE: disable
         run: scripts/check.sh full
 
   lint:
