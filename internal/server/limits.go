@@ -20,7 +20,7 @@ type Limits struct {
 	PollRefill     time.Duration // one more poll each (decided: 50 s; once a minute is stated); also one more such fetch
 	PollAfter      int           // seconds, told to clients (decided: 60)
 	MaxWait        time.Duration // the longest a list is held, whatever its wait asks (PROTOCOL.md §11.11) [tunable]
-	MaxHeldLists   int           // lists this process holds at once; past it a held list is answered 503 (0: none held) [tunable]
+	MaxHeldLists   int           // lists this process holds at once, one a mailbox; past it a held list of a mailbox that holds none is answered 503 (0: none held) [tunable]
 	AccountMaxSize int           // the most an account lifts MaxSize to, so what a send reads first; up to MaxSize, nothing
 	RenewalsPerDay int           // prekey renewals per mailbox, a number a day as SendsPerDay (decided: 5), so no mailbox can spend the mailboxes table's write capacity
 	RenewalsBurst  int           // per mailbox: the renewals it may make at once, the bucket RenewalsPerDay refills (decided: 5, as its number a day)

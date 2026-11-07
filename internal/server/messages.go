@@ -110,9 +110,10 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
 	// A list held is counted once, by how its hold ended, however often it
 	// woke to the same page and was held again.
 	holding, ended := false, ""
+	var replaced chan struct{}
 	defer func() {
 		if holding {
-			s.unhold()
+			s.unhold(mailbox, replaced)
 			s.metrics.heldEnded(ended)
 		}
 	}()
@@ -161,7 +162,7 @@ again:
 		tag = listTag(body)
 		if !until.IsZero() && time.Now().Before(until) && protocol.IfMatch(r.Header.Values("If-Match"), tag) && protocol.IfNoneMatch(r.Header.Values("If-None-Match"), tag) {
 			if !holding {
-				if holding = s.hold(); !holding {
+				if replaced, holding = s.hold(mailbox); !holding {
 					s.metrics.heldEnded("refused")
 					p := fail(protocol.CodeUnavailable, "retry later", "this server holds as many lists as it may")
 					p.retryAfter = time.Duration(s.limits.PollAfter) * time.Second
@@ -187,6 +188,8 @@ again:
 				}
 			case <-s.stopping:
 				ended, until = "stopped", time.Time{}
+			case <-replaced:
+				ended, until = "replaced", time.Time{}
 			case <-r.Context().Done():
 				t.Stop()
 				ended = "gone"
@@ -230,21 +233,49 @@ func listWait(r *http.Request, hasCursor bool) (time.Duration, error) {
 // waitReadBound bounds a wait as read, far past any MaxWait.
 const waitReadBound = 24 * time.Hour
 
-// hold counts one more list held, and reports false, counting nothing, at
-// Limits.MaxHeldLists.
-func (s *Server) hold() bool {
-	if s.holding.Add(1) > int64(s.limits.MaxHeldLists) {
-		s.holding.Add(-1)
-		return false
-	}
-	s.metrics.holding(1)
-	return true
+// holds is the list each mailbox has held (list): one a mailbox, the latest,
+// as the Telegram Bot API server holds one getUpdates a bot and a later one
+// ends the earlier (telegram-bot-api's Client::abort_long_poll). Each is its
+// channel, closed when a later list of the mailbox takes its place.
+type holds struct {
+	mu   sync.Mutex
+	held map[protocol.Address]chan struct{}
 }
 
-// unhold counts one list held fewer.
-func (s *Server) unhold() {
-	s.holding.Add(-1)
-	s.metrics.holding(-1)
+// hold holds a list of mailbox a, and returns the channel closed when a later
+// list of a takes its place. A list a holds already is answered at once, as
+// PROTOCOL.md §11.11 lets a server answer sooner, and this one takes its
+// place in the count; any other is counted one more list held, and refused,
+// counting nothing, at Limits.MaxHeldLists.
+func (s *Server) hold(a protocol.Address) (chan struct{}, bool) {
+	s.holds.mu.Lock()
+	defer s.holds.mu.Unlock()
+	if earlier, ok := s.holds.held[a]; ok {
+		close(earlier)
+	} else if s.holding.Load() >= int64(s.limits.MaxHeldLists) {
+		return nil, false
+	} else {
+		s.holding.Add(1)
+		s.metrics.holding(1)
+	}
+	if s.holds.held == nil {
+		s.holds.held = map[protocol.Address]chan struct{}{}
+	}
+	mine := make(chan struct{})
+	s.holds.held[a] = mine
+	return mine, true
+}
+
+// unhold counts one list held fewer, unless a later list of mailbox a took
+// the place of the one whose channel is mine.
+func (s *Server) unhold(a protocol.Address, mine chan struct{}) {
+	s.holds.mu.Lock()
+	defer s.holds.mu.Unlock()
+	if s.holds.held[a] == mine {
+		delete(s.holds.held, a)
+		s.holding.Add(-1)
+		s.metrics.holding(-1)
+	}
 }
 
 // StopHolds answers every list held, now and from now on, at once: for
