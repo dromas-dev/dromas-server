@@ -1,11 +1,12 @@
 package server
 
-// What an empty poll costs on the DynamoDB store, the primary one: through
-// the handler, and the store's count alone. Both run over the fake of AWS
-// (awsfake_test.go), on a mailbox loaded once, after which a poll reads no AWS:
-// each benchmark checks that it read none. Run under nice, each alone:
+// What an empty poll costs: through the handler, and the store's count
+// alone. Both run on the test store (in memory, or PostgreSQL with
+// DROMAS_TEST_POSTGRES), on a mailbox loaded once, after which a poll makes
+// no call of the backend: each benchmark checks that it made none. Run under
+// nice, each alone:
 //
-//	go test -run '^$' -bench BenchmarkAnEmptyPoll -benchtime 2s -count 5 ./internal/server
+//	go test -tags dromas_nofsync -run '^$' -bench BenchmarkAnEmptyPoll -benchtime 2s -count 5 ./internal/server
 
 import (
 	"context"
@@ -15,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,16 +26,21 @@ import (
 )
 
 // polledMailbox is a mailbox registered through the handler of a server on the
-// DynamoDB store over the fake of AWS, and polled once, which loads it: the
-// handler, the store, the mailbox's address, the fake, and a poll of the mailbox with
-// a pass the server has taken, which answers its status.
-func polledMailbox(tb testing.TB) (http.Handler, Store, protocol.Address, *fakeAWS, func() int) {
+// test store, and polled once, which loads it: the handler, the store, the
+// mailbox's address, how many calls of the backend the store has made, and a
+// poll of the mailbox with a pass the server has taken, which answers its
+// status.
+func polledMailbox(tb testing.TB) (http.Handler, Store, protocol.Address, func() int64, func() int) {
 	tb.Helper()
-	tbl := &mailboxesTable{items: map[string]map[string]any{}}
-	f := newFakeAWS()
-	f.dynamo = tbl.answer
-	s := fakeStore(tb, f)
-	h := New(Config{Store: s, Limits: relaxed(), Now: time.Now}).Handler()
+	s := NewMemStore(time.Now)
+	if onPostgres() {
+		s = startPostgres(tb, time.Now)
+	}
+	f := injectFaults(s)
+	var reads atomic.Int64
+	f.read = func(string) { reads.Add(1) }
+	calls := func() int64 { return reads.Load() + f.wrote.Load() }
+	h := New(Config{Store: s, Limits: relaxed(), Now: time.Now, Ready: s.Ready}).Handler()
 	now := time.Now()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -99,25 +106,15 @@ func polledMailbox(tb testing.TB) (http.Handler, Store, protocol.Address, *fakeA
 	if code := poll(); code != http.StatusOK {
 		tb.Fatalf("the first poll: %d", code)
 	}
-	return h, s, a, f, poll
+	return h, s, a, calls, poll
 }
 
-// callsTo is how many calls the fake of AWS has answered.
-func (f *fakeAWS) callsTo() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	n := 0
-	for _, c := range f.calls {
-		n += c
-	}
-	return n
-}
-
-// An empty poll through the handler, on the DynamoDB store, of a mailbox loaded
-// by a first poll, with a pass the server has taken: it reads no AWS.
-func BenchmarkAnEmptyPollOnTheDynamoDBStore(b *testing.B) {
-	_, _, _, f, poll := polledMailbox(b)
-	before := f.callsTo()
+// An empty poll through the handler, on the test store, of a mailbox loaded
+// by a first poll, with a pass the server has taken: it makes no call of the
+// backend.
+func BenchmarkAnEmptyPoll(b *testing.B) {
+	_, _, _, calls, poll := polledMailbox(b)
+	before := calls()
 	b.ResetTimer()
 	for b.Loop() {
 		if code := poll(); code != http.StatusOK {
@@ -125,16 +122,16 @@ func BenchmarkAnEmptyPollOnTheDynamoDBStore(b *testing.B) {
 		}
 	}
 	b.StopTimer()
-	if n := f.callsTo() - before; n != 0 {
-		b.Fatalf("%d calls to AWS for polls of a loaded mailbox", n)
+	if n := calls() - before; n != 0 {
+		b.Fatalf("%d calls of the backend for polls of a loaded mailbox", n)
 	}
 }
 
 // The store's count of a loaded mailbox, alone: what every poll asks of memory.
-func BenchmarkCountOfALoadedMailboxOnTheDynamoDBStore(b *testing.B) {
-	_, s, a, f, _ := polledMailbox(b)
+func BenchmarkCountOfALoadedMailbox(b *testing.B) {
+	_, s, a, calls, _ := polledMailbox(b)
 	ctx := context.Background()
-	before := f.callsTo()
+	before := calls()
 	b.ResetTimer()
 	for b.Loop() {
 		if n, err := s.Count(ctx, a); err != nil || n != 0 {
@@ -142,7 +139,7 @@ func BenchmarkCountOfALoadedMailboxOnTheDynamoDBStore(b *testing.B) {
 		}
 	}
 	b.StopTimer()
-	if n := f.callsTo() - before; n != 0 {
-		b.Fatalf("%d calls to AWS for counts of a loaded mailbox", n)
+	if n := calls() - before; n != 0 {
+		b.Fatalf("%d calls of the backend for counts of a loaded mailbox", n)
 	}
 }
