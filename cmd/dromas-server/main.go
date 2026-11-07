@@ -28,7 +28,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	flag "github.com/spf13/pflag"
 	"log"
 	"net"
 	"net/http"
@@ -40,7 +39,10 @@ import (
 	"syscall"
 	"time"
 
+	flag "github.com/spf13/pflag"
+
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/dromas-dev/dromas-client/protocol"
 	"github.com/dromas-dev/dromas-server/internal/server"
 	"github.com/prometheus/client_golang/prometheus"
@@ -186,7 +188,7 @@ func serve(args []string) error {
 		}
 		where := "bodies in " + *bodiesDir
 		if *bucket != "" {
-			awsCfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(*region), config.WithLogger(server.AWSLogger(os.Stderr)))
+			awsCfg, err := loadAWS(ctx, *region)
 			if err != nil {
 				return err
 			}
@@ -343,4 +345,10 @@ func serverNames(list string) ([]string, error) {
 		names = append(names, n)
 	}
 	return names, nil
+}
+
+// loadAWS is the AWS configuration of --bucket: credentials from the usual
+// chain, and the SDK's own lines written through the redaction (AWSLogger).
+func loadAWS(ctx context.Context, region string) (aws.Config, error) {
+	return config.LoadDefaultConfig(ctx, config.WithRegion(region), config.WithLogger(server.AWSLogger(os.Stderr)))
 }
