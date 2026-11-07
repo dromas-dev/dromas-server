@@ -220,6 +220,17 @@ func freshDatabase(t *testing.T) (string, string) {
 // ends. A feed that loses its place fails the test, unless with sets Fatal.
 func startPostgresIn(t testing.TB, schema, bodies string, now func() time.Time, with func(*PostgresConfig)) *Memory {
 	t.Helper()
+	s, ctx := newPostgresIn(t, schema, bodies, now, with)
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// newPostgresIn is startPostgresIn's store not yet started, and the context
+// to start it with.
+func newPostgresIn(t testing.TB, schema, bodies string, now func() time.Time, with func(*PostgresConfig)) (*Memory, context.Context) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	c := PostgresConfig{
@@ -239,10 +250,7 @@ func startPostgresIn(t testing.TB, schema, bodies string, now func() time.Time, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Start(ctx); err != nil {
-		t.Fatal(err)
-	}
-	return s
+	return s, ctx
 }
 
 // sharedEnv is an env on a shared store with a feed, PostgreSQL; the test is

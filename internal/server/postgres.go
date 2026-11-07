@@ -61,6 +61,9 @@ type pgBackend struct {
 	// crash there would leave it: "put: after the body", "ack: after the
 	// row".
 	crash func(step string) error
+	// visible, in tests, replaces the feed's read of whether a
+	// transaction's commit is visible (pgFeed.sees).
+	visible func(ctx context.Context, xid uint32) (bool, error)
 }
 
 // PostgresConfig configures a store over PostgreSQL.
