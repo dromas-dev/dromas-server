@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/dromas-dev/dromas-client/protocol"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -20,7 +21,7 @@ const sweepBatch = 500
 func (s *pgBackend) sweep(ctx context.Context) {
 	t := time.NewTicker(s.sweepEvery)
 	defer t.Stop()
-	retention := time.Duration(ttlMs) * time.Millisecond
+	retention := protocol.Retention
 	for {
 		select {
 		case <-ctx.Done():

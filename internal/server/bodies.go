@@ -8,7 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path/filepath"
+	"path"
 	"slices"
 	"strconv"
 	"time"
@@ -152,31 +152,41 @@ func isNoSuchKey(err error) bool {
 	return errors.As(err, &nsk) || errors.As(err, &nf)
 }
 
-// dirBodies keeps bodies in a directory, one file a body at its key's path.
+// dirBodies keeps bodies in a directory, one file a body at its key's path,
+// every operation held inside it (os.Root), a symlink placed in it included.
 // Each is written to a temporary file, flushed, renamed into place and its
 // directory flushed, so a body is whole or absent. Orphans go by collect.
-type dirBodies struct{ root string }
+type dirBodies struct{ root *os.Root }
 
-func (b dirBodies) path(key string) string { return filepath.Join(b.root, filepath.FromSlash(key)) }
+// newDirBodies is the bodies kept under dir, made if it is not there.
+func newDirBodies(dir string) (*dirBodies, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	return &dirBodies{root}, nil
+}
 
-func (b dirBodies) Put(_ context.Context, key string, body []byte) error {
-	p := b.path(key)
-	dir := filepath.Dir(p)
+func (b *dirBodies) Put(_ context.Context, key string, body []byte) error {
+	dir := path.Dir(key)
+	tmp := path.Join(dir, ".put-"+randomHex(8))
 	var f *os.File
 	var err error
 	for range 2 { // collect may take the directory, empty, between the two
-		if err = os.MkdirAll(dir, 0o700); err != nil {
+		if err = b.root.MkdirAll(dir, 0o700); err != nil {
 			return err
 		}
-		if f, err = os.CreateTemp(dir, ".put-*"); !errors.Is(err, fs.ErrNotExist) {
+		if f, err = b.root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600); !errors.Is(err, fs.ErrNotExist) {
 			break
 		}
 	}
 	if err != nil {
 		return err
 	}
-	tmp := f.Name()
-	defer func() { _ = os.Remove(tmp) }() // gone once renamed
+	defer func() { _ = b.root.Remove(tmp) }() // gone once renamed
 	if _, err := f.Write(body); err != nil {
 		_ = f.Close()
 		return err
@@ -188,14 +198,10 @@ func (b dirBodies) Put(_ context.Context, key string, body []byte) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, p); err != nil {
+	if err := b.root.Rename(tmp, key); err != nil {
 		return err
 	}
-	return syncDir(dir)
-}
-
-func syncDir(dir string) error {
-	d, err := os.Open(dir) //nolint:gosec // a directory under the bodies root
+	d, err := b.root.Open(dir)
 	if err != nil {
 		return err
 	}
@@ -203,8 +209,8 @@ func syncDir(dir string) error {
 	return d.Sync()
 }
 
-func (b dirBodies) Get(_ context.Context, key string, from int64, size int) ([]byte, error) {
-	f, err := os.Open(b.path(key))
+func (b *dirBodies) Get(_ context.Context, key string, from int64, size int) ([]byte, error) {
+	f, err := b.root.Open(key)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, errNoBody
 	}
@@ -220,9 +226,9 @@ func (b dirBodies) Get(_ context.Context, key string, from int64, size int) ([]b
 	return io.ReadAll(f)
 }
 
-func (b dirBodies) Delete(_ context.Context, keys ...string) error {
+func (b *dirBodies) Delete(_ context.Context, keys ...string) error {
 	for _, k := range keys {
-		if err := os.Remove(b.path(k)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if err := b.root.Remove(k); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
 	}
@@ -232,16 +238,16 @@ func (b dirBodies) Delete(_ context.Context, keys ...string) error {
 // collect deletes every body last written before cutoff, and the
 // directories left empty: an orphan, or a body whose message has expired.
 // Several processes may collect one directory at once.
-func (b dirBodies) collect(cutoff time.Time) error {
-	return filepath.WalkDir(b.root, func(p string, d fs.DirEntry, err error) error {
+func (b *dirBodies) collect(cutoff time.Time) error {
+	return fs.WalkDir(b.root.FS(), ".", func(p string, d fs.DirEntry, err error) error {
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
 			return nil
 		case err != nil:
 			return err
 		case d.IsDir():
-			if p != b.root {
-				_ = os.Remove(p) // only if empty; a later pass takes one emptied now
+			if p != "." {
+				_ = b.root.Remove(p) // only if empty; a later pass takes one emptied now
 			}
 			return nil
 		}
@@ -253,7 +259,7 @@ func (b dirBodies) collect(cutoff time.Time) error {
 			return err
 		}
 		if info.ModTime().Before(cutoff) {
-			if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			if err := b.root.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return err
 			}
 		}

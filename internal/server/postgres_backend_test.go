@@ -154,7 +154,10 @@ func TestTheBodiesDirectoryCollectsOldBodies(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	root := t.TempDir()
-	d := dirBodies{root}
+	d, err := newDirBodies(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var oldBox, newBox protocol.Address
 	oldBox[0], newBox[0] = 1, 2
 	oldKey, newKey := bodyKey(oldBox, [32]byte{1}, 1000), bodyKey(newBox, [32]byte{2}, 2000)
@@ -164,7 +167,7 @@ func TestTheBodiesDirectoryCollectsOldBodies(t *testing.T) {
 		}
 	}
 	now := time.Now()
-	if err := os.Chtimes(d.path(oldKey), now.Add(-2*time.Hour), now.Add(-2*time.Hour)); err != nil {
+	if err := d.root.Chtimes(oldKey, now.Add(-2*time.Hour), now.Add(-2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.collect(now.Add(-time.Hour)); err != nil {

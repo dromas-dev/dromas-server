@@ -156,7 +156,11 @@ func NewPostgresStore(ctx context.Context, c PostgresConfig) (*Memory, error) {
 	case c.Bucket != "":
 		p.bodies = s3Bodies{newS3(c.AWS), c.Bucket}
 	case c.BodiesDir != "":
-		d := &dirBodies{c.BodiesDir}
+		d, err := newDirBodies(c.BodiesDir)
+		if err != nil {
+			pool.Close()
+			return nil, fmt.Errorf("--bodies-dir: %w", err)
+		}
 		p.bodies, p.bodiesDir = d, d
 	}
 	if err := p.prepare(ctx); err != nil {
@@ -173,7 +177,7 @@ func pgIdent(s string) bool {
 		return false
 	}
 	for _, r := range s {
-		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_') {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' {
 			return false
 		}
 	}

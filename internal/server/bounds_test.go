@@ -96,7 +96,7 @@ func silentBackend(t *testing.T) *pgBackend {
 	rc.RuntimeParams["replication"] = "database"
 	t.Cleanup(pool.Close)
 	t.Cleanup(closeDB) // first, so the pool's dials end and its Close returns
-	return &pgBackend{pool: pool, replication: rc, schema: "public", publication: "dromas_public", bodies: &dirBodies{t.TempDir()}, now: time.Now}
+	return &pgBackend{pool: pool, replication: rc, schema: "public", publication: "dromas_public", bodies: mustDirBodies(t), now: time.Now}
 }
 
 // silentS3 is bodies in a bucket of an S3 that answers nothing, or, where
@@ -556,4 +556,14 @@ func TestEveryReadOfASendsSharedCallIsBounded(t *testing.T) {
 			t.Errorf("the send's %s read, made apart from its request, is handed deadline %v (made %v); want at most %v", read, d, ok, storeTimeout)
 		}
 	}
+}
+
+// mustDirBodies is bodies under a directory of the test's own.
+func mustDirBodies(t testing.TB) *dirBodies {
+	t.Helper()
+	d, err := newDirBodies(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
 }
