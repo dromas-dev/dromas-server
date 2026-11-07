@@ -112,20 +112,18 @@ func TestAWaitOfAnotherFormIsRefused(t *testing.T) {
 	}
 }
 
-// Past --max-held-lists, a list that asks to wait is answered 503 with Retry-After,
-// and the lists held go on.
+// Past --max-held-lists, a list of another mailbox that asks to wait is
+// answered 503 with Retry-After, and the lists held go on.
 func TestAHoldPastTheCapIs503(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	l.MaxHeldLists = 1
 	e := newEnv(t, l)
 	_, to, tag := emptyTag(e)
+	_, other, otherTag := emptyTag(e)
 	c := heldList(e, to, tag, "wait=60")
-	deadline := time.Now().Add(5 * time.Second)
-	for e.server.holding.Load() == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	r := e.doWith("GET", to.path("/messages?wait=60"), nil, to.pass(1), "If-None-Match", tag)
+	holdingNow(t, e.server, 1)
+	r := e.doWith("GET", other.path("/messages?wait=60"), nil, other.pass(1), "If-None-Match", otherTag)
 	e.want(r, http.StatusServiceUnavailable, protocol.CodeUnavailable)
 	if r.header.Get("Retry-After") == "" {
 		t.Error("a hold refused at the cap carries no Retry-After")
@@ -135,6 +133,46 @@ func TestAHoldPastTheCapIs503(t *testing.T) {
 	if n := e.server.holding.Load(); n != 0 {
 		t.Fatalf("%d lists still counted held after a refusal at the cap and the held one's answer", n)
 	}
+}
+
+// A mailbox holds one list: a later one that asks to wait is held in its
+// place, the earlier is answered 304 at once and recorded replaced, and the
+// pair is counted one list held, even at --max-held-lists.
+func TestALaterHeldListOfTheSameMailboxTakesThePlaceOfTheEarlier(t *testing.T) {
+	t.Parallel()
+	l := relaxed()
+	l.MaxHeldLists = 1
+	e, m, _ := metered(t, l)
+	_, to, tag := emptyTag(e)
+	first := heldList(e, to, tag, "wait=60")
+	holdingNow(t, e.server, 1)
+	second := heldList(e, to, tag, "wait=60")
+	var got struct {
+		r    reply
+		took time.Duration
+	}
+	select {
+	case got = <-first:
+	case <-time.After(10 * time.Second):
+		e.server.StopHolds()
+		t.Fatal("the earlier list was still held 10 s after a later one of its mailbox")
+	}
+	e.want(got.r, http.StatusNotModified, "")
+	if got.r.header.Get("ETag") != tag {
+		t.Fatalf("the earlier list was answered tag %q, want %q", got.r.header.Get("ETag"), tag)
+	}
+	if n := testutil.ToFloat64(m.held.WithLabelValues("replaced")); n != 1 {
+		t.Errorf("%v holds recorded replaced, want 1", n)
+	}
+	holdingNow(t, e.server, 1)
+	select {
+	case got := <-second:
+		t.Fatalf("the later list was answered %d before anything changed", got.r.status)
+	case <-time.After(300 * time.Millisecond):
+	}
+	e.server.StopHolds()
+	e.want((<-second).r, http.StatusNotModified, "")
+	holdingNow(t, e.server, 0)
 }
 
 // When the server stops, every held list is answered 304 at once.

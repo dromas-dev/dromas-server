@@ -108,8 +108,10 @@ type Server struct {
 	inFlight [256]inFlight
 	// drains is the cursor each mailbox was handed last (list).
 	drains drains
-	// held counts the lists this process holds (list), and stopping is
-	// closed once it stops (StopHolds), which answers every one.
+	// holds is the list each mailbox has held, holding counts them (list),
+	// and stopping is closed once it stops (StopHolds), which answers every
+	// one.
+	holds    holds
 	holding  atomic.Int64
 	stopping chan struct{}
 	stopOnce sync.Once
