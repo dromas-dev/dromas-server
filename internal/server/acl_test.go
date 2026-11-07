@@ -128,7 +128,7 @@ func TestACLRoute(t *testing.T) {
 		rows = append(rows, s.storedRecord(t, other.Address()))
 	}
 	for _, r := range rows {
-		if r.has("acl") {
+		if ok, err := r.has("acl"); err != nil || ok {
 			t.Fatal("a mailbox with no ACL has one in its record")
 		}
 		if back, err := decodeMailbox(r); err != nil || back.ACL != nil {

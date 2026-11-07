@@ -202,7 +202,7 @@ func TestTheRecordAndTheRevocationsAreTwoRows(t *testing.T) {
 	if revs = revsOf(); revs == nil {
 		t.Fatal("the revocation of the address left no revocations row")
 	}
-	if !revs.has("revocation") {
+	if ok, err := revs.has("revocation"); err != nil || !ok {
 		t.Error("the revocations row does not keep the revocation of the address")
 	}
 }

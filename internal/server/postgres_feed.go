@@ -389,7 +389,9 @@ func (f *pgFeed) row(r *pglogrepl.RelationMessage, tuple, old *pglogrepl.TupleDa
 		}
 		typ, ok := f.types.TypeForOID(oid)
 		if !ok {
-			fail(fmt.Errorf("%s: a column of type %d, which this build does not read", name, oid))
+			// A column of a type this build has no codec for is one it
+			// never reads (a later migration's): it is left out of the
+			// row, and a decoder that reads it fails by its name.
 			continue
 		}
 		v, err := typ.Codec.DecodeValue(f.types, oid, format, col.Data)

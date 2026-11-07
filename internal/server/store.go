@@ -99,12 +99,15 @@ type Mailbox struct {
 // 410.
 func (b *Mailbox) open() bool { return b != nil && b.State == Active }
 
-// writable returns an error unless b's state is the one a record holds:
-// what the store answers from revocations alone is never written as a
-// record.
+// writable returns an error unless b's state is the one a record holds,
+// with the date it may be swept after: what the store answers from
+// revocations alone is never written as a record.
 func (b *Mailbox) writable() error {
 	if b.State != Active {
 		return fmt.Errorf("a mailbox record is %s, never %s", Active, b.State)
+	}
+	if b.Expires.IsZero() {
+		return errors.New("a mailbox record has no expiry")
 	}
 	return nil
 }

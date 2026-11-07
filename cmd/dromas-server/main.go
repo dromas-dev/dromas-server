@@ -2,6 +2,7 @@
 //
 //	dromas-server serve (--bucket B | --bodies-dir DIR) --names NAMES [--listen addr] [options] [limits]
 //	dromas-server serve --dev [--listen addr] [limits]
+//	dromas-server migrate
 //	dromas-server account create [--id NAME] [--unmetered]
 //	dromas-server account key --account ID --uses N --ttl D
 //	dromas-server account drop --account ID --mailbox ADDR
@@ -14,6 +15,11 @@
 // § Storage); it answers 503 until its feed is followed, loads each mailbox
 // into memory on its first use, and exits if the feed loses its place, since
 // a restart rebuilds memory.
+//
+// migrate brings the database's schema up to date, as its owner, before
+// serve runs on it: serve and account start only on a schema that holds
+// every migration of their build, and change no schema (ARCHITECTURE.md
+// § Storage).
 //
 // --dev keeps everything in memory, with no database: the honest server every
 // client tests against. Nothing survives a restart.
@@ -56,12 +62,15 @@ func main() {
 	switch {
 	case len(os.Args) >= 2 && os.Args[1] == "serve":
 		err = serve(os.Args[2:])
+	case len(os.Args) >= 2 && os.Args[1] == "migrate":
+		err = migrate(os.Args[2:])
 	case len(os.Args) >= 3 && os.Args[1] == "account":
 		err = account(os.Args[2], os.Args[3:])
 	case len(os.Args) >= 3 && os.Args[1] == "limits":
 		err = limits(os.Args[2], os.Args[3:])
 	default:
 		fmt.Fprintln(os.Stderr, "usage: dromas-server serve ((--bucket B | --bodies-dir DIR) --names NAMES | --dev) [--listen addr] [--limits FILE] [options]")
+		fmt.Fprintln(os.Stderr, "       dromas-server migrate")
 		fmt.Fprintln(os.Stderr, "       dromas-server account (create | key | drop) [flags]")
 		fmt.Fprintln(os.Stderr, "       dromas-server limits default")
 		fmt.Fprintln(os.Stderr, "       dromas-server limits clear --socket PATH --ip ADDR")
