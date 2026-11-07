@@ -391,7 +391,7 @@ func TestLimitsTopListsTheDeepestInDebtFirst(t *testing.T) {
 		call(shallow, "GET", "/nothing", nil, "")
 	}
 	full := func(key string) time.Duration {
-		bs := e.server.requests
+		bs := e.server.requests.ip
 		bs.mu.Lock()
 		defer bs.mu.Unlock()
 		return bs.full[key].Sub(e.clock.Now())

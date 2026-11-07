@@ -22,9 +22,10 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 	// 1. Who is sending: the pass, before the body is read, and then the
 	// sender's own budget for calls, which every send spends, a retry
 	// included: it bounds everything after it, the dedupe's read among them.
-	// The pre-auth rate is per IP, and comes before anything is checked.
-	if ok, wait := s.sendIPs.take(ipKey(s.clientIP(r)), now); !ok {
-		return rateLimited(protocol.QuotaSendsBeforePass, wait, "too many sends from this address")
+	// The pre-auth rate is per IP and per /48, and comes before anything is
+	// checked.
+	if p := s.sendIPs.take(ctx, s.clientIP(r), s.now, ""); p != nil {
+		return p
 	}
 	from, err := s.sender(r)
 	if err != nil {

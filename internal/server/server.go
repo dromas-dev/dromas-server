@@ -4,7 +4,9 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -23,6 +25,7 @@ import (
 	"time"
 
 	"github.com/aws/smithy-go/logging"
+	"github.com/dchest/siphash"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/dromas-dev/dromas-client/protocol"
@@ -91,22 +94,22 @@ type Server struct {
 	metrics       *Metrics
 	policy        atomic.Pointer[protocol.ServerDocument] // swapped whole by its Reloader
 
-	polls     *buckets // per mailbox
-	pages     *buckets // per mailbox: list pages after the first
-	repeats   *buckets // per mailbox: fetches of a message already fetched
-	regs      *buckets // per IP
-	rangeRegs *buckets // per IPv6 /48: registrations, beside regs
-	sendIPs   *buckets // per IP
-	misses    *buckets // per IP: reads of the mailboxes table that found no mailbox, and checks that failed
-	requests  *buckets // per IP: every call with no pass this process has checked, and every request no route matches
-	calls     *buckets // per mailbox: its calls with its pass that no other budget counts
-	receives  *buckets // per mailbox: new messages it takes
-	lifted    *buckets // per mailbox whose account lifts its new messages: at ReceiveCeiling
-	drained   *buckets // per mailbox: its first fetches of held messages
-	sends     *buckets // per sender, a number a day
-	renewals  *buckets // per mailbox, a number a day: renewals by its current signer
-	certs     *buckets // per mailbox, a number a day: renewals under a later certificate, which only its identity can make
-	raises    *buckets // per mailbox, a number a day: raises of its revocation of certificates, which only its identity can make
+	polls    *buckets     // per mailbox
+	pages    *buckets     // per mailbox: list pages after the first
+	repeats  *buckets     // per mailbox: fetches of a message already fetched
+	regs     addressLimit // registrations
+	sendIPs  addressLimit // sends, before their pass
+	misses   addressLimit // reads of the mailboxes table that found no mailbox, and checks that failed
+	requests addressLimit // every call with no pass this process has checked, and every request no route matches
+	bodies   *openBodies  // the bodies open at once on calls that are their address's
+	calls    *buckets     // per mailbox: its calls with its pass that no other budget counts
+	receives *buckets     // per mailbox: new messages it takes
+	lifted   *buckets     // per mailbox whose account lifts its new messages: at ReceiveCeiling
+	drained  *buckets     // per mailbox: its first fetches of held messages
+	sends    *buckets     // per sender, a number a day
+	renewals *buckets     // per mailbox, a number a day: renewals by its current signer
+	certs    *buckets     // per mailbox, a number a day: renewals under a later certificate, which only its identity can make
+	raises   *buckets     // per mailbox, a number a day: raises of its revocation of certificates, which only its identity can make
 	// inFlight counts the sends let past the mailbox cap and not yet stored, by
 	// the recipient's first byte (reserveCaps).
 	inFlight [256]inFlight
@@ -155,11 +158,11 @@ func New(c Config) *Server {
 		polls:         newBuckets(string(protocol.QuotaPolls), 0, 0),
 		pages:         newBuckets(string(protocol.QuotaPages), 0, 0),
 		repeats:       newBuckets(string(protocol.CodeFetchPaced), 0, 0),
-		regs:          newBuckets(string(protocol.QuotaRegistrations), 0, 0),
-		rangeRegs:     newBuckets(string(protocol.QuotaRegistrationsRange), 0, 0),
-		sendIPs:       newBuckets(string(protocol.QuotaSendsBeforePass), 0, 0),
-		misses:        newBuckets(string(protocol.QuotaMisses), 0, 0),
-		requests:      newBuckets(string(protocol.QuotaRequests), 0, 0),
+		regs:          newAddressLimit(protocol.QuotaRegistrations, protocol.QuotaRegistrationsRange, "registrations"),
+		sendIPs:       newAddressLimit(protocol.QuotaSendsBeforePass, protocol.QuotaSendsBeforePassRange, "sends"),
+		misses:        newAddressLimit(protocol.QuotaMisses, protocol.QuotaMissesRange, "calls"),
+		requests:      newAddressLimit(protocol.QuotaRequests, protocol.QuotaRequestsRange, "calls"),
+		bodies:        newOpenBodies(),
 		calls:         newBuckets(string(protocol.QuotaCalls), 0, 0),
 		receives:      newBuckets(string(protocol.CodeMailboxBusy), 0, 0),
 		lifted:        newBuckets(string(protocol.CodeMailboxBusy), 0, 0),
@@ -207,7 +210,6 @@ func (s *Server) setLimits(l Limits, policy *protocol.ServerDocument) {
 	}{
 		{s.polls, l.PollBurst, l.PollRefill},
 		{s.repeats, l.PollBurst, l.PollRefill},
-		{s.requests, l.RequestBurst, l.RequestRefill},
 		{s.calls, l.CallBurst, l.CallRefill},
 		{s.receives, l.ReceiveBurst, l.ReceiveRefill},
 		{s.lifted, l.ReceiveBurst, l.liftedReceives()},
@@ -216,10 +218,10 @@ func (s *Server) setLimits(l Limits, policy *protocol.ServerDocument) {
 		b.bs.resize(b.n, b.every)
 	}
 	s.pages.resize(l.continuations())
-	s.regs.resize(perPeriod(l.RegistrationsPerHour, l.RegistrationsPerHour, time.Hour))
-	s.rangeRegs.resize(perPeriod(l.RangeRegistrationsPerHour, l.RangeRegistrationsPerHour, time.Hour))
-	s.sendIPs.resize(perPeriod(l.SendsPerMinutePerIP, l.SendsPerMinutePerIP, time.Minute))
-	s.misses.resize(perPeriod(l.MissesPerMinute, l.MissesPerMinute, time.Minute))
+	s.requests.resize(l.RequestBurst, l.RequestRefill, l.RangeRequestBurst, l.RangeRequestRefill)
+	s.regs.resize(perPeriods(l.RegistrationsPerHour, l.RangeRegistrationsPerHour, time.Hour))
+	s.sendIPs.resize(perPeriods(l.SendsPerMinutePerIP, l.RangeSendsPerMinute, time.Minute))
+	s.misses.resize(perPeriods(l.MissesPerMinute, l.RangeMissesPerMinute, time.Minute))
 	s.sends.resize(perPeriod(l.SendsBurst, l.SendsPerDay, day))
 	s.renewals.resize(perPeriod(l.RenewalsBurst, l.RenewalsPerDay, day))
 	s.certs.resize(perPeriod(l.CertificatesBurst, l.CertificatesPerDay, day))
@@ -328,7 +330,8 @@ func (s *Server) subtree(mux *http.ServeMux, prefix string, inner *http.ServeMux
 // process has not checked, which costs a parse and up to two signature
 // checks to find out whose it is (dromas-dev/dromas-server#67,
 // dromas-dev/dromas-client#269). Until its pass is checked, a call is
-// its address's.
+// its address's, and one with a body takes a place among the bodies its
+// address has open until its route has answered (openBody).
 func (s *Server) gate(pass passRule, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.boxsCall(pass, r) {
@@ -336,9 +339,43 @@ func (s *Server) gate(pass passRule, h http.Handler) http.Handler {
 				writeProblem(w, p)
 				return
 			}
+			if r.ContentLength != 0 { // a body: its length, or -1, of one with none given
+				closeBody, p := s.openBody(r)
+				if p != nil {
+					writeProblem(w, p)
+					return
+				}
+				defer closeBody()
+			}
 		}
 		h.ServeHTTP(w, r)
 	})
+}
+
+// openBody takes a place for the body of a call that is its address's, under
+// Limits.MaxBodiesBeforePass of its IPv4 address or IPv6 /64 and
+// Limits.MaxBodiesBeforePassPerRange of its IPv6 /48
+// (dromas-dev/dromas-server#204), and returns what gives it back. A route
+// reads such a body before it checks any pass, so the place bounds what one
+// address holds that way while a slow body arrives (paced). Past either it
+// is 503, as a long poll past its range's share is: a bound on what is open
+// at once, never a rate.
+func (s *Server) openBody(r *http.Request) (func(), *problem) {
+	closeBody, refused := s.bodies.open(s.clientIP(r), s.limits().MaxBodiesBeforePass, s.limits().MaxBodiesBeforePassPerRange)
+	s.metrics.body(refused)
+	if refused != "" {
+		p := fail(protocol.CodeUnavailable, "retry later", "too many requests with a body from this address are open at once")
+		if refused == refusedRange {
+			p = fail(protocol.CodeUnavailable, "retry later", "too many requests with a body from this address's IPv6 /48 are open at once")
+		}
+		p.retryAfter = retryLater
+		return nil, p
+	}
+	s.metrics.bodyOpen(1)
+	return func() {
+		closeBody()
+		s.metrics.bodyOpen(-1)
+	}, nil
 }
 
 // boxsCall reports whether a call is its mailbox's at the gate: it carries a
@@ -960,101 +997,43 @@ type notRead struct{ err error }
 
 func (n notRead) Error() string { return n.err.Error() }
 
-// miss reserves a count of the caller's address under Limits.MissesPerMinute,
-// before work that a caller who named no mailbox, or brought nothing that
-// verifies, makes the server do: a read that may find no mailbox, or a
-// signature check that may fail. It is kept if the work comes to nothing and
-// released if not, so a caller is counted for what failed and never for what
-// passed.
-func (s *Server) miss(r *http.Request) (*reservation, error) {
-	m, ok, wait := s.misses.reserve(r.Context(), ipKey(s.clientIP(r)), s.now)
-	if !ok {
-		return nil, rateLimited(protocol.QuotaMisses, wait, "too many calls from this address that named no mailbox or carried nothing that verified")
-	}
-	return m, nil
+// miss reserves a count of the caller's address under Limits.MissesPerMinute
+// and Limits.RangeMissesPerMinute, before work that a caller who named no
+// mailbox, or brought nothing that verifies, makes the server do: a read
+// that may find no mailbox, or a signature check that may fail. It is kept
+// if the work comes to nothing and released if not, so a caller is counted
+// for what failed and never for what passed.
+func (s *Server) miss(r *http.Request) (addressCount, error) {
+	return s.misses.reserve(r.Context(), s.clientIP(r), s.now, " that named no mailbox or carried nothing that verified")
 }
 
 // spendRequest spends one of the flood budget of the caller's address
-// (Limits.RequestBurst): every call that carries no pass this process has
-// checked (gate), and every request no route matches (unrouted), as Let's
-// Encrypt limits every endpoint per address
+// (Limits.RequestBurst, Limits.RangeRequestBurst): every call that carries
+// no pass this process has checked (gate), and every request no route
+// matches (unrouted), as Let's Encrypt limits every endpoint per address
 // (dromas-dev/dromas-server#58). It is sized far above what an honest
 // crowd behind one address makes, the site's pages included: for floods
 // alone. A refusal is the problem to answer with.
 func (s *Server) spendRequest(r *http.Request) *problem {
-	if ok, wait := s.requests.take(ipKey(s.clientIP(r)), s.now()); !ok {
-		return rateLimited(protocol.QuotaRequests, wait, "too many calls from this address with no pass this server has checked")
-	}
-	return nil
+	return s.requests.take(r.Context(), s.clientIP(r), s.now, " with no pass this server has checked")
 }
 
 // spendRegistration spends a registration of the caller's address
 // (reserveRegistration), kept at once.
 func (s *Server) spendRegistration(r *http.Request, why string) error {
-	g, err := s.reserveRegistration(r, why)
-	if err != nil {
-		return err
+	if p := s.regs.take(r.Context(), s.clientIP(r), s.now, why); p != nil {
+		return p
 	}
-	g.keep()
 	return nil
-}
-
-// registration is a registration's two counts, reserved: of its caller's
-// IPv4 address or IPv6 /64, and of its IPv6 /48 (reserveRegistration). A
-// count that never limits, or an IPv4 address's /48, is nil, which settles
-// as nothing.
-type registration struct{ byIP, byRange *reservation }
-
-// keep settles both counts as counted.
-func (g registration) keep() {
-	g.byRange.keep()
-	g.byIP.keep()
-}
-
-// release gives both counts back. Either does nothing to counts already
-// settled, so a defer made where they are reserved releases them on every
-// path, a panic included.
-func (g registration) release(now time.Time) {
-	g.byRange.release(now)
-	g.byIP.release(now)
 }
 
 // reserveRegistration reserves a registration of the caller's address: of
 // its IPv4 address or IPv6 /64, and of its IPv6 /48, as Let's Encrypt counts
-// new accounts (dromas-dev/dromas-server#57), before the work they
-// guard, to be kept or given back once its outcome is known (LIMITS.md rule
-// 4). Each is reserved before the other is settled, so a refusal by one
-// spends neither; a refusal gives the longer wait of the two (longest). why
+// new accounts (dromas-dev/dromas-server#57), before the work they guard, to
+// be kept or given back once its outcome is known (addressLimit.reserve). why
 // is said after the refusal's words.
-func (s *Server) reserveRegistration(r *http.Request, why string) (registration, error) {
-	host := s.clientIP(r)
-	ip, block := ipKey(host), rangeKey(host)
-	byIP, ok, wait := s.regs.reserve(r.Context(), ip, s.now)
-	if !ok {
-		p := rateLimited(protocol.QuotaRegistrations, wait, "too many registrations from this address"+why)
-		if block != "" {
-			if ok, w := s.rangeRegs.ready(block, s.now()); !ok && w > wait {
-				p = rateLimited(protocol.QuotaRegistrationsRange, w, "too many registrations from this address's IPv6 /48"+why)
-			}
-		}
-		return registration{}, p
-	}
-	g := registration{byIP: byIP}
-	reserved := false
-	defer func() { // settled by the caller, but for a panic here
-		if !reserved {
-			byIP.release(s.now())
-		}
-	}()
-	if block != "" {
-		byRange, ok, wait := s.rangeRegs.reserve(r.Context(), block, s.now)
-		if !ok {
-			return registration{}, rateLimited(protocol.QuotaRegistrationsRange, wait, "too many registrations from this address's IPv6 /48"+why)
-		}
-		g.byRange = byRange
-	}
-	reserved = true
-	return g, nil
+func (s *Server) reserveRegistration(r *http.Request, why string) (addressCount, error) {
+	return s.regs.reserve(r.Context(), s.clientIP(r), s.now, why)
 }
 
 // perDay is one of a mailbox's numbers a day: its buckets, the number, and the
@@ -1211,21 +1190,66 @@ func pathID(r *http.Request) ([32]byte, error) {
 // id (64 hex), wherever a log line holds one.
 var nameRun = regexp.MustCompile(`[0-9A-Za-z_-]{64,}`)
 
-// redact replaces each run of 64 or more letters, digits, "-" and "_" in a log line with
-// "#" and the first 16 hex characters of the SHA-256 of the run in lower
-// case, a name only someone already holding the run can match: no log line
-// carries an address or a message id, in a path, a store's error or
-// anywhere else (dromas-dev/dromas-server#9).
+// redact replaces each run of 64 or more letters, digits, "-" and "_" in a log
+// line with the name logNames gives it: no log line carries an address or a
+// message id, in a path, a store's error or anywhere else
+// (dromas-dev/dromas-server#9).
 func redact(line []byte) []byte {
-	return nameRun.ReplaceAllFunc(line, func(run []byte) []byte { return []byte(logName(run)) })
+	k := logNames.current()
+	return nameRun.ReplaceAllFunc(line, func(run []byte) []byte { return []byte(k.name(run)) })
 }
 
-// logName is the name a log gives a value it never writes: "#" and the first
-// 16 hex characters of the SHA-256 of the value in lower case, the name
-// redact gives a run.
-func logName(v []byte) string {
-	h := sha256.Sum256([]byte(protocol.LowerASCII(string(v))))
-	return "#" + hex.EncodeToString(h[:8])
+// logName is the name a log gives a value it never writes, under the key
+// logNames holds now: the name redact gives a run.
+func logName(v []byte) string { return logNames.current().name(v) }
+
+// logNames is the key every log of this process names values under.
+var logNames = &logNamer{now: time.Now}
+
+// logKeyLife is how long one key names values: a name matches its value only
+// within it, and once the key is gone nobody can match it, the operator
+// included (PROTOCOL.md §13; dromas-dev/dromas-server#203).
+const logKeyLife = 24 * time.Hour
+
+// logNamer holds the key a log names values under: made at random when it is
+// first used, replaced once it has named values for logKeyLife, and never
+// written anywhere. A line reads it with one atomic load.
+type logNamer struct {
+	now func() time.Time
+	key atomic.Pointer[logKey]
+}
+
+// logKey is one SipHash-2-4 key, and the time it is replaced.
+type logKey struct {
+	k0, k1 uint64
+	until  time.Time
+}
+
+// current is the key in force, a new one made at random once the last has
+// run its life.
+func (n *logNamer) current() *logKey {
+	old := n.key.Load()
+	now := n.now()
+	if old != nil && now.Before(old.until) {
+		return old
+	}
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	k := &logKey{k0: binary.LittleEndian.Uint64(b[:8]), k1: binary.LittleEndian.Uint64(b[8:]), until: now.Add(logKeyLife)}
+	if n.key.CompareAndSwap(old, k) {
+		return k
+	}
+	return n.key.Load()
+}
+
+// name is "#" and the 16 hex characters of the SipHash-2-4 under k of v in
+// lower case, a keyed PRF as Linux names a pointer in its logs (siphash_1u64
+// under a random ptr_key, lib/vsprintf.c): only this process can compute it,
+// and only while k is in force.
+func (k *logKey) name(v []byte) string {
+	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], siphash.Hash(k.k0, k.k1, []byte(protocol.LowerASCII(string(v)))))
+	return "#" + hex.EncodeToString(b[:])
 }
 
 // redactor is a log's writer that redacts each line written to it: a
@@ -1310,11 +1334,12 @@ func loggedPath(r *http.Request) string {
 	case !strings.Contains(pattern, "{"):
 		return fmt.Sprintf("%s (a path of %d bytes)", pattern, len(sent))
 	}
+	k := logNames.current()
 	return wildcard.ReplaceAllStringFunc(pattern, func(w string) string {
 		if w == "{$}" { // the end of the path, no wildcard's value
 			return ""
 		}
-		return logName([]byte(r.PathValue(strings.TrimSuffix(strings.Trim(w, "{}"), "..."))))
+		return k.name([]byte(r.PathValue(strings.TrimSuffix(strings.Trim(w, "{}"), "..."))))
 	})
 }
 

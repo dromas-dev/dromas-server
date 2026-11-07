@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"time"
 
@@ -524,8 +525,17 @@ func bounded(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(ctx, storeTimeout)
 }
 
-func ms(t time.Time) uint64     { return uint64(t.UnixMilli()) }          //nolint:gosec // times after 1970
-func fromMs(v uint64) time.Time { return time.UnixMilli(int64(v)).UTC() } //nolint:gosec // decoded from our own keys
+func ms(t time.Time) uint64 { return uint64(t.UnixMilli()) } //nolint:gosec // times after 1970
+
+// fromMs reads a time this server wrote as milliseconds since 1970: a value
+// past the largest int64 is no time it writes, so a broken item or key, and
+// never a time that wraps.
+func fromMs(v uint64) (time.Time, error) {
+	if v > math.MaxInt64 {
+		return time.Time{}, fmt.Errorf("item: %d is no time in milliseconds", v)
+	}
+	return time.UnixMilli(int64(v)).UTC(), nil
+}
 
 // ttlMs is how long a message is kept after it was received, in ms: the
 // TTL less the hour the maker of a time-limited thing leaves, and a post's own

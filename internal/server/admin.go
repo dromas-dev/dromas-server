@@ -16,32 +16,27 @@ import (
 // listener, so nothing that reaches the API reaches it.
 
 // ClearAddress forgets what the limits keyed by a caller's address hold of
-// ip: its misses, its registrations, by its IPv4 address or IPv6 /64 and by
-// its IPv6 /48, its sends before their pass and its calls with no checked pass, each
-// bucket full again as if the address had never been seen. ip is an IPv4
-// address or any IPv6 address of a /64, with or without a zone, which is how
-// the limits key a caller (ipKey). It returns that key and the names of the
-// limits that held anything of it, and false if ip is no address.
+// ip, by its IPv4 address or IPv6 /64 and by its IPv6 /48: its misses, its
+// registrations, its sends before their pass and its calls with no checked
+// pass, each bucket full again as if the address had never been seen. ip is
+// an IPv4 address or any IPv6 address of a /64, with or without a zone,
+// which is how the limits key a caller (ipKey). It returns that key and the
+// names of the limits that held anything of it, and false if ip is no
+// address.
 func (s *Server) ClearAddress(ip string) (key string, cleared []string, ok bool) {
 	if _, ok := hostAddr(ip); !ok {
 		return "", nil, false
 	}
-	key, now := ipKey(ip), s.now()
-	for _, l := range []struct {
-		bs  *buckets
-		key string
-	}{
-		{s.misses, key},
-		{s.regs, key},
-		{s.rangeRegs, rangeKey(ip)},
-		{s.sendIPs, key},
-		{s.requests, key},
-	} {
-		if l.key != "" && l.bs.clear(l.key, now) {
-			cleared = append(cleared, l.bs.name)
-		}
+	now := s.now()
+	for _, l := range s.addressLimits() {
+		cleared = append(cleared, l.clear(ip, now)...)
 	}
-	return key, cleared, true
+	return ipKey(ip), cleared, true
+}
+
+// addressLimits are the limits keyed by a caller's address.
+func (s *Server) addressLimits() []addressLimit {
+	return []addressLimit{s.misses, s.regs, s.sendIPs, s.requests}
 }
 
 // limitsByName are the server's limits, each by its name: the quota a
@@ -49,7 +44,11 @@ func (s *Server) ClearAddress(ip string) (key string, cleared []string, ok bool)
 // refill an account lifts to has the buckets of each (receivesAt).
 func (s *Server) limitsByName() map[string][]*buckets {
 	m := map[string][]*buckets{}
-	for _, bs := range []*buckets{s.polls, s.pages, s.repeats, s.regs, s.rangeRegs, s.sendIPs, s.misses, s.requests, s.calls, s.receives, s.lifted, s.drained, s.sends, s.renewals, s.certs, s.raises} {
+	sets := []*buckets{s.polls, s.pages, s.repeats, s.calls, s.receives, s.lifted, s.drained, s.sends, s.renewals, s.certs, s.raises}
+	for _, l := range s.addressLimits() {
+		sets = append(sets, l.ip, l.rng)
+	}
+	for _, bs := range sets {
 		m[bs.name] = append(m[bs.name], bs)
 	}
 	return m

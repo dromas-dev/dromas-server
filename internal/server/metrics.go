@@ -46,6 +46,8 @@ type Metrics struct {
 	collections prometheus.Histogram
 	holds       prometheus.Gauge
 	held        *prometheus.CounterVec
+	bodiesOpen  prometheus.Gauge
+	bodies      *prometheus.CounterVec
 	versions    *prometheus.CounterVec
 	reloads     *prometheus.CounterVec
 }
@@ -101,6 +103,10 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Help: "Long polls held now (PROTOCOL.md §11.11)."}),
 		held: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "long_polls_total",
 			Help: "Long polls, each once by how it ended: changed (the mailbox changed, or a message in it expired), waited (its wait passed), gone (the caller left), stopped (the server stopped), replaced (a later list of the same mailbox was held in its place), refused (past max_long_polls), or refused_range (past max_long_polls_per_range)."}, []string{"outcome"}),
+		bodiesOpen: prometheus.NewGauge(prometheus.GaugeOpts{Namespace: ns, Name: "bodies_before_pass_open",
+			Help: "Request bodies open now on calls that are their address's (max_bodies_before_pass)."}),
+		bodies: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "bodies_before_pass_total",
+			Help: "Requests with a body on calls that are their address's, by outcome: opened, refused (past max_bodies_before_pass of its IPv4 address or IPv6 /64), or refused_range (past max_bodies_before_pass_per_range of its IPv6 /48)."}, []string{"outcome"}),
 		// By the policy's verdict on the request's version, never the version
 		// itself, which the caller writes: Kubernetes counts requests to
 		// deprecated APIs the same way, apiserver_requested_deprecated_apis
@@ -113,7 +119,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 	for _, r := range []string{"ok", "failed"} {
 		m.reloads.WithLabelValues(versionPolicyFile, r) // each series from the start, at 0
 	}
-	reg.MustRegister(m.requests, m.latency, m.limits, m.passes, m.fetches, m.lists, m.store, m.storeTime, m.caches, m.largeRead, m.cut, m.conns, m.streamAge, m.collections, m.holds, m.held, m.versions, m.reloads)
+	reg.MustRegister(m.requests, m.latency, m.limits, m.passes, m.fetches, m.lists, m.store, m.storeTime, m.caches, m.largeRead, m.cut, m.conns, m.streamAge, m.collections, m.holds, m.held, m.bodiesOpen, m.bodies, m.versions, m.reloads)
 	return m
 }
 
@@ -265,6 +271,26 @@ func (m *Metrics) heldEnded(outcome string) {
 		return
 	}
 	m.held.WithLabelValues(outcome).Inc()
+}
+
+// bodyOpen counts a body opened on a call that is its address's (n 1), or
+// closed (n -1).
+func (m *Metrics) bodyOpen(n float64) {
+	if m == nil {
+		return
+	}
+	m.bodiesOpen.Add(n)
+}
+
+// body counts a body's place taken (refused "") or refused.
+func (m *Metrics) body(refused string) {
+	if m == nil {
+		return
+	}
+	if refused == "" {
+		refused = "opened"
+	}
+	m.bodies.WithLabelValues(refused).Inc()
 }
 
 // cacheEvent counts a hit, a miss or an eviction of the cache named name.

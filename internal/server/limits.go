@@ -29,14 +29,35 @@ type Limits struct {
 	RegistrationsPerHour      int // per IPv4 address or IPv6 /64, at once and an hour: a spike limit, which honest use meets once a mailbox (decided: 50, a household standing up dozens of agents at once)
 	RangeRegistrationsPerHour int // per IPv6 /48, beside the /64's (decided: 500, Let's Encrypt's ratio of the two, until measured)
 	SendsPerMinutePerIP       int // the pre-auth send rate per IP [tunable]
+	RangeSendsPerMinute       int // per IPv6 /48, beside the /64's [tunable]
 	MissesPerMinute           int // per IP: reads of the mailboxes table that find no mailbox, and checks that fail (decided: 10 for now)
+	RangeMissesPerMinute      int // per IPv6 /48, beside the /64's: a last-resort clamp on reads of the provisioned mailboxes table that every caller shares (decided: 100, ten /64s' worth; honest calls rarely miss)
 	MaxLongPollsPerRange      int // per IPv4 address or IPv6 /48: long polls held at once, past which a long poll is answered 503 (0: off); a last-resort clamp so one range cannot fill MaxLongPolls, never a limit of normal use (decided: 10,000, ten held mailboxes for each of the thousand subscribers the densest carrier NAT puts behind one address)
+
+	// MaxBodiesBeforePass is how many request bodies the calls of one IPv4
+	// address or IPv6 /64 that are its address's (gate) may have open at
+	// once, and MaxBodiesBeforePassPerRange of one IPv6 /48: past either,
+	// 503 (0: off). A body the route reads before any pass is checked (a
+	// registration's, a renewal's, a revocation's) holds what it has read
+	// for as long as it takes to arrive (paced), so these bound the memory
+	// one range holds that way. Last-resort clamps: an honest body arrives
+	// in about a round trip, and the rate of the calls that send one is
+	// bounded by the registrations, the renewals and the flood budget, so
+	// honest use keeps few open at once (decided: 256 and 1,024, about 20 MB
+	// and 80 MB at the bodies' cap).
+	MaxBodiesBeforePass         int
+	MaxBodiesBeforePassPerRange int
 
 	// Requests is the flood budget of an IPv4 address or IPv6 /64: every call
 	// with no pass and every request no route matches (decided: 100 at once,
 	// 50 a second).
 	RequestBurst  int
 	RequestRefill time.Duration
+	// RangeRequests is the flood budget of an IPv6 /48, beside the /64's: a
+	// last-resort clamp, each call it counts up to two signature checks
+	// (decided: 2,000 at once, 1,000 a second, twenty /64s' worth).
+	RangeRequestBurst  int
+	RangeRequestRefill time.Duration
 
 	// Budgets: a burst at once and one more each refill (LIMITS.md).
 	ReceiveBurst                 int           // per mailbox: new messages it takes, from all senders together (decided: 50, on, and never off: ReceiveCeiling)
@@ -113,8 +134,13 @@ func DefaultLimits() Limits {
 		RegistrationsPerHour:         50,
 		RangeRegistrationsPerHour:    500,
 		MissesPerMinute:              10,
+		RangeMissesPerMinute:         100,
+		MaxBodiesBeforePass:          256,
+		MaxBodiesBeforePassPerRange:  1024,
 		RequestBurst:                 100,
 		RequestRefill:                20 * time.Millisecond,
+		RangeRequestBurst:            2000,
+		RangeRequestRefill:           time.Millisecond,
 		ReceiveBurst:                 50,
 		ReceiveRefill:                6 * time.Second,
 		DrainBurst:                   50,
@@ -304,6 +330,14 @@ func perPeriod(burst, n int, period time.Duration) (int, time.Duration) {
 	return burst, period / time.Duration(n)
 }
 
+// perPeriods is the size of an addressLimit's two counts, n and rn a
+// period, each its own burst (perPeriod).
+func perPeriods(n, rn int, period time.Duration) (int, time.Duration, int, time.Duration) {
+	burst, every := perPeriod(n, n, period)
+	rBurst, rEvery := perPeriod(rn, rn, period)
+	return burst, every, rBurst, rEvery
+}
+
 // resize gives bs n tokens, one back each interval, from its next take on:
 // each key keeps the time its bucket is full again, and is read by the new
 // size, as Let's Encrypt's Boulder keeps a key's TAT alone and reads the
@@ -429,6 +463,176 @@ func rangeKey(host string) string {
 	}
 	p, _ := ip.Prefix(48)
 	return p.String()
+}
+
+// addressLimit is a limit of a caller's address, counted twice (LIMITS.md,
+// rule 2): by its IPv4 address or IPv6 /64 (ipKey), and by its IPv6 /48
+// (rangeKey), as Let's Encrypt counts new accounts by both. An IPv4 address
+// has no /48 count. Every limit keyed by a caller's address is one, so no
+// /48 spends more of any than its own count, however many of its 65,536 /64s
+// it calls from (dromas-dev/dromas-server#202).
+type addressLimit struct {
+	ip, rng *buckets
+	what    string // what it counts, as its refusal says: "too many <what> from this address"
+}
+
+// newAddressLimit is an addressLimit counting what, its two counts named
+// by their quotas, off until sized (resize).
+func newAddressLimit(ip, rng protocol.Quota, what string) addressLimit {
+	return addressLimit{ip: newBuckets(string(ip), 0, 0), rng: newBuckets(string(rng), 0, 0), what: what}
+}
+
+// resize sizes the IPv4 address's or IPv6 /64's count n, one back each
+// every, and the IPv6 /48's rn, one back each rEvery (buckets.resize).
+func (l addressLimit) resize(n int, every time.Duration, rn int, rEvery time.Duration) {
+	l.ip.resize(n, every)
+	l.rng.resize(rn, rEvery)
+}
+
+// addressCount is a call's two counts of an addressLimit, reserved: of its
+// caller's IPv4 address or IPv6 /64, and of its IPv6 /48. A count that never
+// limits, or an IPv4 address's /48, is nil, which settles as nothing.
+type addressCount struct{ byIP, byRange *reservation }
+
+// keep settles both counts as counted.
+func (c addressCount) keep() {
+	c.byRange.keep()
+	c.byIP.keep()
+}
+
+// release gives both counts back. Either does nothing to counts already
+// settled, so a defer made where they are reserved releases them on every
+// path, a panic included.
+func (c addressCount) release(now time.Time) {
+	c.byRange.release(now)
+	c.byIP.release(now)
+}
+
+// reserve reserves a count of host by both its keys before the work they
+// guard, to be kept or given back once its outcome is known (LIMITS.md,
+// rule 4). Each is reserved before the other is settled, so a refusal by
+// one spends neither; a refusal names the count with the longer wait, as
+// RFC 8555 §6.6 asks. why is said after the refusal's words.
+func (l addressLimit) reserve(ctx context.Context, host string, now func() time.Time, why string) (addressCount, error) {
+	c, p := l.counts(ctx, host, now, why)
+	if p != nil {
+		return c, p
+	}
+	return c, nil
+}
+
+// counts is reserve, its refusal the problem to answer with.
+func (l addressLimit) counts(ctx context.Context, host string, now func() time.Time, why string) (addressCount, *problem) {
+	ip, block := ipKey(host), rangeKey(host)
+	byIP, ok, wait := l.ip.reserve(ctx, ip, now)
+	if !ok {
+		p := l.refused(false, wait, why)
+		if block != "" {
+			if ok, w := l.rng.ready(block, now()); !ok && w > wait {
+				p = l.refused(true, w, why)
+			}
+		}
+		return addressCount{}, p
+	}
+	c := addressCount{byIP: byIP}
+	reserved := false
+	defer func() { // settled by the caller, but for a panic here
+		if !reserved {
+			byIP.release(now())
+		}
+	}()
+	if block != "" {
+		byRange, ok, wait := l.rng.reserve(ctx, block, now)
+		if !ok {
+			return addressCount{}, l.refused(true, wait, why)
+		}
+		c.byRange = byRange
+	}
+	reserved = true
+	return c, nil
+}
+
+// take spends a count of host by both its keys at once (reserve, kept), and
+// returns the refusal, if any, to answer with.
+func (l addressLimit) take(ctx context.Context, host string, now func() time.Time, why string) *problem {
+	c, p := l.counts(ctx, host, now, why)
+	if p != nil {
+		return p
+	}
+	c.keep()
+	return nil
+}
+
+// refused is the 429 of a call past the count of its IPv6 /48 (byRange) or of
+// its IPv4 address or IPv6 /64, with how long to wait.
+func (l addressLimit) refused(byRange bool, wait time.Duration, why string) *problem {
+	if byRange {
+		return rateLimited(protocol.Quota(l.rng.name), wait, "too many "+l.what+" from this address's IPv6 /48"+why)
+	}
+	return rateLimited(protocol.Quota(l.ip.name), wait, "too many "+l.what+" from this address"+why)
+}
+
+// clear forgets what both counts hold of host (buckets.clear), and returns
+// the names of those that held anything.
+func (l addressLimit) clear(host string, now time.Time) (cleared []string) {
+	if l.ip.clear(ipKey(host), now) {
+		cleared = append(cleared, l.ip.name)
+	}
+	if k := rangeKey(host); k != "" && l.rng.clear(k, now) {
+		cleared = append(cleared, l.rng.name)
+	}
+	return cleared
+}
+
+// refusedAddress is how openBodies refuses a body past its IPv4 address's or
+// IPv6 /64's bound, as bodies_before_pass_total counts it; past its /48's,
+// refusedRange.
+const refusedAddress = "refused"
+
+// openBodies counts the request bodies open at once on the calls that are
+// their address's (gate), by the caller's IPv4 address or IPv6 /64 and by
+// its IPv6 /48 (Limits.MaxBodiesBeforePass, dromas-dev/dromas-server#204),
+// as nginx's limit_conn counts a connection once its request's head is read
+// and until it is answered.
+type openBodies struct {
+	mu      sync.Mutex
+	ip, rng map[string]int
+}
+
+func newOpenBodies() *openBodies {
+	return &openBodies{ip: map[string]int{}, rng: map[string]int{}}
+}
+
+// open takes a place for a body of host's, past perIP open of its IPv4
+// address or IPv6 /64 or perRange of its IPv6 /48 (0: no bound) refused,
+// and returns what gives it back, or how it was refused (refusedAddress,
+// refusedRange) and nil.
+func (b *openBodies) open(host string, perIP, perRange int) (closeBody func(), refused string) {
+	ip, block := ipKey(host), rangeKey(host)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	switch {
+	case perIP > 0 && b.ip[ip] >= perIP:
+		return nil, refusedAddress
+	case block != "" && perRange > 0 && b.rng[block] >= perRange:
+		return nil, refusedRange
+	}
+	b.ip[ip]++
+	if block != "" {
+		b.rng[block]++
+	}
+	return func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if b.ip[ip]--; b.ip[ip] <= 0 {
+			delete(b.ip, ip)
+		}
+		if block != "" {
+			if b.rng[block]--; b.rng[block] <= 0 {
+				delete(b.rng, block)
+			}
+		}
+	}, ""
 }
 
 // hostAddr reads a client's address as the limits key it: an IPv4 address
