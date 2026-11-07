@@ -132,6 +132,19 @@ func (r *raw) certs(through uint64) protocol.Revocations {
 	return protocol.Revocations{Identity: r.id.Document(), RevokedCertificates: l.Statement(), RevokedCertificatesSignature: sig}
 }
 
+// sealFor is an age file sealed to raw mailbox to's prekey of the given serial.
+func sealFor(t *testing.T, to *raw, serial uint64) []byte {
+	t.Helper()
+	var ct bytes.Buffer
+	w, err := age.Encrypt(&ct, to.keys[serial].Recipient())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.WriteString(w, `{"v":1}`)
+	_ = w.Close()
+	return ct.Bytes()
+}
+
 // sendTo posts an age file sealed to to's statement of the given serial,
 // naming it, with a pass by the signer of from's statement fromSerial.
 func (e *env) sendTo(to *raw, serial uint64, from *raw, fromSerial uint64) reply {
@@ -215,9 +228,9 @@ func (f fault) String() string {
 // errInjected is the injector's error of no kind.
 var errInjected = errors.New("injected: an error the backend states nothing of")
 
-// errStated is a refusal AWS stated, for a write with no condition of its
-// own: a throttle, or an answer of 4xx to the call.
-var errStated = refused(errors.New("AWS throttled the call"))
+// errStated is a refusal the store stated, for a write with no condition of
+// its own: a statement the database rolled back.
+var errStated = refused(errors.New("the database refused the statement"))
 
 // set makes method's outcome f, until set again.
 func (f *faults) set(method string, x fault) {

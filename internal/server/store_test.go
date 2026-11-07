@@ -1,169 +1,64 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	stypes "github.com/aws/aws-sdk-go-v2/service/dynamodbstreams/types"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
 	"github.com/dromas-dev/dromas-client/api/apitest"
 	"github.com/dromas-dev/dromas-client/client"
 	"github.com/dromas-dev/dromas-client/protocol"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
-// The suite runs against the in-memory store, or, with
-// DROMAS_TEST_MESSAGES_TABLE set, against DynamoDB + S3 Express: every test,
-// plus the ones here that need AWS, on the tables and the bucket that
-// variable and the three of awsTestNames name, each of which must then be
-// set. Name tables and a directory bucket kept for tests, never the ones a
-// running server uses.
-
-var awsTestNames = []string{"DROMAS_TEST_MAILBOXES_TABLE", "DROMAS_TEST_MESSAGES_TABLE", "DROMAS_TEST_ACCOUNTS_TABLE", "DROMAS_TEST_BUCKET"}
-
-func onAWS() bool { return os.Getenv("DROMAS_TEST_MESSAGES_TABLE") != "" }
-
-func newTestStore(t *testing.T, now func() time.Time) (Store, func() bool) {
-	t.Helper()
-	if !onAWS() {
-		return NewMemStore(now), nil
+// recordRow is mailbox b's row of the mailboxes table, each column as pgx
+// hands its type over, to a read of the table and to the feed.
+func recordRow(b *Mailbox) row {
+	var retired any
+	_ = json.Unmarshal(retiredColumn(b), &retired) // a column this package encoded
+	r := row{
+		"addr": bytes.Clone(b.Addr[:]), "identity": b.Identity, "created": toInt(ms(b.Created)), "state": string(b.State),
+		"statement": b.Statement, "statement_sig": b.Signature, "rank": numeric(b.Rank), "signer": bytes.Clone(b.Signer[:]),
+		"senders": sendersColumn(b), "retired": retired, "acl": nil, "account": nil, "expires_at": nil, "rev": toInt(b.Rev),
 	}
-	s := startDynamo(t, now)
-	return s, s.Ready
+	if acl := aclColumn(b); acl != nil {
+		r["acl"] = acl
+	}
+	if acc := accountColumn(b); acc != nil {
+		r["account"] = *acc
+	}
+	if exp := expiresColumn(b); exp != nil {
+		r["expires_at"] = *exp
+	}
+	return r
 }
 
-func startDynamo(t *testing.T, now func() time.Time) *Memory {
-	t.Helper()
-	for _, name := range awsTestNames {
-		if os.Getenv(name) == "" {
-			t.Fatalf("DROMAS_TEST_MESSAGES_TABLE is set, and %s is not: the tests on AWS need all four of %s", name, strings.Join(awsTestNames, ", "))
-		}
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion("us-east-1"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := NewDynamoStore(DynamoConfig{
-		AWS:               cfg,
-		MailboxesTable:    os.Getenv("DROMAS_TEST_MAILBOXES_TABLE"),
-		MessagesTable:     os.Getenv("DROMAS_TEST_MESSAGES_TABLE"),
-		AccountsTable:     os.Getenv("DROMAS_TEST_ACCOUNTS_TABLE"),
-		Bucket:            os.Getenv("DROMAS_TEST_BUCKET"),
-		Now:               now,
-		MailboxCache:      100,
-		StreamInterval:    200 * time.Millisecond,
-		HeartbeatInterval: 200 * time.Millisecond,
-		// The tests read back what they wrote within milliseconds.
-		ConsistentReads: true,
-		Fatal:           func(err error) { t.Errorf("stream: %v", err) },
-	})
-	if err := s.Start(ctx); err != nil {
-		t.Fatal(err)
-	}
-	return s
-}
-
-// dynamoEnv is an env on DynamoDB + S3 Express; the test is skipped without.
-func dynamoEnv(t *testing.T) (*env, *Memory) {
-	t.Helper()
-	if !onAWS() {
-		t.Skip("needs the AWS tables: DROMAS_TEST_MESSAGES_TABLE and the three beside it (awsTestNames)")
-	}
-	e := newEnv(t, relaxed())
-	return e, e.store.(*Memory)
-}
-
-// failOnce makes the DynamoDB backend fail once between the two steps of a
-// write, as a crash there would.
-func failOnce(s *Memory, point string) {
-	var mu sync.Mutex
-	done := false
-	s.dynamo().crash = func(p string) error {
-		mu.Lock()
-		defer mu.Unlock()
-		if p == point && !done {
-			done = true
-			return errors.New("injected: a crash " + p)
-		}
-		return nil
+// applyRow applies a row of table as the feed hands it to memory: changed,
+// or gone (pgFeed.change).
+func (s *Memory) applyRow(table string, r row, gone bool) {
+	if c, err := changeOf(table, r, gone); err == nil && c.Kind != 0 {
+		s.apply(c)
 	}
 }
 
-
-// lists holds the mailboxes table's index of each account's mailboxes to whether it
-// lists mailbox a under account: the index is read eventually consistent, as
-// every global secondary index is, so it is asked for up to ten seconds.
-func (s *Memory) lists(t *testing.T, account string, a protocol.Address, want bool) {
-	t.Helper()
-	for range 100 {
-		out, err := s.dynamo().db.Query(context.Background(), &dynamodb.QueryInput{
-			TableName:                 &s.dynamo().mailboxes,
-			IndexName:                 aws.String(accountIndex),
-			KeyConditionExpression:    aws.String("#c = :c AND #a = :a"),
-			ExpressionAttributeNames:  map[string]string{"#c": "account", "#a": "addr"},
-			ExpressionAttributeValues: map[string]types.AttributeValue{":c": bin([]byte(account)), ":a": bin(a[:])},
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if (len(out.Items) > 0) == want {
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	t.Fatalf("after ten seconds the account index does not list %s under %q: want %v", a, account, want)
-}
-
-// stored reads a message's item from the table as it is, or nil.
-func (s *Memory) stored(t *testing.T, mailbox protocol.Address, id [32]byte) item {
-	t.Helper()
-	out, err := s.dynamo().db.GetItem(context.Background(), &dynamodb.GetItemInput{TableName: &s.dynamo().msgs, Key: msgKey(mailbox, id), ConsistentRead: aws.Bool(true)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return out.Item
-}
-
-func (s *Memory) bodyExists(t *testing.T, mailbox protocol.Address, id [32]byte) bool {
-	t.Helper()
-	_, err := s.dynamo().s3.HeadObject(context.Background(), &s3.HeadObjectInput{Bucket: &s.dynamo().bucket, Key: aws.String(bodyKey(mailbox, id))})
-	if err != nil && !isNoSuchKey(err) {
-		t.Fatal(err)
-	}
-	return err == nil
-}
-
-// listed reports whether the table lists the message: its item is in the
-// live index.
-func (s *Memory) listed(t *testing.T, mailbox protocol.Address, id [32]byte) bool {
-	t.Helper()
-	_, ok := s.stored(t, mailbox, id)["live"]
-	return ok
-}
+// applyImage applies mailbox b's record as the feed's image of it.
+func (s *Memory) applyImage(b *Mailbox) { s.applyRow("mailboxes", recordRow(b), false) }
 
 // Each crash point between the writes, then the retry.
 
 func TestCrashAfterTheBody(t *testing.T) {
 	t.Parallel()
-	e, s := dynamoEnv(t)
+	e, s := sharedEnv(t)
 	a, b := e.mailbox(), e.mailbox()
 	failOnce(s, "put: after the body")
 	if _, err := a.Send(context.Background(), b.Address(), "an orphan body first"); err == nil {
@@ -177,41 +72,49 @@ func TestCrashAfterTheBody(t *testing.T) {
 	}
 }
 
-// An ack deletes the message's item and its body, and nothing of it is
-// kept (PROTOCOL.md §13): the same bytes posted after it are a new message,
-// stored and listed again, which the reader skips, and acks (§11.10 step
-// 6, §12.3 check 8). No item names a sender or holds a signature.
+// An ack deletes the message's row and its body, and nothing of it is kept
+// (PROTOCOL.md §13): the same bytes posted after it are a new message,
+// stored again under a body key of its own, listed and served, which the
+// reader skips, and acks (§11.10 step 6, §12.3 check 8). A message's row
+// holds its id, size and times, and nothing that names a sender or holds a
+// signature.
 func TestTheSameBytesAfterAnAckAreANewMessage(t *testing.T) {
 	t.Parallel()
-	e, s := dynamoEnv(t)
+	e, s := sharedEnv(t)
 	ctx := context.Background()
 	a, b := e.mailbox(), e.mailbox()
 	sent := capture(e, "/v1/"+b.Address().String())
 	send(t, a, b, "once")
 	e.setMiddle(nil)
 	id := sha256.Sum256(sent.ciphertext)
-	for k := range s.stored(t, b.Address(), id) {
-		if k == "from" || k == "sig" {
-			t.Fatalf("a message's item holds %q", k)
-		}
+	if cols := slices.Sorted(maps.Keys(s.storedMsg(t, b.Address(), id))); !slices.Equal(cols, []string{"box", "expires_at", "id", "received_at", "size"}) {
+		t.Fatalf("a message's row holds %v", cols)
 	}
+	first := s.bodyKeyOf(t, b.Address(), id)
 	receive(t, b)
-	if it := s.stored(t, b.Address(), id); it != nil {
-		t.Fatalf("the ack left the item: %v", it)
+	if r := s.storedMsg(t, b.Address(), id); r != nil {
+		t.Fatalf("the ack left the row: %v", r)
 	}
-	if s.bodyExists(t, b.Address(), id) {
+	if s.hasBody(t, first) {
 		t.Fatal("the ack left the body")
 	}
 	if err := s.DeleteMessage(ctx, b.Address(), id); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a second ack: %v", err)
 	}
+	e.clock.Add(time.Second)
 	if r := e.do(http.MethodPost, "/v1/"+b.Address().String()+"/messages", *sent, e.pass(a)); r.status != http.StatusCreated {
 		t.Fatalf("the same bytes after the ack: %d %s; want 201", r.status, r.body)
 	}
 	// In the table, too: memory's tomb for the ack would hide a message the
-	// post listed again, until the stream brought it.
-	if !s.listed(t, b.Address(), id) || !s.bodyExists(t, b.Address(), id) {
+	// post listed again, until the feed brought it.
+	if s.storedMsg(t, b.Address(), id) == nil || !s.bodyExists(t, b.Address(), id) {
 		t.Fatal("the same bytes after the ack are not listed, or have no body")
+	}
+	if again := s.bodyKeyOf(t, b.Address(), id); again == first {
+		t.Fatalf("the same bytes after the ack are kept under the first send's body key %s", first)
+	}
+	if _, body, err := s.Message(ctx, b.Address(), id, 0); err != nil || !bytes.Equal(body, sent.ciphertext) {
+		t.Fatalf("the same bytes after the ack are not served: %v", err)
 	}
 	if n, _ := s.Count(ctx, b.Address()); n != 1 {
 		t.Fatalf("memory counts %d; want the one posted again", n)
@@ -219,51 +122,57 @@ func TestTheSameBytesAfterAnAckAreANewMessage(t *testing.T) {
 	if res := receive(t, b); len(res.Delivered) != 0 {
 		t.Fatalf("the same bytes after the ack were delivered again: %d", len(res.Delivered))
 	}
-	if s.listed(t, b.Address(), id) {
+	if s.storedMsg(t, b.Address(), id) != nil {
 		t.Fatal("the reader left the same bytes listed")
 	}
 }
 
+// An ack deletes the message's row, then its body: a crash between leaves
+// the ack done, the message out of the list and its body kept under a key
+// no row names, for the collection by age; never a listed message without
+// its body.
 func TestCrashBetweenAnAcksDeletes(t *testing.T) {
 	t.Parallel()
-	e, s := dynamoEnv(t)
+	e, s := sharedEnv(t)
 	a, b := e.mailbox(), e.mailbox()
 	ctx := context.Background()
-	send(t, a, b, "acked halfway")
-	failOnce(s, "ack: after the body")
-	res, err := b.Receive(ctx)
-	if err == nil || res == nil || len(res.Delivered) != 1 {
-		t.Fatalf("first drain: %v", err)
-	}
-	if n, _ := s.Count(ctx, b.Address()); n != 1 {
-		t.Fatal("the message left the list with the body")
-	}
-	// The client acks again on its next drain, and it leaves the list.
-	res = receive(t, b)
-	if len(res.Delivered) != 0 || len(res.Duplicates) != 0 || len(res.Refused) != 0 {
-		t.Fatalf("second drain: %+v", res)
+	id := idOf(t, send(t, a, b, "acked halfway"))
+	key := s.bodyKeyOf(t, b.Address(), id)
+	failOnce(s, "ack: after the row")
+	if res := receive(t, b); len(res.Delivered) != 1 {
+		t.Fatalf("first drain: delivered %d", len(res.Delivered))
 	}
 	if n, _ := s.Count(ctx, b.Address()); n != 0 {
-		t.Fatal("not acked on the second drain")
+		t.Fatal("the message stayed in the list")
+	}
+	if r := s.storedMsg(t, b.Address(), id); r != nil {
+		t.Fatalf("the ack left the row: %v", r)
+	}
+	if !s.hasBody(t, key) {
+		t.Fatal("control: the crash between the deletes left no body")
+	}
+	res := receive(t, b)
+	if len(res.Delivered) != 0 || len(res.Duplicates) != 0 || len(res.Refused) != 0 {
+		t.Fatalf("second drain: %+v", res)
 	}
 }
 
 func TestHeaderWithoutBodyIsGone(t *testing.T) {
 	t.Parallel()
-	e, s := dynamoEnv(t)
+	e, s := sharedEnv(t)
 	a, b := e.mailbox(), e.mailbox()
 	ctx := context.Background()
-	id := idOf(t, send(t, a, b, "its body expires early"))
+	id := idOf(t, send(t, a, b, "its body goes early"))
 	if _, _, err := s.Message(ctx, b.Address(), id, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.dynamo().deleteBody(ctx, b.Address(), id); err != nil {
+	if err := s.pg().bodies.Delete(ctx, s.bodyKeyOf(t, b.Address(), id)); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := s.Message(ctx, b.Address(), id, 0); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("fetch: %v, want gone", err)
 	}
-	if s.listed(t, b.Address(), id) {
+	if s.storedMsg(t, b.Address(), id) != nil {
 		t.Fatal("the bodiless message is still listed")
 	}
 	if n, _ := s.Count(ctx, b.Address()); n != 0 {
@@ -271,18 +180,19 @@ func TestHeaderWithoutBodyIsGone(t *testing.T) {
 	}
 }
 
-// An acked message is never served, even if its body comes back, as an
-// orphan the lifecycle rule reaps does: the ack deleted its item.
+// An acked message is never served, even with a body under its key: the
+// ack deleted its row, and the row is what says a message is live.
 func TestAckedMessageWithABodyAgainIsGone(t *testing.T) {
 	t.Parallel()
-	e, s := dynamoEnv(t)
+	e, s := sharedEnv(t)
 	a, b := e.mailbox(), e.mailbox()
 	ctx := context.Background()
-	id := idOf(t, send(t, a, b, "acked, then its body rewritten"))
+	id := idOf(t, send(t, a, b, "acked, then its body written again"))
+	key := s.bodyKeyOf(t, b.Address(), id)
 	if res := receive(t, b); len(res.Delivered) != 1 {
 		t.Fatalf("delivered %d", len(res.Delivered))
 	}
-	if _, err := s.dynamo().s3.PutObject(ctx, &s3.PutObjectInput{Bucket: &s.dynamo().bucket, Key: aws.String(bodyKey(b.Address(), id)), Body: strings.NewReader("ciphertext")}); err != nil {
+	if err := s.pg().bodies.Put(ctx, key, []byte("ciphertext")); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := s.Message(ctx, b.Address(), id, 0); !errors.Is(err, ErrNotFound) {
@@ -290,14 +200,13 @@ func TestAckedMessageWithABodyAgainIsGone(t *testing.T) {
 	}
 }
 
-// Two processes on one pair of tables: what one writes reaches the other
-// through the streams, and an id the other has not heard of yet is read by
-// its key.
+// Two processes on one database: what one writes reaches the other through
+// the feed, and an id the other has not heard of yet is read by its key.
 func TestTwoProcesses(t *testing.T) {
 	t.Parallel()
-	e, _ := dynamoEnv(t)
+	e, _ := sharedEnv(t)
 	ctx := context.Background()
-	other := startDynamo(t, e.clock.Now)
+	other := startPostgres(t, e.clock.Now)
 	srv2 := httptest.NewServer(apitest.Handler(t, New(Config{Store: other, Limits: relaxed(), Now: e.clock.Now, Ready: other.Ready}).Handler()))
 	t.Cleanup(srv2.Close)
 	e2 := &env{t: t, clock: e.clock, store: other, srv: srv2}
@@ -330,7 +239,7 @@ func TestTwoProcesses(t *testing.T) {
 	t.Logf("an ack on the second process reached the first in %s", took)
 
 	// A long poll on the other process is woken by a send stored on this
-	// one, through the stream (PROTOCOL.md §11.11).
+	// one, through the feed (PROTOCOL.md §11.11).
 	list := "/v1/" + b.Address().String() + "/messages"
 	tag := e2.do(http.MethodGet, list, nil, tok()).header.Get("ETag")
 	woke := make(chan reply, 1)
@@ -357,7 +266,7 @@ func TestTwoProcesses(t *testing.T) {
 	}
 
 	// A new prekey comes under a new certificate: the other process, which
-	// took the old pass a moment ago, refuses it from memory once the stream
+	// took the old pass a moment ago, refuses it from memory once the feed
 	// brings the change, and takes the identity's pass, as always.
 	old := tok()
 	if r := e2.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages", nil, old); r.status != http.StatusOK {
@@ -389,7 +298,7 @@ func TestTwoProcesses(t *testing.T) {
 // on its first use, once, and answered from memory after that.
 func TestRestartLoadsLazily(t *testing.T) {
 	t.Parallel()
-	e, _ := dynamoEnv(t)
+	e, _ := sharedEnv(t)
 	ctx := context.Background()
 	a, b, c, f := e.mailbox(), e.mailbox(), e.mailbox(), e.mailbox()
 	one := send(t, a, b, "one")
@@ -403,7 +312,7 @@ func TestRestartLoadsLazily(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fresh := startDynamo(t, e.clock.Now)
+	fresh := startPostgres(t, e.clock.Now)
 	if !fresh.Ready() || fresh.loads.Load() != 0 {
 		t.Fatalf("ready %v after %d loads: want ready with none", fresh.Ready(), fresh.loads.Load())
 	}
@@ -445,12 +354,12 @@ func TestRestartLoadsLazily(t *testing.T) {
 // dromas-dev/dromas-server#42).
 func TestAResentRevocationLoadsNothingElsewhere(t *testing.T) {
 	t.Parallel()
-	e, _ := dynamoEnv(t)
+	e, _ := sharedEnv(t)
 	a := e.mailbox()
 	rec := record(t, a)
 	e.want(e.do("PUT", revocationPath(a.Address()), rec, ""), 201, "")
 
-	fresh := startDynamo(t, e.clock.Now)
+	fresh := startPostgres(t, e.clock.Now)
 	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: fresh, Limits: relaxed(), Now: e.clock.Now, Ready: fresh.Ready}).Handler()))
 	t.Cleanup(srv.Close)
 	e2 := &env{t: t, clock: e.clock, store: fresh, srv: srv}
@@ -464,10 +373,10 @@ func TestAResentRevocationLoadsNothingElsewhere(t *testing.T) {
 }
 
 // Polls read a mailbox once per process, on its first use: every later poll,
-// empty or not, is answered from memory, kept current by the stream.
+// empty or not, is answered from memory, kept current by the feed.
 func TestPollsReadOncePerProcess(t *testing.T) {
 	t.Parallel()
-	e, s := dynamoEnv(t)
+	e, s := sharedEnv(t)
 	a, b := e.mailbox(), e.mailbox()
 	poll := func() reply {
 		e.clock.Add(time.Minute) // past the poll limit
@@ -495,7 +404,7 @@ func TestPollsReadOncePerProcess(t *testing.T) {
 type throttled struct{ Store }
 
 func (throttled) Count(context.Context, protocol.Address) (int, error) {
-	return 0, &smithy.GenericAPIError{Code: "ProvisionedThroughputExceededException", Message: "slow down"}
+	return 0, &smithy.GenericAPIError{Code: "SlowDown", Message: "slow down"}
 }
 
 func TestThrottleIs503(t *testing.T) {
@@ -525,33 +434,6 @@ func TestNotReadyIs503(t *testing.T) {
 		t.Fatalf("%d %s", r.status, r.body)
 	}
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // An empty poll never leaves the process (ARCHITECTURE.md § Memory): a mailbox
 // showing a new pass, one showing a pass the server has taken, a renewed
@@ -612,8 +494,8 @@ func TestPollStaysInMemory(t *testing.T) {
 	}
 }
 
-// A header past its expiry is never listed, though the TTL has not deleted
-// it yet.
+// A header past its expiry is never listed, though the sweep has not
+// deleted it yet.
 func TestExpiredHeadersAreNotListed(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
@@ -666,13 +548,13 @@ func TestTheDedupeSpansAnUnackedMessagesLife(t *testing.T) {
 	}
 }
 
-// A mailbox's record (sk 0x00) and its address's revocations (sk 0x01) are
-// memory's, and nothing else under the address is: another item, whatever it
-// holds, changes nothing on the stream. A revocation adds to what memory
-// holds; the record's removal drops the mailbox, whose next use reads it again.
+// A mailbox's record and its address's revocations are memory's, each a row
+// of its own table, and a row of a table memory holds nothing of changes
+// nothing in the feed. A revocation adds to what memory holds; the record's
+// removal drops the mailbox, whose next use reads it again.
 func TestTheRecordAndTheRevocationsAreMemorys(t *testing.T) {
 	t.Parallel()
-	s := NewDynamoStore(DynamoConfig{MailboxCache: 10})
+	s := newMemory(nil, 10, nil, nil) // never started: memory alone
 	var a protocol.Address
 	a[0] = 7
 	if err := s.idx.ensure(context.Background(), a, func() (mailboxRead, error) {
@@ -680,45 +562,33 @@ func TestTheRecordAndTheRevocationsAreMemorys(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	b := func(v []byte) stypes.AttributeValue { return &stypes.AttributeValueMemberB{Value: v} }
-	keys := func(sk []byte) map[string]stypes.AttributeValue {
-		return map[string]stypes.AttributeValue{"addr": b(a[:]), "sk": b(sk)}
-	}
-	other := keys([]byte("a-later-item"))
-	img := map[string]stypes.AttributeValue{
-		"addr": other["addr"], "sk": other["sk"], "state": &stypes.AttributeValueMemberS{Value: string(Active)},
-		"identity": b([]byte("x")), "revocation": b([]byte("x")), "rev": &stypes.AttributeValueMemberN{Value: "9"},
-	}
-	record := func(op stypes.OperationType, k, img map[string]stypes.AttributeValue) stypes.Record {
-		return stypes.Record{EventName: op, Dynamodb: &stypes.StreamRecord{Keys: k, NewImage: img}}
-	}
 	standing := func() (Standing, bool) { return s.idx.standing(a) }
-	s.applyMailboxRecord(record(stypes.OperationTypeInsert, other, img))
+	key := row{"account": "an account", "hash": make([]byte, 32), "uses": int32(1), "expires_at": int64(1)}
+	s.applyRow("adopt_keys", key, false)
 	if st, _ := standing(); st.State != Active {
-		t.Fatalf("another item set the standing: %v", st)
+		t.Fatalf("another table's row set the standing: %v", st)
 	}
-	s.applyMailboxRecord(record(stypes.OperationTypeRemove, other, nil))
+	s.applyRow("adopt_keys", key, true)
 	if _, ok := standing(); !ok {
-		t.Fatal("another item's removal dropped the mailbox")
+		t.Fatal("another table's row's removal dropped the mailbox")
 	}
-	revs := keys([]byte{skRevocations})
-	certs := map[string]stypes.AttributeValue{"addr": revs["addr"], "sk": revs["sk"], "identity": b([]byte("x")),
-		"revoked_certs": b([]byte("x")), "revoked_certs_sig": b([]byte("x")), "through": &stypes.AttributeValueMemberN{Value: "5"}}
-	s.applyMailboxRecord(record(stypes.OperationTypeInsert, revs, certs))
+	certs := row{"addr": a[:], "identity": []byte("x"), "revocation": nil,
+		"revoked_certs": []byte("x"), "revoked_certs_sig": []byte("x"), "through": numeric(5)}
+	s.applyRow("revocations", certs, false)
 	if st, _ := standing(); st.State != Active || !st.Listed {
 		t.Fatalf("a revocation of the mailbox's certificate: %+v", st)
 	}
-	certs["through"] = &stypes.AttributeValueMemberN{Value: "3"} // lower: changes nothing
-	s.applyMailboxRecord(record(stypes.OperationTypeModify, revs, certs))
+	certs["through"] = numeric(3) // lower: changes nothing
+	s.applyRow("revocations", certs, false)
 	if st, _ := standing(); !st.Listed {
 		t.Fatal("a lower revocation of certificates took the mailbox's back")
 	}
-	certs["revocation"] = b([]byte("x"))
-	s.applyMailboxRecord(record(stypes.OperationTypeModify, revs, certs))
+	certs["revocation"] = []byte("x")
+	s.applyRow("revocations", certs, false)
 	if st, _ := standing(); st.State != Revoked {
 		t.Fatalf("a revocation of the address: %+v", st)
 	}
-	s.applyMailboxRecord(record(stypes.OperationTypeRemove, keys([]byte{skMailbox}), nil))
+	s.applyRow("mailboxes", row{"addr": a[:]}, true)
 	if _, ok := standing(); ok {
 		t.Fatal("the record's removal left the mailbox in memory")
 	}
@@ -727,7 +597,7 @@ func TestTheRecordAndTheRevocationsAreMemorys(t *testing.T) {
 // A mailbox record this build cannot read whole is no record: one in a state it
 // never writes, "deleted" among them (dromas-dev/dromas-client#312), or an active one whose stored ACL does
 // not read. Reading it is an error, so nothing is served or taken for the
-// address, and its image on the stream makes memory forget the mailbox wherever
+// address, and its image on the feed makes memory forget the mailbox wherever
 // it holds it, loaded or loading, its record cached, or its address
 // remembered missing, rather than keep answering for it as it was
 // (dromas-dev/dromas-server#87). Control: an active image keeps it.
@@ -741,18 +611,32 @@ func TestARecordInAStateNotWrittenIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	it := item(mailboxItem(rec))
+	it := recordRow(rec)
 	if _, err := decodeMailbox(it); err != nil {
 		t.Fatalf("an active record: %v", err)
 	}
-	at := func(rev uint64, set func(item)) item {
-		x := item(mailboxItem(rec))
-		x["rev"] = num(rev)
+	if s, ok := e.store.(*Memory); ok && onPostgres() {
+		// recordRow is the table's row: its columns, and what they read as.
+		stored := s.storedRecord(t, a)
+		if got, want := slices.Sorted(maps.Keys(it)), slices.Sorted(maps.Keys(stored)); !slices.Equal(got, want) {
+			t.Fatalf("control: recordRow has the columns %v; the table %v", got, want)
+		}
+		from, err := decodeMailbox(stored)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if made, _ := decodeMailbox(it); made.Rev != from.Rev || made.Rank != from.Rank || !bytes.Equal(made.Statement, from.Statement) {
+			t.Fatal("control: recordRow does not read as the table's row does")
+		}
+	}
+	at := func(rev uint64, set func(row)) row {
+		x := recordRow(rec)
+		x["rev"] = toInt(rev)
 		set(x)
 		return x
 	}
-	deleted := at(rec.Rev+1, func(x item) { x["state"] = str("deleted") })
-	badACL := at(rec.Rev+1, func(x item) { x["acl"] = bin([]byte(`{"allow":"not a list"}`)) })
+	deleted := at(rec.Rev+1, func(x row) { x["state"] = "deleted" })
+	badACL := at(rec.Rev+1, func(x row) { x["acl"] = []byte(`{"allow":"not a list"}`) })
 	if _, _, err := decodeStanding(badACL); err != nil {
 		t.Fatalf("control: the standing of a record whose ACL does not read: %v", err)
 	}
@@ -763,18 +647,18 @@ func TestARecordInAStateNotWrittenIsRefused(t *testing.T) {
 	}
 	for _, im := range []struct {
 		name string
-		it   item
+		it   row
 	}{{"a record in the state \"deleted\"", deleted}, {"an active record whose ACL does not read", badACL}} {
 		if b, err := decodeMailbox(im.it); err == nil {
 			t.Fatalf("%s read as %s", im.name, b.State)
 		}
 		t.Run(im.name+", loaded and cached", func(t *testing.T) {
-			s := NewDynamoStore(DynamoConfig{MailboxCache: 10})
+			s := newMemory(nil, 10, nil, nil)
 			if err := s.idx.ensure(ctx, a, read(rec.Rev)); err != nil {
 				t.Fatal(err)
 			}
 			s.cache.put(rec)
-			s.applyMailboxImage(im.it)
+			s.applyRow("mailboxes", im.it, false)
 			if st, ok := s.Held(a); ok {
 				t.Errorf("the index kept the mailbox as %s", st.State)
 			}
@@ -783,18 +667,18 @@ func TestARecordInAStateNotWrittenIsRefused(t *testing.T) {
 			}
 		})
 		t.Run(im.name+", remembered missing", func(t *testing.T) {
-			s := NewDynamoStore(DynamoConfig{MailboxCache: 10})
+			s := newMemory(nil, 10, nil, nil)
 			s.cache.missed(a, s.cache.begin(a), s.now())
 			if _, ok := s.Known(a); !ok {
 				t.Fatal("control: the miss is not remembered")
 			}
-			s.applyMailboxImage(im.it)
+			s.applyRow("mailboxes", im.it, false)
 			if _, ok := s.Known(a); ok {
 				t.Error("an image of a record left the address remembered as missing")
 			}
 		})
 		t.Run(im.name+", loading", func(t *testing.T) {
-			s := NewDynamoStore(DynamoConfig{MailboxCache: 10})
+			s := newMemory(nil, 10, nil, nil)
 			reading, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
 			go func() {
 				done <- s.idx.ensure(ctx, a, func() (mailboxRead, error) {
@@ -804,7 +688,7 @@ func TestARecordInAStateNotWrittenIsRefused(t *testing.T) {
 				})
 			}()
 			<-reading
-			s.applyMailboxImage(im.it)
+			s.applyRow("mailboxes", im.it, false)
 			close(release)
 			if err := <-done; err != nil {
 				t.Fatal(err)
@@ -815,12 +699,12 @@ func TestARecordInAStateNotWrittenIsRefused(t *testing.T) {
 		})
 	}
 	t.Run("control: an active image keeps it", func(t *testing.T) {
-		s := NewDynamoStore(DynamoConfig{MailboxCache: 10})
+		s := newMemory(nil, 10, nil, nil)
 		if err := s.idx.ensure(ctx, a, read(rec.Rev)); err != nil {
 			t.Fatal(err)
 		}
 		s.cache.put(rec)
-		s.applyMailboxImage(at(rec.Rev+1, func(item) {}))
+		s.applyRow("mailboxes", at(rec.Rev+1, func(row) {}), false)
 		if st, ok := s.Held(a); !ok || st.State != Active {
 			t.Errorf("an active image: the index holds the mailbox %s, %v", st.State, ok)
 		}
@@ -830,11 +714,48 @@ func TestARecordInAStateNotWrittenIsRefused(t *testing.T) {
 	})
 }
 
+// cannedRecord is a backend whose reads of an address answer the mailboxes
+// row the test holds, decoded as a read of the table decodes it, and none of
+// its revocations, over the in-memory backend for everything else.
+type cannedRecord struct {
+	Backend
+	mu  sync.Mutex
+	rec row
+}
+
+// cannedStore is memory over a cannedRecord holding r.
+func cannedStore(r row) (*Memory, *cannedRecord) {
+	s := NewMemStore(time.Now)
+	c := &cannedRecord{Backend: s.backend, rec: r}
+	s.backend = c
+	return s, c
+}
+
+func (c *cannedRecord) set(r row) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.rec = r
+}
+
+func (c *cannedRecord) ReadAddress(context.Context, protocol.Address) (*Mailbox, *Revocations, error) {
+	c.mu.Lock()
+	r := c.rec
+	c.mu.Unlock()
+	if r == nil {
+		return nil, nil, nil
+	}
+	b, err := decodeMailbox(r)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b, nil, nil
+}
+
 // A process that served a mailbox from its record cache, and then takes the
-// stream's image of the record in a state this build never writes, does not
+// feed's image of the record in a state this build never writes, does not
 // serve it from the cache again: the read of the mailbox after the image reads
-// the record, which fails (dromas-dev/dromas-server#87). In process
-// over canned tables.
+// the record, which fails (dromas-dev/dromas-server#87). In process, over a
+// canned row.
 func TestADeletedImageIsNotServedFromTheCache(t *testing.T) {
 	t.Parallel()
 	e0 := newEnv(t, relaxed())
@@ -844,19 +765,18 @@ func TestADeletedImageIsNotServedFromTheCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tables := &cannedTables{address: []map[string]types.AttributeValue{mailboxItem(rec)}}
-	s := tables.store()
+	s, canned := cannedStore(recordRow(rec))
 	e := newEnv(t, relaxed(), func(c *Config) { c.Store = s })
 	r.e = e
 	e.want(e.do("GET", r.path(""), nil, ""), http.StatusOK, "")
 	if _, ok := s.Known(a); !ok {
 		t.Fatal("control: the read did not fill the record cache")
 	}
-	deleted := item(mailboxItem(rec))
-	deleted["state"] = str("deleted")
-	deleted["rev"] = num(rec.Rev + 1)
-	tables.set(deleted)
-	s.applyMailboxImage(deleted)
+	deleted := recordRow(rec)
+	deleted["state"] = "deleted"
+	deleted["rev"] = toInt(rec.Rev + 1)
+	canned.set(deleted)
+	s.applyRow("mailboxes", deleted, false)
 	got := e.do("GET", r.path(""), nil, "")
 	t.Logf("the read of the mailbox after the image: %d %s", got.status, got.code())
 	if got.status == http.StatusOK {
@@ -944,7 +864,7 @@ func TestTheMailboxsStateAnswersBeforeItsPass(t *testing.T) {
 		t.Fatalf("unknown mailbox: %d %s", r.status, r.body)
 	}
 	pass := e.pass(c)
-	if err := e.store.DeleteMailbox(ctx, c.Address()); err != nil { // as the TTL deletes it
+	if err := e.store.DeleteMailbox(ctx, c.Address()); err != nil { // as the sweep deletes it
 		t.Fatal(err)
 	}
 	for _, p := range []string{"", pass} {
@@ -961,43 +881,5 @@ func TestTheMailboxsStateAnswersBeforeItsPass(t *testing.T) {
 		if r := poll(d.Address(), p); r.code() != protocol.CodeRevoked {
 			t.Fatalf("revoked mailbox: %d %s", r.status, r.body)
 		}
-	}
-}
-
-// On DynamoDB the answer to a message write carries its mailbox's item
-// collection's size, which the metric observes: the messages table has its
-// LSI, so the metric is not blind, and a new mailbox's estimate tops out at 1 GB.
-func TestDynamoObservesTheItemCollection(t *testing.T) {
-	t.Parallel()
-	e, s := dynamoEnv(t)
-	m := NewMetrics(prometheus.NewRegistry())
-	s.dynamo().metrics = m
-	a, b := e.mailbox(), e.mailbox()
-	send(t, a, b, "sized")
-	if err := testutil.CollectAndCompare(m.collections, strings.NewReader(collectionsWant(1)), "dromas_server_item_collection_estimate_bytes"); err != nil {
-		t.Error(err)
-	}
-}
-
-// Each table's heartbeat comes back through its stream to its follower, so a
-// follower on an idle table is shown current by it.
-func TestTheHeartbeatComesBackThroughEachStream(t *testing.T) {
-	t.Parallel()
-	if !onAWS() {
-		t.Skip("needs the AWS tables: DROMAS_TEST_MESSAGES_TABLE and the three beside it (awsTestNames)")
-	}
-	s := startDynamo(t, time.Now)
-	started := time.Now()
-	d := s.dynamo()
-	for _, tb := range d.beatTables() {
-		for wait := time.Now().Add(10 * time.Second); tb.f.beat.Load() <= started.UnixNano(); time.Sleep(50 * time.Millisecond) {
-			if time.Now().After(wait) {
-				t.Fatalf("no heartbeat back through the %s stream in 10 s", tb.table)
-			}
-		}
-		t.Logf("a heartbeat back through the %s stream %s after the start", tb.table, time.Unix(0, tb.f.beat.Load()).Sub(started).Round(time.Millisecond))
-	}
-	if !s.Ready() {
-		t.Error("not ready, every heartbeat back")
 	}
 }

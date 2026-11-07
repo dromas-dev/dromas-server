@@ -12,14 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"filippo.io/age"
 	"github.com/dromas-dev/dromas-client/api/apitest"
-	"github.com/dromas-dev/dromas-client/client"
 	"github.com/dromas-dev/dromas-client/protocol"
 )
-
-
-
 
 // A mailbox's ACL is the mailbox's own to read and replace, whole; one that is not
 // an ACL, or holds more entries than the server takes, is refused before
@@ -110,22 +105,35 @@ func TestACLRoute(t *testing.T) {
 	if err != nil || stored.ACL == nil || stored.ACL.Allow.Any || stored.ACL.Allow.Len() != 2 {
 		t.Fatalf("the stored ACL: %+v, %v", stored.ACL, err)
 	}
-	back, err := decodeMailbox(item(mailboxItem(stored)))
-	if err != nil || back.ACL == nil || !back.ACL.SameLists(stored.ACL) {
-		t.Fatalf("the ACL does not come back from the record as it went in: %+v, %v", back.ACL, err)
+	rows := []row{recordRow(stored)}
+	s, onPG := onPg(e.store)
+	if onPG {
+		rows = append(rows, s.storedRecord(t, b.Address()))
 	}
-	if doc, err := item(mailboxItem(stored)).bytes("acl"); err != nil || string(doc) != want {
-		t.Fatalf("the record holds the ACL as %s, %v; want %s", doc, err, want)
+	for _, r := range rows {
+		back, err := decodeMailbox(r)
+		if err != nil || back.ACL == nil || !back.ACL.SameLists(stored.ACL) {
+			t.Fatalf("the ACL does not come back from the record as it went in: %+v, %v", back.ACL, err)
+		}
+		if doc, err := r.bytes("acl"); err != nil || string(doc) != want {
+			t.Fatalf("the record holds the ACL as %s, %v; want %s", doc, err, want)
+		}
 	}
 	none, err := e.store.Mailbox(context.Background(), other.Address())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := mailboxItem(none)["acl"]; ok {
-		t.Fatal("a mailbox with no ACL has one in its record")
+	rows = []row{recordRow(none)}
+	if onPG {
+		rows = append(rows, s.storedRecord(t, other.Address()))
 	}
-	if back, err := decodeMailbox(item(mailboxItem(none))); err != nil || back.ACL != nil {
-		t.Fatalf("a record with no ACL reads back with one: %+v, %v", back.ACL, err)
+	for _, r := range rows {
+		if r.has("acl") {
+			t.Fatal("a mailbox with no ACL has one in its record")
+		}
+		if back, err := decodeMailbox(r); err != nil || back.ACL != nil {
+			t.Fatalf("a record with no ACL reads back with one: %+v, %v", back.ACL, err)
+		}
 	}
 }
 
@@ -404,12 +412,12 @@ func TestACLDeletesNoMessages(t *testing.T) {
 	}
 }
 
-// On DynamoDB, an ACL put through one process reaches another through the
-// stream, and that process then refuses what it refuses.
+// On PostgreSQL, an ACL put through one process reaches another through the
+// feed, and that process then refuses what it refuses.
 func TestACLReachesAnotherProcess(t *testing.T) {
 	t.Parallel()
-	e, _ := dynamoEnv(t)
-	other := startDynamo(t, e.clock.Now)
+	e, _ := sharedEnv(t)
+	other := startPostgres(t, e.clock.Now)
 	srv2 := httptest.NewServer(apitest.Handler(t, New(Config{Store: other, Limits: relaxed(), Now: e.clock.Now, Ready: other.Ready}).Handler()))
 	t.Cleanup(srv2.Close)
 	e2 := &env{t: t, clock: e.clock, store: other, srv: srv2}

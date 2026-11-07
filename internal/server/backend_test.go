@@ -1,9 +1,8 @@
 package server
 
-// The store's backends, and the boundary between them and memory: the
-// injector of faults at it, which every test of what memory makes of a
-// write's outcome or of a read's answer uses, and the stream's records as
-// the DynamoDB backend hands them to memory.
+// The store's backends, and the boundary between them and memory: every
+// write's outcome, every change the feed hands over, and the rows as the
+// PostgreSQL backend's feed decodes them.
 
 import (
 	"context"
@@ -13,116 +12,23 @@ import (
 	"reflect"
 	"slices"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	stypes "github.com/aws/aws-sdk-go-v2/service/dynamodbstreams/types"
 	"github.com/dromas-dev/dromas-client/protocol"
 )
 
-// dynamo is the DynamoDB backend s is over.
-func (s *Memory) dynamo() *dynamoBackend { return s.backend.(*dynamoBackend) }
-
-// onDynamo is the store as memory over the DynamoDB backend, if it is.
-func onDynamo(st Store) (*Memory, bool) {
-	s, ok := st.(*Memory)
-	if !ok {
-		return nil, false
+// heldRecord is a registered mailbox's record, from the suite's store.
+func heldRecord(t *testing.T) (*env, *raw, *Mailbox) {
+	t.Helper()
+	e := newEnv(t, relaxed())
+	r := e.raw().register(protocol.MaxPrekeyLifetime)
+	b, err := e.store.Mailbox(t.Context(), r.id.Address())
+	if err != nil {
+		t.Fatal(err)
 	}
-	_, ok = s.backend.(*dynamoBackend)
-	return s, ok
+	return e, r, b
 }
-
-// applyMailboxRecord applies a record of the --mailboxes-table stream as the
-// DynamoDB backend's feed hands it to memory.
-func (s *Memory) applyMailboxRecord(r stypes.Record) { s.applyStream(mailboxStreamChange(r)) }
-
-// applyMsgRecord is applyMailboxRecord for the --messages-table stream.
-func (s *Memory) applyMsgRecord(r stypes.Record) { s.applyStream(msgStreamChange(r)) }
-
-// applyAccountRecord is applyMailboxRecord for the --accounts-table stream.
-func (s *Memory) applyAccountRecord(r stypes.Record) { s.applyStream(accountStreamChange(r)) }
-
-func (s *Memory) applyStream(c Change, err error) {
-	if err == nil && c.Kind != 0 {
-		s.apply(c)
-	}
-}
-
-// applyMailboxImage applies an item of the --mailboxes-table table as it now is, as
-// the stream's image of it.
-func (s *Memory) applyMailboxImage(it item) {
-	s.applyMailboxRecord(stypes.Record{EventName: stypes.OperationTypeModify, Dynamodb: &stypes.StreamRecord{NewImage: toStream(it)}})
-}
-
-// toStream is an item as a stream's image carries it.
-func toStream(it item) map[string]stypes.AttributeValue {
-	out := map[string]stypes.AttributeValue{}
-	for k, v := range it {
-		if c := toStreamAV(v); c != nil {
-			out[k] = c
-		}
-	}
-	return out
-}
-
-// toStreamAV is fromStream's convertAV, the other way.
-func toStreamAV(v types.AttributeValue) stypes.AttributeValue {
-	switch v := v.(type) {
-	case *types.AttributeValueMemberB:
-		return &stypes.AttributeValueMemberB{Value: v.Value}
-	case *types.AttributeValueMemberS:
-		return &stypes.AttributeValueMemberS{Value: v.Value}
-	case *types.AttributeValueMemberN:
-		return &stypes.AttributeValueMemberN{Value: v.Value}
-	case *types.AttributeValueMemberBOOL:
-		return &stypes.AttributeValueMemberBOOL{Value: v.Value}
-	case *types.AttributeValueMemberL:
-		l := make([]stypes.AttributeValue, 0, len(v.Value))
-		for _, e := range v.Value {
-			if c := toStreamAV(e); c != nil {
-				l = append(l, c)
-			}
-		}
-		return &stypes.AttributeValueMemberL{Value: l}
-	case *types.AttributeValueMemberM:
-		return &stypes.AttributeValueMemberM{Value: toStream(v.Value)}
-	}
-	return nil
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // holdsMailbox reports whether the index holds mailbox a loaded, with a record or
 // none.
@@ -597,34 +503,25 @@ func TestEveryChangeMemoryAppliesToAMailboxWakesItsLongPolls(t *testing.T) {
 // whatever its kind: the address forgotten, the record cache and the index
 // both, or the account evicted, each counted so that a read begun before it
 // puts nothing (dromas-dev/dromas-client#407 item 1). Each kind's item
-// comes as the DynamoDB backend decodes its stream's record. Every kind of
+// comes as the PostgreSQL backend's feed decodes its row. Every kind of
 // change is here: one added and not here fails.
 func TestAnItemThatDoesNotReadIsGoneWhateverItsKind(t *testing.T) {
 	t.Parallel()
-	b := func(v []byte) stypes.AttributeValue { return &stypes.AttributeValueMemberB{Value: v} }
-	s := func(v string) stypes.AttributeValue { return &stypes.AttributeValueMemberS{Value: v} }
-	modify := func(img map[string]stypes.AttributeValue) stypes.Record {
-		return stypes.Record{EventName: stypes.OperationTypeModify, Dynamodb: &stypes.StreamRecord{NewImage: img}}
-	}
-	// Each kind's record of an item of world w that does not read, and the
-	// decoder of its stream.
-	cases := map[ChangeKind]func(w *heldWorld) (func(stypes.Record) (Change, error), stypes.Record){
-		RecordChange: func(w *heldWorld) (func(stypes.Record) (Change, error), stypes.Record) {
-			img := toStream(mailboxItem(w.rec))
-			img["state"] = s("deleted") // a state this build never writes
-			return mailboxStreamChange, modify(img)
+	// Each kind's table, and a row of it of world w that does not read.
+	cases := map[ChangeKind]func(w *heldWorld) (string, row){
+		RecordChange: func(w *heldWorld) (string, row) {
+			r := recordRow(w.rec)
+			r["state"] = "deleted" // a state this build never writes
+			return "mailboxes", r
 		},
-		RevocationsChange: func(w *heldWorld) (func(stypes.Record) (Change, error), stypes.Record) {
-			return mailboxStreamChange, modify(map[string]stypes.AttributeValue{"addr": b(w.a[:]), "sk": b([]byte{skRevocations}),
-				"identity": s("not the bytes of an identity document"), "revocation": b([]byte("the identity's revocation"))})
+		RevocationsChange: func(w *heldWorld) (string, row) {
+			return "revocations", row{"addr": w.a[:], "identity": "not the bytes of an identity document", "revocation": []byte("the identity's revocation")}
 		},
-		MessageChange: func(w *heldWorld) (func(stypes.Record) (Change, error), stypes.Record) {
-			return msgStreamChange, modify(map[string]stypes.AttributeValue{"box": b(w.a[:]), "id": b(make([]byte, 32)),
-				"size": &stypes.AttributeValueMemberN{Value: "3"}, "received_at": s("not a number")})
+		MessageChange: func(w *heldWorld) (string, row) {
+			return "messages", row{"box": w.a[:], "id": make([]byte, 32), "size": int32(3), "received_at": "not a number", "expires_at": int64(1)}
 		},
-		AccountChange: func(w *heldWorld) (func(stypes.Record) (Change, error), stypes.Record) {
-			return accountStreamChange, modify(map[string]stypes.AttributeValue{"account": b([]byte(w.acct)), "sk": b([]byte{skAccount}),
-				"rev": s("two"), "unmetered": &stypes.AttributeValueMemberBOOL{Value: true}})
+		AccountChange: func(w *heldWorld) (string, row) {
+			return "accounts", row{"id": w.acct, "rev": "two", "unmetered": true}
 		},
 	}
 	for k := ChangeKind(1); int(k) <= numChangeKinds; k++ {
@@ -634,10 +531,10 @@ func TestAnItemThatDoesNotReadIsGoneWhateverItsKind(t *testing.T) {
 				t.Fatalf("no item of kind %d that does not read", k)
 			}
 			w := newHeldWorld(t, false)
-			decode, r := c(w)
-			ch, err := decode(r)
+			table, r := c(w)
+			ch, err := changeOf(table, r, false)
 			if err != nil || ch.Kind != k || ch.Err == nil {
-				t.Fatalf("control: the record decodes as %v of kind %d, error %v; want its kind, and an image that does not read", err, ch.Kind, ch.Err)
+				t.Fatalf("control: the row decodes as %v of kind %d, error %v; want its kind, and an image that does not read", err, ch.Kind, ch.Err)
 			}
 			tok, atok := w.s.cache.begin(w.a), w.s.accCache.begin(w.acct)
 			w.s.apply(ch)
@@ -666,9 +563,9 @@ func TestAnItemThatDoesNotReadIsGoneWhateverItsKind(t *testing.T) {
 }
 
 // The in-memory backend hands each change to memory after the write that
-// made it has applied its own outcome, as DynamoDB's stream brings a write
-// back a second or two after it, and in the order the writes were made: at
-// the start of the backend's next write. So a registration of an address a
+// made it has applied its own outcome, as the PostgreSQL feed brings a write
+// back after it, and in the order the writes were made: at the start of the
+// backend's next write. So a registration of an address a
 // read found missing is cached by its own write, which its echo, applied
 // first, would keep out by ending the miss; and two writes' changes go in
 // the order they were made.

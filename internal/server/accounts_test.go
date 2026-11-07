@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"maps"
 	"net"
 	"net/http"
@@ -18,13 +17,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"testing/synctest"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/dromas-dev/dromas-client/client"
 	"github.com/dromas-dev/dromas-client/protocol"
 	"github.com/prometheus/client_golang/prometheus"
@@ -71,7 +65,7 @@ func TestAdoptKeys(t *testing.T) {
 	}
 }
 
-// The accounts table keeps an adopt key's SHA-256 and never the key, so a
+// The adopt_keys table keeps an adopt key's SHA-256 and never the key, so a
 // copy of the table holds no key.
 func TestAnAdoptKeyIsKeptAsItsHash(t *testing.T) {
 	t.Parallel()
@@ -85,24 +79,22 @@ func TestAnAdoptKeyIsKeptAsItsHash(t *testing.T) {
 	if _, err := e.store.AdoptKey(ctx, acc.ID, sha256.Sum256([]byte(key+"A"))); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("another key: %v", err)
 	}
-	s, ok := onDynamo(e.store)
+	s, ok := onPg(e.store)
 	if !ok {
 		return
 	}
-	out, err := s.dynamo().db.GetItem(ctx, &dynamodb.GetItemInput{TableName: &s.dynamo().accts, Key: adoptKeyKey(acc.ID, hash), ConsistentRead: aws.Bool(true)})
-	if err != nil || out.Item == nil {
-		t.Fatalf("the key's item: %v", err)
+	rows, err := rowsOf(s.pool().Query(ctx, `SELECT * FROM adopt_keys WHERE account = $1`, acc.ID))
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("the account's adopt keys: %d rows, %v; want the one", len(rows), err)
 	}
-	if sk := out.Item["sk"].(*types.AttributeValueMemberB).Value; !bytes.Equal(sk, append([]byte{skAdoptKey}, hash[:]...)) {
-		t.Fatalf("the key's item is at %x", sk)
+	if h, err := rows[0].hash("hash"); err != nil || h != hash {
+		t.Fatalf("the key's row is at %x (%v); want its SHA-256", h, err)
 	}
-	names := slices.Sorted(maps.Keys(out.Item))
-	if !slices.Equal(names, []string{"account", "expires", "expires_at", "sk", "uses"}) {
-		t.Fatalf("the key's item holds %v", names)
+	names := slices.Sorted(maps.Keys(rows[0]))
+	if !slices.Equal(names, []string{"account", "expires_at", "hash", "uses"}) {
+		t.Fatalf("the key's row holds %v", names)
 	}
 }
-
-
 
 func (e *env) accountOf(b *client.Mailbox) string {
 	e.t.Helper()
@@ -112,7 +104,6 @@ func (e *env) accountOf(b *client.Mailbox) string {
 	}
 	return r.Account
 }
-
 
 func TestAccounts(t *testing.T) {
 	t.Parallel()
@@ -236,7 +227,7 @@ func TestAccounts(t *testing.T) {
 		if got := adopt(t, a, key2); got != second.ID || e.accountOf(a) != second.ID {
 			t.Fatalf("moved to %q", e.accountOf(a))
 		}
-		if s, ok := onDynamo(e.store); ok { // the index of each account's mailboxes follows the mailbox record
+		if s, ok := onPg(e.store); ok { // the account's mailboxes are the mailbox records that name it
 			s.lists(t, first.ID, a.Address(), false)
 			s.lists(t, second.ID, a.Address(), true)
 			if err := a.Leave(ctx); err != nil {
@@ -391,226 +382,52 @@ func TestAdoptRaceIsAConflict(t *testing.T) {
 	}
 }
 
-// cannedDynamo answers DynamoDB's calls in turn from its answers, the last
-// one again once they run out, and counts the calls.
-type cannedDynamo struct {
-	n       atomic.Int32
-	answers []string // a 200's body, or a 400's: an error in the SDK's JSON shape, by its "__type"
-}
-
-func (d *cannedDynamo) Do(r *http.Request) (*http.Response, error) {
-	i := int(d.n.Add(1)) - 1
-	if r.Body != nil {
-		_, _ = io.Copy(io.Discard, r.Body)
-	}
-	body := d.answers[min(i, len(d.answers)-1)]
-	status := http.StatusOK
-	if strings.Contains(body, `"__type"`) {
-		status = http.StatusBadRequest
-	}
-	return &http.Response{StatusCode: status, Status: http.StatusText(status), Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
-		Header: http.Header{"Content-Type": {"application/x-amz-json-1.0"}, "X-Amzn-Requestid": {"t"}},
-		Body:   io.NopCloser(strings.NewReader(body)), Request: r}, nil
-}
-
-func (d *cannedDynamo) store(logged *bytes.Buffer) *Memory {
-	return NewDynamoStore(DynamoConfig{AWS: aws.Config{Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "x", ""),
-		HTTPClient: d, BaseEndpoint: aws.String("http://127.0.0.1:1")}, MailboxesTable: "b", MessagesTable: "m", AccountsTable: "a", Bucket: "s", Log: log.New(logged, "", 0)})
-}
-
-// cancelled is a TransactWriteItems cancelled for these reasons, one an item.
-func cancelled(reasons ...string) string {
-	var codes []string
-	for _, r := range reasons {
-		codes = append(codes, `{"Code":"`+r+`"}`)
-	}
-	return `{"__type":"com.amazonaws.dynamodb.v20120810#TransactionCanceledException","Message":"Transaction cancelled, please refer cancellation reasons for specific reasons [` + strings.Join(reasons, ", ") + `]","CancellationReasons":[` + strings.Join(codes, ",") + `]}`
-}
-
-// dynamoAdopt is the test store, but with the Adopt of a store on DynamoDB.
-type dynamoAdopt struct {
-	Store
-	d *Memory
-}
-
-func (s dynamoAdopt) Adopt(ctx context.Context, b *Mailbox, account string, key [32]byte) error {
-	return s.d.Adopt(ctx, b, account, key)
-}
-
-// An adopt that meets another transaction on the mailbox's record or the key's
-// item, as two adopts with one multi-use key do, is cancelled for a
-// TransactionConflict, which the SDK does not retry. It applied nothing, so
-// the store sends it again, by a new call, up to four calls in all; one
-// that meets another every time is ErrStale, and the adopt 409 mailbox_changed.
-// A failed condition still wins, whichever item conflicted.
-func TestAnAdoptThatMeetsAnotherIsSentAgain(t *testing.T) {
+// Two adopts at once with one key of a single use: one takes it, and the
+// other is refused for the key, never both taken, whatever the store.
+func TestTwoAdoptsAtOnceTakeOneUse(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
-	acc, key := accountEnv(t, e, true, 5)
+	acc, key := accountEnv(t, e, true, 1)
 	_, hash, _ := parseAdopt(key)
-	a := e.mailbox()
-	conflict := cancelled("None", "TransactionConflict")
-	for _, c := range []struct {
-		name    string
-		answers []string
-		calls   int32
-		want    error
-	}{
-		{"none", []string{`{}`}, 1, nil},
-		{"one conflict", []string{conflict, `{}`}, 2, nil},
-		{"three conflicts", []string{conflict, conflict, cancelled("TransactionConflict", "None"), `{}`}, 4, nil},
-		{"a conflict every time", []string{conflict}, 4, ErrStale}, // the SDK's own tries for DynamoDB
-		{"a key that is spent", []string{cancelled("None", "ConditionalCheckFailed")}, 1, ErrKeyRefused},
-		{"a key that is spent, beside a conflict", []string{cancelled("TransactionConflict", "ConditionalCheckFailed")}, 1, ErrKeyRefused},
-		{"a mailbox that moved on", []string{conflict, cancelled("ConditionalCheckFailed", "None")}, 2, ErrStale},
-	} {
-		b, err := e.store.Mailbox(ctx, a.Address())
+	var recs [2]*Mailbox
+	for i := range recs {
+		b, err := e.store.Mailbox(ctx, e.mailbox().Address())
 		if err != nil {
 			t.Fatal(err)
 		}
-		var logged bytes.Buffer
-		d := &cannedDynamo{answers: c.answers}
-		if err := d.store(&logged).Adopt(ctx, b, acc.ID, hash); !errors.Is(err, c.want) || (c.want == nil) != (err == nil) {
-			t.Errorf("%s: %v, want %v", c.name, err, c.want)
-		}
-		if n := d.n.Load(); n != c.calls {
-			t.Errorf("%s: %d calls to DynamoDB, want %d", c.name, n, c.calls)
+		recs[i] = b
+	}
+	var wg sync.WaitGroup
+	var errs [2]error
+	for i, b := range recs {
+		wg.Go(func() { errs[i] = e.store.Adopt(ctx, b, acc.ID, hash) })
+	}
+	wg.Wait()
+	took := 0
+	for i, err := range errs {
+		switch {
+		case err == nil:
+			took++
+		case !errors.Is(err, ErrKeyRefused):
+			t.Errorf("adopt %d: %v, want taken or ErrKeyRefused", i, err)
 		}
 	}
-
-	// Through the handler: a conflict that lasts is 409 mailbox_changed, which a
-	// client sends again as it is, and nothing is logged as an internal error.
-	var logged bytes.Buffer
-	srv := New(Config{Store: dynamoAdopt{e.store, (&cannedDynamo{answers: []string{conflict}}).store(&logged)}, Limits: relaxed(), Now: e.clock.Now, Log: log.New(&logged, "", 0)}).Handler()
-	e.setMiddle(func(w http.ResponseWriter, r *http.Request, _ http.Handler) { srv.ServeHTTP(w, r) })
-	defer e.setMiddle(nil)
-	if _, err := e.mailbox().Adopt(ctx, key); codeOf(err) != protocol.CodeMailboxChanged {
-		t.Errorf("an adopt that met another every time: %v, want mailbox_changed", err)
+	if took != 1 {
+		t.Errorf("%d adopts took a key of one use", took)
 	}
-	if strings.Contains(logged.String(), "internal error") {
-		t.Errorf("an adopt that met another is logged as an internal error: %s", logged.String())
-	}
-}
-
-// timedDynamo is cannedDynamo with the time of each call kept, and a hook
-// run at each.
-type timedDynamo struct {
-	cannedDynamo
-	mu     sync.Mutex
-	at     []time.Time
-	onCall func()
-}
-
-func (d *timedDynamo) Do(r *http.Request) (*http.Response, error) {
-	d.mu.Lock()
-	d.at = append(d.at, time.Now())
-	d.mu.Unlock()
-	if d.onCall != nil {
-		d.onCall()
-	}
-	return d.cannedDynamo.Do(r)
-}
-
-func (d *timedDynamo) store(logged *bytes.Buffer) *Memory {
-	return NewDynamoStore(DynamoConfig{AWS: aws.Config{Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "x", ""),
-		HTTPClient: d, BaseEndpoint: aws.String("http://127.0.0.1:1")}, MailboxesTable: "b", MessagesTable: "m", AccountsTable: "a", Bucket: "s", Log: log.New(logged, "", 0)})
-}
-
-// An adopt that meets another pauses before each try after its first, for a
-// time drawn below a cap that doubles from transactPause, never none; and a
-// context that ends in a pause ends the adopt there, with no call more
-// (#438 item 1). On fake time, in a synctest bubble.
-func TestAnAdoptPausesBetweenItsTries(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	e := newEnv(t, relaxed())
-	acc, key := accountEnv(t, e, true, 5)
-	_, hash, _ := parseAdopt(key)
-	b, err := e.store.Mailbox(ctx, e.mailbox().Address())
-	if err != nil {
-		t.Fatal(err)
-	}
-	conflict := cancelled("None", "TransactionConflict")
-	synctest.Test(t, func(t *testing.T) {
-		var logged bytes.Buffer
-		d := &timedDynamo{cannedDynamo: cannedDynamo{answers: []string{conflict}}}
-		if err := d.store(&logged).Adopt(ctx, b, acc.ID, hash); !errors.Is(err, ErrStale) {
-			t.Fatalf("an adopt that met another every time: %v, want ErrStale", err)
-		}
-		if len(d.at) != transactTries {
-			t.Fatalf("%d calls, want %d", len(d.at), transactTries)
-		}
-		for i := 1; i < len(d.at); i++ {
-			gap, most := d.at[i].Sub(d.at[i-1]), transactPause<<(i-1)
-			if gap <= 0 || gap >= most {
-				t.Errorf("the pause before try %d: %s, want above none and below %s", i+1, gap, most)
-			}
-		}
-	})
-	synctest.Test(t, func(t *testing.T) {
-		var logged bytes.Buffer
-		cctx, cancel := context.WithCancel(ctx)
-		defer cancel()
-		d := &timedDynamo{cannedDynamo: cannedDynamo{answers: []string{conflict}}}
-		d.onCall = func() { // ends the context a nanosecond into the pause after the first try
-			d.onCall = nil
-			go func() {
-				time.Sleep(time.Nanosecond)
-				cancel()
-			}()
-		}
-		err := d.store(&logged).Adopt(cctx, b, acc.ID, hash)
-		if !errors.Is(err, context.Canceled) {
-			t.Errorf("an adopt whose context ended in a pause: %v, want context.Canceled", err)
-		}
-		if len(d.at) != 1 {
-			t.Fatalf("%d calls, want the one before the pause", len(d.at))
-		}
-		// The SDK refuses a call under an ended context by itself, so what
-		// shows the pause ends with it is the time: none waited past the end.
-		if waited := time.Since(d.at[0]); waited != time.Nanosecond {
-			t.Errorf("the adopt returned %s after its first call, want at its context's end, %s", waited, time.Nanosecond)
-		}
-	})
-}
-
-// A write of the mailbox's record alone that meets a transaction on it is
-// refused with a TransactionConflictException, which the SDK does not retry:
-// the record changes if that transaction commits, so it is ErrStale, as a
-// failed condition is, and a client sends it again (409 mailbox_changed).
-func TestARecordWriteThatMeetsATransactionIsStale(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	e := newEnv(t, relaxed())
-	a := e.mailbox()
-	b, err := e.store.Mailbox(ctx, a.Address())
-	if err != nil {
-		t.Fatal(err)
-	}
-	conflict := `{"__type":"com.amazonaws.dynamodb.v20120810#TransactionConflictException","message":"Transaction is ongoing for the item"}`
-	for name, write := range map[string]func(*Memory) error{
-		"UpdateMailbox": func(s *Memory) error { return s.UpdateMailbox(ctx, cloneMailbox(b)) },
-		"Leave":         func(s *Memory) error { return s.Leave(ctx, cloneMailbox(b)) },
-	} {
-		var logged bytes.Buffer
-		d := &cannedDynamo{answers: []string{conflict}}
-		if err := write(d.store(&logged)); !errors.Is(err, ErrStale) {
-			t.Errorf("%s that met a transaction: %v, want ErrStale", name, err)
-		}
-		if n := d.n.Load(); n != 1 {
-			t.Errorf("%s: %d calls to DynamoDB, want 1", name, n)
-		}
+	if k, err := e.store.AdoptKey(ctx, acc.ID, hash); err != nil || k.Uses != 0 {
+		t.Errorf("the key after the adopts: %+v %v; want no uses left", k, err)
 	}
 }
 
-// A change to an account reaches memory by the accounts stream: an operator
-// makes a metered account unmetered by hand, then deletes it, and its mailbox
-// has the free limits again.
+// A change to an account reaches memory by the feed: an operator makes a
+// metered account unmetered by hand, then deletes it, and its mailbox has
+// the free limits again.
 func TestAccountChangesReachMemory(t *testing.T) {
 	t.Parallel()
-	if !onAWS() {
-		t.Skip("needs the AWS tables")
+	if !onPostgres() {
+		t.Skip("needs PostgreSQL: DROMAS_TEST_POSTGRES")
 	}
 	ctx := context.Background()
 	l := relaxed()
@@ -624,19 +441,14 @@ func TestAccountChangesReachMemory(t *testing.T) {
 	if _, err := a.Send(ctx, b.Address(), "2"); !limitedBy(err, protocol.QuotaSends) {
 		t.Fatalf("second send: %v", err)
 	}
-	if _, err := s.dynamo().db.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName: &s.dynamo().accts, Key: accountKey(acc.ID, skAccount),
-		UpdateExpression:          aws.String("SET #u = :t, #r = :r"),
-		ExpressionAttributeNames:  map[string]string{"#u": "unmetered", "#r": "rev"},
-		ExpressionAttributeValues: map[string]types.AttributeValue{":t": &types.AttributeValueMemberBOOL{Value: true}, ":r": num(2)},
-	}); err != nil {
+	if _, err := s.pool().Exec(ctx, `UPDATE accounts SET unmetered = true, rev = 2 WHERE id = $1`, acc.ID); err != nil {
 		t.Fatal(err)
 	}
 	until(t, func(i int) bool {
 		_, err := a.Send(ctx, b.Address(), fmt.Sprintf("unmetered %d", i))
 		return err == nil
 	})
-	if _, err := s.dynamo().db.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: &s.dynamo().accts, Key: accountKey(acc.ID, skAccount)}); err != nil {
+	if _, err := s.pool().Exec(ctx, `DELETE FROM accounts WHERE id = $1`, acc.ID); err != nil {
 		t.Fatal(err)
 	}
 	until(t, func(i int) bool {
@@ -645,7 +457,7 @@ func TestAccountChangesReachMemory(t *testing.T) {
 	})
 }
 
-// until retries ok every 100 ms, for up to 10 s: the stream's delay.
+// until retries ok every 100 ms, for up to 10 s: the feed's delay.
 func until(t *testing.T, ok func(i int) bool) {
 	t.Helper()
 	for i := range 100 {
@@ -654,7 +466,7 @@ func until(t *testing.T, ok func(i int) bool) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Fatal("the stream never brought the change")
+	t.Fatal("the feed never brought the change")
 }
 
 // A send past the free cap's size waits for the one allowance for large

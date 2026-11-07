@@ -99,8 +99,8 @@ func TestAShardIsIOfAPowerOfTwo(t *testing.T) {
 
 // sharded is n processes, shard i of n each, behind a reverse proxy that
 // sends each mailbox's calls to its own (proxyShard), as the one in front
-// does. On AWS each process is a store of its own, following the streams;
-// in memory they share one store, which is the tables.
+// does. On PostgreSQL each process is a store of its own, following the
+// feed; in memory they share one store, which is the tables.
 type sharded struct {
 	t     *testing.T
 	clock *clock
@@ -113,7 +113,7 @@ func newSharded(t *testing.T, n int) *sharded {
 	t.Helper()
 	s := &sharded{t: t, clock: &clock{t: time.Now().UTC().Truncate(time.Second)}, procs: make([]*env, n)}
 	var shared Store
-	if !onAWS() {
+	if !onPostgres() {
 		shared = NewMemStore(s.clock.Now)
 	}
 	for i := range n {
@@ -138,7 +138,7 @@ func (s *sharded) start(i int, shared Store) *env {
 	p := &env{t: s.t, clock: s.clock, store: shared}
 	var ready func() bool
 	if shared == nil {
-		m := startDynamo(s.t, s.clock.Now)
+		m := startPostgres(s.t, s.clock.Now)
 		p.store, ready = m, m.Ready
 	}
 	p.server = New(Config{Store: p.store, Limits: relaxed(), Now: s.clock.Now, Ready: ready,
@@ -153,7 +153,7 @@ func (s *sharded) start(i int, shared Store) *env {
 func (s *sharded) restart(i int) {
 	s.t.Helper()
 	var shared Store
-	if !onAWS() {
+	if !onPostgres() {
 		shared = s.procs[i].store
 	}
 	p := s.start(i, shared)
