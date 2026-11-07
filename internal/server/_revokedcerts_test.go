@@ -21,36 +21,7 @@ import (
 // it in every read of the mailbox, takes no pass and no prekey statement under a
 // revoked certificate, and sends nobody to a prekey under one.
 
-// certs is the revocation of r's certificates through a serial, signed by its
-// identity, in the record that carries it; r signs every statement after it
-// under a certificate (raw.certified).
-func (r *raw) certs(through uint64) protocol.Revocations {
-	r.e.t.Helper()
-	r.underCertificates = true
-	l, err := protocol.NewRevokedCertificates(r.id.Address(), through)
-	if err != nil {
-		r.e.t.Fatal(err)
-	}
-	sig, err := protocol.SignRevokedCertificates(r.signer, l)
-	if err != nil {
-		r.e.t.Fatal(err)
-	}
-	return protocol.Revocations{Identity: r.id.Document(), RevokedCertificates: l.Statement(), RevokedCertificatesSignature: sig}
-}
 
-// sendTo posts an age file sealed to to's statement of the given serial,
-// naming it, with a pass by the signer of from's statement fromSerial.
-func (e *env) sendTo(to *raw, serial uint64, from *raw, fromSerial uint64) reply {
-	e.t.Helper()
-	var ct bytes.Buffer
-	w, err := age.Encrypt(&ct, to.keys[serial].Recipient())
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	_, _ = io.WriteString(w, `{"v":1}`)
-	_ = w.Close()
-	return e.do("POST", to.path("/messages"), to.sealed(serial, ct.Bytes()), from.pass(fromSerial))
-}
 
 // A stored revocation of certificates that does not parse is an error
 // wherever it is read, never "nothing revoked": nothing this server writes

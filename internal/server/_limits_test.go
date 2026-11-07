@@ -68,24 +68,7 @@ func TestContinuationAllowance(t *testing.T) {
 	}
 }
 
-// counted is a second server on e's store and keys, with its own limits'
-// state, whose storage calls are counted.
-func counted(t *testing.T, e *env, l Limits) (*env, *countingStore) {
-	t.Helper()
-	cs := &countingStore{s: e.store}
-	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: cs, Limits: l, Now: e.clock.Now}).Handler()))
-	t.Cleanup(srv.Close)
-	return &env{t: t, clock: e.clock, srv: srv}, cs
-}
 
-func listOf(t *testing.T, r reply) protocol.MessageList {
-	t.Helper()
-	var l protocol.MessageList
-	if err := json.Unmarshal(r.body, &l); err != nil {
-		t.Fatalf("%d %s: %v", r.status, r.body, err)
-	}
-	return l
-}
 
 // A cursor is no way around the poll rate: with nothing after it, a list is
 // a poll, answered from memory; with something after it, it is a

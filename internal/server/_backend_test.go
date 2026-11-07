@@ -94,211 +94,35 @@ func toStreamAV(v types.AttributeValue) stypes.AttributeValue {
 	return nil
 }
 
-// fault is what the injector makes of a write: its outcome, as Backend
-// names them.
-type fault int
 
-const (
-	asIs          fault = iota
-	refusedBefore       // refused, with the write's own refusal, nothing applied
-	unknownBefore       // an error the backend states nothing of, nothing applied
-	unknownAfter        // applied, then an error the backend states nothing of
-)
 
-func (f fault) String() string {
-	return [...]string{"as is", "refused", "unknown before applying", "unknown after applying"}[f]
-}
 
-// errInjected is the injector's error of no kind.
-var errInjected = errors.New("injected: an error the backend states nothing of")
 
-// errStated is a refusal AWS stated, for a write with no condition of its
-// own: a throttle, or an answer of 4xx to the call.
-var errStated = refused(errors.New("AWS throttled the call"))
 
-// faults wraps a backend, and makes any write's outcome what a test asks of
-// it, and runs a hook at a read's answer: after the backend answered, before
-// memory has the answer. It stands where every fault of a backend reaches
-// memory (dromas-dev/dromas-client#407 item 4).
-type faults struct {
-	Backend
-	mu     sync.Mutex
-	writes map[string]fault // by the Backend method's name
-	refuse map[string]error // the refusal a write states, if not its own
-	// read, if set, runs at each read's answer, with the method's name.
-	read func(method string)
-	// wrote counts the writes that reached the injector, whatever their
-	// outcome: every write the store makes of its backend.
-	wrote atomic.Int64
-}
 
-// injectFaults puts an injector between s and its backend.
-func injectFaults(s *Memory) *faults {
-	f := &faults{Backend: s.backend, writes: map[string]fault{}, refuse: map[string]error{}}
-	s.backend = f
-	return f
-}
 
-// set makes method's outcome f, until set again.
-func (f *faults) set(method string, x fault) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.writes[method] = x
-}
 
-// ownRefusal is the refusal each write states of itself.
-var ownRefusal = map[string]error{
-	"CreateMailbox": ErrExists,
-	"UpdateMailbox": ErrStale,
-	"DeleteMailbox": errStated,
-	"Revoke":        ErrStale,
-	"Adopt":         ErrStale,
-	"Leave":         ErrStale,
-	"CreateAccount": ErrExists,
-	"PutAdoptKey":   ErrExists,
-	"PutMessage":    errNotStored,
-	"Retire":        ErrNotFound,
-	"DeleteMessage": ErrNotFound,
-	"DeleteAll":     errStated,
-}
 
-// write runs do as method's fault says.
-func (f *faults) write(method string, do func() error) error {
-	f.wrote.Add(1)
-	f.mu.Lock()
-	x, ref := f.writes[method], f.refuse[method]
-	f.mu.Unlock()
-	if ref == nil {
-		ref = ownRefusal[method]
-	}
-	switch x {
-	case refusedBefore:
-		return ref
-	case unknownBefore:
-		return errInjected
-	case unknownAfter:
-		if err := do(); err != nil {
-			return err
-		}
-		return errInjected
-	}
-	return do()
-}
 
-// answered runs the read hook at method's answer.
-func (f *faults) answered(method string) {
-	f.mu.Lock()
-	h := f.read
-	f.mu.Unlock()
-	if h != nil {
-		h(method)
-	}
-}
 
-func (f *faults) ReadAddress(ctx context.Context, a protocol.Address) (*Mailbox, *Revocations, error) {
-	b, rv, err := f.Backend.ReadAddress(ctx, a)
-	f.answered("ReadAddress")
-	return b, rv, err
-}
 
-func (f *faults) ReadLive(ctx context.Context, mailbox protocol.Address) ([]Header, error) {
-	hs, err := f.Backend.ReadLive(ctx, mailbox)
-	f.answered("ReadLive")
-	return hs, err
-}
 
-func (f *faults) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error) {
-	hs, err := f.Backend.List(ctx, mailbox, after, limit, consistent)
-	f.answered("List")
-	return hs, err
-}
 
-func (f *faults) Message(ctx context.Context, mailbox protocol.Address, id [32]byte, from int64) (*Header, []byte, error) {
-	h, body, err := f.Backend.Message(ctx, mailbox, id, from)
-	f.answered("Message")
-	return h, body, err
-}
 
-func (f *faults) Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
-	h, err := f.Backend.Dedupe(ctx, mailbox, id)
-	f.answered("Dedupe")
-	return h, err
-}
 
-func (f *faults) Account(ctx context.Context, id string) (*Account, error) {
-	a, err := f.Backend.Account(ctx, id)
-	f.answered("Account")
-	return a, err
-}
 
-func (f *faults) AdoptKey(ctx context.Context, account string, hash [32]byte) (*AdoptKey, error) {
-	k, err := f.Backend.AdoptKey(ctx, account, hash)
-	f.answered("AdoptKey")
-	return k, err
-}
 
-func (f *faults) CreateMailbox(ctx context.Context, b *Mailbox) error {
-	return f.write("CreateMailbox", func() error { return f.Backend.CreateMailbox(ctx, b) })
-}
 
-func (f *faults) UpdateMailbox(ctx context.Context, b *Mailbox) error {
-	return f.write("UpdateMailbox", func() error { return f.Backend.UpdateMailbox(ctx, b) })
-}
 
-func (f *faults) DeleteMailbox(ctx context.Context, a protocol.Address) error {
-	return f.write("DeleteMailbox", func() error { return f.Backend.DeleteMailbox(ctx, a) })
-}
 
-func (f *faults) Revoke(ctx context.Context, a protocol.Address, rv *Revocations, want Expect) (*Revocations, error) {
-	var held *Revocations
-	err := f.write("Revoke", func() (err error) {
-		held, err = f.Backend.Revoke(ctx, a, rv, want)
-		return err
-	})
-	return held, err
-}
 
-func (f *faults) Adopt(ctx context.Context, b *Mailbox, account string, key [32]byte) error {
-	return f.write("Adopt", func() error { return f.Backend.Adopt(ctx, b, account, key) })
-}
 
-func (f *faults) Leave(ctx context.Context, b *Mailbox) error {
-	return f.write("Leave", func() error { return f.Backend.Leave(ctx, b) })
-}
 
-func (f *faults) CreateAccount(ctx context.Context, a *Account) error {
-	return f.write("CreateAccount", func() error { return f.Backend.CreateAccount(ctx, a) })
-}
 
-func (f *faults) PutAdoptKey(ctx context.Context, k *AdoptKey) error {
-	return f.write("PutAdoptKey", func() error { return f.Backend.PutAdoptKey(ctx, k) })
-}
 
-func (f *faults) PutMessage(ctx context.Context, mailbox protocol.Address, h *Header, body []byte) error {
-	return f.write("PutMessage", func() error { return f.Backend.PutMessage(ctx, mailbox, h, body) })
-}
 
-func (f *faults) Retire(ctx context.Context, mailbox protocol.Address, id [32]byte) (time.Time, error) {
-	var at time.Time
-	err := f.write("Retire", func() (err error) {
-		at, err = f.Backend.Retire(ctx, mailbox, id)
-		return err
-	})
-	return at, err
-}
 
-func (f *faults) DeleteMessage(ctx context.Context, mailbox protocol.Address, id [32]byte) (time.Time, error) {
-	var at time.Time
-	err := f.write("DeleteMessage", func() (err error) {
-		at, err = f.Backend.DeleteMessage(ctx, mailbox, id)
-		return err
-	})
-	return at, err
-}
 
-func (f *faults) DeleteAll(ctx context.Context, mailbox protocol.Address, retired func([32]byte, time.Time)) error {
-	return f.write("DeleteAll", func() error { return f.Backend.DeleteAll(ctx, mailbox, retired) })
-}
 
 // holdsMailbox reports whether the index holds mailbox a loaded, with a record or
 // none.

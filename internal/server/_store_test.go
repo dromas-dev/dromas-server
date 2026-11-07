@@ -107,12 +107,6 @@ func failOnce(s *Memory, point string) {
 	}
 }
 
-func idOf(t *testing.T, r *protocol.Receipt) [32]byte {
-	t.Helper()
-	var id [32]byte
-	copy(id[:], mustHex(t, r.ID))
-	return id
-}
 
 // lists holds the mailboxes table's index of each account's mailboxes to whether it
 // lists mailbox a under account: the index is read eventually consistent, as
@@ -532,127 +526,32 @@ func TestNotReadyIs503(t *testing.T) {
 	}
 }
 
-// countingStore counts every call of a Store that reaches storage. It does
-// not embed the Store, so each method is written here, and a new one is
-// counted or not by a choice made where it is added: those Memory
-// answers from memory (the index and the record cache, after a mailbox's one
-// load on its first use) are not counted.
-type countingStore struct {
-	s     Store
-	calls atomic.Int64
-}
 
-func (c *countingStore) count() { c.calls.Add(1) }
 
-func (c *countingStore) Held(a protocol.Address) (Standing, bool) { return c.s.Held(a) }
 
-func (c *countingStore) Changed(a protocol.Address) <-chan struct{} { return c.s.Changed(a) }
-func (c *countingStore) NextExpiry(a protocol.Address) time.Time    { return c.s.NextExpiry(a) }
 
-func (c *countingStore) Known(a protocol.Address) (*Mailbox, bool) { return c.s.Known(a) }
 
-func (c *countingStore) Begin(a protocol.Address) uint64 { return c.s.Begin(a) }
 
-func (c *countingStore) Count(ctx context.Context, mailbox protocol.Address) (int, error) {
-	return c.s.Count(ctx, mailbox)
-}
 
-func (c *countingStore) After(ctx context.Context, mailbox protocol.Address, cur *Cursor) (int, error) {
-	return c.s.After(ctx, mailbox, cur)
-}
 
-func (c *countingStore) Holds(ctx context.Context, mailbox protocol.Address, id [32]byte) (bool, error) {
-	return c.s.Holds(ctx, mailbox, id)
-}
 
-func (c *countingStore) Fetched(ctx context.Context, mailbox protocol.Address, id [32]byte) (bool, bool, error) {
-	return c.s.Fetched(ctx, mailbox, id)
-}
 
-func (c *countingStore) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error) {
-	c.count()
-	return c.s.Mailbox(ctx, a)
-}
 
-func (c *countingStore) CreateMailbox(ctx context.Context, b *Mailbox) error {
-	c.count()
-	return c.s.CreateMailbox(ctx, b)
-}
 
-func (c *countingStore) UpdateMailbox(ctx context.Context, b *Mailbox) error {
-	c.count()
-	return c.s.UpdateMailbox(ctx, b)
-}
 
-func (c *countingStore) DeleteMailbox(ctx context.Context, a protocol.Address) error {
-	c.count()
-	return c.s.DeleteMailbox(ctx, a)
-}
 
-func (c *countingStore) Revoke(ctx context.Context, a protocol.Address, rv *Revocations, want Expect) error {
-	c.count()
-	return c.s.Revoke(ctx, a, rv, want)
-}
 
-func (c *countingStore) Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
-	c.count()
-	return c.s.Dedupe(ctx, mailbox, id)
-}
 
-func (c *countingStore) PutMessage(ctx context.Context, mailbox protocol.Address, h *Header, body []byte) (*Header, error) {
-	c.count()
-	return c.s.PutMessage(ctx, mailbox, h, body)
-}
 
-func (c *countingStore) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error) {
-	c.count()
-	return c.s.List(ctx, mailbox, after, limit, consistent)
-}
 
-func (c *countingStore) Message(ctx context.Context, mailbox protocol.Address, id [32]byte, from int64) (*Header, []byte, error) {
-	c.count()
-	return c.s.Message(ctx, mailbox, id, from)
-}
 
-func (c *countingStore) DeleteMessage(ctx context.Context, mailbox protocol.Address, id [32]byte) error {
-	c.count()
-	return c.s.DeleteMessage(ctx, mailbox, id)
-}
 
-func (c *countingStore) DeleteMessages(ctx context.Context, mailbox protocol.Address) error {
-	c.count()
-	return c.s.DeleteMessages(ctx, mailbox)
-}
 
-func (c *countingStore) Account(ctx context.Context, id string) (*Account, error) {
-	c.count()
-	return c.s.Account(ctx, id)
-}
 
-func (c *countingStore) CreateAccount(ctx context.Context, a *Account) error {
-	c.count()
-	return c.s.CreateAccount(ctx, a)
-}
 
-func (c *countingStore) PutAdoptKey(ctx context.Context, k *AdoptKey) error {
-	c.count()
-	return c.s.PutAdoptKey(ctx, k)
-}
 
-func (c *countingStore) AdoptKey(ctx context.Context, account string, hash [32]byte) (*AdoptKey, error) {
-	c.count()
-	return c.s.AdoptKey(ctx, account, hash)
-}
 
-func (c *countingStore) Adopt(ctx context.Context, b *Mailbox, account string, key [32]byte) error {
-	c.count()
-	return c.s.Adopt(ctx, b, account, key)
-}
 
-func (c *countingStore) Leave(ctx context.Context, b *Mailbox) error {
-	c.count()
-	return c.s.Leave(ctx, b)
-}
 
 // An empty poll never leaves the process (ARCHITECTURE.md § Memory): a mailbox
 // showing a new pass, one showing a pass the server has taken, a renewed

@@ -25,28 +25,6 @@ func revocationPath(a protocol.Address) string { return "/v1/" + a.String() + "/
 
 func mailboxPath(a protocol.Address) string { return "/v1/" + a.String() }
 
-// held is the revocation record a read of a mailbox (GET /v1/<address>) shows,
-// read as a client reads it: the 200's revocation of certificates, or the
-// 410's record. Nil when it shows none.
-func held(t *testing.T, r reply) *protocol.Revocations {
-	t.Helper()
-	switch r.status {
-	case 200:
-		var b protocol.MailboxResponse
-		if err := protocol.Unmarshal(r.body, &b); err != nil {
-			t.Fatalf("the read of a mailbox: %v: %s", err, r.body)
-		}
-		return b.Record()
-	case 410:
-		var p protocol.Problem
-		if err := protocol.Unmarshal(r.body, &p); err != nil {
-			t.Fatalf("the read of a revoked mailbox: %v: %s", err, r.body)
-		}
-		return p.Record
-	}
-	t.Fatalf("the read of a mailbox: %d %s", r.status, r.body)
-	return nil
-}
 
 // recordOf is the record a 410 carries as it was written, and its members.
 func recordOf(t *testing.T, r reply) ([]byte, map[string]json.RawMessage) {
@@ -61,15 +39,6 @@ func recordOf(t *testing.T, r reply) ([]byte, map[string]json.RawMessage) {
 	return p.Record, members
 }
 
-// record is a mailbox's own revocation, as its owner makes it.
-func record(t *testing.T, b *client.Mailbox) *protocol.Revocations {
-	t.Helper()
-	rec, err := b.Revocation(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return rec
-}
 
 func TestRevocation(t *testing.T) {
 	t.Parallel()

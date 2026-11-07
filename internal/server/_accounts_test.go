@@ -102,43 +102,7 @@ func TestAnAdoptKeyIsKeptAsItsHash(t *testing.T) {
 	}
 }
 
-// accountEnv is an env with an account, unmetered or not, and an adopt key
-// into it with the given uses.
-func accountEnv(t *testing.T, e *env, unmetered bool, uses int) (*Account, string) {
-	t.Helper()
-	ctx := context.Background()
-	id, err := NewAccountID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	a, err := NewAccount(id, unmetered)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := e.store.CreateAccount(ctx, a); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.store.CreateAccount(ctx, &Account{ID: id}); !errors.Is(err, ErrExists) {
-		t.Fatalf("the account again: %v", err)
-	}
-	return a, e.adoptKey(t, id, uses, time.Hour)
-}
 
-func (e *env) adoptKey(t *testing.T, account string, uses int, ttl time.Duration) string {
-	t.Helper()
-	key, hash, err := NewAdoptKey(account)
-	if err != nil {
-		t.Fatal(err)
-	}
-	k := &AdoptKey{Account: account, Hash: hash, Uses: uses, Expires: e.clock.Now().Add(ttl)}
-	if err := e.store.PutAdoptKey(context.Background(), k); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.store.PutAdoptKey(context.Background(), k); !errors.Is(err, ErrExists) {
-		t.Fatalf("the key again: %v", err)
-	}
-	return key
-}
 
 func (e *env) accountOf(b *client.Mailbox) string {
 	e.t.Helper()
@@ -149,14 +113,6 @@ func (e *env) accountOf(b *client.Mailbox) string {
 	return r.Account
 }
 
-func adopt(t *testing.T, b *client.Mailbox, key string) string {
-	t.Helper()
-	acc, err := b.Adopt(context.Background(), key)
-	if err != nil {
-		t.Fatalf("adopt: %v", err)
-	}
-	return acc
-}
 
 func TestAccounts(t *testing.T) {
 	t.Parallel()

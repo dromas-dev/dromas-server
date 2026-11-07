@@ -18,43 +18,8 @@ import (
 	"github.com/dromas-dev/dromas-client/protocol"
 )
 
-// aclOf is an ACL document: the lists as given.
-func aclOf(allow, deny []string) protocol.ACLDocument {
-	return protocol.ACLDocument{Allow: allow, Deny: deny}
-}
 
-// aclReply reads an ACL document out of an answer.
-func aclReply(t *testing.T, r reply) protocol.ACLDocument {
-	t.Helper()
-	var d protocol.ACLDocument
-	if err := protocol.Unmarshal(r.body, &d); err != nil {
-		t.Fatalf("not an ACL document: %v: %s", err, r.body)
-	}
-	return d
-}
 
-// sealTo is a send to mailbox to, as the server sees one: an age file to its
-// current prekey under both its serials. What is inside is the recipient's
-// to judge, so a test needs nothing more.
-func (e *env) sealTo(to *client.Mailbox) sealed {
-	e.t.Helper()
-	b, err := e.store.Mailbox(context.Background(), to.Address())
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	rcpt, err := b.Prekey.Recipient()
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	var ct bytes.Buffer
-	w, err := age.Encrypt(&ct, rcpt)
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	_, _ = io.WriteString(w, `{"v":1}`)
-	_ = w.Close()
-	return sealedTo(e.statement(to.Address()), ct.Bytes())
-}
 
 // A mailbox's ACL is the mailbox's own to read and replace, whole; one that is not
 // an ACL, or holds more entries than the server takes, is refused before

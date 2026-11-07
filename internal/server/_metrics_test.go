@@ -33,13 +33,6 @@ func (e *env) sent(r reply) string {
 	return rc.ID
 }
 
-// metered is a test server whose metrics are m, on a registry of their own.
-func metered(t *testing.T, l Limits) (*env, *Metrics, *prometheus.Registry) {
-	t.Helper()
-	reg := prometheus.NewRegistry()
-	m := NewMetrics(reg)
-	return newEnv(t, l, func(c *Config) { c.Metrics = m }), m, reg
-}
 
 // The metrics count what the server does and refuses (dromas-dev/dromas-server#59):
 // each request by its route, status and code; each take of a limit by its
