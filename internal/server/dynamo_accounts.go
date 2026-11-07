@@ -120,15 +120,15 @@ func (s *dynamoBackend) AdoptKey(ctx context.Context, account string, hash [32]b
 		return nil, ErrNotFound
 	}
 	it := item(out.Item)
-	uses, err := it.uint("uses")
+	uses, err := it.count("uses")
 	if err != nil {
 		return nil, err
 	}
-	exp, err := it.uint("expires")
+	exp, err := it.millis("expires")
 	if err != nil {
 		return nil, err
 	}
-	return &AdoptKey{Account: account, Hash: hash, Uses: int(uses), Expires: fromMs(exp)}, nil //nolint:gosec // uses are a count we wrote
+	return &AdoptKey{Account: account, Hash: hash, Uses: uses, Expires: exp}, nil
 }
 
 // mailboxRevCheck is the update of a mailbox record at b.Rev that bumps it.

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -339,6 +340,43 @@ func (it item) size(name string) (int, error) {
 	return 0, fmt.Errorf("item: %s is missing or not a number", name)
 }
 
+// millis reads a time this server wrote as milliseconds since 1970
+// (fromMs).
+func (it item) millis(name string) (time.Time, error) {
+	n, err := it.uint(name)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return fromMs(n)
+}
+
+// seconds reads a time this server wrote as seconds since 1970, as a TTL
+// attribute is: a value past the largest int64 is a broken item, never a
+// time that wraps.
+func (it item) seconds(name string) (time.Time, error) {
+	n, err := it.uint(name)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if n > math.MaxInt64 {
+		return time.Time{}, fmt.Errorf("item: %s is no time in seconds", name)
+	}
+	return time.Unix(int64(n), 0).UTC(), nil
+}
+
+// count reads a count this server wrote: a number no larger than the largest
+// int32, so it is an int on every platform.
+func (it item) count(name string) (int, error) {
+	n, err := it.uint(name)
+	if err != nil {
+		return 0, err
+	}
+	if n > math.MaxInt32 {
+		return 0, fmt.Errorf("item: %s is not a count of at most %d", name, math.MaxInt32)
+	}
+	return int(n), nil
+}
+
 func (it item) string(name string) (string, error) {
 	if v, ok := it[name].(*types.AttributeValueMemberS); ok {
 		return v.Value, nil
@@ -488,11 +526,9 @@ func decodeMailbox(it item) (*Mailbox, error) {
 		b.Account = string(acc)
 	}
 	if _, ok := it["expires_at"]; ok {
-		exp, err := it.uint("expires_at")
-		if err != nil {
+		if b.Expires, err = it.seconds("expires_at"); err != nil {
 			return nil, err
 		}
-		b.Expires = time.Unix(int64(exp), 0).UTC() //nolint:gosec // written from a time after 1970
 	}
 	if _, ok := it["acl"]; ok {
 		if b.ACL, err = decodeACL(it); err != nil {
@@ -505,11 +541,9 @@ func decodeMailbox(it item) (*Mailbox, error) {
 	if b.Signature, err = it.bytes("statement_sig"); err != nil {
 		return nil, err
 	}
-	created, err := it.uint("created")
-	if err != nil {
+	if b.Created, err = it.millis("created"); err != nil {
 		return nil, err
 	}
-	b.Created = fromMs(created)
 	if b.Prekey, err = protocol.ParsePrekey(b.Statement); err != nil {
 		return nil, fmt.Errorf("item: the stored prekey: %w", err)
 	}
@@ -542,7 +576,7 @@ func decodeMailbox(it item) (*Mailbox, error) {
 		if err != nil {
 			return nil, err
 		}
-		notAfter, err := r.uint("not_after")
+		notAfter, err := r.millis("not_after")
 		if err != nil {
 			return nil, err
 		}
@@ -550,7 +584,7 @@ func decodeMailbox(it item) (*Mailbox, error) {
 		if err != nil || len(h) != 32 {
 			return nil, errors.New("item: bad key_hash")
 		}
-		ret := Retired{Type: protocol.KeyType(t), NotAfter: fromMs(notAfter)}
+		ret := Retired{Type: protocol.KeyType(t), NotAfter: notAfter}
 		copy(ret.KeyHash[:], h)
 		b.Retired = append(b.Retired, ret)
 	}
@@ -653,7 +687,10 @@ func decodeMsg(it item) (*Header, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	h := &Header{ID: id, Size: size, ReceivedAt: fromMs(recv), ExpiresAt: fromMs(recv + ttlMs)}
+	h, err := header(id, size, recv)
+	if err != nil {
+		return nil, false, err
+	}
 	_, live := it["live"]
 	return h, live, nil
 }
@@ -672,7 +709,21 @@ func decodeLive(it item) (*Header, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Header{ID: id, Size: size, ReceivedAt: fromMs(recv), ExpiresAt: fromMs(recv + ttlMs)}, nil
+	return header(id, size, recv)
+}
+
+// header is a message's header from its id, its size and when it was
+// received, in ms (fromMs).
+func header(id [32]byte, size int, recv uint64) (*Header, error) {
+	received, err := fromMs(recv)
+	if err != nil {
+		return nil, err
+	}
+	expires, err := fromMs(recv + ttlMs)
+	if err != nil {
+		return nil, err
+	}
+	return &Header{ID: id, Size: size, ReceivedAt: received, ExpiresAt: expires}, nil
 }
 
 func isConditionFailed(err error) (*types.ConditionalCheckFailedException, bool) {
@@ -1009,7 +1060,10 @@ func (s *dynamoBackend) Retire(ctx context.Context, mailbox protocol.Address, id
 	if err == nil {
 		var recv uint64
 		if recv, _, err = fromLiveKey(k); err == nil {
-			return fromMs(recv), nil
+			var t time.Time
+			if t, err = fromMs(recv); err == nil {
+				return t, nil
+			}
 		}
 	}
 	return time.Time{}, unknown(fmt.Errorf("applied, and its answer does not read: %w", err))
