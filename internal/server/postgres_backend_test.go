@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -276,9 +278,173 @@ func TestAFeedRowThatDoesNotReadIsForgotten(t *testing.T) {
 	if _, mood := r["mood"]; err != nil || mood || r["addr"] == nil {
 		t.Fatalf("a row with a column of a type no codec reads: %v, %v; want it read without that column", r, err)
 	}
-	f.change(1, tuple, nil, false)
+	fc, ok := f.decode(1, tuple, nil, false)
+	if !ok {
+		t.Fatal("the change is of no table of the schema's")
+	}
+	f.hand(fc)
 	if len(got) != 1 || got[0].Kind != RecordChange || got[0].Addr != a || got[0].Err == nil || got[0].Mailbox != nil {
 		t.Fatalf("the change handed over: %+v; want the address's record, as one that does not read", got)
+	}
+}
+
+// The feed applies a transaction only once its commit is visible to a new
+// snapshot: PostgreSQL sends a commit to the walsenders before it is
+// visible, and memory takes a read begun after a change was applied to see
+// it. Here another process's write is held invisible to the follower's
+// feed: the follower neither applies it nor is synced past it until the
+// hold ends, and then applies it. Every transaction outside the hold is
+// asked of a real snapshot.
+func TestTheFeedAppliesATransactionOnlyOnceItsCommitIsVisible(t *testing.T) {
+	t.Parallel()
+	if !onPostgres() {
+		t.Skip("needs PostgreSQL: DROMAS_TEST_POSTGRES")
+	}
+	ctx := context.Background()
+	schema, bodies := freshDatabase(t)
+	writer := startPostgresIn(t, schema, bodies, nil, nil)
+	e := newEnv(t, relaxed(), func(c *Config) { c.Store = writer })
+	follower, fctx := newPostgresIn(t, schema, bodies, nil, nil)
+	var mu sync.Mutex
+	held, asked := false, map[uint32]bool{}
+	follower.pg().visible = func(ctx context.Context, xid uint32) (bool, error) {
+		mu.Lock()
+		hold := held
+		if hold {
+			asked[xid] = true
+		}
+		mu.Unlock()
+		if hold {
+			return false, nil
+		}
+		var snap string
+		if err := follower.pool().QueryRow(ctx, "SELECT pg_current_snapshot()::text").Scan(&snap); err != nil {
+			return false, err
+		}
+		return snapshotSees(snap, xid)
+	}
+	if err := follower.Start(fctx); err != nil {
+		t.Fatal(err)
+	}
+	waitFor := func(what string, ok func() bool) {
+		t.Helper()
+		for start := time.Now(); !ok(); time.Sleep(20 * time.Millisecond) {
+			if time.Since(start) > 15*time.Second {
+				t.Fatalf("%s: not within 15 s", what)
+			}
+		}
+	}
+	b := e.mailbox()
+	a := b.Address()
+	waitFor("the follower holding the record", func() bool {
+		if _, err := follower.Mailbox(ctx, a); err != nil {
+			t.Fatal(err)
+		}
+		rec, ok := follower.Known(a)
+		return ok && rec != nil
+	})
+	if rec, _ := follower.Known(a); rec.ACL != nil {
+		t.Fatalf("control: the record holds an ACL before one is set: %+v", rec.ACL)
+	}
+	fed(t, follower)
+
+	mu.Lock()
+	held = true
+	mu.Unlock()
+	var x protocol.Address
+	_, _ = rand.Read(x[:])
+	e.want(e.do("PUT", "/v1/"+a.String()+"/acl", aclOf([]string{"*"}, []string{x.String()}), e.pass(b)), 200, "")
+	written := time.Now()
+	waitFor("the follower's feed asking whether the write is visible", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(asked) > 0
+	})
+	// Room for every status update and keepalive that would sync the feed
+	// past the write.
+	time.Sleep(10 * follower.pg().syncEvery)
+	switch rec, ok := follower.Known(a); {
+	case !ok || rec == nil:
+		t.Fatal("the follower no longer holds the record")
+	case rec.ACL != nil:
+		t.Fatalf("the follower applied a write whose commit is held invisible: it holds the ACL %+v", rec.ACL)
+	}
+	if synced := time.Unix(0, follower.pg().synced.Load()); !synced.Before(written) {
+		t.Fatalf("the follower's feed is synced through %v, past a write at %v whose commit is held invisible", synced, written)
+	}
+
+	mu.Lock()
+	held = false
+	mu.Unlock()
+	waitFor("the follower applying the write once it is visible", func() bool {
+		rec, ok := follower.Known(a)
+		return ok && rec != nil && rec.ACL != nil && rec.ACL.Deny.Len() == 1
+	})
+	fed(t, follower)
+}
+
+// A snapshot sees a transaction committed below its xmin, or below its xmax
+// and not in progress; a transaction at or past xmax is not yet visible,
+// as the one writing its commit is before its end is. The 32-bit xid is
+// taken as the one nearest xmax, across an epoch's end either way.
+func TestASnapshotSeesWhatHasCommitted(t *testing.T) {
+	t.Parallel()
+	const e1 = 1 << 32 // the first xid of epoch 1
+	for _, c := range []struct {
+		snap string
+		xid  uint32
+		want bool
+	}{
+		{"100:104:", 99, true},
+		{"100:104:", 100, true},
+		{"100:104:", 103, true},
+		{"100:104:", 104, false}, // the newest, writing its commit
+		{"100:104:", 105, false},
+		{"100:104:100,102", 100, false},
+		{"100:104:100,102", 101, true},
+		{"100:104:100,102", 102, false},
+		{"100:104:100,102", 103, true},
+		{"104:104:", 104, false},
+		{"104:104:", 103, true},
+		{"100:104:", 104 + 1<<31 - 1, false}, // as far ahead as one can be
+		{"3:3:", 3, false},
+		// xmax just past epoch 1's start.
+		{fmt.Sprint(e1-6, ":", e1+5, ":"), 0xFFFFFFF0, true},
+		{fmt.Sprint(e1-6, ":", e1+5, ":", e1-4), 0xFFFFFFFC, false},
+		{fmt.Sprint(e1-6, ":", e1+5, ":", e1-4), 0xFFFFFFFD, true},
+		{fmt.Sprint(e1-6, ":", e1+5, ":", e1+3), 3, false},
+		{fmt.Sprint(e1-6, ":", e1+5, ":", e1+3), 4, true},
+		{fmt.Sprint(e1-6, ":", e1+5, ":"), 5, false},
+		{fmt.Sprint(e1-6, ":", e1+5, ":"), 6, false},
+		// xmax just short of epoch 1: a transaction of epoch 1 is ahead.
+		{fmt.Sprint(e1-20, ":", e1-10, ":"), 2, false},
+		{fmt.Sprint(e1-20, ":", e1-10, ":"), 0xFFFFFFF0, true},
+		{fmt.Sprint(e1-20, ":", e1-10, ":"), 0xFFFFFFF6, false},
+		// Epoch 2.
+		{fmt.Sprint(2*e1+8, ":", 2*e1+10, ":"), 8, true},
+		{fmt.Sprint(2*e1+8, ":", 2*e1+10, ":"), 0xFFFFFFFF, true},
+		{fmt.Sprint(2*e1+8, ":", 2*e1+10, ":", 2*e1+9), 9, false},
+		{fmt.Sprint(2*e1+8, ":", 2*e1+10, ":"), 10, false},
+	} {
+		got, err := snapshotSees(c.snap, c.xid)
+		if err != nil || got != c.want {
+			t.Errorf("snapshot %s sees %d: %v, %v; want %v", c.snap, c.xid, got, err, c.want)
+		}
+	}
+	for _, c := range []struct {
+		snap string
+		xid  uint32
+	}{
+		{"", 1}, {"1:2", 1}, {"1:2:3:4", 1}, {"a:2:", 1}, {"1:b:", 1}, {"-1:4:", 1},
+		{"5:4:", 1},                  // xmin past xmax
+		{"1:4:x", 1}, {"1:4:2,,", 1}, // an xip that does not read
+		{"1:4:4", 1}, {"2:4:1", 1}, // an xip outside [xmin, xmax)
+		{"100:104:", 104 + 1<<31}, // of an epoch before the first
+		{"100:104:", 0xFFFFFFFF},  // likewise
+	} {
+		if got, err := snapshotSees(c.snap, c.xid); err == nil {
+			t.Errorf("snapshot %q sees %d: %v; want an error", c.snap, c.xid, got)
+		}
 	}
 }
 

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,6 +45,9 @@ const (
 	// feedStartWithin bounds Start: creating a slot waits for every
 	// transaction open at that moment to end.
 	feedStartWithin = 30 * time.Second
+	// feedVisibleEvery is how long the feed waits before it asks again
+	// whether a commit it has received is visible.
+	feedVisibleEvery = time.Millisecond
 )
 
 // feedTarget is a flushed WAL position, and the wall time it was read at.
@@ -89,8 +94,20 @@ func (s *pgBackend) Start(ctx context.Context, apply func(Change)) error {
 		_ = conn.Close(context.Background())
 		return fmt.Errorf("postgres: the feed's position reader: %w", err)
 	}
+	// Whether a commit is visible is read on a connection of run's own:
+	// pos is targets', and the pool every request's.
+	snap, err := pgx.ConnectConfig(sctx, s.pool.Config().ConnConfig.Copy())
+	if err != nil {
+		_ = conn.Close(context.Background())
+		_ = pos.Close(context.Background())
+		return fmt.Errorf("postgres: the feed's snapshot reader: %w", err)
+	}
 	fctx, stop := context.WithCancel(ctx)
-	f := &pgFeed{s: s, conn: conn, pos: pos, applied: from, relations: map[uint32]*pglogrepl.RelationMessage{}, types: pgtype.NewMap()}
+	f := &pgFeed{s: s, conn: conn, pos: pos, snap: snap, applied: from, relations: map[uint32]*pglogrepl.RelationMessage{}, types: pgtype.NewMap()}
+	f.visible = f.sees
+	if s.visible != nil {
+		f.visible = s.visible
+	}
 	began := time.Now()
 	go f.run(fctx)
 	go f.targets(fctx)
@@ -132,15 +149,22 @@ func randomHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-// pgFeed is one session of the feed. Its connection is run's alone.
+// pgFeed is one session of the feed. Its connections are run's alone, but
+// pos, which is targets'.
 type pgFeed struct {
 	s       *pgBackend
 	conn    *pgconn.PgConn
 	pos     *pgx.Conn     // targets' own
+	snap    *pgx.Conn     // run's own: whether a commit is visible (sees)
 	applied pglogrepl.LSN // every change up to it is applied: what each status update confirms
-	inTxn   bool
-	made    time.Time // the commit time of the transaction being applied
+	inTxn   bool          // a transaction is begun and not yet applied
+	xid     uint32        // the transaction begun
+	made    time.Time     // the commit time of the transaction begun
+	held    []fedChange   // its changes, held until its commit is visible
 	types   *pgtype.Map
+	// visible reports whether a transaction's commit is visible to a new
+	// snapshot: sees, or the backend's replacement in a test.
+	visible func(ctx context.Context, xid uint32) (bool, error)
 
 	relations map[uint32]*pglogrepl.RelationMessage
 
@@ -186,11 +210,13 @@ func (f *pgFeed) targets(ctx context.Context) {
 }
 
 // run follows the stream until ctx ends or the session is lost, applying
-// each change as it arrives: memory's apply takes its locks briefly and
-// never waits on I/O. A session that answers nothing for feedSilentAfter,
-// keepalives asked for included, is gone half-open.
+// each transaction once its commit is visible (commit): memory's apply
+// takes its locks briefly and never waits on I/O. A session that answers
+// nothing for feedSilentAfter, keepalives asked for included, is gone
+// half-open.
 func (f *pgFeed) run(ctx context.Context) {
 	defer func() { _ = f.conn.Close(context.Background()) }()
+	defer func() { _ = f.snap.Close(context.Background()) }()
 	// A panic here would end the process with its words on stderr, past the
 	// redaction: it is logged through the store's log, which redacts, and
 	// ends the process as a lost place does, so a restart rebuilds memory.
@@ -239,7 +265,7 @@ func (f *pgFeed) run(ctx context.Context) {
 			return
 		}
 		lastHeard = time.Now()
-		if err := f.handle(msg); err != nil {
+		if err := f.handle(ctx, msg); err != nil {
 			f.lost(ctx, err)
 			return
 		}
@@ -258,7 +284,7 @@ func (f *pgFeed) lost(ctx context.Context, err error) {
 	}
 }
 
-func (f *pgFeed) handle(msg pgproto3.BackendMessage) error {
+func (f *pgFeed) handle(ctx context.Context, msg pgproto3.BackendMessage) error {
 	switch m := msg.(type) {
 	case *pgproto3.CopyData:
 		if len(m.Data) == 0 {
@@ -281,7 +307,7 @@ func (f *pgFeed) handle(msg pgproto3.BackendMessage) error {
 			if err != nil {
 				return err
 			}
-			return f.logical(lm)
+			return f.logical(ctx, lm)
 		}
 		return nil
 	case *pgproto3.ErrorResponse:
@@ -294,8 +320,8 @@ func (f *pgFeed) handle(msg pgproto3.BackendMessage) error {
 
 // heard takes a keepalive: the walsender has decoded the WAL to end, and
 // sent every transaction committed before it ahead of this message
-// (walsender.c, WalSndKeepalive sends sentPtr). Between transactions,
-// everything up to end is applied.
+// (walsender.c, WalSndKeepalive sends sentPtr). Between transactions, none
+// held, everything up to end is applied.
 func (f *pgFeed) heard(end pglogrepl.LSN) {
 	if f.inTxn {
 		return
@@ -314,52 +340,173 @@ func (f *pgFeed) heard(end pglogrepl.LSN) {
 	}
 }
 
-// logical applies one message of pgoutput's.
-func (f *pgFeed) logical(lm pglogrepl.Message) error {
+// logical takes one message of pgoutput's. A transaction's changes are
+// held from its Begin and applied at its Commit, once the commit is visible
+// (commit). What is held is bounded by the transaction, and every write and
+// each of the sweep's batches is a transaction of bounded size.
+func (f *pgFeed) logical(ctx context.Context, lm pglogrepl.Message) error {
 	switch m := lm.(type) {
 	case *pglogrepl.RelationMessage:
 		f.relations[m.RelationID] = m
 	case *pglogrepl.BeginMessage:
-		f.inTxn, f.made = true, m.CommitTime
+		f.inTxn, f.xid, f.made, f.held = true, m.Xid, m.CommitTime, f.held[:0]
 	case *pglogrepl.CommitMessage:
-		f.inTxn = false
-		if m.TransactionEndLSN > f.applied {
-			f.applied = m.TransactionEndLSN
-		}
+		return f.commit(ctx, m.TransactionEndLSN)
 	case *pglogrepl.InsertMessage:
-		f.change(m.RelationID, m.Tuple, nil, false)
+		f.hold(m.RelationID, m.Tuple, nil, false)
 	case *pglogrepl.UpdateMessage:
-		f.change(m.RelationID, m.NewTuple, m.OldTuple, false)
+		f.hold(m.RelationID, m.NewTuple, m.OldTuple, false)
 	case *pglogrepl.DeleteMessage:
-		f.change(m.RelationID, m.OldTuple, nil, true)
+		f.hold(m.RelationID, m.OldTuple, nil, true)
 	case *pglogrepl.TruncateMessage:
 		return errors.New("a table was truncated")
 	}
 	return nil
 }
 
-// change hands one row's change to memory. A key that does not read is
-// skipped, as nothing can be said of it; a row that does not read beyond
-// its key, a column of a type this build does not decode among them, is
-// handed over as one that does not read (Change.Err), which memory takes as
-// gone, so that it holds nothing of the row as it was.
-func (f *pgFeed) change(rel uint32, tuple, old *pglogrepl.TupleData, gone bool) {
+// commit applies the transaction begun, once its commit is visible to a new
+// snapshot. PostgreSQL's CommitTransaction flushes the commit's WAL, which
+// wakes the walsenders, and waits for a synchronous standby, before
+// ProcArrayEndTransaction makes the commit visible to a new snapshot
+// (xact.c, read 2026-11-07), so the feed can bring a change that a read
+// begun after memory applied it does not see. Memory's record cache and a
+// mailbox's load take a read begun after a change was applied to see it
+// (ARCHITECTURE.md § Memory), so nothing is applied before it is visible.
+// A snapshot that sees the commit is followed by none that does not. A
+// transaction that brings memory nothing is not waited on; one whose commit
+// is still not visible after feedUnsyncedAfter (a synchronous standby that
+// never answers holds every commit so) is a lost place, saying so, since
+// the feed reads nothing meanwhile.
+func (f *pgFeed) commit(ctx context.Context, end pglogrepl.LSN) error {
+	for began := time.Now(); len(f.held) > 0; {
+		ok, err := f.visible(ctx, f.xid)
+		if err != nil {
+			return fmt.Errorf("whether transaction %d is visible: %w", f.xid, err)
+		}
+		if ok {
+			break
+		}
+		if waited := time.Since(began); waited > feedUnsyncedAfter {
+			return fmt.Errorf("transaction %d's commit has not been visible for %v", f.xid, waited.Round(time.Second))
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(feedVisibleEvery):
+		}
+	}
+	for i := range f.held {
+		f.hand(f.held[i])
+		f.held[i] = fedChange{}
+	}
+	f.held, f.inTxn = f.held[:0], false
+	if end > f.applied {
+		f.applied = end
+	}
+	return nil
+}
+
+// sees reads a new snapshot on the feed's own connection and reports
+// whether it sees transaction xid committed.
+func (f *pgFeed) sees(ctx context.Context, xid uint32) (bool, error) {
+	rctx, cancel := context.WithTimeout(ctx, feedUnsyncedAfter)
+	defer cancel()
+	var snap string
+	if err := f.snap.QueryRow(rctx, "SELECT pg_current_snapshot()::text").Scan(&snap); err != nil {
+		return false, err
+	}
+	return snapshotSees(snap, xid)
+}
+
+// snapshotSees reports whether a snapshot, pg_current_snapshot()'s text
+// (xmin:xmax:xip,...; each a 64-bit xid8, its epoch in the high 32 bits),
+// sees transaction xid committed, xid being the 32 bits pgoutput's Begin
+// carries of a transaction that has written its commit. The xid is taken
+// as the one nearest xmax, within 2^31 either way, as PostgreSQL compares
+// 32-bit xids (TransactionIdPrecedes): a transaction writing its commit
+// may be at or past xmax, which is one past the newest transaction whose
+// end is visible, and is then in no snapshot's xip (GetSnapshotData in
+// procarray.c, read 2026-11-07). Committed is below xmin, or below xmax
+// and not in progress (xip).
+func snapshotSees(snap string, xid uint32) (bool, error) {
+	bad := func() error { return fmt.Errorf("a snapshot that does not read: %q", snap) }
+	parts := strings.Split(snap, ":")
+	if len(parts) != 3 {
+		return false, bad()
+	}
+	xmin, err1 := strconv.ParseUint(parts[0], 10, 64)
+	xmax, err2 := strconv.ParseUint(parts[1], 10, 64)
+	if err1 != nil || err2 != nil || xmin > xmax {
+		return false, bad()
+	}
+	epoch := xmax &^ 0xFFFFFFFF
+	full := epoch | uint64(xid)
+	switch {
+	case full > xmax && full-xmax >= 1<<31: // of the epoch before
+		if epoch == 0 {
+			return false, fmt.Errorf("transaction %d is before the first epoch, against the snapshot %q", xid, snap)
+		}
+		full -= 1 << 32
+	case full < xmax && xmax-full > 1<<31: // of the epoch after
+		full += 1 << 32
+	}
+	var running bool
+	if parts[2] != "" {
+		for x := range strings.SplitSeq(parts[2], ",") {
+			n, err := strconv.ParseUint(x, 10, 64)
+			if err != nil || n < xmin || n >= xmax {
+				return false, bad()
+			}
+			running = running || n == full
+		}
+	}
+	return full < xmin || full < xmax && !running, nil
+}
+
+// fedChange is one row's change, decoded as the feed received it.
+type fedChange struct {
+	table string
+	c     Change
+	ok    bool // memory takes it
+}
+
+// hold decodes one row's change, and holds it until its transaction is
+// applied.
+func (f *pgFeed) hold(rel uint32, tuple, old *pglogrepl.TupleData, gone bool) {
+	if fc, ok := f.decode(rel, tuple, old, gone); ok {
+		f.held = append(f.held, fc)
+	}
+}
+
+// decode decodes one row's change, and reports whether it is of a table
+// of the schema's. A key that does not read is skipped, as nothing can be
+// said of it; a row that does not read beyond its key, a column of a type
+// this build does not decode among them, is handed over as one that does
+// not read (Change.Err), which memory takes as gone, so that it holds
+// nothing of the row as it was.
+func (f *pgFeed) decode(rel uint32, tuple, old *pglogrepl.TupleData, gone bool) (fedChange, bool) {
 	r, ok := f.relations[rel]
 	if !ok || r.Namespace != f.s.schema || tuple == nil {
-		return
+		return fedChange{}, false
 	}
 	data, rowErr := f.row(r, tuple, old)
 	c, err := changeOf(r.RelationName, data, gone)
 	switch {
 	case err != nil:
 		f.s.logf("%s: skipping a change whose key does not read: %v", r.RelationName, err)
-	case c.Kind != 0 && f.s.apply != nil:
-		if rowErr != nil {
-			c = Change{Kind: c.Kind, Addr: c.Addr, AccountID: c.AccountID, Header: c.Header, Gone: c.Gone, Err: rowErr}
-		}
-		f.s.apply(c)
+		return fedChange{table: r.RelationName}, true
+	case rowErr != nil:
+		c = Change{Kind: c.Kind, Addr: c.Addr, AccountID: c.AccountID, Header: c.Header, Gone: c.Gone, Err: rowErr}
 	}
-	f.s.metrics.applied(r.RelationName, f.made, time.Now())
+	return fedChange{table: r.RelationName, c: c, ok: c.Kind != 0}, true
+}
+
+// hand hands one change to memory.
+func (f *pgFeed) hand(fc fedChange) {
+	if fc.ok && f.s.apply != nil {
+		f.s.apply(fc.c)
+	}
+	f.s.metrics.applied(fc.table, f.made, time.Now())
 }
 
 // row decodes a tuple by its relation's columns: every column that reads,
