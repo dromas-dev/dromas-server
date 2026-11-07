@@ -110,6 +110,46 @@ func TestAStoreStartsOnlyOnAMigratedSchema(t *testing.T) {
 	}
 }
 
+// The role serve runs as reads goose's table of versions and writes
+// nothing to it, though the default privileges grant it every table's
+// writes: it could otherwise mark a migration applied that never ran.
+func TestTheRuntimeRoleOnlyReadsTheVersions(t *testing.T) {
+	t.Parallel()
+	if !onPostgres() {
+		t.Skip("needs PostgreSQL: DROMAS_TEST_POSTGRES")
+	}
+	schema := newSchema()
+	url := pgURL(t, schema)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(context.Background()) }()
+	if _, err := conn.Exec(ctx, "SET search_path = "+schema); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := conn.QueryRow(ctx, "SELECT count(*) FROM goose_db_version").Scan(&n); err != nil || n == 0 {
+		t.Fatalf("control: the runtime role reads the versions: %d rows, %v", n, err)
+	}
+	for _, q := range []string{
+		"INSERT INTO goose_db_version (version_id, is_applied) VALUES (999, true)",
+		"UPDATE goose_db_version SET is_applied = false",
+		"DELETE FROM goose_db_version",
+		"TRUNCATE goose_db_version",
+	} {
+		if _, err := conn.Exec(ctx, q); !isPgCode(err, "42501") {
+			t.Errorf("%s as the runtime role: %v; want permission denied (42501)", q, err)
+		}
+	}
+	// Control: the same role writes the tables it serves.
+	if _, err := conn.Exec(ctx, "DELETE FROM messages WHERE false"); err != nil {
+		t.Errorf("control: the runtime role writes messages: %v", err)
+	}
+}
+
 // migrationVersions is this build's migrations' versions, in order.
 func migrationVersions() ([]int64, error) {
 	var out []int64

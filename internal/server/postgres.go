@@ -71,7 +71,7 @@ type PostgresConfig struct {
 	// which is how dromas-server serve finds it.
 	URL string
 	// Schema holds the tables, and names the publication the feed reads
-	// (dromas_<schema>); empty: public.
+	// (publicationName); empty: public.
 	Schema string
 	// Bodies are kept in a bucket, through AWS, or under a directory: one
 	// of the two, or neither for a store that keeps no messages (the
@@ -151,7 +151,7 @@ func NewPostgresStore(ctx context.Context, c PostgresConfig) (*Memory, error) {
 		pool:        pool,
 		replication: rc,
 		schema:      schema,
-		publication: "dromas_" + schema,
+		publication: publicationName(schema),
 		now:         s.clock,
 		log:         s.log,
 		metrics:     c.Metrics,
