@@ -270,7 +270,7 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, sign
 		return listedCertificate()
 	}
 	if count {
-		var m *reservation
+		var m addressCount
 		if m, err = s.miss(r); err != nil {
 			return err
 		}
