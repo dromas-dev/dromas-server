@@ -41,6 +41,7 @@ type Metrics struct {
 	caches      *prometheus.CounterVec
 	largeRead   *prometheus.CounterVec
 	cut         prometheus.Counter
+	misroutes   prometheus.Counter
 	conns       prometheus.Gauge
 	streamAge   *prometheus.GaugeVec
 	collections prometheus.Histogram
@@ -93,6 +94,8 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Help: "Sends past the free size, by how their wait for the one large read ended: taken, timed_out, or gone (the caller left)."}, []string{"outcome"}),
 		cut: prometheus.NewCounter(prometheus.CounterOpts{Namespace: ns, Name: "bodies_cut_total",
 			Help: "Request bodies cut off at their deadline (body_timeout, body_min_rate)."}),
+		misroutes: prometheus.NewCounter(prometheus.CounterOpts{Namespace: ns, Name: "misrouted_total",
+			Help: "Calls for a mailbox outside this process's shard (--shard), answered 503: the reverse proxy in front sent them to the wrong process."}),
 		conns: prometheus.NewGauge(prometheus.GaugeOpts{Namespace: ns, Name: "connections_open",
 			Help: "Connections open on the API's listener."}),
 		streamAge: prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: ns, Name: "stream_record_age_seconds",
@@ -119,7 +122,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 	for _, r := range []string{"ok", "failed"} {
 		m.reloads.WithLabelValues(versionPolicyFile, r) // each series from the start, at 0
 	}
-	reg.MustRegister(m.requests, m.latency, m.limits, m.passes, m.fetches, m.lists, m.store, m.storeTime, m.caches, m.largeRead, m.cut, m.conns, m.streamAge, m.collections, m.holds, m.held, m.bodiesOpen, m.bodies, m.versions, m.reloads)
+	reg.MustRegister(m.requests, m.latency, m.limits, m.passes, m.fetches, m.lists, m.store, m.storeTime, m.caches, m.largeRead, m.cut, m.misroutes, m.conns, m.streamAge, m.collections, m.holds, m.held, m.bodiesOpen, m.bodies, m.versions, m.reloads)
 	return m
 }
 
@@ -315,6 +318,14 @@ func (m *Metrics) bodyCut() {
 		return
 	}
 	m.cut.Inc()
+}
+
+// misrouted counts a call for a mailbox outside this process's shard.
+func (m *Metrics) misrouted() {
+	if m == nil {
+		return
+	}
+	m.misroutes.Inc()
 }
 
 // applied records the age of a record applied from table's stream.

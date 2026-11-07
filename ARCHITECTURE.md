@@ -152,7 +152,7 @@ A pass under a certificate that passes all three costs about 180 µs, two signat
 
 ### Behind a reverse proxy
 
-`dromas-server` speaks plain HTTP; TLS ends in a reverse proxy in front (dromas-dev/dromas-server#124). That keeps TLS above `dromas-server`, so a restart of `dromas-server` drops no client's TLS session, and it is where routing by a mailbox's address goes once there is more than one process (§ Extreme scale).
+`dromas-server` speaks plain HTTP; TLS ends in a reverse proxy in front (dromas-dev/dromas-server#124). That keeps TLS above `dromas-server`, so a restart of `dromas-server` drops no client's TLS session, and it is where routing by a mailbox's address goes once there is more than one process (§ Routing by address).
 - **The client's address** is the last entry of `X-Forwarded-For` from a peer in `--trusted-proxy`, the one that proxy wrote of the connection it took (`clientIP`); every entry before it is the caller's own word and is never read, and from any other peer the header is ignored. Every per-IP limit keys on it (`LIMITS.md`), and the site is told it (`--site-backend`), with every other header a proxy or CDN names a client by dropped.
 - **`Host` is passed on unchanged** (§ The pass check), and `X-Forwarded-Proto` from a trusted proxy says the scheme (the link page's).
 - **A long poll holds nothing of `dromas-server`'s but its goroutine and its connection:** no write deadline runs while it waits (the pacing sets one on each write, and the answer's is set as it is written), `--idle-timeout` is for the time between requests, and a connection `--listen` accepts sends no TCP keep-alive probes (`listenAll`), as nginx leaves a listening socket's to the operating system's default, since each phase of a connection has a bound of its own. Every change memory applies to a mailbox, a write of this process or one from the streams, passes through the index's `apply`, `imageStanding` or `forget`, which wake the long polls on it (`TestEveryChangeMemoryAppliesToAMailboxWakesItsLongPolls`, from the backend's writes and its feed's kinds); a long poll on one process is woken by a send stored on another through the stream (measured 2026-10-28 on DynamoDB, `TestTwoProcesses`: 0.64 s). A message's expiry is no change memory applies: a long poll's wait ends at its mailbox's first expiry, by the store's clock, and its page is read again. The page of a list asked to wait is read strongly consistent (§ Memory), so a list is never held on a page that misses a change memory had applied. When the API's `http.Server` shuts down (SIGTERM), `RegisterOnShutdown` answers every long poll `304` at once (`StopHolds`, wired where that `http.Server` is made: `Server.HTTPServer`), so its clients list again at once and `Shutdown` waits for none of them.
@@ -232,15 +232,13 @@ sequenceDiagram
   - Redis is the penciled alternative.
   - Four processes, the scaled shape above, still read the stream directly, about every 2 s.
 
-### Extreme scale: shard by the first character of the address's bytes
+### Routing by address
 
-**It fits the design.** Every mailbox call names its mailbox in the path (`/v1/<addr>/…`, and a send is `POST /v1/<recipient>/messages`), and an address is `d_` and SHA-384 output in base64url, so the first character after `d_` splits the load into 64 even shards. The edge routes by path prefix. `cloudflared`'s ingress rules can match a path, as can Cloudflare's load-balancing rules or an AWS ALB (an NLB can't).
-
-What changes:
-- **Memory stops being replicated.** Each shard group holds only its sixty-fourth of layer 1, layer 2, the mailbox standings and the poll buckets. That removes the one capacity limit above, where every process held all of layer 1.
-- **The stream bouncer routes by the same character.** Mailbox events go only to their shard. Mailbox-record changes (revocations, certificates, prekeys) go to every shard, because any shard may check a sender.
-- **Per-sender send limits cross shards.** A's sends land on each recipient's shard. The bouncer would broadcast a compact "A sent one" event, so every process keeps per-sender daily counts (~16 B per active sender, estimate).
-- **Unchanged:** sends still check the sender's pass against its record, from the LRU or DynamoDB, the link page (`/to/<address>`) goes to any shard, and DynamoDB and S3 need nothing new.
+**A reverse proxy in front may send each mailbox's calls to one process by its address, and `--shard I/N` makes a process answer for its part alone** (`internal/server/shard.go`). Every mailbox call names its mailbox in the path (`/v1/<addr>/…`, and a send is `POST /v1/<recipient>/messages`), and an address is `d_` and SHA-384 output in base64url, so its first character after `d_` is uniform over base64url's 64 values. Shard I of N, N a power of two up to 64, is the characters whose value v has v·N/64 = I; shards of different N may sit side by side, so one half splits into two quarters with the other half untouched.
+- **The proxy matches the path:** with nginx, a `map` on `$uri` from `/v1/d_` and the character's range to one `upstream` group for each process, and `proxy_pass` to the group the map names. A group for each process, so that a retry on the next server of a group never hands a mailbox to another process. A path naming no mailbox (`GET /v1/`, the link page, the site) may go to any.
+- **A call for a mailbox outside the process's shard is answered `503 unavailable`, with `Retry-After`** (`owned`), behind the gate, so it is counted first, and counted again in `dromas_server_misrouted_total` (§ Metrics): a proxy that sends a mailbox to the wrong process fails at once, and no mailbox has two processes answering for it. A Redis Cluster node makes the same check of its own slots and answers `MOVED` (Redis cluster specification, read 2026-11-07).
+- **A change of shards stops the old process before the new one starts,** so that no mailbox is answered by two at once. A restart is its shard's alone: memory starts empty and reads each mailbox on its first use (§ Startup).
+- **Exact under it:** every count kept per mailbox, `mailbox_cap`, the ACL, and a long poll, which the send stored on its own process wakes. **Per process, so up to N times across them:** a sender's sends a day and its calls on a send, each spent on the recipient's process, and every limit by IP address. **From the streams:** a sender's certificate and revocations, read for the pass on a send, and accounts (§ Following the stream).
 
 ### Startup
 **Lazy, per mailbox.** A full Scan at start saves no reads over loading mailboxes as they are used, reads dormant mailboxes too, holds the whole service at 503 until it ends, and is a burst that provisioned capacity throttles; at 1M mailboxes the mailboxes table alone is ~0.6 read units a mailbox.
@@ -256,7 +254,7 @@ What changes:
 ### Limits
 
 **Every limit, who pays for it and the known weaknesses → [`LIMITS.md`](LIMITS.md).** What is architecture about them:
-- **Every budget and count is per process,** in memory, because a poll can't afford a round trip: with N processes a mailbox could spend N times each. Sharding by address at the edge (§ Extreme scale) or sticky routing would put each mailbox's calls on one process; with neither, each process is to enforce a 1/N share (not built: one process enforces the whole of each), which keeps the bill ceiling, and rules at an edge in front can sit on top, keyed by /64 and /48 for IPv6.
+- **Every budget and count is per process,** in memory, because a poll can't afford a round trip: with N processes a mailbox could spend N times each. Sharding by address at the edge (§ Routing by address) or sticky routing would put each mailbox's calls on one process; with neither, each process is to enforce a 1/N share (not built: one process enforces the whole of each), which keeps the bill ceiling, and rules at an edge in front can sit on top, keyed by /64 and /48 for IPv6.
 - **The mailbox total (`mailbox_cap`) is global**: it reads layer 1's marks, which the stream feeds on every process, 1–2 s behind, with no extra writes; a process's own sends count at once. **Sends per sender a day, and the counts of renewals, certificates and raises of a revocation of certificates,** are each process's own today. Every accepted send and every renewal arrives on the stream, so each process can count across all of them: that is stage 2, not built.
 - **The passes remembered are per process,** so with N processes a mailbox's new pass is checked once on each it calls.
 - **Every limit is a bucket, the numbers a day among them:** a number a day is one back each day divided by it, into a bucket its `-burst` flag sets apart, as Let's Encrypt sets a limit by its burst, count and period, so no window empties at midnight and every refusal's wait is its key's own (the client repo's `PRECEDENTS.md`). A start refuses a number a day that is on with a bucket of nothing (`bursts`).
@@ -283,6 +281,7 @@ What changes:
 | `dromas_server_runtime_config_reloads_total` | `file` (`version-policy`), `result` (`ok`, `failed`) | each reload of a file of the runtime-config directory (§ Runtime config); the minute's read of bytes unchanged is none. When the file last loaded is its log line's |
 | `dromas_server_version_requests_total` | `state` (`current`, `deprecated`, `sunset`, `retired`) | each request under `/v1/` by what the version policy says of its version: retired (below the floor or past a sunset; answered `410` but on `GET /v1/`), else sunset (a sunset covers it, not yet passed), else deprecated (a deprecation covers it), else current. The version itself is no label: the client writes it. Kubernetes counts requests to deprecated APIs by what its own code defines (`apiserver_requested_deprecated_apis`, from memory) |
 | `dromas_server_large_reads_total`, `dromas_server_bodies_cut_total`, `dromas_server_connections_open` | `outcome` (`taken`, `timed_out`, `gone`) | the one large read's waits, bodies cut off at their deadline, connections open |
+| `dromas_server_misrouted_total` | | calls for a mailbox outside this process's `--shard`, answered `503` (§ Routing by address) |
 | the Go runtime's and the process's | | `client_golang`'s collectors |
 
 - 🛑 **No label is a value a caller chose:** no address, IP, mailbox, message id, cursor or path as sent. Each would be a series per caller, and each is what the logs leave out: "Do not use labels to store dimensions with high cardinality (many different label values), such as user IDs, email addresses, or other unbounded sets of values." (`docs/practices/naming.md`, the same commit). `TestMetricsCarryNoCallerValue` holds it.
@@ -299,7 +298,7 @@ What changes:
 | Failure | What happens | Recovery |
 |---|---|---|
 | Memory pressure | Layer 2 (once built) shrinks, down to off; lists come from DynamoDB, as all of them do today; polls are unaffected | Automatic |
-| Layer 1 alone outgrows memory | Capacity, not a fault: every process holds all of it | A bigger instance; ~50 B per live message makes this distant. At the extreme, shard by address (§ Extreme scale) |
+| Layer 1 alone outgrows memory | Capacity, not a fault: every process holds all of it | A bigger instance; ~50 B per live message makes this distant. At the extreme, shard by address (§ Routing by address) |
 | A writer dies right after its commit | The stream still delivers the change to everyone | Automatic |
 | A process falls behind the stream | Stage 2, not built: it fails `/readyz` and leaves rotation. Today a follower that loses its place exits the process | It catches up. More than 24 h behind (stream retention) means a restart: memory starts empty, and each mailbox is read again on its first use (§ Startup) |
 | DynamoDB or its stream unavailable | Processes can't prove they're current: `503` + `Retry-After` | Wait |
@@ -393,7 +392,7 @@ dromas-server (this repo)
 | 1: first production (**live**, with the echo mailbox) | one host: a reverse proxy terminating TLS, one `dromas-server` with the stream on, and the echo mailbox beside it |
 | 2: availability and scale | first a second host for availability, then 2–4 hosts across AZs, one `dromas-server` each using every core (e.g. 4 hosts of 4 cores), behind a load balancer |
 | Later, only if measured | our own stream bouncer for more than ~4 processes; Redis if sub-second delivery or exact global limits are ever needed |
-| Extreme | shard by the address's first hex character at the edge, with the bouncer routing by the same character (§ Extreme scale) |
+| By address | each mailbox's calls to one process, chosen by its address at the reverse proxy in front (§ Routing by address) |
 
 ## Build order
 
