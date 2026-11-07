@@ -173,7 +173,9 @@ func ReadVersionPolicy(path string, l Limits) (protocol.ServerDocument, []byte, 
 func (s *Server) VersionPolicy(path string, read []byte) *Reloader {
 	return &Reloader{name: versionPolicyFile, path: path, bound: MaxVersionPolicy, last: read, log: s.log, metrics: s.metrics,
 		apply: func(b []byte) error {
-			d, err := ParseVersionPolicy(b, s.limits)
+			s.config.Lock()
+			defer s.config.Unlock()
+			d, err := ParseVersionPolicy(b, s.limits())
 			if err != nil {
 				return err
 			}

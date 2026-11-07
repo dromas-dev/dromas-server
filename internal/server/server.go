@@ -74,8 +74,12 @@ type Config struct {
 
 // Server is the API.
 type Server struct {
-	store   Store
-	limits  Limits
+	store Store
+	// lim is the limits in force, swapped whole by its Reloader (setLimits).
+	lim atomic.Pointer[Limits]
+	// config is held while the limits or the policy are put in force, which
+	// both make the server's document.
+	config  sync.Mutex
 	now     func() time.Time
 	log     *log.Logger
 	ready   func() bool
@@ -141,7 +145,6 @@ type Server struct {
 func New(c Config) *Server {
 	s := &Server{
 		store:         c.Store,
-		limits:        c.Limits,
 		now:           c.Now,
 		log:           redacting(c.Log),
 		ready:         c.Ready,
@@ -149,22 +152,22 @@ func New(c Config) *Server {
 		names:         c.Names,
 		identityTypes: c.IdentityTypes,
 		metrics:       c.Metrics,
-		polls:         newBuckets(string(protocol.QuotaPolls), c.Limits.PollBurst, c.Limits.PollRefill),
-		pages:         c.Limits.continuations(),
-		repeats:       newBuckets(string(protocol.CodeFetchPaced), c.Limits.PollBurst, c.Limits.PollRefill),
-		regs:          perPeriod(string(protocol.QuotaRegistrations), c.Limits.RegistrationsPerHour, c.Limits.RegistrationsPerHour, time.Hour),
-		rangeRegs:     perPeriod(string(protocol.QuotaRegistrationsRange), c.Limits.RangeRegistrationsPerHour, c.Limits.RangeRegistrationsPerHour, time.Hour),
-		sendIPs:       perPeriod(string(protocol.QuotaSendsBeforePass), c.Limits.SendsPerMinutePerIP, c.Limits.SendsPerMinutePerIP, time.Minute),
-		misses:        perPeriod(string(protocol.QuotaMisses), c.Limits.MissesPerMinute, c.Limits.MissesPerMinute, time.Minute),
-		requests:      newBuckets(string(protocol.QuotaRequests), c.Limits.RequestBurst, c.Limits.RequestRefill),
-		calls:         newBuckets(string(protocol.QuotaCalls), c.Limits.CallBurst, c.Limits.CallRefill),
-		receives:      newBuckets(string(protocol.CodeMailboxBusy), c.Limits.ReceiveBurst, c.Limits.ReceiveRefill),
-		lifted:        newBuckets(string(protocol.CodeMailboxBusy), c.Limits.ReceiveBurst, c.Limits.liftedReceives()),
-		drained:       newBuckets(string(protocol.CodeFetchPaced), c.Limits.DrainBurst, c.Limits.DrainRefill),
-		sends:         perPeriod(string(protocol.QuotaSends), c.Limits.SendsBurst, c.Limits.SendsPerDay, day),
-		renewals:      perPeriod(string(protocol.QuotaRenewals), c.Limits.RenewalsBurst, c.Limits.RenewalsPerDay, day),
-		certs:         perPeriod(string(protocol.QuotaCertificates), c.Limits.CertificatesBurst, c.Limits.CertificatesPerDay, day),
-		raises:        perPeriod(string(protocol.QuotaCertificateRevocations), c.Limits.CertificateRevocationsBurst, c.Limits.CertificateRevocationsPerDay, day),
+		polls:         newBuckets(string(protocol.QuotaPolls), 0, 0),
+		pages:         newBuckets(string(protocol.QuotaPages), 0, 0),
+		repeats:       newBuckets(string(protocol.CodeFetchPaced), 0, 0),
+		regs:          newBuckets(string(protocol.QuotaRegistrations), 0, 0),
+		rangeRegs:     newBuckets(string(protocol.QuotaRegistrationsRange), 0, 0),
+		sendIPs:       newBuckets(string(protocol.QuotaSendsBeforePass), 0, 0),
+		misses:        newBuckets(string(protocol.QuotaMisses), 0, 0),
+		requests:      newBuckets(string(protocol.QuotaRequests), 0, 0),
+		calls:         newBuckets(string(protocol.QuotaCalls), 0, 0),
+		receives:      newBuckets(string(protocol.CodeMailboxBusy), 0, 0),
+		lifted:        newBuckets(string(protocol.CodeMailboxBusy), 0, 0),
+		drained:       newBuckets(string(protocol.CodeFetchPaced), 0, 0),
+		sends:         newBuckets(string(protocol.QuotaSends), 0, 0),
+		renewals:      newBuckets(string(protocol.QuotaRenewals), 0, 0),
+		certs:         newBuckets(string(protocol.QuotaCertificates), 0, 0),
+		raises:        newBuckets(string(protocol.QuotaCertificateRevocations), 0, 0),
 		largeRead:     make(chan struct{}, 1),
 		passes:        newPasses(),
 		stopping:      make(chan struct{}),
@@ -172,8 +175,7 @@ func New(c Config) *Server {
 	if s.now == nil {
 		s.now = time.Now
 	}
-	policy := policyOf(c.Policy, c.Limits)
-	s.policy.Store(&policy)
+	s.setLimits(c.Limits, &c.Policy)
 	if len(s.identityTypes) == 0 {
 		s.identityTypes = protocol.IdentityTypes()
 	}
@@ -182,6 +184,48 @@ func New(c Config) *Server {
 		s.site = s.siteProxy(c.SiteBackend)
 	}
 	return s
+}
+
+// limits is the limits in force, a copy: a reload swaps them whole, so one
+// read sees one file.
+func (s *Server) limits() Limits { return *s.lim.Load() }
+
+// setLimits puts l in force: every bucket takes its size from l, and the
+// server's document is policy, or the one in force where policy is nil, with
+// l's longest certificate.
+func (s *Server) setLimits(l Limits, policy *protocol.ServerDocument) {
+	s.config.Lock()
+	defer s.config.Unlock()
+	if policy == nil {
+		policy = s.policy.Load()
+	}
+	s.lim.Store(&l)
+	for _, b := range []struct {
+		bs    *buckets
+		n     int
+		every time.Duration
+	}{
+		{s.polls, l.PollBurst, l.PollRefill},
+		{s.repeats, l.PollBurst, l.PollRefill},
+		{s.requests, l.RequestBurst, l.RequestRefill},
+		{s.calls, l.CallBurst, l.CallRefill},
+		{s.receives, l.ReceiveBurst, l.ReceiveRefill},
+		{s.lifted, l.ReceiveBurst, l.liftedReceives()},
+		{s.drained, l.DrainBurst, l.DrainRefill},
+	} {
+		b.bs.resize(b.n, b.every)
+	}
+	s.pages.resize(l.continuations())
+	s.regs.resize(perPeriod(l.RegistrationsPerHour, l.RegistrationsPerHour, time.Hour))
+	s.rangeRegs.resize(perPeriod(l.RangeRegistrationsPerHour, l.RangeRegistrationsPerHour, time.Hour))
+	s.sendIPs.resize(perPeriod(l.SendsPerMinutePerIP, l.SendsPerMinutePerIP, time.Minute))
+	s.misses.resize(perPeriod(l.MissesPerMinute, l.MissesPerMinute, time.Minute))
+	s.sends.resize(perPeriod(l.SendsBurst, l.SendsPerDay, day))
+	s.renewals.resize(perPeriod(l.RenewalsBurst, l.RenewalsPerDay, day))
+	s.certs.resize(perPeriod(l.CertificatesBurst, l.CertificatesPerDay, day))
+	s.raises.resize(perPeriod(l.CertificateRevocationsBurst, l.CertificateRevocationsPerDay, day))
+	d := policyOf(*policy, l)
+	s.policy.Store(&d)
 }
 
 // wildcard is a wildcard in a route's pattern.
@@ -397,7 +441,7 @@ func HTTPServer(addr string, h http.Handler, l Limits, idle time.Duration) *http
 // shuts down (StopHolds, by http.Server.RegisterOnShutdown), so its clients
 // list again at once and Shutdown waits for none of them.
 func (s *Server) HTTPServer(addr string, idle time.Duration) *http.Server {
-	srv := HTTPServer(addr, s.Handler(), s.limits, idle)
+	srv := HTTPServer(addr, s.Handler(), s.limits(), idle)
 	srv.RegisterOnShutdown(s.StopHolds)
 	return srv
 }
@@ -555,7 +599,7 @@ func (s *Server) handle(h func(http.ResponseWriter, *http.Request) error) http.H
 // no body or a body's last bytes, which net/http writes then. Off when
 // either is zero.
 func (s *Server) paced(h http.Handler) http.Handler {
-	if s.limits.BodyTimeout <= 0 || s.limits.BodyMinRate <= 0 {
+	if s.limits().BodyTimeout <= 0 || s.limits().BodyMinRate <= 0 {
 		return h
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -566,13 +610,13 @@ func (s *Server) paced(h http.Handler) http.Handler {
 			// net/http wraps a body to send 100 Continue only so, and
 			// answers any other Expect 417 before a handler runs.
 			waits := r.Header.Get("Expect") != "" && r.ProtoAtLeast(1, 1) && r.ContentLength != 0
-			body = &pacedBody{ReadCloser: r.Body, rc: rc, start: start, timeout: s.limits.BodyTimeout, rate: int64(s.limits.BodyMinRate), m: s.metrics, deadline: start.Add(s.limits.BodyTimeout), length: r.ContentLength, undrained: r.Close || waits}
+			body = &pacedBody{ReadCloser: r.Body, rc: rc, start: start, timeout: s.limits().BodyTimeout, rate: int64(s.limits().BodyMinRate), m: s.metrics, deadline: start.Add(s.limits().BodyTimeout), length: r.ContentLength, undrained: r.Close || waits}
 			_ = rc.SetReadDeadline(body.deadline)
 			r.Body = body
 		}
-		h.ServeHTTP(&pacedWriter{ResponseWriter: w, rc: rc, body: body, timeout: s.limits.BodyTimeout, rate: int64(s.limits.BodyMinRate)}, r)
+		h.ServeHTTP(&pacedWriter{ResponseWriter: w, rc: rc, body: body, timeout: s.limits().BodyTimeout, rate: int64(s.limits().BodyMinRate)}, r)
 		body.drain()
-		_ = rc.SetWriteDeadline(time.Now().Add(s.limits.BodyTimeout))
+		_ = rc.SetWriteDeadline(time.Now().Add(s.limits().BodyTimeout))
 	})
 }
 
@@ -1032,15 +1076,15 @@ func (s *Server) sendsADay(n int) perDay {
 }
 
 func (s *Server) renewalsADay() perDay {
-	return perDay{s.renewals, s.limits.RenewalsPerDay, "this mailbox has renewed its prekey as often as %d a day allows"}
+	return perDay{s.renewals, s.limits().RenewalsPerDay, "this mailbox has renewed its prekey as often as %d a day allows"}
 }
 
 func (s *Server) certificatesADay() perDay {
-	return perDay{s.certs, s.limits.CertificatesPerDay, "this mailbox's identity has certified as many new working keys as %d a day allows"}
+	return perDay{s.certs, s.limits().CertificatesPerDay, "this mailbox's identity has certified as many new working keys as %d a day allows"}
 }
 
 func (s *Server) raisesADay() perDay {
-	return perDay{s.raises, s.limits.CertificateRevocationsPerDay, "this mailbox's identity has raised its revocation of certificates as often as %d a day allows"}
+	return perDay{s.raises, s.limits().CertificateRevocationsPerDay, "this mailbox's identity has raised its revocation of certificates as often as %d a day allows"}
 }
 
 // longest is p, the refusal of one of mailbox a's counts, or the refusal of one
@@ -1079,13 +1123,13 @@ func (s *Server) spendCall(a protocol.Address, lim Limits, also ...perDay) error
 // otherwise with whatever its account lifts.
 func (s *Server) limitsOf(ctx context.Context, a protocol.Address) (Limits, error) {
 	if st, ok := s.store.Held(a); ok && !st.InAccount {
-		return s.limits, nil
+		return s.limits(), nil
 	}
 	b, ok := s.store.Known(a)
 	if !ok || b == nil {
 		var err error
 		if b, err = s.mailbox(ctx, a); err != nil || b == nil {
-			return s.limits, err
+			return s.limits(), err
 		}
 	}
 	return s.limitsFor(ctx, b)

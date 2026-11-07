@@ -27,7 +27,7 @@ func refused(t *testing.T, args ...string) error {
 // dromas-server serve refuses to start on a --version-policy file it cannot
 // read, or one that breaks a version policy's form (PROTOCOL.md §11.17,
 // §11.18), naming the flag and the path, never what the file holds.
-// Control: a file of its form is taken, so the refusal is the next flag's.
+// Control: a file of its form is taken, so the refusal is the listener's.
 func TestServeRefusesAVersionPolicyThatBreaksItsForm(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -60,7 +60,41 @@ func TestServeRefusesAVersionPolicyThatBreaksItsForm(t *testing.T) {
 		t.Errorf("a missing file: %v", err)
 	}
 	good := file("good.json", `{"min_version":"1.2","latest_version":"1.5.1","deprecations":[{"below":"1.4","at":"`+at+`"}],"sunsets":[{"below":"1.4","at":"`+later+`"}]}`)
-	if err := refused(t, "--version-policy", good, "--max-size", "-1"); err == nil || !strings.HasPrefix(err.Error(), "--max-size:") {
-		t.Errorf("control, a file of its form: %v, want the refusal of --max-size", err)
+	if err := refused(t, "--version-policy", good, "--listen", "not an address"); err == nil || strings.HasPrefix(err.Error(), "--version-policy") {
+		t.Errorf("control, a file of its form: %v, want the refusal of --listen", err)
+	}
+}
+
+// dromas-server serve refuses to start on a --limits file it cannot read, or
+// one the limits refuse, naming the flag, the path and the member, never a
+// value. Control: a file of its form is taken, so the refusal is the
+// listener's.
+func TestServeRefusesALimitsFileThatBreaksItsForm(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	file := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	for _, c := range []struct{ name, body, says string }{
+		{"not-json", `max_size: 1`, "not a JSON object"},
+		{"unknown-member", `{"secretish": 1}`, `"secretish" is no limit`},
+		{"a-check", `{"acl_entries": 0}`, "acl_entries:"},
+	} {
+		p := file(c.name+".json", c.body)
+		err := refused(t, "--limits", p)
+		if err == nil || !strings.HasPrefix(err.Error(), "--limits: "+p+": ") || !strings.Contains(err.Error(), c.says) {
+			t.Errorf("%s: %v, want a refusal naming the flag, the path and saying %q", c.name, err, c.says)
+		}
+	}
+	if err := refused(t, "--limits", filepath.Join(dir, "missing.json")); err == nil || !strings.HasPrefix(err.Error(), "--limits: ") {
+		t.Errorf("a missing file: %v", err)
+	}
+	good := file("good.json", `{"registrations_per_hour": 7}`)
+	if err := refused(t, "--limits", good, "--listen", "not an address"); err == nil || strings.HasPrefix(err.Error(), "--limits") {
+		t.Errorf("control, a file of its form: %v, want the refusal of --listen", err)
 	}
 }

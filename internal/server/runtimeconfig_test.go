@@ -285,7 +285,7 @@ func TestTheLargestPolicyFits(t *testing.T) {
 
 // A version policy file names none of the server's own members: its
 // capabilities, the code's, and the longest certificate it takes, its
-// setting (--max-certificate-lifetime). The document it is served in carries
+// setting (max_certificate_lifetime). The document it is served in carries
 // the setting's (PROTOCOL.md §11.18).
 func TestAPolicyNamesNoMemberOfTheServersOwn(t *testing.T) {
 	t.Parallel()

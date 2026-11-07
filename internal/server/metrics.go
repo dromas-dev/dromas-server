@@ -90,7 +90,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		largeRead: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "large_reads_total",
 			Help: "Sends past the free size, by how their wait for the one large read ended: taken, timed_out, or gone (the caller left)."}, []string{"outcome"}),
 		cut: prometheus.NewCounter(prometheus.CounterOpts{Namespace: ns, Name: "bodies_cut_total",
-			Help: "Request bodies cut off at their deadline (--body-timeout, --body-min-rate)."}),
+			Help: "Request bodies cut off at their deadline (body_timeout, body_min_rate)."}),
 		conns: prometheus.NewGauge(prometheus.GaugeOpts{Namespace: ns, Name: "connections_open",
 			Help: "Connections open on the API's listener."}),
 		streamAge: prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: ns, Name: "stream_record_age_seconds",
@@ -100,7 +100,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		holds: prometheus.NewGauge(prometheus.GaugeOpts{Namespace: ns, Name: "long_polls_held",
 			Help: "Long polls held now (PROTOCOL.md §11.11)."}),
 		held: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "long_polls_total",
-			Help: "Long polls, each once by how it ended: changed (the mailbox changed, or a message in it expired), waited (its wait passed), gone (the caller left), stopped (the server stopped), replaced (a later list of the same mailbox was held in its place), refused (past --max-long-polls), or refused_range (past --max-long-polls-per-range)."}, []string{"outcome"}),
+			Help: "Long polls, each once by how it ended: changed (the mailbox changed, or a message in it expired), waited (its wait passed), gone (the caller left), stopped (the server stopped), replaced (a later list of the same mailbox was held in its place), refused (past max_long_polls), or refused_range (past max_long_polls_per_range)."}, []string{"outcome"}),
 		// By the policy's verdict on the request's version, never the version
 		// itself, which the caller writes: Kubernetes counts requests to
 		// deprecated APIs the same way, apiserver_requested_deprecated_apis
@@ -108,7 +108,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		versions: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "version_requests_total",
 			Help: "Requests under /v1/, by what the version policy says of the version each names (PROTOCOL.md §11.17): retired (answered 410 version_retired, but on GET /v1/), sunset (a sunset covers it, not yet passed), deprecated (a deprecation covers it, no sunset does), or current."}, []string{"state"}),
 		reloads: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "runtime_config_reloads_total",
-			Help: "Reloads of each file of the runtime-config directory, by file (version-policy) and result: ok (read, checked and in force) or failed (not read, too large or refused: what was in force stays)."}, []string{"file", "result"}),
+			Help: "Reloads of each file of the runtime-config directory, by file (version-policy, limits) and result: ok (read, checked and in force) or failed (not read, too large or refused: what was in force stays)."}, []string{"file", "result"}),
 	}
 	for _, r := range []string{"ok", "failed"} {
 		m.reloads.WithLabelValues(versionPolicyFile, r) // each series from the start, at 0

@@ -55,15 +55,15 @@ func TestContinuationAllowance(t *testing.T) {
 	t.Parallel()
 	l := DefaultLimits()
 	pages := (l.MailboxCap + pageSize - 1) / pageSize
-	if bs := l.continuations(); bs.n != 2*pages || bs.every != l.PollRefill/time.Duration(pages) {
-		t.Fatalf("%d pages, one each %s", bs.n, bs.every)
+	if n, every := l.continuations(); n != 2*pages || every != l.PollRefill/time.Duration(pages) {
+		t.Fatalf("%d pages, one each %s", n, every)
 	}
 	l.MailboxCap = 0
-	if bs := l.continuations(); bs.n != 2*uncappedPages {
-		t.Fatalf("no mailbox cap: %d pages", bs.n)
+	if n, _ := l.continuations(); n != 2*uncappedPages {
+		t.Fatalf("no mailbox cap: %d pages", n)
 	}
 	l.PollBurst = 0
-	if bs := l.continuations(); bs.n != 0 {
+	if n, _ := l.continuations(); n != 0 {
 		t.Fatal("no poll limit, and a page limit")
 	}
 }
@@ -502,8 +502,8 @@ func TestMissingMailboxIsRememberedUntilItIsWritten(t *testing.T) {
 }
 
 // A refusal's detail names no value that no member carries (PROTOCOL.md §11.3):
-// the polls' refusal says no rate, which is the server's to set (--poll-after,
-// --poll-burst, --poll-refill), and the wait is in Retry-After (#65).
+// the polls' refusal says no rate, which is the server's to set (poll_after,
+// poll_burst, poll_refill), and the wait is in Retry-After (#65).
 func TestThePollsRefusalNamesNoRateItDoesNotCarry(t *testing.T) {
 	t.Parallel()
 	l := relaxed()

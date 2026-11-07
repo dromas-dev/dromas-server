@@ -127,7 +127,8 @@ func TestCostMemoryPerMailbox(t *testing.T) {
 
 	// The sends a day: one bucket per sender that sent within a day.
 	before = heapNow()
-	d := perPeriod("sends", 20, 20, day)
+	burst, every := perPeriod(20, 20, day)
+	d := newBuckets("sends", burst, every)
 	for _, a := range addrs {
 		d.take(a.String(), now)
 	}

@@ -67,7 +67,7 @@ func TestALongPollIsAnsweredWhenAMessageArrives(t *testing.T) {
 	}
 }
 
-// With nothing new, a long poll is answered 304 once --max-wait passes,
+// With nothing new, a long poll is answered 304 once max_wait passes,
 // whatever longer wait it asked; it is one poll.
 func TestALongPollWithNothingNewIs304AtMaxWait(t *testing.T) {
 	t.Parallel()
@@ -112,7 +112,7 @@ func TestAWaitOfAnotherFormIsRefused(t *testing.T) {
 	}
 }
 
-// Past --max-long-polls, a list of another mailbox that asks to wait is
+// Past max_long_polls, a list of another mailbox that asks to wait is
 // answered 503 with Retry-After, and the long polls go on.
 func TestAHoldPastTheCapIs503(t *testing.T) {
 	t.Parallel()
@@ -137,7 +137,7 @@ func TestAHoldPastTheCapIs503(t *testing.T) {
 
 // A mailbox holds one list: a later one that asks to wait is held in its
 // place, the earlier is answered 304 at once and recorded replaced, and the
-// pair is counted one long poll, even at --max-long-polls.
+// pair is counted one long poll, even at max_long_polls.
 func TestALaterLongPollOfTheSameMailboxTakesThePlaceOfTheEarlier(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
@@ -175,7 +175,7 @@ func TestALaterLongPollOfTheSameMailboxTakesThePlaceOfTheEarlier(t *testing.T) {
 	holdingNow(t, e.server, 0)
 }
 
-// Past --max-long-polls-per-range, a list from that range that asks to wait is
+// Past max_long_polls_per_range, a list from that range that asks to wait is
 // answered 503 with Retry-After, and recorded refused_range, while the pool
 // has room; the long polls go on.
 func TestAHoldPastItsRangesShareIs503(t *testing.T) {
@@ -315,7 +315,7 @@ func holdingNow(t *testing.T, s *Server, n int64) {
 
 // A message's expiry is no change memory applies, and it changes the page:
 // a long poll on a page that holds the message is answered as it expires,
-// not at --max-wait (PROTOCOL.md §11.11).
+// not at max_wait (PROTOCOL.md §11.11).
 func TestALongPollIsAnsweredWhenAMessageExpires(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
