@@ -4,7 +4,9 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -23,6 +25,7 @@ import (
 	"time"
 
 	"github.com/aws/smithy-go/logging"
+	"github.com/dchest/siphash"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/dromas-dev/dromas-client/protocol"
@@ -1211,21 +1214,66 @@ func pathID(r *http.Request) ([32]byte, error) {
 // id (64 hex), wherever a log line holds one.
 var nameRun = regexp.MustCompile(`[0-9A-Za-z_-]{64,}`)
 
-// redact replaces each run of 64 or more letters, digits, "-" and "_" in a log line with
-// "#" and the first 16 hex characters of the SHA-256 of the run in lower
-// case, a name only someone already holding the run can match: no log line
-// carries an address or a message id, in a path, a store's error or
-// anywhere else (dromas-dev/dromas-server#9).
+// redact replaces each run of 64 or more letters, digits, "-" and "_" in a log
+// line with the name logNames gives it: no log line carries an address or a
+// message id, in a path, a store's error or anywhere else
+// (dromas-dev/dromas-server#9).
 func redact(line []byte) []byte {
-	return nameRun.ReplaceAllFunc(line, func(run []byte) []byte { return []byte(logName(run)) })
+	k := logNames.current()
+	return nameRun.ReplaceAllFunc(line, func(run []byte) []byte { return []byte(k.name(run)) })
 }
 
-// logName is the name a log gives a value it never writes: "#" and the first
-// 16 hex characters of the SHA-256 of the value in lower case, the name
-// redact gives a run.
-func logName(v []byte) string {
-	h := sha256.Sum256([]byte(protocol.LowerASCII(string(v))))
-	return "#" + hex.EncodeToString(h[:8])
+// logName is the name a log gives a value it never writes, under the key
+// logNames holds now: the name redact gives a run.
+func logName(v []byte) string { return logNames.current().name(v) }
+
+// logNames is the key every log of this process names values under.
+var logNames = &logNamer{now: time.Now}
+
+// logKeyLife is how long one key names values: a name matches its value only
+// within it, and once the key is gone nobody can match it, the operator
+// included (PROTOCOL.md §13; dromas-dev/dromas-server#203).
+const logKeyLife = 24 * time.Hour
+
+// logNamer holds the key a log names values under: made at random when it is
+// first used, replaced once it has named values for logKeyLife, and never
+// written anywhere. A line reads it with one atomic load.
+type logNamer struct {
+	now func() time.Time
+	key atomic.Pointer[logKey]
+}
+
+// logKey is one SipHash-2-4 key, and the time it is replaced.
+type logKey struct {
+	k0, k1 uint64
+	until  time.Time
+}
+
+// current is the key in force, a new one made at random once the last has
+// run its life.
+func (n *logNamer) current() *logKey {
+	old := n.key.Load()
+	now := n.now()
+	if old != nil && now.Before(old.until) {
+		return old
+	}
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	k := &logKey{k0: binary.LittleEndian.Uint64(b[:8]), k1: binary.LittleEndian.Uint64(b[8:]), until: now.Add(logKeyLife)}
+	if n.key.CompareAndSwap(old, k) {
+		return k
+	}
+	return n.key.Load()
+}
+
+// name is "#" and the 16 hex characters of the SipHash-2-4 under k of v in
+// lower case, a keyed PRF as Linux names a pointer in its logs (siphash_1u64
+// under a random ptr_key, lib/vsprintf.c): only this process can compute it,
+// and only while k is in force.
+func (k *logKey) name(v []byte) string {
+	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], siphash.Hash(k.k0, k.k1, []byte(protocol.LowerASCII(string(v)))))
+	return "#" + hex.EncodeToString(b[:])
 }
 
 // redactor is a log's writer that redacts each line written to it: a
@@ -1310,11 +1358,12 @@ func loggedPath(r *http.Request) string {
 	case !strings.Contains(pattern, "{"):
 		return fmt.Sprintf("%s (a path of %d bytes)", pattern, len(sent))
 	}
+	k := logNames.current()
 	return wildcard.ReplaceAllStringFunc(pattern, func(w string) string {
 		if w == "{$}" { // the end of the path, no wildcard's value
 			return ""
 		}
-		return logName([]byte(r.PathValue(strings.TrimSuffix(strings.Trim(w, "{}"), "..."))))
+		return k.name([]byte(r.PathValue(strings.TrimSuffix(strings.Trim(w, "{}"), "..."))))
 	})
 }
 
