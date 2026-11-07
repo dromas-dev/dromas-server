@@ -195,7 +195,7 @@ func TestAccounts(t *testing.T) {
 		// A key naming the account the mailbox is already in spends no use, and
 		// is answered 200 whatever state it is in or whether it is still held,
 		// so a retry whose answer was lost is 200 once the key has expired and
-		// its item has gone (PROTOCOL.md §11.16). One naming another account is
+		// its row has gone (PROTOCOL.md §11.16). One naming another account is
 		// still judged.
 		adopt(t, a, key)
 		adopt(t, a, key)
@@ -339,7 +339,7 @@ func (s *adoptCounting) Adopt(ctx context.Context, b *Mailbox, account string, k
 }
 
 // A key that is not this server's, or is spent or expired, is refused after
-// a read of its item, and never reaches the write of the mailbox's record.
+// a read of its row, and never reaches the write of the mailbox's record.
 func TestARefusedKeyWritesNothing(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
