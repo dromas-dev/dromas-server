@@ -41,8 +41,8 @@ import (
 
 	flag "github.com/spf13/pflag"
 
-	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/dromas-dev/dromas-client/protocol"
 	"github.com/dromas-dev/dromas-server/internal/server"
 	"github.com/prometheus/client_golang/prometheus"
