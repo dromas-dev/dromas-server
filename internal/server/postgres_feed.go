@@ -303,32 +303,40 @@ func (f *pgFeed) logical(lm pglogrepl.Message) error {
 
 // change hands one row's change to memory. A key that does not read is
 // skipped, as nothing can be said of it; a row that does not read beyond
-// its key is handed over as one that does not read (Change.Err).
+// its key, a column of a type this build does not decode among them, is
+// handed over as one that does not read (Change.Err), which memory takes as
+// gone, so that it holds nothing of the row as it was.
 func (f *pgFeed) change(rel uint32, tuple, old *pglogrepl.TupleData, gone bool) {
 	r, ok := f.relations[rel]
 	if !ok || r.Namespace != f.s.schema || tuple == nil {
 		return
 	}
-	data, err := f.row(r, tuple, old)
-	if err != nil {
-		f.s.logf("%s: skipping a change that does not read: %v", r.RelationName, err)
-		return
-	}
+	data, rowErr := f.row(r, tuple, old)
 	c, err := changeOf(r.RelationName, data, gone)
 	switch {
 	case err != nil:
 		f.s.logf("%s: skipping a change whose key does not read: %v", r.RelationName, err)
 	case c.Kind != 0 && f.s.apply != nil:
+		if rowErr != nil {
+			c = Change{Kind: c.Kind, Addr: c.Addr, AccountID: c.AccountID, Header: c.Header, Gone: c.Gone, Err: rowErr}
+		}
 		f.s.apply(c)
 	}
 	f.s.metrics.applied(r.RelationName, f.made, time.Now())
 }
 
-// row decodes a tuple by its relation's columns. A column stored out of line
-// that an update left alone comes without its value ('u'), which the old
-// row, sent whole under REPLICA IDENTITY FULL, holds.
-func (f *pgFeed) row(r *pglogrepl.RelationMessage, tuple, old *pglogrepl.TupleData) (row, error) {
-	out := make(row, len(tuple.Columns))
+// row decodes a tuple by its relation's columns: every column that reads,
+// and the first error of one that does not, so the key can still be read. A
+// column stored out of line that an update left alone comes without its
+// value ('u'), which the old row, sent whole under REPLICA IDENTITY FULL,
+// holds.
+func (f *pgFeed) row(r *pglogrepl.RelationMessage, tuple, old *pglogrepl.TupleData) (out row, first error) {
+	out = make(row, len(tuple.Columns))
+	fail := func(err error) {
+		if first == nil {
+			first = err
+		}
+	}
 	for i, col := range tuple.Columns {
 		if i >= len(r.Columns) {
 			break
@@ -336,7 +344,8 @@ func (f *pgFeed) row(r *pglogrepl.RelationMessage, tuple, old *pglogrepl.TupleDa
 		name, oid := r.Columns[i].Name, r.Columns[i].DataType
 		if col.DataType == pglogrepl.TupleDataTypeToast {
 			if old == nil || i >= len(old.Columns) || old.Columns[i].DataType == pglogrepl.TupleDataTypeToast {
-				return nil, fmt.Errorf("%s: an unchanged value not sent, and no old row holds it", name)
+				fail(fmt.Errorf("%s: an unchanged value not sent, and no old row holds it", name))
+				continue
 			}
 			col = old.Columns[i]
 		}
@@ -350,7 +359,8 @@ func (f *pgFeed) row(r *pglogrepl.RelationMessage, tuple, old *pglogrepl.TupleDa
 		case pglogrepl.TupleDataTypeText:
 			format = pgtype.TextFormatCode
 		default:
-			return nil, fmt.Errorf("%s: a value of kind %q", name, col.DataType)
+			fail(fmt.Errorf("%s: a value of kind %q", name, col.DataType))
+			continue
 		}
 		if isJSONType(oid) {
 			out[name] = rawJSON(oid, format, col.Data)
@@ -358,15 +368,17 @@ func (f *pgFeed) row(r *pglogrepl.RelationMessage, tuple, old *pglogrepl.TupleDa
 		}
 		typ, ok := f.types.TypeForOID(oid)
 		if !ok {
-			return nil, fmt.Errorf("%s: a column of type %d, which this build does not read", name, oid)
+			fail(fmt.Errorf("%s: a column of type %d, which this build does not read", name, oid))
+			continue
 		}
 		v, err := typ.Codec.DecodeValue(f.types, oid, format, col.Data)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", name, err)
+			fail(fmt.Errorf("%s: %w", name, err))
+			continue
 		}
 		out[name] = v
 	}
-	return out, nil
+	return out, first
 }
 
 // changeOf is the change a row of table makes to what memory holds. A

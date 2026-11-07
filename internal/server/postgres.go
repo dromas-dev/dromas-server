@@ -184,8 +184,8 @@ func pgIdent(s string) bool {
 	return true
 }
 
-// prepare checks what the backend needs of the database, applies the
-// migrations, and makes the feed's publication.
+// prepare checks what the backend needs of the database and applies the
+// migrations, the feed's publication among them.
 func (s *pgBackend) prepare(ctx context.Context) error {
 	ctx, cancel := bounded(ctx)
 	defer cancel()
@@ -211,10 +211,6 @@ func (s *pgBackend) prepare(ctx context.Context) error {
 	defer func() { _ = db.Close() }()
 	if err := migrate(ctx, db); err != nil {
 		return fmt.Errorf("postgres: migrations: %w", err)
-	}
-	_, err := s.pool.Exec(ctx, "CREATE PUBLICATION "+s.publication+" FOR TABLE "+s.schema+".mailboxes, "+s.schema+".revocations, "+s.schema+".messages, "+s.schema+".accounts")
-	if err != nil && !isPgCode(err, "42710", "23505") { // made already, by an earlier start or another process
-		return fmt.Errorf("postgres: the publication: %w", err)
 	}
 	return nil
 }
@@ -946,7 +942,8 @@ func (s *pgBackend) list(ctx context.Context, mailbox protocol.Address, after *C
 	}
 	q += ` ORDER BY received_at, id`
 	if limit > 0 {
-		q += ` LIMIT ` + strconv.Itoa(limit)
+		args = append(args, limit)
+		q += ` LIMIT $` + strconv.Itoa(len(args))
 	}
 	rows, err := rowsOf(s.pool.Query(ctx, q, args...))
 	if err != nil {

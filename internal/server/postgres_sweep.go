@@ -15,7 +15,8 @@ const sweepBatch = 500
 
 // sweep deletes, each sweepEvery, the rows past their expiry by more than
 // sweepGrace, which no read takes as live (PostgreSQL has no TTL), and
-// collects bodies on disk as old. It runs on the database's clock, unlike
+// collects bodies on disk as old. It runs on the database's clock (each
+// batch's transaction's start), unlike
 // every other condition, so a process whose clock is wrong deletes nothing
 // early.
 func (s *pgBackend) sweep(ctx context.Context) {
@@ -63,8 +64,12 @@ func (s *pgBackend) sweepTable(ctx context.Context, table, column string, keep t
 			if err := tx.QueryRow(ctx, "SELECT pg_try_advisory_xact_lock(hashtext('dromas sweep ' || current_schema()))").Scan(&took); err != nil || !took {
 				return err
 			}
-			tag, err := tx.Exec(ctx, `DELETE FROM `+table+` WHERE ctid IN (SELECT ctid FROM `+table+`
-				WHERE `+column+` < clock_timestamp() - $1::interval LIMIT $2)`, keep, sweepBatch)
+			// now() is the transaction's start, the same through the
+			// statement, so the condition takes the column's index (a
+			// volatile clock never does); it is repeated outside, so a row
+			// changed since the inner read is deleted only if it still meets it.
+			tag, err := tx.Exec(ctx, `DELETE FROM `+table+` WHERE ctid = ANY (ARRAY(SELECT ctid FROM `+table+`
+				WHERE `+column+` < now() - $1::interval LIMIT $2)) AND `+column+` < now() - $1::interval`, keep, sweepBatch)
 			n = tag.RowsAffected()
 			return err
 		})

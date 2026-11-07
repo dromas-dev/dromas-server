@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/dromas-dev/dromas-client/protocol"
+	"github.com/jackc/pglogrepl"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // The PostgreSQL backend's own risks: what its feed, its sweep and its
@@ -234,5 +236,68 @@ func TestALostFeedIsNotReady(t *testing.T) {
 	}
 	if s.Ready() {
 		t.Error("the store is ready with its feed's session ended")
+	}
+}
+
+// A row of the feed that does not read past its key, a column of a type
+// this build does not decode, is handed to memory as one that does not
+// read, so memory forgets what it held of it; never skipped, which would
+// leave memory answering from the row as it was.
+func TestAFeedRowThatDoesNotReadIsForgotten(t *testing.T) {
+	t.Parallel()
+	var got []Change
+	f := &pgFeed{
+		s:     &pgBackend{schema: "s", apply: func(c Change) { got = append(got, c) }},
+		types: pgtype.NewMap(),
+		relations: map[uint32]*pglogrepl.RelationMessage{1: {RelationID: 1, Namespace: "s", RelationName: "mailboxes", Columns: []*pglogrepl.RelationMessageColumn{
+			{Name: "addr", DataType: pgtype.ByteaOID},
+			{Name: "mood", DataType: 4_000_000_000}, // a type no build decodes
+		}}},
+	}
+	var a protocol.Address
+	a[0] = 7
+	f.change(1, &pglogrepl.TupleData{Columns: []*pglogrepl.TupleDataColumn{
+		{DataType: pglogrepl.TupleDataTypeBinary, Data: a[:]},
+		{DataType: pglogrepl.TupleDataTypeText, Data: []byte("happy")},
+	}}, nil, false)
+	if len(got) != 1 || got[0].Kind != RecordChange || got[0].Addr != a || got[0].Err == nil || got[0].Mailbox != nil {
+		t.Fatalf("the change handed over: %+v; want the address's record, as one that does not read", got)
+	}
+}
+
+// The sweep's condition takes its table's index: a volatile clock in it
+// would make every pass read the whole table.
+func TestTheSweepTakesItsIndex(t *testing.T) {
+	t.Parallel()
+	if !onPostgres() {
+		t.Skip("needs PostgreSQL: DROMAS_TEST_POSTGRES")
+	}
+	s := startPostgres(t, time.Now)
+	ctx := context.Background()
+	for _, x := range [][2]string{{"messages", "received_at"}, {"mailboxes", "expires_at"}, {"adopt_keys", "expires_at"}} {
+		tx, err := s.pool().Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "SET LOCAL enable_seqscan = off"); err != nil {
+			t.Fatal(err)
+		}
+		var plan strings.Builder
+		rows, err := tx.Query(ctx, `EXPLAIN SELECT ctid FROM `+x[0]+` WHERE `+x[1]+` < now() - '1 hour'::interval LIMIT 500`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var line string
+			if err := rows.Scan(&line); err != nil {
+				t.Fatal(err)
+			}
+			plan.WriteString(line + "\n")
+		}
+		rows.Close()
+		_ = tx.Rollback(ctx)
+		if strings.Contains(plan.String(), "Seq Scan") || !strings.Contains(plan.String(), "Index") {
+			t.Errorf("the sweep of %s reads it without its index:\n%s", x[0], plan.String())
+		}
 	}
 }
