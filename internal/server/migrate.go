@@ -185,6 +185,16 @@ func schemaName(schema string) (string, error) {
 	return schema, nil
 }
 
+// publicationName is the feed's publication in schema, as migration 00002
+// names it: dromas_publication in public, dromas_publication_<schema> in
+// any other.
+func publicationName(schema string) string {
+	if schema == "public" {
+		return "dromas_publication"
+	}
+	return "dromas_publication_" + schema
+}
+
 func logf(l *log.Logger, format string, args ...any) {
 	if l != nil {
 		l.Printf(format, args...)

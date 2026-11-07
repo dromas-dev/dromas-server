@@ -96,7 +96,7 @@ func silentBackend(t *testing.T) *pgBackend {
 	rc.RuntimeParams["replication"] = "database"
 	t.Cleanup(pool.Close)
 	t.Cleanup(closeDB) // first, so the pool's dials end and its Close returns
-	return &pgBackend{pool: pool, replication: rc, schema: "public", publication: "dromas_public", bodies: mustDirBodies(t), now: time.Now}
+	return &pgBackend{pool: pool, replication: rc, schema: "public", publication: publicationName("public"), bodies: mustDirBodies(t), now: time.Now}
 }
 
 // silentS3 is bodies in a bucket of an S3 that answers nothing, or, where

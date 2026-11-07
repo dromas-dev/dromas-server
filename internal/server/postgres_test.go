@@ -113,7 +113,7 @@ func dropSchema(schema string) error {
 		return err
 	}
 	defer func() { _ = conn.Close(context.Background()) }()
-	if _, err := conn.Exec(ctx, "DROP PUBLICATION IF EXISTS dromas_"+schema); err != nil {
+	if _, err := conn.Exec(ctx, "DROP PUBLICATION IF EXISTS dromas_"+schema+", "+publicationName(schema)); err != nil {
 		return err
 	}
 	_, err = conn.Exec(ctx, "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
