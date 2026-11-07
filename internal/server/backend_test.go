@@ -511,14 +511,14 @@ func TestAnItemThatDoesNotReadIsGoneWhateverItsKind(t *testing.T) {
 	cases := map[ChangeKind]func(w *heldWorld) (string, row){
 		RecordChange: func(w *heldWorld) (string, row) {
 			r := recordRow(w.rec)
-			r["state"] = "deleted" // a state this build never writes
+			r["identity"] = []byte("not an identity document")
 			return "mailboxes", r
 		},
 		RevocationsChange: func(w *heldWorld) (string, row) {
 			return "revocations", row{"addr": w.a[:], "identity": "not the bytes of an identity document", "revocation": []byte("the identity's revocation")}
 		},
 		MessageChange: func(w *heldWorld) (string, row) {
-			return "messages", row{"box": w.a[:], "id": make([]byte, 32), "size": int32(3), "received_at": "not a number", "expires_at": int64(1)}
+			return "messages", row{"box": w.a[:], "id": make([]byte, 32), "size": int32(3), "received_at": "not a time"}
 		},
 		AccountChange: func(w *heldWorld) (string, row) {
 			return "accounts", row{"id": w.acct, "rev": "two", "unmetered": true}

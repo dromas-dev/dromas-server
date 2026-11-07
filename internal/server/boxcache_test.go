@@ -358,7 +358,7 @@ func TestAnImageDuringAReadKeepsItsFillOut(t *testing.T) {
 	newer["rev"] = toInt(rec.Rev + 1)
 	certs := r.certs(1)
 	revoked := row{"addr": a[:], "identity": r.id.Document(), "revocation": nil, "through": numeric(1),
-		"revoked_certs": certs.RevokedCertificates, "revoked_certs_sig": certs.RevokedCertificatesSignature}
+		"revoked_certs": []byte(certs.RevokedCertificates), "revoked_certs_sig": []byte(certs.RevokedCertificatesSignature)}
 	for _, im := range []struct {
 		name   string
 		table  string

@@ -253,8 +253,8 @@ func (s *Memory) apply(c Change) {
 	case RecordChange:
 		// A record's image refreshes the record cache and the standing,
 		// where they hold an older record; one this build cannot read, such
-		// as one in a state it never writes or whose ACL does not read, is
-		// forgotten, as its removal is.
+		// as one whose identity or ACL does not read, is forgotten, as its
+		// removal is.
 		var st Standing
 		var err error
 		if !gone {
@@ -492,7 +492,7 @@ func (s *Memory) Message(ctx context.Context, mailbox protocol.Address, id [32]b
 	return h, body, nil
 }
 
-// retire deletes a live message's item, so it leaves the list, and takes it
+// retire deletes a live message's row, so it leaves the list, and takes it
 // out of memory. ErrNotFound if it is not live.
 func (s *Memory) retire(ctx context.Context, mailbox protocol.Address, id [32]byte) error {
 	var received time.Time
@@ -502,9 +502,8 @@ func (s *Memory) retire(ctx context.Context, mailbox protocol.Address, id [32]by
 	}, func() { s.retired(mailbox, id, received) })
 }
 
-// DeleteMessage implements Store (ack): the body, then the item. Both steps
-// are safe to repeat, so a crash between them is finished by the client's
-// next ack, and a fetch in between finds no body and retires it.
+// DeleteMessage implements Store (ack): the row, then the body. A crash
+// between them leaves a body no row names, which goes by age.
 func (s *Memory) DeleteMessage(ctx context.Context, mailbox protocol.Address, id [32]byte) error {
 	var received time.Time
 	return s.write(ofAddress(mailbox), func() (err error) {

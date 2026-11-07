@@ -285,16 +285,18 @@ func numeric(v uint64) pgtype.Numeric {
 // pgOutcome is the one reading of what PostgreSQL answered a write, as one
 // of the three outcomes (Backend). err nil: applied. An answer of the
 // database's own is a statement it rolled back, a transaction's statement or
-// its COMMIT included, so a refusal stated; so is a write pgx never sent
-// (pgconn.SafeToRetry). Anything else is unknown: an answer lost, a
-// context that ended mid-statement, a COMMIT with no answer. pgx retries
-// nothing it sent.
+// its COMMIT included, so a refusal stated; so is a write pgx never sent:
+// one whose connection was never made (pgconn.ConnectError), or that pgx
+// marks safe to retry (pgconn.SafeToRetry). Anything else is unknown: an
+// answer lost, a context that ended mid-statement, a COMMIT with no
+// answer. pgx retries nothing it sent.
 func pgOutcome(err error) error {
 	if err == nil {
 		return nil
 	}
 	var pe *pgconn.PgError
-	if errors.As(err, &pe) || pgconn.SafeToRetry(err) {
+	var ce *pgconn.ConnectError
+	if errors.As(err, &pe) || errors.As(err, &ce) || pgconn.SafeToRetry(err) {
 		return refused(err)
 	}
 	return unknown(err)

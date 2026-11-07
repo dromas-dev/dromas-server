@@ -58,14 +58,39 @@ func newTestStore(t *testing.T, now func() time.Time) (Store, func() bool) {
 
 func TestMain(m *testing.M) {
 	code := m.Run()
-	if onPostgres() && testSchema != "" {
-		if err := dropSchema(testSchema); err != nil {
-			fmt.Fprintf(os.Stderr, "dropping the run's schema %s: %v\n", testSchema, err)
-			code = max(code, 1)
+	if onPostgres() {
+		schemasMu.Lock()
+		all := schemas
+		if testSchema != "" {
+			all = append(all, testSchema)
+		}
+		schemasMu.Unlock()
+		for _, schema := range all {
+			if err := dropSchema(schema); err != nil {
+				fmt.Fprintf(os.Stderr, "dropping the schema %s: %v\n", schema, err)
+				code = max(code, 1)
+			}
 		}
 		_ = os.RemoveAll(testBodies)
 	}
 	os.Exit(code)
+}
+
+// A schema a test makes for itself is dropped when the run ends, never
+// while other tests' feeds run: a feed decoding a change to a table dropped
+// meanwhile loses its place ("could not map filenumber").
+var (
+	schemasMu sync.Mutex
+	schemas   []string
+)
+
+// newSchema is a schema of a test's own, dropped when the run ends.
+func newSchema() string {
+	schema := "t_" + randomHex(6)
+	schemasMu.Lock()
+	schemas = append(schemas, schema)
+	schemasMu.Unlock()
+	return schema
 }
 
 // dropSchema drops a schema the tests made, its tables and its feed's
@@ -97,13 +122,7 @@ func startPostgres(t testing.TB, now func() time.Time) *Memory {
 // dropped when it ends, for a test that must know every row there.
 func freshDatabase(t *testing.T) (string, string) {
 	t.Helper()
-	schema := "t_" + randomHex(6)
-	t.Cleanup(func() {
-		if err := dropSchema(schema); err != nil {
-			t.Errorf("dropping the test's schema %s: %v", schema, err)
-		}
-	})
-	return schema, t.TempDir()
+	return newSchema(), t.TempDir()
 }
 
 // startPostgresIn is a store on schema, its bodies under the directory
@@ -210,11 +229,11 @@ func (s *Memory) bodyKeyOf(t *testing.T, mailbox protocol.Address, id [32]byte) 
 	if r == nil {
 		t.Fatalf("no row of the message %s", hexID(id))
 	}
-	recv, err := r.uint("received_at")
+	recv, err := r.time("received_at")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return bodyKey(mailbox, id, recv)
+	return bodyKey(mailbox, id, ms(recv))
 }
 
 // hasBody reports whether a body is kept under key.

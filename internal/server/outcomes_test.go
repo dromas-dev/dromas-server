@@ -64,7 +64,7 @@ func TestWhatPostgreSQLAnsweredAWriteIsOneOutcome(t *testing.T) {
 	}
 	t.Cleanup(closed.Close)
 	_, err = closed.Exec(t.Context(), `DELETE FROM mailboxes`)
-	cases = append(cases, outcome{"a call to a port where no database listens", err, false})
+	cases = append(cases, outcome{"a call to a port where no database listens", err, true})
 	if onPostgres() {
 		pool := startPostgres(t, time.Now).pool()
 		_, err := pool.Exec(t.Context(), `SELECT 1/0`)

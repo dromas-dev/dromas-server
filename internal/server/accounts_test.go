@@ -448,13 +448,17 @@ func TestAccountChangesReachMemory(t *testing.T) {
 		_, err := a.Send(ctx, b.Address(), fmt.Sprintf("unmetered %d", i))
 		return err == nil
 	})
-	if _, err := s.pool().Exec(ctx, `DELETE FROM accounts WHERE id = $1`, acc.ID); err != nil {
+	if _, err := s.pool().Exec(ctx, `UPDATE accounts SET unmetered = false, rev = 3 WHERE id = $1`, acc.ID); err != nil {
 		t.Fatal(err)
 	}
 	until(t, func(i int) bool {
-		_, err := a.Send(ctx, b.Address(), fmt.Sprintf("gone %d", i))
+		_, err := a.Send(ctx, b.Address(), fmt.Sprintf("metered %d", i))
 		return limitedBy(err, protocol.QuotaSends)
 	})
+	// An account its mailboxes name is not deleted: they reference it.
+	if _, err := s.pool().Exec(ctx, `DELETE FROM accounts WHERE id = $1`, acc.ID); !isPgCode(err, "23503") {
+		t.Fatalf("the delete of an account a mailbox is in: %v; want a foreign key's refusal", err)
+	}
 }
 
 // until retries ok every 100 ms, for up to 10 s: the feed's delay.

@@ -222,14 +222,14 @@ func TestAFollowersPanicIsLoggedRedactedAndEndsTheProcess(t *testing.T) {
 	if !onPostgres() {
 		t.Skip("needs PostgreSQL: DROMAS_TEST_POSTGRES")
 	}
-	schema, bodies := "t_"+randomHex(6), t.TempDir()
+	schema, bodies := newSchema(), t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	var mu sync.Mutex
 	var logged bytes.Buffer
 	ended := make(chan error, 1)
 	s, err := NewPostgresStore(ctx, PostgresConfig{
-		URL: os.Getenv("DROMAS_TEST_POSTGRES"), Schema: schema, BodiesDir: bodies, MaxConns: 2,
+		Schema: schema, BodiesDir: bodies, MaxConns: 2,
 		Log:   log.New(lockedWriter{&mu, &logged}, "", 0),
 		Fatal: func(err error) { ended <- err },
 	})

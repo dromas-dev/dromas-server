@@ -109,6 +109,24 @@ type sharded struct {
 	front *env // the clients' view: its srv is the reverse proxy
 }
 
+// fedOn waits until process i holds mailbox a's standing as a's own
+// process holds it: the feed has brought a's latest record.
+func (s *sharded) fedOn(i int, a protocol.Address) {
+	s.t.Helper()
+	own := s.procs[proxyShard("/v1/"+a.String(), len(s.procs))].store
+	want, ok := own.Held(a)
+	if !ok {
+		s.t.Fatalf("%s's own process does not hold it", a)
+	}
+	for range 500 {
+		if st, ok := s.procs[i].store.Held(a); !ok || st.Signer == want.Signer {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	s.t.Fatalf("after five seconds process %d holds %s's standing from before its renewal", i, a)
+}
+
 func newSharded(t *testing.T, n int) *sharded {
 	t.Helper()
 	s := &sharded{t: t, clock: &clock{t: time.Now().UTC().Truncate(time.Second)}, procs: make([]*env, n)}
@@ -200,12 +218,16 @@ func TestTwoShardsBehindAProxy(t *testing.T) {
 	}
 	exchange("across the halves")
 
-	// b renews on its own process, and at once sends under the new
-	// certificate to a, whose process has b's record from before.
+	// b renews on its own process, then sends under the new certificate to
+	// a, whose process held b's record from before and takes the renewal
+	// from the feed: a's process reads b's standing from memory, so the
+	// send waits until the feed has brought it (ARCHITECTURE.md § Routing
+	// by address).
 	if _, err := b.Rekey(ctx); err != nil {
 		t.Fatal(err)
 	}
-	exchange("at once after b's renewal")
+	s.fedOn(0, b.Address())
+	exchange("after b's renewal")
 
 	// A call for a's mailbox sent to b's process is refused there, and
 	// counted: the proxy, not the mailbox, is wrong.

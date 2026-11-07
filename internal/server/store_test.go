@@ -21,18 +21,16 @@ import (
 	"github.com/dromas-dev/dromas-client/protocol"
 )
 
-// recordRow is mailbox b's row of the mailboxes table, each column as pgx
-// hands its type over, to a read of the table and to the feed.
+// recordRow is mailbox b's row of the mailboxes table, each column as a
+// read of the table and the feed hand it over (rowsOf, pgFeed.row).
 func recordRow(b *Mailbox) row {
-	var retired any
-	_ = json.Unmarshal(retiredColumn(b), &retired) // a column this package encoded
 	r := row{
-		"addr": bytes.Clone(b.Addr[:]), "identity": b.Identity, "created": toInt(ms(b.Created)), "state": string(b.State),
+		"addr": bytes.Clone(b.Addr[:]), "identity": b.Identity, "created": msTime(b.Created),
 		"statement": b.Statement, "statement_sig": b.Signature, "rank": numeric(b.Rank), "signer": bytes.Clone(b.Signer[:]),
-		"senders": sendersColumn(b), "retired": retired, "acl": nil, "account": nil, "expires_at": nil, "rev": toInt(b.Rev),
+		"senders": sendersColumn(b), "retired": json.RawMessage(retiredColumn(b)), "acl": nil, "account": nil, "expires_at": nil, "rev": toInt(b.Rev),
 	}
 	if acl := aclColumn(b); acl != nil {
-		r["acl"] = acl
+		r["acl"] = json.RawMessage(acl)
 	}
 	if acc := accountColumn(b); acc != nil {
 		r["account"] = *acc
@@ -87,7 +85,7 @@ func TestTheSameBytesAfterAnAckAreANewMessage(t *testing.T) {
 	send(t, a, b, "once")
 	e.setMiddle(nil)
 	id := sha256.Sum256(sent.ciphertext)
-	if cols := slices.Sorted(maps.Keys(s.storedMsg(t, b.Address(), id))); !slices.Equal(cols, []string{"box", "expires_at", "id", "received_at", "size"}) {
+	if cols := slices.Sorted(maps.Keys(s.storedMsg(t, b.Address(), id))); !slices.Equal(cols, []string{"box", "id", "received_at", "size"}) {
 		t.Fatalf("a message's row holds %v", cols)
 	}
 	first := s.bodyKeyOf(t, b.Address(), id)
@@ -594,14 +592,13 @@ func TestTheRecordAndTheRevocationsAreMemorys(t *testing.T) {
 	}
 }
 
-// A mailbox record this build cannot read whole is no record: one in a state it
-// never writes, "deleted" among them (dromas-dev/dromas-client#312), or an active one whose stored ACL does
-// not read. Reading it is an error, so nothing is served or taken for the
+// A mailbox record this build cannot read whole is no record: one whose
+// stored identity or ACL does not read. Reading it is an error, so nothing is served or taken for the
 // address, and its image on the feed makes memory forget the mailbox wherever
 // it holds it, loaded or loading, its record cached, or its address
 // remembered missing, rather than keep answering for it as it was
 // (dromas-dev/dromas-server#87). Control: an active image keeps it.
-func TestARecordInAStateNotWrittenIsRefused(t *testing.T) {
+func TestARecordThatDoesNotReadIsRefused(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
@@ -635,7 +632,7 @@ func TestARecordInAStateNotWrittenIsRefused(t *testing.T) {
 		set(x)
 		return x
 	}
-	deleted := at(rec.Rev+1, func(x row) { x["state"] = "deleted" })
+	broken := at(rec.Rev+1, func(x row) { x["identity"] = []byte("not an identity document") })
 	badACL := at(rec.Rev+1, func(x row) { x["acl"] = []byte(`{"allow":"not a list"}`) })
 	if _, _, err := decodeStanding(badACL); err != nil {
 		t.Fatalf("control: the standing of a record whose ACL does not read: %v", err)
@@ -648,9 +645,9 @@ func TestARecordInAStateNotWrittenIsRefused(t *testing.T) {
 	for _, im := range []struct {
 		name string
 		it   row
-	}{{"a record in the state \"deleted\"", deleted}, {"an active record whose ACL does not read", badACL}} {
+	}{{"a record whose identity does not read", broken}, {"a record whose ACL does not read", badACL}} {
 		if b, err := decodeMailbox(im.it); err == nil {
-			t.Fatalf("%s read as %s", im.name, b.State)
+			t.Fatalf("%s read as a record at rev %d", im.name, b.Rev)
 		}
 		t.Run(im.name+", loaded and cached", func(t *testing.T) {
 			s := newMemory(nil, 10, nil, nil)
@@ -752,7 +749,7 @@ func (c *cannedRecord) ReadAddress(context.Context, protocol.Address) (*Mailbox,
 }
 
 // A process that served a mailbox from its record cache, and then takes the
-// feed's image of the record in a state this build never writes, does not
+// feed's image of a record that does not read, does not
 // serve it from the cache again: the read of the mailbox after the image reads
 // the record, which fails (dromas-dev/dromas-server#87). In process, over a
 // canned row.
@@ -772,15 +769,15 @@ func TestADeletedImageIsNotServedFromTheCache(t *testing.T) {
 	if _, ok := s.Known(a); !ok {
 		t.Fatal("control: the read did not fill the record cache")
 	}
-	deleted := recordRow(rec)
-	deleted["state"] = "deleted"
-	deleted["rev"] = toInt(rec.Rev + 1)
-	canned.set(deleted)
-	s.applyRow("mailboxes", deleted, false)
+	broken := recordRow(rec)
+	broken["identity"] = []byte("not an identity document")
+	broken["rev"] = toInt(rec.Rev + 1)
+	canned.set(broken)
+	s.applyRow("mailboxes", broken, false)
 	got := e.do("GET", r.path(""), nil, "")
 	t.Logf("the read of the mailbox after the image: %d %s", got.status, got.code())
 	if got.status == http.StatusOK {
-		t.Errorf("a mailbox whose record is in a state this build never writes is served from the record cache: %d", got.status)
+		t.Errorf("a mailbox whose record does not read is served from the record cache: %d", got.status)
 	}
 }
 

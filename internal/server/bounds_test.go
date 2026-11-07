@@ -207,7 +207,7 @@ func TestEveryCallOfTheBackendEndsAtItsBound(t *testing.T) {
 	sweep := silentBackend(t)
 	put, get, del, stalled := silentS3(t, false), silentS3(t, false), silentS3(t, false), silentS3(t, true)
 	calls = append(calls,
-		call{"the sweep's batch", storeTimeout, func(ctx context.Context) error { return sweep.sweepTable(ctx, "messages") }},
+		call{"the sweep's batch", storeTimeout, func(ctx context.Context) error { return sweep.sweepTable(ctx, "messages", "received_at", 0) }},
 		call{"a body's write to S3", storeTimeout, func(ctx context.Context) error { return put.Put(ctx, "k", []byte("abc")) }},
 		call{"a body's read from S3", storeTimeout, func(ctx context.Context) error { _, err := get.Get(ctx, "k", 0, 3); return err }},
 		call{"a body's bytes from S3", storeTimeout, func(ctx context.Context) error { _, err := stalled.Get(ctx, "k", 0, 3); return err }},

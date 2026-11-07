@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"filippo.io/age"
 	"github.com/dromas-dev/dromas-client/protocol"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -57,19 +56,6 @@ func (h *heldTillGone) UpdateMailbox(ctx context.Context, b *Mailbox) error {
 		return err
 	}
 	return ctx.Err()
-}
-
-// sealFor is an age file sealed to raw mailbox to's prekey of the given serial.
-func sealFor(t *testing.T, to *raw, serial uint64) []byte {
-	t.Helper()
-	var ct bytes.Buffer
-	w, err := age.Encrypt(&ct, to.keys[serial].Recipient())
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _ = io.WriteString(w, `{"v":1}`)
-	_ = w.Close()
-	return ct.Bytes()
 }
 
 // A write runs to its end however its caller goes, and what it changed is

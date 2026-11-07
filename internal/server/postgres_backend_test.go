@@ -91,7 +91,7 @@ func TestTheSweepDeletesWhatHasExpired(t *testing.T) {
 	e := newEnv(t, relaxed(), func(c *Config) { c.Store = s })
 	gone, kept := e.mailbox().Address(), e.mailbox().Address()
 	now := time.Now()
-	const past = 1 // ms since 1970
+	past := time.UnixMilli(1)
 	exec := func(sql string, args ...any) {
 		t.Helper()
 		if _, err := s.pool().Exec(ctx, sql, args...); err != nil {
@@ -104,10 +104,13 @@ func TestTheSweepDeletesWhatHasExpired(t *testing.T) {
 		t.Fatal(err)
 	}
 	// More expired messages than one batch deletes.
-	exec(`INSERT INTO messages (box, id, size, received_at, expires_at)
-		SELECT $1, sha256(i::text::bytea), 3, $2, $2 FROM generate_series(1, $3::int) i`, kept[:], past, 2*sweepBatch+1)
+	exec(`INSERT INTO messages (box, id, size, received_at)
+		SELECT $1, sha256(i::text::bytea), 3, $2 FROM generate_series(1, $3::int) i`, kept[:], past, 2*sweepBatch+1)
+	if err := s.backend.CreateAccount(ctx, &Account{ID: "acct", Rev: 1}); err != nil {
+		t.Fatal(err)
+	}
 	for _, k := range []*AdoptKey{
-		{Account: "acct", Hash: [32]byte{1}, Uses: 1, Expires: time.UnixMilli(past)},
+		{Account: "acct", Hash: [32]byte{1}, Uses: 1, Expires: past},
 		{Account: "acct", Hash: [32]byte{2}, Uses: 1, Expires: now.Add(time.Hour)},
 	} {
 		if err := s.backend.PutAdoptKey(ctx, k); err != nil {
@@ -125,9 +128,12 @@ func TestTheSweepDeletesWhatHasExpired(t *testing.T) {
 	if n := count("messages"); n != 2*sweepBatch+2 {
 		t.Fatalf("control: %d messages planted", n)
 	}
-	for _, table := range []string{"messages", "mailboxes", "adopt_keys"} {
-		if err := s.pg().sweepTable(ctx, table); err != nil {
-			t.Fatalf("the sweep of %s: %v", table, err)
+	for _, x := range []struct {
+		table, column string
+		keep          time.Duration
+	}{{"messages", "received_at", protocol.Retention}, {"mailboxes", "expires_at", 0}, {"adopt_keys", "expires_at", 0}} {
+		if err := s.pg().sweepTable(ctx, x.table, x.column, x.keep); err != nil {
+			t.Fatalf("the sweep of %s: %v", x.table, err)
 		}
 	}
 	if n := count("messages"); n != 1 || s.storedMsg(t, kept, live.ID) == nil {

@@ -177,8 +177,8 @@ func TestTheRecordAndTheRevocationsAreTwoRows(t *testing.T) {
 	}
 	rec, revs := s.storedRecord(t, a), revsOf()
 	b, _ := e.stands(a)
-	if exp, err := rec.uint("expires_at"); err != nil || exp != ms(b.Expires) {
-		t.Fatalf("the record's expires_at is %d (%v), want %d", exp, err, ms(b.Expires))
+	if exp, err := rec.time("expires_at"); err != nil || !exp.Equal(msTime(b.Expires)) {
+		t.Fatalf("the record's expires_at is %v (%v), want %v", exp, err, msTime(b.Expires))
 	}
 	for _, name := range []string{"revocation", "revoked_certs", "revoked_certs_sig", "through"} {
 		if _, ok := rec[name]; ok {
