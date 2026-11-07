@@ -65,9 +65,10 @@ type pgBackend struct {
 
 // PostgresConfig configures a store over PostgreSQL.
 type PostgresConfig struct {
-	// URL is a libpq connection string, a URL or key=value pairs; the
-	// password comes from PGPASSWORD or the password file, as libpq takes
-	// them, when it names none.
+	// URL is a libpq connection string, a URL or key=value pairs; empty,
+	// the database is found as libpq finds one, by its environment
+	// (PGHOST, PGDATABASE, PGUSER, PGPASSWORD, PGSERVICE and the rest),
+	// which is how dromas-server serve finds it.
 	URL string
 	// Schema holds the tables, and names the publication the feed reads
 	// (dromas_<schema>); empty: public.

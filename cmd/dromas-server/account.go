@@ -14,7 +14,6 @@ import (
 // account runs one operator command on accounts (PROTOCOL.md §11.16).
 func account(cmd string, args []string) error {
 	fs := flag.NewFlagSet("account "+cmd, flag.ContinueOnError)
-	pgURL := fs.String("postgres", "", "the PostgreSQL database, a libpq connection string naming no password (PGPASSWORD or the password file)")
 	var run func(context.Context, *server.Memory) error
 	switch cmd {
 	case "create":
@@ -82,12 +81,9 @@ func account(cmd string, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *pgURL == "" {
-		return errors.New("name --postgres")
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s, err := server.NewPostgresStore(ctx, server.PostgresConfig{URL: *pgURL})
+	s, err := server.NewPostgresStore(ctx, server.PostgresConfig{})
 	if err != nil {
 		return err
 	}

@@ -1,13 +1,15 @@
 // Command dromas-server is the dromas.dev server.
 //
-//	dromas-server serve --postgres URL (--bucket B | --bodies-dir DIR) --names NAMES [--listen addr] [options] [limits]
+//	dromas-server serve (--bucket B | --bodies-dir DIR) --names NAMES [--listen addr] [options] [limits]
 //	dromas-server serve --dev [--listen addr] [limits]
-//	dromas-server account create --postgres URL [--id NAME] [--unmetered]
-//	dromas-server account key --postgres URL --account ID --uses N --ttl D
-//	dromas-server account drop --postgres URL --account ID --mailbox ADDR
+//	dromas-server account create [--id NAME] [--unmetered]
+//	dromas-server account key --account ID --uses N --ttl D
+//	dromas-server account drop --account ID --mailbox ADDR
 //	dromas-server limits clear --socket PATH --ip ADDR
 //
-// The first keeps state in PostgreSQL, and messages' bodies in an S3 bucket,
+// The first keeps state in PostgreSQL, found as libpq finds a database, by
+// its environment (PGHOST, PGDATABASE, PGUSER, PGPASSWORD, PGSERVICE and the
+// rest), and messages' bodies in an S3 bucket,
 // with AWS credentials from the usual chain, or a directory (ARCHITECTURE.md
 // § Storage); it answers 503 until its feed is followed, loads each mailbox
 // into memory on its first use, and exits if the feed loses its place, since
@@ -57,7 +59,7 @@ func main() {
 	case len(os.Args) >= 3 && os.Args[1] == "limits":
 		err = limits(os.Args[2], os.Args[3:])
 	default:
-		fmt.Fprintln(os.Stderr, "usage: dromas-server serve (--postgres URL (--bucket B | --bodies-dir DIR) --names NAMES | --dev) [--listen addr] [--limits FILE] [options]")
+		fmt.Fprintln(os.Stderr, "usage: dromas-server serve ((--bucket B | --bodies-dir DIR) --names NAMES | --dev) [--listen addr] [--limits FILE] [options]")
 		fmt.Fprintln(os.Stderr, "       dromas-server account (create | key | drop) [flags]")
 		fmt.Fprintln(os.Stderr, "       dromas-server limits default")
 		fmt.Fprintln(os.Stderr, "       dromas-server limits clear --socket PATH --ip ADDR")
@@ -73,7 +75,6 @@ func serve(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	dev := fs.Bool("dev", false, "keep everything in memory, with no database")
 	listen := fs.String("listen", "127.0.0.1:8080", "comma-separated TCP addresses to listen on, each served alike: a reverse proxy in front spreads its connections across several, and each is one more range of its ephemeral ports")
-	pgURL := fs.String("postgres", "", "the PostgreSQL database, a libpq connection string (a URL or key=value pairs) naming no password: the password comes from PGPASSWORD or the password file, as libpq takes them")
 	bucket := fs.String("bucket", "", "the S3 bucket that keeps messages' bodies, a directory bucket or a general purpose one, with a lifecycle rule that deletes what is older than the message TTL")
 	bodiesDir := fs.String("bodies-dir", "", "the directory that keeps messages' bodies, in place of --bucket: shared by several processes only on one host or a shared filesystem")
 	sweepEvery := fs.Duration("sweep-interval", 10*time.Minute, "how often the rows past their expiry are deleted, one process at a time, and bodies under --bodies-dir past the message TTL collected (0: never)")
@@ -166,16 +167,15 @@ func serve(args []string) error {
 	var start func() error
 	switch {
 	case *dev:
-		if *pgURL != "" || *bucket != "" || *bodiesDir != "" {
-			return errors.New("--dev takes no --postgres, --bucket or --bodies-dir")
+		if *bucket != "" || *bodiesDir != "" {
+			return errors.New("--dev takes no --bucket or --bodies-dir")
 		}
 		cfg.Store = server.NewMemStore(time.Now)
 		logger.Printf("dromas-server --dev on %s (in memory: nothing survives a restart)", *listen)
-	case *pgURL == "" || (*bucket == "") == (*bodiesDir == "") || len(cfg.Names) == 0:
-		return errors.New("name --postgres, --bucket or --bodies-dir, and --names, or run --dev")
+	case (*bucket == "") == (*bodiesDir == "") || len(cfg.Names) == 0:
+		return errors.New("name --bucket or --bodies-dir, and --names, or run --dev")
 	default:
 		pc := server.PostgresConfig{
-			URL:           *pgURL,
 			Bucket:        *bucket,
 			BodiesDir:     *bodiesDir,
 			MailboxCache:  *mailboxCache,
