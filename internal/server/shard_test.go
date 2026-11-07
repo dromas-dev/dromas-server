@@ -110,7 +110,10 @@ type sharded struct {
 }
 
 // fedOn waits until process i holds mailbox a's standing as a's own
-// process holds it: the feed has brought a's latest record.
+// process holds it: the feed has brought a's latest record. Process i must
+// hold something of a, loaded or in its record cache, as a sender's
+// recipient's process does: one that holds nothing reads a afresh, and the
+// wait would show nothing of the feed.
 func (s *sharded) fedOn(i int, a protocol.Address) {
 	s.t.Helper()
 	own := s.procs[proxyShard("/v1/"+a.String(), len(s.procs))].store
@@ -118,8 +121,23 @@ func (s *sharded) fedOn(i int, a protocol.Address) {
 	if !ok {
 		s.t.Fatalf("%s's own process does not hold it", a)
 	}
+	held := func() (Standing, bool) {
+		st := s.procs[i].store
+		if h, ok := st.Held(a); ok {
+			return h, true
+		}
+		if b, _ := st.Known(a); b != nil {
+			if h, ok, err := b.standing(); err == nil && ok {
+				return h, true
+			}
+		}
+		return Standing{}, false
+	}
+	if _, ok := held(); !ok {
+		s.t.Fatalf("process %d holds nothing of %s: the wait would show nothing of the feed", i, a)
+	}
 	for range 500 {
-		if st, ok := s.procs[i].store.Held(a); !ok || st.Signer == want.Signer {
+		if h, ok := held(); ok && h.Signer == want.Signer {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)

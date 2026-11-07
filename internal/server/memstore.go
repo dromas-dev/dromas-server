@@ -205,8 +205,8 @@ func (s *memBackend) Revoke(_ context.Context, a protocol.Address, rv *Revocatio
 	if !ok {
 		cur = &Revocations{}
 	}
-	if rv.Through > 0 && cur.Through >= rv.Through {
-		return nil, ErrStale
+	if len(rv.Address) == 0 && rv.Through > 0 && cur.Through >= rv.Through {
+		return nil, ErrStale // it brings nothing: a revocation of the address is kept whatever is beside it (merge)
 	}
 	c := *cur
 	c.merge(rv)

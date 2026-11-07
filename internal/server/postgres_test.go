@@ -269,7 +269,7 @@ func fed(t testing.TB, st Store) {
 	if !ok {
 		return
 	}
-	now := time.Now().UnixNano()
+	now := monoNanos(time.Now())
 	for range 1000 {
 		if s.pg().synced.Load() >= now {
 			return

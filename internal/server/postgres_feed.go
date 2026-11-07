@@ -32,6 +32,14 @@ const (
 	// feedUnsyncedAfter is how long the feed may go without being synced
 	// before Ready says it is not.
 	feedUnsyncedAfter = 30 * time.Second
+	// feedSilentAfter is how long a session may answer nothing before it is
+	// taken for gone: wal_receiver_timeout's default, as PostgreSQL's own
+	// standby takes its walsender (its docs, Replication settings,
+	// read 2026-11-07). A walsender busy decoding a transaction the
+	// publication leaves out sends a keepalive only every
+	// wal_sender_timeout/2, its default 30 s, so a bound of 30 s would take
+	// it for gone.
+	feedSilentAfter = 60 * time.Second
 	// feedStartWithin bounds Start: creating a slot waits for every
 	// transaction open at that moment to end.
 	feedStartWithin = 30 * time.Second
@@ -87,7 +95,7 @@ func (s *pgBackend) Start(ctx context.Context, apply func(Change)) error {
 	go f.run(fctx)
 	go f.targets(fctx)
 	for {
-		if s.synced.Load() >= began.UnixNano() {
+		if s.synced.Load() >= monoNanos(began) {
 			s.started.Store(true)
 			if s.sweepEvery > 0 {
 				go s.sweep(fctx)
@@ -107,8 +115,16 @@ func (s *pgBackend) Start(ctx context.Context, apply func(Change)) error {
 // Ready implements Backend: the feed is followed, and has been synced
 // within feedUnsyncedAfter.
 func (s *pgBackend) Ready() bool {
-	return s.started.Load() && time.Since(time.Unix(0, s.synced.Load())) <= feedUnsyncedAfter
+	synced := s.synced.Load()
+	return s.started.Load() && synced != 0 && monoNanos(time.Now())-synced <= int64(feedUnsyncedAfter)
 }
+
+// monoBase is the process's start, for monoNanos.
+var monoBase = time.Now()
+
+// monoNanos is t on the monotonic clock, as nanoseconds after monoBase,
+// plus one, so that 0 is never: a step of the wall clock moves neither.
+func monoNanos(t time.Time) int64 { return int64(t.Sub(monoBase)) + 1 }
 
 func randomHex(n int) string {
 	b := make([]byte, n)
@@ -171,7 +187,7 @@ func (f *pgFeed) targets(ctx context.Context) {
 
 // run follows the stream until ctx ends or the session is lost, applying
 // each change as it arrives: memory's apply takes its locks briefly and
-// never waits on I/O. A session that answers nothing for feedUnsyncedAfter,
+// never waits on I/O. A session that answers nothing for feedSilentAfter,
 // keepalives asked for included, is gone half-open.
 func (f *pgFeed) run(ctx context.Context) {
 	defer func() { _ = f.conn.Close(context.Background()) }()
@@ -205,7 +221,7 @@ func (f *pgFeed) run(ctx context.Context) {
 			}
 			nextStatus = now.Add(f.s.syncEvery)
 		}
-		if time.Since(lastHeard) > feedUnsyncedAfter {
+		if time.Since(lastHeard) > feedSilentAfter {
 			f.lost(ctx, errors.New("the walsender has answered nothing"))
 			return
 		}
@@ -294,7 +310,7 @@ func (f *pgFeed) heard(end pglogrepl.LSN) {
 	}
 	f.mu.Unlock()
 	if w != nil && end >= w.lsn {
-		f.s.synced.Store(w.at.UnixNano())
+		f.s.synced.Store(monoNanos(w.at))
 	}
 }
 
