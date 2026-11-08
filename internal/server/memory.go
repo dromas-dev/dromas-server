@@ -391,8 +391,9 @@ func (s *Memory) DeleteMailbox(ctx context.Context, a protocol.Address) error {
 }
 
 // Revoke implements Store. The record's rev the revocation raised is
-// applied to the copy memory holds of it, which is forgotten where it holds
-// another (Backend.Revoke).
+// applied to the copy memory holds of it, which is kept where it holds that
+// rev or a later one already, the feed's echo of the revocation having
+// reached it first, and forgotten where it holds an earlier (Backend.Revoke).
 func (s *Memory) Revoke(ctx context.Context, a protocol.Address, rv *Revocations, want Expect) error {
 	var held *Revocations
 	var rev uint64
@@ -404,11 +405,14 @@ func (s *Memory) Revoke(ctx context.Context, a protocol.Address, rv *Revocations
 		if rev == 0 {
 			return
 		}
-		if b, ok := s.cache.get(a); ok && b.hasRecord() && b.Rev+1 == rev {
+		b, ok := s.cache.get(a)
+		switch {
+		case ok && b.hasRecord() && b.Rev >= rev:
+		case ok && b.hasRecord() && b.Rev+1 == rev:
 			b = cloneMailbox(b)
 			b.Rev = rev
 			s.applyMailbox(b)
-		} else {
+		default:
 			s.forget(a)
 		}
 	})
