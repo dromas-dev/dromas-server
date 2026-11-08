@@ -27,7 +27,8 @@ import (
 // does as the schema's owner, and every store runs as a role of the run's
 // own that owns nothing, as serve does: REPLICATION, and the grants
 // README.md names (pgURL), so a privilege the store needs and the
-// grants lack fails every test. The environment's role needs CREATEROLE.
+// grants lack fails every test; an account and an adopt key are made as
+// the owner, as dromas-server account makes them (operator). The environment's role needs CREATEROLE.
 // TestMain drops the run's schemas and their publications, and the role,
 // and removes its bodies directory, once every test has run.
 
@@ -319,6 +320,35 @@ func onPg(st Store) (*Memory, bool) {
 	}
 	_, ok = s.backend.(*pgBackend)
 	return s, ok
+}
+
+// operator is a store on st's database as dromas-server account opens one,
+// for the operator's commands, which alone make an account or an adopt key
+// (migration 00007): on PostgreSQL, as the role libpq's environment names,
+// which migrated st's schema and so owns it, not started, so it follows no
+// feed, beside any faults st's backend is injected with; in memory, st
+// itself.
+func operator(t testing.TB, st Store) Store {
+	t.Helper()
+	m, ok := st.(*Memory)
+	if !ok {
+		return st
+	}
+	b := m.backend
+	if f, ok := b.(*faults); ok {
+		b = f.Backend
+	}
+	p, ok := b.(*pgBackend)
+	if !ok {
+		return st
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	s, err := NewPostgresStore(ctx, PostgresConfig{Schema: p.schema, Now: m.now, MaxConns: 1})
+	if err != nil {
+		t.Fatalf("the operator's store: %v", err)
+	}
+	return s
 }
 
 // pool is a connection pool on the run's schema, for a test's reads of the

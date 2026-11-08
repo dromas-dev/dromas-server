@@ -231,10 +231,14 @@ func (m *mailboxMem) prune(now uint64) {
 func same(a, b mark) bool { return a.tag == b.tag && a.exp == b.exp }
 
 // insert adds a live message, from this process's write or the feed. A
-// message with a tomb stays removed.
+// message with a tomb stays removed, and a mailbox loaded with no record
+// takes none: no send stores a message where there is no record, and a load
+// that finds none reads no messages, so an insert there is the feed's late
+// echo of one deleted with the record before the load
+// (dromas-dev/dromas-server#254).
 func (x *index) insert(mailbox protocol.Address, k mark, now uint64) {
 	x.apply(mailbox, func(m *mailboxMem) {
-		if k.exp <= now {
+		if k.exp <= now || !m.exists {
 			return
 		}
 		m.prune(now)

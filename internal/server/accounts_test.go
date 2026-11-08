@@ -436,34 +436,39 @@ func TestAccountChangesReachMemory(t *testing.T) {
 	e := newEnv(t, l)
 	s := e.store.(*Memory)
 	acc, key := accountEnv(t, e, false, 1)
+	// The operator's hand edit, as the owner: the role serve runs as writes
+	// no account (migrations 00004, 00007).
+	byHand := func(q string) error {
+		return asTestRole(func(ctx context.Context, conn *pgx.Conn) error {
+			if _, err := conn.Exec(ctx, "SET search_path = "+quotedSchema(s.pg().schema)); err != nil {
+				return err
+			}
+			_, err := conn.Exec(ctx, q, acc.ID)
+			return err
+		})
+	}
 	a, b := e.mailbox(), e.mailbox()
 	adopt(t, a, key)
 	send(t, a, b, "1")
 	if _, err := a.Send(ctx, b.Address(), "2"); !limitedBy(err, protocol.QuotaSends) {
 		t.Fatalf("second send: %v", err)
 	}
-	if _, err := s.pool().Exec(ctx, `UPDATE accounts SET unmetered = true, rev = 2 WHERE id = $1`, acc.ID); err != nil {
+	if err := byHand(`UPDATE accounts SET unmetered = true, rev = 2 WHERE id = $1`); err != nil {
 		t.Fatal(err)
 	}
 	until(t, func(i int) bool {
 		_, err := a.Send(ctx, b.Address(), fmt.Sprintf("unmetered %d", i))
 		return err == nil
 	})
-	if _, err := s.pool().Exec(ctx, `UPDATE accounts SET unmetered = false, rev = 3 WHERE id = $1`, acc.ID); err != nil {
+	if err := byHand(`UPDATE accounts SET unmetered = false, rev = 3 WHERE id = $1`); err != nil {
 		t.Fatal(err)
 	}
 	until(t, func(i int) bool {
 		_, err := a.Send(ctx, b.Address(), fmt.Sprintf("metered %d", i))
 		return limitedBy(err, protocol.QuotaSends)
 	})
-	// An account its mailboxes name is not deleted: they reference it. The
-	// role serve runs as deletes no account (migration 00004), so the hand
-	// edit is the owner's.
-	err := asTestRole(func(ctx context.Context, conn *pgx.Conn) error {
-		_, err := conn.Exec(ctx, `DELETE FROM `+s.pg().schema+`.accounts WHERE id = $1`, acc.ID)
-		return err
-	})
-	if !isPgCode(err, "23503") {
+	// An account its mailboxes name is not deleted: they reference it.
+	if err := byHand(`DELETE FROM accounts WHERE id = $1`); !isPgCode(err, "23503") {
 		t.Fatalf("the delete of an account a mailbox is in: %v; want a foreign key's refusal", err)
 	}
 }

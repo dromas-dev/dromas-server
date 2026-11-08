@@ -155,7 +155,9 @@ func TestTheRuntimeRoleOnlyReadsTheVersions(t *testing.T) {
 // back or change it, or lower a revocation of certificates or replace it at
 // its serial. Each refusal is the database's, so a server broken into cannot
 // either; and no role deletes a revocation, the owner included, but by the
-// owner's DDL (a trigger dropped or disabled, or its function replaced).
+// owner's DDL (a trigger dropped or disabled, or its function replaced). The
+// account is the owner's to make, as dromas-server account makes one
+// (TestTheRuntimeRoleWritesNoAccountAndMakesNoAdoptKey).
 func TestTheRuntimeRoleCannotTakeARevocationBack(t *testing.T) {
 	t.Parallel()
 	if !onPostgres() {
@@ -177,13 +179,16 @@ func TestTheRuntimeRoleCannotTakeARevocationBack(t *testing.T) {
 	if err := exec("SET search_path = " + schema); err != nil {
 		t.Fatal(err)
 	}
-	// Controls: the role writes what dromas-server writes.
+	// Controls: the owner makes an account, and the role writes what
+	// dromas-server serve writes.
+	if err := asOwnerIn(schema, `INSERT INTO accounts (id, unmetered, rev) VALUES ('a', false, 1)`); err != nil {
+		t.Fatalf("control: an account made by the owner: %v", err)
+	}
 	for _, q := range []string{
 		`INSERT INTO revocations (addr, identity, revoked_certs, revoked_certs_sig, through) VALUES (sha384('i'), 'i', 'c', 's', 2)`,
 		`UPDATE revocations SET revoked_certs = 'c3', revoked_certs_sig = 's3', through = 3`,
 		`UPDATE revocations SET revocation = 'r'`,
 		`UPDATE revocations SET revocation = COALESCE(revocation, 'r2')`,
-		`INSERT INTO accounts (id, unmetered, rev) VALUES ('a', false, 1)`,
 		`DELETE FROM messages WHERE false`,
 	} {
 		if err := exec(q); err != nil {
@@ -221,6 +226,82 @@ func TestTheRuntimeRoleCannotTakeARevocationBack(t *testing.T) {
 	var rev, certs []byte
 	if err := conn.QueryRow(ctx, `SELECT through, revocation, revoked_certs FROM revocations`).Scan(&through, &rev, &certs); err != nil || through != 3 || string(rev) != "r" || string(certs) != "c3" {
 		t.Errorf("the revocations kept: through %d, revocation %q, revoked_certs %q, %v; want 3, r and c3", through, rev, certs, err)
+	}
+}
+
+// asOwnerIn runs q in schema as the role libpq's environment names, which
+// migrated the schema and so owns it.
+func asOwnerIn(schema, q string) error {
+	return asTestRole(func(ctx context.Context, conn *pgx.Conn) error {
+		if _, err := conn.Exec(ctx, "SET search_path = "+schema); err != nil {
+			return err
+		}
+		_, err := conn.Exec(ctx, q)
+		return err
+	})
+}
+
+// What the role serve runs as may not write of an account or an adopt key,
+// which only the operator's commands make, as the owner (dromas-server
+// account; migration 00007): insert an account or update one, or insert an
+// adopt key. Each refusal is the database's, so a server broken into cannot
+// make an account or set unmetered on one, nor make itself an adopt key.
+// Controls: the owner makes each, and the role reads the account and takes
+// a use of the key and deletes it, as an adopt and the sweep do.
+func TestTheRuntimeRoleWritesNoAccountAndMakesNoAdoptKey(t *testing.T) {
+	t.Parallel()
+	if !onPostgres() {
+		t.Skip("needs PostgreSQL: DROMAS_TEST_POSTGRES")
+	}
+	schema := newSchema()
+	url := pgURL(t, schema)
+	for _, q := range []string{
+		`INSERT INTO accounts (id, unmetered, rev) VALUES ('a', false, 1)`,
+		`UPDATE accounts SET unmetered = true, rev = 2 WHERE id = 'a'`,
+		`INSERT INTO adopt_keys (account, hash, uses, expires_at) VALUES ('a', sha256('k'), 2, now() + interval '1 hour')`,
+	} {
+		if err := asOwnerIn(schema, q); err != nil {
+			t.Fatalf("control: %s as the owner: %v", q, err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(context.Background()) }()
+	exec := func(q string) error {
+		_, err := conn.Exec(ctx, q)
+		return err
+	}
+	if err := exec("SET search_path = " + schema); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`SELECT unmetered, rev FROM accounts WHERE id = 'a'`,
+		`UPDATE adopt_keys SET uses = uses - 1 WHERE account = 'a' AND hash = sha256('k') AND uses >= 1`,
+		`DELETE FROM adopt_keys WHERE account = 'a' AND hash = sha256('k')`,
+	} {
+		if err := exec(q); err != nil {
+			t.Fatalf("control: %s as the runtime role: %v", q, err)
+		}
+	}
+	for _, q := range []string{
+		`INSERT INTO accounts (id, unmetered, rev) VALUES ('b', true, 1)`,
+		`INSERT INTO accounts (id, unmetered, rev) VALUES ('a', true, 1) ON CONFLICT (id) DO NOTHING`,
+		`UPDATE accounts SET unmetered = true, rev = rev + 1`,
+		`UPDATE accounts SET unmetered = false WHERE false`,
+		`INSERT INTO adopt_keys (account, hash, uses, expires_at) VALUES ('a', sha256('j'), 9, now() + interval '1 hour')`,
+	} {
+		if err := exec(q); !isPgCode(err, "42501") {
+			t.Errorf("%s as the runtime role: %v; want permission denied (42501)", q, err)
+		}
+	}
+	var unmetered bool
+	var rev int
+	if err := conn.QueryRow(ctx, `SELECT unmetered, rev FROM accounts WHERE id = 'a'`).Scan(&unmetered, &rev); err != nil || !unmetered || rev != 2 {
+		t.Errorf("the account kept: unmetered %v, rev %d, %v; want the owner's, true and 2", unmetered, rev, err)
 	}
 }
 

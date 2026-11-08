@@ -27,7 +27,9 @@
 //
 // account is the operator's hand on accounts (PROTOCOL.md §11.16) until
 // accounts have users who log in: create one, mint an adopt key for it, or
-// drop a mailbox from it.
+// drop a mailbox from it. It runs as the schema's owner, since the role
+// serve runs as may make no account and no adopt key (ARCHITECTURE.md
+// § Storage).
 package main
 
 import (

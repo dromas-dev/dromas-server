@@ -499,8 +499,8 @@ var errNotStored = errors.New("not stored")
 // condition on the record it read (UpdateMailbox, Adopt, Leave, a send's
 // sendHeld) and memory's copy of the record a revocation raised
 // (Memory.Revoke). An account's has its rev alone: dromas-server deletes no
-// account, and the role serve runs as may not (migration 00004), so none is
-// made again.
+// account, and the role serve runs as may not (migration 00004), nor make
+// one (00007), so none is made again.
 type version struct{ created, rev uint64 }
 
 // after reports whether v is a later record than o.

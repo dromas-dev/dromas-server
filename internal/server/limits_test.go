@@ -282,15 +282,21 @@ func TestANewMailboxIsUsedWhateverItsAddressMissed(t *testing.T) {
 // remembers one.
 func TestARememberedMissIsFree(t *testing.T) {
 	t.Parallel()
-	e, _ := sharedEnv(t)
+	e, s := sharedEnv(t)
 	l := relaxed()
 	l.MissesPerMinute = 1
-	e2, cs := counted(t, e, l)
-	nobody := e.raw().id.Address()
+	var e2 *env
+	var cs *countingStore
+	var nobody protocol.Address
 	read := func(a protocol.Address) reply {
 		return e2.do(http.MethodGet, "/v1/"+a.String(), nil, "")
 	}
-	e2.want(read(nobody), http.StatusNotFound, protocol.CodeNoSuchMailbox) // the read, and the address's one miss
+	rememberedMiss(t, s, func() protocol.Address {
+		e2, cs = counted(t, e, l) // a server of its own each try, with limits of its own
+		nobody = e.raw().id.Address()
+		e2.want(read(nobody), http.StatusNotFound, protocol.CodeNoSuchMailbox) // the read, and its caller's one miss
+		return nobody
+	})
 	before := cs.calls.Load()
 	for range 5 {
 		e2.want(read(nobody), http.StatusNotFound, protocol.CodeNoSuchMailbox)
@@ -461,24 +467,101 @@ func TestMissCache(t *testing.T) {
 	}
 }
 
+// missTries is how many fresh unregistered addresses a test of a remembered
+// miss reads before it fails (rememberedMiss).
+const missTries = 5
+
+// rememberedMiss runs try, which reads a fresh unregistered address and
+// returns it, until memory s remembers that address's miss. Every
+// sharedEnv store follows the run's whole schema on its feed, so another
+// test's write, applied to the address's cache shard while its read runs,
+// keeps that read's miss out, as recCache.missed is made to
+// (TestAMissReadAcrossAWriteToItsShardIsNotRemembered); a race on every try
+// fails the test.
+func rememberedMiss(t *testing.T, s *Memory, try func() protocol.Address) {
+	t.Helper()
+	for range missTries {
+		if a := try(); s.cache.missingAt(a, s.now()) {
+			return
+		}
+	}
+	t.Fatalf("in %d reads, each of a fresh unregistered address, no miss was remembered", missTries)
+}
+
 // On PostgreSQL, a mailbox a read did not find is remembered as missing until
 // it is written.
 func TestMissingMailboxIsRememberedUntilItIsWritten(t *testing.T) {
 	t.Parallel()
 	e, s := sharedEnv(t)
 	ctx := context.Background()
-	r := e.raw()
+	var r *raw
+	rememberedMiss(t, s, func() protocol.Address {
+		r = e.raw()
+		if _, err := s.Mailbox(ctx, r.id.Address()); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("an unregistered mailbox: %v", err)
+		}
+		return r.id.Address()
+	})
 	a := r.id.Address()
-	if _, err := s.Mailbox(ctx, a); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("an unregistered mailbox: %v", err)
-	}
-	if !s.cache.missingAt(a, e.clock.Now()) {
-		t.Fatal("the miss was not remembered")
-	}
 	r.prekey(1, e.clock.Now().Add(24*time.Hour), nil)
 	e.want(e.do(http.MethodPut, r.path(""), r.registration(1), r.pass(1)), http.StatusCreated, "")
 	if b, err := s.Mailbox(ctx, a); err != nil || b.Addr != a {
 		t.Fatalf("the mailbox, once registered: %v", err)
+	}
+}
+
+// readHeld is a backend whose read of an address waits, once it has begun,
+// until the test releases it.
+type readHeld struct {
+	Backend
+	reading, release chan struct{}
+}
+
+func (b *readHeld) ReadAddress(ctx context.Context, a protocol.Address) (*Mailbox, *Revocations, error) {
+	close(b.reading)
+	<-b.release
+	return b.Backend.ReadAddress(ctx, a)
+}
+
+// A read that finds no mailbox remembers no miss where a write to its
+// address's cache shard was counted while it ran (recCache.missed): the
+// write may be of the address, its record made after the read, and the miss
+// would hide it. Here the racing write is the feed's deletion of another
+// address's record in the same shard, applied while the read is held.
+// Control: one in another shard keeps nothing out.
+func TestAMissReadAcrossAWriteToItsShardIsNotRemembered(t *testing.T) {
+	t.Parallel()
+	var a protocol.Address
+	a[0], a[1] = 7, 1
+	for name, c := range map[string]struct {
+		shard      byte
+		remembered bool
+	}{
+		"a write to its shard":              {7, false},
+		"control: a write to another shard": {8, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			m := newMemory(nil, 10, nil, nil)
+			b := &readHeld{Backend: newMemBackend(m.clock), reading: make(chan struct{}), release: make(chan struct{})}
+			m.backend = b
+			done := make(chan error, 1)
+			go func() {
+				_, err := m.Mailbox(context.Background(), a)
+				done <- err
+			}()
+			<-b.reading
+			var other protocol.Address
+			other[0] = c.shard
+			m.apply(Change{Kind: RecordChange, Addr: other, Gone: true})
+			close(b.release)
+			if err := <-done; !errors.Is(err, ErrNotFound) {
+				t.Fatalf("an unregistered mailbox: %v", err)
+			}
+			if got := m.cache.missingAt(a, m.now()); got != c.remembered {
+				t.Fatalf("the miss remembered %v, want %v", got, c.remembered)
+			}
+		})
 	}
 }
 

@@ -32,8 +32,8 @@ const (
 // does: it makes the schema if it is not there and applies, in order, every
 // migration this build holds that the database has not (migrations/), one
 // process of a schema at a time (goose's session lock, keyed by the schema).
-// It runs as the schema's owner, with CREATE on the database; serve runs as
-// a role that owns nothing (ARCHITECTURE.md § Storage). url is a libpq
+// It runs as the schema's owner, with CREATE on the database, as account
+// does; serve runs as a role that owns nothing (ARCHITECTURE.md § Storage). url is a libpq
 // connection string, empty for libpq's environment; schema, empty, is
 // public. It returns the versions applied, and the schema's version after.
 func Migrate(ctx context.Context, url, schema string, l *log.Logger) (applied []int64, version int64, err error) {
