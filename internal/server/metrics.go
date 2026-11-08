@@ -92,7 +92,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		holds: prometheus.NewGauge(prometheus.GaugeOpts{Namespace: ns, Name: "long_polls_held",
 			Help: "Long polls held now (PROTOCOL.md §11.11)."}),
 		held: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "long_polls_total",
-			Help: "Long polls, each once by how it ended: changed (the mailbox changed, or a message in it expired), waited (its wait passed), gone (the caller left), stopped (the server stopped), replaced (a later list of the same mailbox was held in its place), refused (past max_long_polls), or refused_range (past max_long_polls_per_range)."}, []string{"outcome"}),
+			Help: "Long polls, each once by how it ended: changed (the mailbox changed, or a message in it expired), waited (its wait passed), gone (the caller left), stopped (the server stopped), replaced (a later list of the same mailbox was held in its place), standing (at a wake, its pass or its mailbox was no longer taken), refused (past max_long_polls), or refused_range (past max_long_polls_per_range)."}, []string{"outcome"}),
 		bodiesOpen: prometheus.NewGauge(prometheus.GaugeOpts{Namespace: ns, Name: "bodies_before_pass_open",
 			Help: "Request bodies open now on calls that are their address's (max_bodies_before_pass)."}),
 		bodies: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "bodies_before_pass_total",

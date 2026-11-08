@@ -164,8 +164,11 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 	// outcome is unknown: the record answers, as for a mailbox registered
 	// before (dromas-dev/dromas-client#411 item 2), and no count of the
 	// client's retry depends on the write.
-	exists := errors.Is(err, ErrExists)
-	if !exists && !mayHaveApplied(err) {
+	// The address is revoked, or its certificates through the statement's,
+	// by a revocation the read before the write did not show (another
+	// process's: ErrStale): the address, read again, answers.
+	exists, revoked := errors.Is(err, ErrExists), errors.Is(err, ErrStale)
+	if !exists && !revoked && !mayHaveApplied(err) {
 		return err
 	}
 	read, rerr := s.mailbox(r.Context(), h)
@@ -174,6 +177,8 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 		return rerr
 	case settled(read):
 		return s.registered(w, r, id, read, &req, true)
+	case revoked:
+		return statementRevoked()
 	case !exists:
 		return err // the record does not hold it: its client sends it again
 	}

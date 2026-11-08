@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
@@ -50,7 +51,7 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 	}
-	mailbox, err := s.owner(r, cursorParam, waitParam)
+	mailbox, ctx, err := s.owner(r, cursorParam, waitParam)
 	if err != nil {
 		return err
 	}
@@ -128,7 +129,16 @@ again:
 	}
 	resp := protocol.MessageList{Count: int64(n), Messages: []protocol.MessageInfo{}}
 	if n > 0 && (after == nil || more > 0) {
-		page, err := s.store.List(r.Context(), mailbox, after, pageSize+1, asked)
+		page, err := s.store.List(ctx, mailbox, after, pageSize+1, asked)
+		if errors.Is(err, ErrStale) {
+			if ctx, err = s.recheck(r, cursorParam, waitParam); err != nil {
+				return err
+			}
+			page, err = s.store.List(ctx, mailbox, after, pageSize+1, asked)
+		}
+		if errors.Is(err, ErrStale) {
+			return changedDuring()
+		}
 		if err != nil {
 			return err
 		}
@@ -202,6 +212,16 @@ again:
 				return r.Context().Err()
 			}
 			t.Stop()
+			// The pass is checked again at each wake, a lookup in memory, so
+			// a hold answers nothing a fresh call with its pass would not be
+			// answered: a renewal, a revocation or the pass's end since it
+			// began ends it as that call's refusal. A change another process
+			// made reaches memory by the feed before any change it woke for
+			// that came after it (dromas-dev/dromas-server#226).
+			if ctx, err = s.recheck(r, cursorParam, waitParam); err != nil {
+				ended = "standing"
+				return err
+			}
 			goto again
 		}
 		if err := precondition(r, targetState{exists: true, tag: tag, hint: hintList, also: []string{"Retry-After", poll}}); err != nil {
@@ -479,7 +499,7 @@ func (s *Server) notHeld(r *http.Request, a protocol.Address) error {
 // the message, takes no token of new messages and marks nothing, spends one of
 // the mailbox's calls, and carries no Content-Length and reads no Range.
 func (s *Server) fetch(w http.ResponseWriter, r *http.Request) error {
-	mailbox, err := s.owner(r)
+	mailbox, ctx, err := s.owner(r)
 	if err != nil {
 		return err
 	}
@@ -546,7 +566,16 @@ func (s *Server) fetch(w http.ResponseWriter, r *http.Request) error {
 	// Read after the preconditions, as RFC 9110 §14.2 has a Range read: a
 	// false one answered above leaves it unread.
 	from, ranged := protocol.RangeAsked(r.Header.Values("Range"), r.Header.Values("If-Range"))
-	m, body, err := s.store.Message(r.Context(), mailbox, id, from)
+	m, body, err := s.store.Message(ctx, mailbox, id, from)
+	if errors.Is(err, ErrStale) {
+		if ctx, err = s.recheck(r); err != nil {
+			return err
+		}
+		m, body, err = s.store.Message(ctx, mailbox, id, from)
+	}
+	if errors.Is(err, ErrStale) {
+		return changedDuring()
+	}
 	if errors.Is(err, ErrNotFound) {
 		return gone()
 	}
@@ -578,7 +607,7 @@ func (s *Server) fetch(w http.ResponseWriter, r *http.Request) error {
 // mailbox's calls (precondition). The delete is of a live message only, so an
 // If-Match that held is held at it: one acked meanwhile is gone.
 func (s *Server) ack(w http.ResponseWriter, r *http.Request) error {
-	mailbox, err := s.owner(r)
+	mailbox, ctx, err := s.owner(r)
 	if err != nil {
 		return err
 	}
@@ -592,7 +621,16 @@ func (s *Server) ack(w http.ResponseWriter, r *http.Request) error {
 	if err := precondition(r, targetState{exists: true, hint: hintConditions, spend: func() error { return s.spendOwner(r.Context(), mailbox) }}); err != nil {
 		return err
 	}
-	err = s.store.DeleteMessage(detached(r.Context()), mailbox, id)
+	err = s.store.DeleteMessage(detached(ctx), mailbox, id)
+	if errors.Is(err, ErrStale) {
+		if ctx, err = s.recheck(r); err != nil {
+			return err
+		}
+		err = s.store.DeleteMessage(detached(ctx), mailbox, id)
+	}
+	if errors.Is(err, ErrStale) {
+		return changedDuring()
+	}
 	if errors.Is(err, ErrNotFound) {
 		return gone()
 	}
@@ -601,4 +639,20 @@ func (s *Server) ack(w http.ResponseWriter, r *http.Request) error {
 	}
 	w.WriteHeader(http.StatusNoContent)
 	return nil
+}
+
+// recheck answers a call of a mailbox's own whose store call met ErrStale
+// (held.go): memory has forgotten the address, so the pass is checked again,
+// against the record as it now is. The call is refused as a fresh one would
+// be, or, where the pass still holds, the context carrying it is returned for
+// the store call to be made once more.
+func (s *Server) recheck(r *http.Request, params ...string) (context.Context, error) {
+	_, ctx, err := s.owner(r, params...)
+	return ctx, err
+}
+
+// changedDuring is the answer to a call whose store call met ErrStale twice:
+// the mailbox changed while it was handled (PROTOCOL.md §11.2).
+func changedDuring() *problem {
+	return fail(protocol.CodeMailboxChanged, "retry", "the mailbox changed during the request")
 }

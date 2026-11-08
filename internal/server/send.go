@@ -27,10 +27,11 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 	if p := s.sendIPs.take(ctx, s.clientIP(r), s.now, ""); p != nil {
 		return p
 	}
-	from, err := s.sender(r)
+	by, err := s.sender(r)
 	if err != nil {
 		return err
 	}
+	from := by.addr
 	// A refusal of the calls gives their wait alone. The sends a day are
 	// behind the dedupe (step 6): only it shows whether the call is a new message
 	// that spends them, and a retry spends none (PROTOCOL.md §11.5).
@@ -64,7 +65,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 		if err != nil {
 			return err
 		}
-		if err := s.checkPass(r, from, key, sender.Signer, sender.Rank, true, nil); err != nil {
+		if by, err = s.checkPassBy(r, from, key, sender.Signer, sender.Rank, true, nil); err != nil {
 			return err
 		}
 	}
@@ -170,7 +171,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 	// sender's. Each call runs apart from the request that leads it, so its
 	// caller going fails none of the others, and each of its reads is
 	// bounded (deliver).
-	p := &post{from: from, to: to, id: sha256.Sum256(ciphertext), ciphertext: ciphertext, stanzas: stanzas, q: q, sender: sender, rcpt: rcpt, lim: lim, now: now}
+	p := &post{from: from, by: by, to: to, id: sha256.Sum256(ciphertext), ciphertext: ciphertext, stanzas: stanzas, q: q, sender: sender, rcpt: rcpt, lim: lim, now: now}
 	key := string(p.to[:]) + string(p.id[:]) + p.q.Encode()
 	led := false
 	call := func() (any, error) {
@@ -199,6 +200,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 // A post is a send past its step 5: what steps 6 to 9 read.
 type post struct {
 	from, to     protocol.Address
+	by           passBy // the sender's pass, which the write is held to
 	id           [32]byte
 	ciphertext   []byte
 	stanzas      protocol.Stanzas
@@ -345,7 +347,15 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 		ReceivedAt: now.UTC().Truncate(time.Millisecond),
 		ExpiresAt:  now.UTC().Truncate(time.Millisecond).Add(protocol.Retention), // the TTL less the hour and a post's own time (PROTOCOL.md §3.4, §13)
 	}
-	orig, err = s.store.PutMessage(ctx, to, h, p.ciphertext)
+	// The write is held to the recipient's record as steps 5 to 8 read it,
+	// and to the sender's pass: from the second process on, either can have
+	// changed at another before this process's memory has it (held.go). One
+	// that changed stores nothing, and memory forgets both.
+	held := withSend(ctx, sendHeld{rcpt: to, created: rcpt.Created, rev: rcpt.Rev, from: p.by})
+	orig, err = s.store.PutMessage(held, to, h, p.ciphertext)
+	if errors.Is(err, ErrStale) {
+		return delivered{}, s.changedSend(ctx, to, from)
+	}
 	if err != nil {
 		stored = mayHaveApplied(err)
 		return delivered{}, err
@@ -375,6 +385,34 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 		return delivered{}, noSuchMailbox
 	}
 	return delivered{h: h, fresh: true}, nil
+}
+
+// changedSend answers a send whose write met a change since its checks
+// (ErrStale): as the recipient and the sender stand once read again, revoked
+// or gone as a fresh send is answered, and otherwise mailbox_changed, which
+// the sender's client posts again as it is (PROTOCOL.md §11.2).
+func (s *Server) changedSend(ctx context.Context, to, from protocol.Address) error {
+	read, cancel := bounded(ctx)
+	defer cancel()
+	rcpt, err := s.mailbox(read, to)
+	switch {
+	case err != nil:
+		return err
+	case rcpt != nil && rcpt.State == Revoked:
+		return revokedWith(rcpt)
+	case !rcpt.open():
+		return noSuchMailbox
+	}
+	sender, err := s.mailbox(read, from)
+	switch {
+	case err != nil:
+		return err
+	case sender != nil && sender.State == Revoked:
+		return fail(protocol.CodeSenderRevoked, "your mailbox is revoked: make a new one, dromas init", "the sending mailbox is revoked")
+	case !sender.open():
+		return fail(protocol.CodeUnknownSender, "register your own mailbox first: dromas init", "the mailbox the pass names is not registered")
+	}
+	return fail(protocol.CodeMailboxChanged, "post it again as it is: dromas outbox flush does", "the mailbox, or the sending mailbox, changed during the request")
 }
 
 // inFlight is, for each mailbox, the sends this process has let past the mailbox

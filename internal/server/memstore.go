@@ -156,6 +156,9 @@ func (s *memBackend) CreateMailbox(_ context.Context, b *Mailbox) error {
 	if s.mailboxes[b.Addr] != nil {
 		return ErrExists
 	}
+	if rv := s.revocations[b.Addr]; rv != nil && (len(rv.Address) > 0 || rv.Through > 0 && rv.Through >= b.Rank) {
+		return ErrStale // a revocation its checks did not read
+	}
 	if _, err := identityWire(b.Identity); err != nil {
 		return refused(fmt.Errorf("the identity: %w", err))
 	}
@@ -166,12 +169,12 @@ func (s *memBackend) CreateMailbox(_ context.Context, b *Mailbox) error {
 }
 
 // UpdateMailbox implements Backend.
-func (s *memBackend) UpdateMailbox(_ context.Context, b *Mailbox) error {
+func (s *memBackend) UpdateMailbox(ctx context.Context, b *Mailbox) error {
 	s.deliver()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cur := s.mailboxes[b.Addr]
-	if cur == nil || cur.Rev != b.Rev {
+	if cur == nil || cur.Rev != b.Rev || !s.held(ctx) {
 		return ErrStale
 	}
 	rec := storedRecord(b)
@@ -194,26 +197,33 @@ func (s *memBackend) DeleteMailbox(_ context.Context, a protocol.Address) error 
 }
 
 // Revoke implements Backend.
-func (s *memBackend) Revoke(_ context.Context, a protocol.Address, rv *Revocations, want Expect) (*Revocations, error) {
+func (s *memBackend) Revoke(_ context.Context, a protocol.Address, rv *Revocations, want Expect) (*Revocations, uint64, error) {
 	s.deliver()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cur, ok := s.revocations[a]
 	if want == ExpectHeld && !ok || want == ExpectNone && ok {
-		return nil, ErrStale
+		return nil, 0, ErrStale
 	}
 	if !ok {
 		cur = &Revocations{}
 	}
 	if len(rv.Address) == 0 && rv.Through > 0 && cur.Through >= rv.Through {
-		return nil, ErrStale // it brings nothing: a revocation of the address is kept whatever is beside it (merge)
+		return nil, 0, ErrStale // it brings nothing: a revocation of the address is kept whatever is beside it (merge)
 	}
 	c := *cur
 	c.merge(rv)
 	s.revocations[a] = &c
 	held, echo := c, c
 	s.changed(Change{Kind: RevocationsChange, Addr: a, Revocations: &echo})
-	return &held, nil
+	var rev uint64
+	if r := s.mailboxes[a]; r != nil {
+		rec := cloneMailbox(r)
+		rec.Rev++
+		s.mailboxes[a], rev = rec, rec.Rev
+		s.changed(recordChange(rec))
+	}
+	return &held, rev, nil
 }
 
 // Dedupe implements Backend.
@@ -230,10 +240,16 @@ func (s *memBackend) Dedupe(_ context.Context, mailbox protocol.Address, id [32]
 
 // PutMessage implements Backend: a live message of the id refuses it, as
 // the send's conditional insert does.
-func (s *memBackend) PutMessage(_ context.Context, mailbox protocol.Address, h *Header, body []byte) error {
+func (s *memBackend) PutMessage(ctx context.Context, mailbox protocol.Address, h *Header, body []byte) error {
 	s.deliver()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if held, ok := sendOf(ctx); ok {
+		rec := s.mailboxes[held.rcpt]
+		if rec == nil || !rec.Created.Equal(held.created) || rec.Rev != held.rev || !s.passHeldBy(held.from) {
+			return ErrStale
+		}
+	}
 	if m, ok := s.live(mailbox)[h.ID]; ok {
 		orig := m.h
 		return duplicate{&orig}
@@ -255,9 +271,12 @@ func less(a, b Header) int {
 }
 
 // List implements Backend: every read of the maps is consistent.
-func (s *memBackend) List(_ context.Context, mailbox protocol.Address, after *Cursor, limit int, _ bool) ([]Header, error) {
+func (s *memBackend) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, _ bool) ([]Header, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.held(ctx) {
+		return nil, ErrStale
+	}
 	var all []Header
 	for _, m := range s.live(mailbox) {
 		if after != nil && less(m.h, Header{ReceivedAt: after.ReceivedAt, ID: after.ID}) <= 0 {
@@ -274,9 +293,12 @@ func (s *memBackend) List(_ context.Context, mailbox protocol.Address, after *Cu
 
 // Message implements Backend: the body, or its bytes from byte from on, a
 // slice of what the map keeps.
-func (s *memBackend) Message(_ context.Context, mailbox protocol.Address, id [32]byte, from int64) (*Header, []byte, error) {
+func (s *memBackend) Message(ctx context.Context, mailbox protocol.Address, id [32]byte, from int64) (*Header, []byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.held(ctx) {
+		return nil, nil, ErrStale
+	}
 	m, ok := s.live(mailbox)[id]
 	if !ok {
 		return nil, nil, ErrNotFound
@@ -305,10 +327,13 @@ func (s *memBackend) retireLocked(mailbox protocol.Address, id [32]byte, receive
 }
 
 // Retire implements Backend.
-func (s *memBackend) Retire(_ context.Context, mailbox protocol.Address, id [32]byte, received time.Time) (time.Time, error) {
+func (s *memBackend) Retire(ctx context.Context, mailbox protocol.Address, id [32]byte, received time.Time) (time.Time, error) {
 	s.deliver()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.held(ctx) {
+		return time.Time{}, ErrStale
+	}
 	return s.retireLocked(mailbox, id, received)
 }
 
@@ -390,12 +415,12 @@ func (s *memBackend) AdoptKey(_ context.Context, account string, hash [32]byte) 
 
 // Adopt implements Backend: the record and the key's use in one step, as
 // the PostgreSQL backend's transaction.
-func (s *memBackend) Adopt(_ context.Context, b *Mailbox, account string, key [32]byte) error {
+func (s *memBackend) Adopt(ctx context.Context, b *Mailbox, account string, key [32]byte) error {
 	s.deliver()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cur := s.mailboxes[b.Addr]
-	if cur == nil || cur.Rev != b.Rev {
+	if cur == nil || cur.Rev != b.Rev || !s.held(ctx) {
 		return ErrStale
 	}
 	k, ok := s.keys[adoptKeyRef{account, key}]
@@ -411,12 +436,12 @@ func (s *memBackend) Adopt(_ context.Context, b *Mailbox, account string, key [3
 }
 
 // Leave implements Backend.
-func (s *memBackend) Leave(_ context.Context, b *Mailbox) error {
+func (s *memBackend) Leave(ctx context.Context, b *Mailbox) error {
 	s.deliver()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cur := s.mailboxes[b.Addr]
-	if cur == nil || cur.Rev != b.Rev {
+	if cur == nil || cur.Rev != b.Rev || !s.held(ctx) {
 		return ErrStale
 	}
 	rec := cloneMailbox(cur)
