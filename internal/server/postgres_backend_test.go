@@ -152,14 +152,15 @@ func TestTheSweepDeletesWhatHasExpired(t *testing.T) {
 	// More expired messages than one batch deletes.
 	exec(`INSERT INTO messages (box, id, size, received_at, nonce)
 		SELECT $1, sha256(i::text::bytea), 3, $2, '\x0000000000000000' FROM generate_series(1, $3::int) i`, kept[:], past, 2*sweepBatch+1)
-	if err := s.backend.CreateAccount(ctx, &Account{ID: "acct", Rev: 1}); err != nil {
+	op := operator(t, s)
+	if err := op.CreateAccount(ctx, &Account{ID: "acct", Rev: 1}); err != nil {
 		t.Fatal(err)
 	}
 	for _, k := range []*AdoptKey{
 		{Account: "acct", Hash: [32]byte{1}, Uses: 1, Expires: past},
 		{Account: "acct", Hash: [32]byte{2}, Uses: 1, Expires: now.Add(time.Hour)},
 	} {
-		if err := s.backend.PutAdoptKey(ctx, k); err != nil {
+		if err := op.PutAdoptKey(ctx, k); err != nil {
 			t.Fatal(err)
 		}
 	}

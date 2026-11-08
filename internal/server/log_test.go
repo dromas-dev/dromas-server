@@ -244,7 +244,7 @@ func TestAFollowersPanicIsLoggedRedactedAndEndsTheProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.pg().CreateAccount(ctx, &Account{ID: acct, Rev: 1}); err != nil {
+	if err := operator(t, s).CreateAccount(ctx, &Account{ID: acct, Rev: 1}); err != nil {
 		t.Fatal(err)
 	}
 	select {

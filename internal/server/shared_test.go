@@ -172,10 +172,11 @@ func accountEnv(t *testing.T, e *env, unmetered bool, uses int) (*Account, strin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := e.store.CreateAccount(ctx, a); err != nil {
+	op := operator(t, e.store)
+	if err := op.CreateAccount(ctx, a); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.store.CreateAccount(ctx, &Account{ID: id}); !errors.Is(err, ErrExists) {
+	if err := op.CreateAccount(ctx, &Account{ID: id}); !errors.Is(err, ErrExists) {
 		t.Fatalf("the account again: %v", err)
 	}
 	return a, e.adoptKey(t, id, uses, time.Hour)
@@ -402,10 +403,11 @@ func (e *env) adoptKey(t *testing.T, account string, uses int, ttl time.Duration
 		t.Fatal(err)
 	}
 	k := &AdoptKey{Account: account, Hash: hash, Uses: uses, Expires: e.clock.Now().Add(ttl)}
-	if err := e.store.PutAdoptKey(context.Background(), k); err != nil {
+	op := operator(t, e.store)
+	if err := op.PutAdoptKey(context.Background(), k); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.store.PutAdoptKey(context.Background(), k); !errors.Is(err, ErrExists) {
+	if err := op.PutAdoptKey(context.Background(), k); !errors.Is(err, ErrExists) {
 		t.Fatalf("the key again: %v", err)
 	}
 	return key
