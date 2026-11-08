@@ -13,9 +13,9 @@ import (
 // reverse proxy in front sends each mailbox's calls to one process by its
 // address (ARCHITECTURE.md § Routing by address). An address is "d_" and
 // base64url of a SHA-384, so its first character after "d_" is uniform over
-// base64url's 64 values: shard I of N, N a power of two up to 64, is the
-// characters whose value v has v*N/64 == I, v being the top six bits of
-// the address's first byte. Shards of different N may sit side by side, so one half splits
+// base64url's 64 values: shard I of N, N a power of two up to 64 and I
+// from 1 to N, is the characters whose value v has v*N/64 == I-1, v being
+// the top six bits of the address's first byte. Shards of different N may sit side by side, so one half splits
 // into two quarters with the other half untouched. The zero Shard is every
 // address.
 type Shard struct{ I, N int }
@@ -32,8 +32,8 @@ func ParseShard(s string) (Shard, error) {
 	is, ns, ok := strings.Cut(s, "/")
 	i, ierr := strconv.Atoi(is)
 	n, nerr := strconv.Atoi(ns)
-	if !ok || ierr != nil || nerr != nil || n < 1 || n > maxShards || n&(n-1) != 0 || i < 0 || i >= n {
-		return Shard{}, fmt.Errorf("a shard is I/N: N a power of two from 1 to %d, I from 0 to N-1", maxShards)
+	if !ok || ierr != nil || nerr != nil || n < 1 || n > maxShards || n&(n-1) != 0 || i < 1 || i > n {
+		return Shard{}, fmt.Errorf("a shard is I/N: N a power of two from 1 to %d, I from 1 to N", maxShards)
 	}
 	return Shard{I: i, N: n}, nil
 }
@@ -41,7 +41,7 @@ func ParseShard(s string) (Shard, error) {
 // String writes the shard as ParseShard reads it.
 func (s Shard) String() string {
 	if s.N <= 1 {
-		return "0/1"
+		return "1/1"
 	}
 	return fmt.Sprintf("%d/%d", s.I, s.N)
 }
@@ -53,7 +53,7 @@ func (s Shard) owns(addr string) bool {
 		return true
 	}
 	a, err := protocol.ParseAddress(addr)
-	return err != nil || int(a[0]>>2)*s.N/maxShards == s.I
+	return err != nil || int(a[0]>>2)*s.N/maxShards == s.I-1
 }
 
 // owned answers 503 to a call for a mailbox outside this process's shard,

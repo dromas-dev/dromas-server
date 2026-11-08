@@ -25,8 +25,9 @@ import (
 const base64urlAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
 // proxyShard is the shard of n a reverse proxy in front sends a path to, as
-// a map over the path does: the first character after /v1/d_, by its
-// base64url value; a path naming no mailbox goes to shard 0.
+// a map over the path does, counted from 0 (shard I is index I-1): the first
+// character after /v1/d_, by its base64url value; a path naming no mailbox
+// goes to the first shard.
 func proxyShard(path string, n int) int {
 	rest, ok := strings.CutPrefix(path, "/v1/"+protocol.AddressForm+"_")
 	if !ok || rest == "" {
@@ -45,10 +46,10 @@ func proxyShard(path string, n int) int {
 // route to refuse.
 func TestEveryAddressIsOneShards(t *testing.T) {
 	t.Parallel()
-	layouts := [][]Shard{{{0, 4}, {1, 4}, {1, 2}}}
+	layouts := [][]Shard{{{1, 4}, {2, 4}, {2, 2}}}
 	for n := 1; n <= maxShards; n *= 2 {
 		var l []Shard
-		for i := range n {
+		for i := 1; i <= n; i++ {
 			l = append(l, Shard{i, n})
 		}
 		layouts = append(layouts, l)
@@ -67,8 +68,8 @@ func TestEveryAddressIsOneShards(t *testing.T) {
 			if len(owners) != 1 {
 				t.Fatalf("%s… is owned by %v of %v: want one", addr[:3], owners, l)
 			}
-			if o := owners[0]; o.N > 1 && proxyShard("/v1/"+addr+"/messages", o.N) != o.I {
-				t.Fatalf("%s… is shard %s's, and a proxy matching its first character sends it to %d of %d", addr[:3], o, proxyShard("/v1/"+addr, o.N), o.N)
+			if o := owners[0]; o.N > 1 && proxyShard("/v1/"+addr+"/messages", o.N) != o.I-1 {
+				t.Fatalf("%s… is shard %s's, and a proxy matching its first character sends it to %d of %d", addr[:3], o, proxyShard("/v1/"+addr, o.N)+1, o.N)
 			}
 		}
 	}
@@ -81,7 +82,7 @@ func TestEveryAddressIsOneShards(t *testing.T) {
 
 func TestAShardIsIOfAPowerOfTwo(t *testing.T) {
 	t.Parallel()
-	for _, s := range []string{"0/1", "0/2", "1/2", "3/4", "63/64"} {
+	for _, s := range []string{"1/1", "1/2", "2/2", "4/4", "64/64"} {
 		sh, err := ParseShard(s)
 		if err != nil || sh.String() != s {
 			t.Errorf("%q: %v, %v", s, sh, err)
@@ -90,14 +91,14 @@ func TestAShardIsIOfAPowerOfTwo(t *testing.T) {
 	if sh, err := ParseShard(""); err != nil || sh.N > 1 || !sh.owns("d_x") {
 		t.Errorf(`"": %v, %v: want every address`, sh, err)
 	}
-	for _, s := range []string{"1", "/2", "2/2", "-1/2", "0/3", "0/0", "0/128", "a/b", "0/2/4", " 0/2"} {
+	for _, s := range []string{"1", "/2", "0/2", "3/2", "-1/2", "1/3", "1/0", "0/0", "1/128", "a/b", "1/2/4", " 1/2"} {
 		if _, err := ParseShard(s); err == nil {
 			t.Errorf("%q is taken as a shard", s)
 		}
 	}
 }
 
-// sharded is n processes, shard i of n each, behind a reverse proxy that
+// sharded is n processes, procs[i] shard i+1 of n, behind a reverse proxy that
 // sends each mailbox's calls to its own (proxyShard), as the one in front
 // does. On PostgreSQL each process is a store of its own, following the
 // feed; in memory they share one store, which is the tables.
@@ -167,7 +168,7 @@ func newSharded(t *testing.T, n int) *sharded {
 	return s
 }
 
-// start starts the process of shard i, on shared, or on a store of its own
+// start starts procs[i], shard i+1, on shared, or on a store of its own
 // when shared is nil.
 func (s *sharded) start(i int, shared Store) *env {
 	s.t.Helper()
@@ -178,7 +179,7 @@ func (s *sharded) start(i int, shared Store) *env {
 		p.store, ready = m, m.Ready
 	}
 	p.server = New(Config{Store: p.store, Limits: relaxed(), Now: s.clock.Now, Ready: ready,
-		Shard: Shard{I: i, N: len(s.procs)}, Metrics: NewMetrics(prometheus.NewRegistry())})
+		Shard: Shard{I: i + 1, N: len(s.procs)}, Metrics: NewMetrics(prometheus.NewRegistry())})
 	p.srv = httptest.NewServer(apitest.Handler(s.t, p.server.Handler()))
 	s.t.Cleanup(p.srv.Close)
 	return p
