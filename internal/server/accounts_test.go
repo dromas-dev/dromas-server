@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/jackc/pgx/v5"
 	"io"
 	"maps"
 	"net"
@@ -455,8 +456,14 @@ func TestAccountChangesReachMemory(t *testing.T) {
 		_, err := a.Send(ctx, b.Address(), fmt.Sprintf("metered %d", i))
 		return limitedBy(err, protocol.QuotaSends)
 	})
-	// An account its mailboxes name is not deleted: they reference it.
-	if _, err := s.pool().Exec(ctx, `DELETE FROM accounts WHERE id = $1`, acc.ID); !isPgCode(err, "23503") {
+	// An account its mailboxes name is not deleted: they reference it. The
+	// role serve runs as deletes no account (migration 00004), so the hand
+	// edit is the owner's.
+	err := asTestRole(func(ctx context.Context, conn *pgx.Conn) error {
+		_, err := conn.Exec(ctx, `DELETE FROM `+s.pg().schema+`.accounts WHERE id = $1`, acc.ID)
+		return err
+	})
+	if !isPgCode(err, "23503") {
 		t.Fatalf("the delete of an account a mailbox is in: %v; want a foreign key's refusal", err)
 	}
 }
