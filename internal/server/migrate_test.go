@@ -150,6 +150,66 @@ func TestTheRuntimeRoleOnlyReadsTheVersions(t *testing.T) {
 	}
 }
 
+// What the role serve runs as may not do to a revocation, which is kept for
+// good, or to an account: delete either, take an address's revocation
+// back or change it, or lower a revocation of certificates. Each refusal
+// is the database's, so a server broken into cannot either.
+func TestTheRuntimeRoleCannotTakeARevocationBack(t *testing.T) {
+	t.Parallel()
+	if !onPostgres() {
+		t.Skip("needs PostgreSQL: DROMAS_TEST_POSTGRES")
+	}
+	schema := newSchema()
+	url := pgURL(t, schema)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(context.Background()) }()
+	exec := func(q string) error {
+		_, err := conn.Exec(ctx, q)
+		return err
+	}
+	if err := exec("SET search_path = " + schema); err != nil {
+		t.Fatal(err)
+	}
+	// Controls: the role writes what dromas-server writes.
+	for _, q := range []string{
+		`INSERT INTO revocations (addr, identity, revoked_certs, revoked_certs_sig, through) VALUES (sha384('i'), 'i', 'c', 's', 2)`,
+		`UPDATE revocations SET revoked_certs = 'c3', revoked_certs_sig = 's3', through = 3`,
+		`UPDATE revocations SET revocation = 'r'`,
+		`UPDATE revocations SET revocation = COALESCE(revocation, 'r2')`,
+		`INSERT INTO accounts (id, unmetered, rev) VALUES ('a', false, 1)`,
+		`DELETE FROM messages WHERE false`,
+	} {
+		if err := exec(q); err != nil {
+			t.Fatalf("control: %s as the runtime role: %v", q, err)
+		}
+	}
+	for _, c := range []struct{ q, code string }{
+		{`DELETE FROM revocations`, "42501"},
+		{`TRUNCATE revocations`, "42501"},
+		{`DELETE FROM accounts`, "42501"},
+		{`UPDATE revocations SET revocation = 'another'`, "23514"},
+		{`UPDATE revocations SET revocation = NULL`, "23514"},
+		{`UPDATE revocations SET revoked_certs = 'c1', revoked_certs_sig = 's1', through = 1`, "23514"},
+		{`UPDATE revocations SET identity = 'j', addr = sha384('j')`, "23514"},
+		{`DROP TRIGGER revocations_only_add ON revocations`, "42501"},
+		{`ALTER TABLE revocations DISABLE TRIGGER revocations_only_add`, "42501"},
+	} {
+		if err := exec(c.q); !isPgCode(err, c.code) {
+			t.Errorf("%s as the runtime role: %v; want %s", c.q, err, c.code)
+		}
+	}
+	var through int
+	var rev []byte
+	if err := conn.QueryRow(ctx, `SELECT through, revocation FROM revocations`).Scan(&through, &rev); err != nil || through != 3 || string(rev) != "r" {
+		t.Errorf("the revocations kept: through %d, revocation %q, %v; want 3 and r", through, rev, err)
+	}
+}
+
 // migrationVersions is this build's migrations' versions, in order.
 func migrationVersions() ([]int64, error) {
 	var out []int64
