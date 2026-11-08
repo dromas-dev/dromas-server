@@ -96,7 +96,7 @@ func serve(args []string) error {
 	region := fs.String("region", "us-east-1", "the AWS region of --bucket")
 	mailboxCache := fs.Int("mailbox-cache", server.DefaultMailboxCache, "mailbox records held in memory, for sends and reads of a mailbox")
 	dbConns := fs.Int("db-max-conns", 0, "the most connections to the database this process's pool holds for its calls; the feed's three are beside them (0: pgxpool's default, the greater of 4 and the number of CPUs)")
-	shard := fs.String("shard", "", "I/N: this process answers only for the mailboxes of shard I of N, N a power of two up to 64, when the reverse proxy in front sends each mailbox's calls to one process by its address: shard I is the addresses whose first character after d_ has a base64url value v with v*N/64 == I; any other mailbox's call is answered 503 (empty: every mailbox)")
+	shard := fs.String("shard", "", "I/N: this process answers only for the mailboxes of shard I of N, N a power of two up to 64 and I from 1 to N, when the reverse proxy in front sends each mailbox's calls to one process by its address: shard I is the addresses whose first character after d_ has a base64url value v with v*N/64 == I-1; any other mailbox's call is answered 503 (empty: every mailbox)")
 	proxies := fs.String("trusted-proxy", "", "comma-separated CIDRs of the reverse proxy in front, if any, whose X-Forwarded-For names the client: its last address, the one the proxy wrote")
 	l := server.DefaultLimits()
 	fs.IntVar(&l.HeadBytes, "max-header-bytes", l.HeadBytes, "the most of a request's head, its request line and headers, the server reads: what the longest call needs, its pass at the longest a pass can be, and no more; net/http answers a longer one 431 (0: net/http's default)")
