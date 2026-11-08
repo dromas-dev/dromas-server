@@ -199,7 +199,7 @@ sequenceDiagram
 
 | Answer | Compressed | Why |
 |---|---|---|
-| A mailbox's read, `GET /v1/<addr>` `200` | Per answer, by Huffman coding alone, with a writer from a pool | Base64 in JSON, read before every post and for each sender in a drain. On reads of 1.6 KB and 4.1 KB (an X25519 and a post-quantum prekey) it saves 24% and 27% in about 9 and 13 µs; levels 1 to 6 save 1.4 to 3.8% of an X25519 read more, and nothing of a post-quantum one, in 1.5 to 1.7 times the time, since base64 holds almost no repeats, and a new writer per answer costs more than the coding (measured 2026-10-18) |
+| A mailbox's read, `GET /v1/<addr>` `200` | Per answer, by Huffman coding alone, with a writer from a pool | Base64 in JSON, read before every post. On reads of 1.6 KB and 4.1 KB (an X25519 and a post-quantum prekey) it saves 24% and 27% in about 9 and 13 µs; levels 1 to 6 save 1.4 to 3.8% of an X25519 read more, and nothing of a post-quantum one, in 1.5 to 1.7 times the time, since base64 holds almost no repeats, and a new writer per answer costs more than the coding (measured 2026-10-18) |
 | A list or a poll | Never | A `304` has no body and an empty page is 45 bytes; a page puts what senders chose beside the mailbox's own values, the shape of BREACH (RFC 7457 §2.6) |
 | A fetch | Never | Age ciphertext does not compress (§ Storage) |
 | Errors, an owner's reads, the link page | Never | A few hundred bytes, or seldom asked for |

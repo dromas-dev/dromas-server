@@ -544,9 +544,9 @@ func (s *Server) getMailbox(w http.ResponseWriter, r *http.Request) error {
 
 // getRevocations is GET /v1/<address>/revocations (PROTOCOL.md §11.15): the
 // record this server holds of the address, with a mailbox here or none, or 404
-// not_revoked. A mailbox learns the same of the mailboxes it writes to from their read
-// (getMailbox); this route is for its own, where this server holds no mailbox for it.
-// It takes no pass, as the PUT beside it takes none.
+// not_revoked. A reader asks it of each sender in a drain (PROTOCOL.md §12.3,
+// check 7), and a mailbox asks it of its own address where this server holds no
+// mailbox for it. It takes no pass, as the PUT beside it takes none.
 func (s *Server) getRevocations(w http.ResponseWriter, r *http.Request) error {
 	h, err := pathAddr(r)
 	if err != nil {
