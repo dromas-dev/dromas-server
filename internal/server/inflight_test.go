@@ -411,7 +411,7 @@ type leadDedupe struct {
 	entered, second, read chan struct{}
 }
 
-func (s *leadDedupe) Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
+func (s *leadDedupe) Header(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
 	switch s.n.Add(1) {
 	case 1:
 		close(s.entered)
@@ -424,7 +424,7 @@ func (s *leadDedupe) Dedupe(ctx context.Context, mailbox protocol.Address, id [3
 		close(s.second)
 		<-s.read
 	}
-	return s.Store.Dedupe(ctx, mailbox, id)
+	return s.Store.Header(ctx, mailbox, id)
 }
 
 // armedDedupe is leadDedupe once on: every dedupe read before is the
@@ -434,11 +434,11 @@ type armedDedupe struct {
 	on atomic.Bool
 }
 
-func (s *armedDedupe) Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
+func (s *armedDedupe) Header(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
 	if !s.on.Load() {
-		return s.Store.Dedupe(ctx, mailbox, id)
+		return s.Store.Header(ctx, mailbox, id)
 	}
-	return s.leadDedupe.Dedupe(ctx, mailbox, id)
+	return s.leadDedupe.Header(ctx, mailbox, id)
 }
 
 // Posts of the same bytes from one sender naming other statements are posts

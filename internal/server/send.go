@@ -241,12 +241,18 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 	// stored, a renewal of the mailbox's prekey included. What those checks keep
 	// from the mailbox is a new message, and that is none. Nothing is kept once a
 	// message is acked or expired, so the same bytes after that are a new message.
+	// The read is held to the sender's pass, not to the recipient's record, as
+	// the write is to both (held.go): a sender ended at another process since
+	// its pass was checked here meets the write's refusal (changedSend).
 	read, cancel := bounded(ctx)
-	orig, err := s.store.Dedupe(read, to, msgID)
+	orig, err := s.store.Header(withPass(read, p.by), to, msgID)
 	cancel()
-	if err == nil {
+	switch {
+	case err == nil:
 		return delivered{h: orig}, nil
-	} else if !errors.Is(err, ErrNotFound) {
+	case errors.Is(err, ErrStale):
+		return delivered{}, s.changedSend(ctx, to, from)
+	case !errors.Is(err, ErrNotFound):
 		return delivered{}, err
 	}
 

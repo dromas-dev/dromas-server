@@ -163,8 +163,10 @@ func TestAContinuationIsTheCursorHandedOutLast(t *testing.T) {
 	}
 }
 
-// A fetch or an ack of an id the mailbox does not hold is answered from memory.
-func TestUnknownIDsStayInMemory(t *testing.T) {
+// A fetch or an ack of an id the mailbox does not hold is answered from
+// memory, once one read shows its pass holds (Store.PassHeld): no row is
+// read for it.
+func TestAnUnknownIDReadsOnlyItsPass(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	a, b := e.mailbox(), e.mailbox()
@@ -177,19 +179,19 @@ func TestUnknownIDsStayInMemory(t *testing.T) {
 	unknown := strings.Repeat("ab", 32)
 	e2.want(msg(http.MethodGet, unknown), http.StatusNotFound, protocol.CodeNoSuchMessage)
 	e2.want(msg(http.MethodDelete, unknown), http.StatusNotFound, protocol.CodeNoSuchMessage)
-	if n := cs.calls.Load(); n != 0 {
-		t.Fatalf("%d storage calls for an id the mailbox does not hold", n)
+	if n := cs.calls.Load(); n != 2 {
+		t.Fatalf("%d storage calls for a fetch and an ack of an id the mailbox does not hold; want 2, a read of the pass each", n)
 	}
 	id := send(t, a, b, "x").ID
 	e2.want(msg(http.MethodGet, id), http.StatusOK, "")
 	e2.want(msg(http.MethodDelete, id), http.StatusNoContent, "")
-	if n := cs.calls.Load(); n != 2 {
-		t.Fatalf("%d storage calls for a fetch and an ack", n)
+	if n := cs.calls.Load(); n != 4 {
+		t.Fatalf("%d storage calls for a fetch and an ack", n-2)
 	}
 	e2.want(msg(http.MethodGet, id), http.StatusNotFound, protocol.CodeNoSuchMessage)
 	e2.want(msg(http.MethodDelete, id), http.StatusNotFound, protocol.CodeNoSuchMessage)
-	if n := cs.calls.Load(); n != 2 {
-		t.Fatalf("%d storage calls: an acked id reached storage again", n)
+	if n := cs.calls.Load(); n != 6 {
+		t.Fatalf("%d storage calls for a fetch and an ack of an acked id; want 2, a read of the pass each", n-4)
 	}
 }
 

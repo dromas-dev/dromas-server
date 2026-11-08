@@ -27,9 +27,10 @@ import (
 //     other error is taken as unknown too.
 //
 // A call carries in its context what its checks read of memory and relied
-// on (held.go): the pass a mailbox's own call was taken under, which List,
-// Message, Retire, DeleteMessage, UpdateMailbox, Adopt and Leave are held
-// to, and a send's recipient record and sender's pass, which PutMessage is.
+// on (held.go): the pass a call was taken under, which List, Message,
+// Header, PassHeld, Retire, DeleteMessage, UpdateMailbox, Adopt and Leave
+// are held to, and a send's recipient record and sender's pass, which
+// PutMessage is.
 // A call whose standing no longer holds is ErrStale, and reads or changes
 // nothing.
 //
@@ -55,9 +56,13 @@ type Backend interface {
 	// ErrNotFound; or errNoBody, with the header, for a live row whose body
 	// is gone.
 	Message(ctx context.Context, mailbox protocol.Address, id [32]byte, from int64) (*Header, []byte, error)
-	// Dedupe returns the header of the live message mailbox holds with this
-	// id, or ErrNotFound.
-	Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error)
+	// Header returns the header of the live message mailbox holds with this
+	// id, or ErrNotFound: a message's HEAD, and a send's dedupe, whose
+	// context carries the sender's pass.
+	Header(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error)
+	// PassHeld reads whether ctx's pass still holds: nil, or ErrStale. A
+	// fetch or an ack of an id memory does not hold reads nothing else.
+	PassHeld(ctx context.Context) error
 	// Account reads an account's record, strongly consistent, or returns
 	// ErrNotFound.
 	Account(ctx context.Context, id string) (*Account, error)

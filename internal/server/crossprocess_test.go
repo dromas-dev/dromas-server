@@ -77,6 +77,24 @@ func (x *twoProcesses) onB(method, path string, body any, pass string, headers .
 	return x.b.doAs(x.a.name(), method, path, body, pass, headers...)
 }
 
+// headOnB is a HEAD on B by A's name: its status, since its answer has no
+// content to read a code from.
+func (x *twoProcesses) headOnB(path, pass string) int {
+	x.t.Helper()
+	req, err := http.NewRequest(http.MethodHead, x.b.srv.URL+path, nil)
+	if err != nil {
+		x.t.Fatal(err)
+	}
+	req.Host = x.a.name()
+	req.Header.Set("Authorization", pass)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		x.t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode
+}
+
 // count is the one integer q reads from the database.
 func (x *twoProcesses) count(q string, args ...any) int {
 	x.t.Helper()
@@ -93,8 +111,9 @@ func messagesOf(x *twoProcesses, a protocol.Address) int {
 
 // After a renewal on A, B, behind, stores no send sealed to the statement
 // the renewal replaced (PROTOCOL.md §15.3), and takes the replaced
-// certificate's pass for no fetch, ack, list, ACL or long poll held since
-// before it (§15.5; dromas-dev/dromas-server#195, #247, #226). Each call is
+// certificate's pass for no fetch, ack, message's HEAD, list, ACL or long
+// poll held since before it, nor for a fetch or an ack of an id the mailbox
+// does not hold (§15.5; dromas-dev/dromas-server#195, #247, #226, #266). Each call is
 // B's first after the renewal, on a pair of processes of its own: B's
 // memory, once it has found itself behind, answers the next call from the
 // record read again.
@@ -114,6 +133,17 @@ func TestAProcessBehindTakesNothingARenewalElsewhereEnded(t *testing.T) {
 		}},
 		{"an ack", false, func(t *testing.T, x *twoProcesses, _, to *raw, id [32]byte, old string, _ <-chan reply) {
 			x.a.wantNotCurrent(x.onB("DELETE", to.path("/messages/"+hexID(id)), nil, old), 3)
+		}},
+		{"a message's HEAD", false, func(t *testing.T, x *twoProcesses, _, to *raw, id [32]byte, old string, _ <-chan reply) {
+			if got := x.headOnB(to.path("/messages/"+hexID(id)), old); got != http.StatusUnauthorized {
+				t.Errorf("HEAD under the replaced certificate: %d; want 401", got)
+			}
+		}},
+		{"a fetch of an id the mailbox does not hold", false, func(t *testing.T, x *twoProcesses, _, to *raw, _ [32]byte, old string, _ <-chan reply) {
+			x.a.wantNotCurrent(x.onB("GET", to.path("/messages/"+hexID([32]byte{1})), nil, old), 3)
+		}},
+		{"an ack of an id the mailbox does not hold", false, func(t *testing.T, x *twoProcesses, _, to *raw, _ [32]byte, old string, _ <-chan reply) {
+			x.a.wantNotCurrent(x.onB("DELETE", to.path("/messages/"+hexID([32]byte{1})), nil, old), 3)
 		}},
 		{"a list", false, func(t *testing.T, x *twoProcesses, _, to *raw, _ [32]byte, old string, _ <-chan reply) {
 			x.a.wantNotCurrent(x.onB("GET", to.path("/messages"), nil, old), 3)
@@ -214,6 +244,119 @@ func TestAProcessBehindStoresNothingForAnAddressRevokedElsewhere(t *testing.T) {
 		t.Errorf("after a send on B to the revoked address: %d messages held; want none", n)
 	}
 	x.hold(false)
+}
+
+// After a revocation of an address on A, B, behind, answers its mailbox's
+// own pass, for a message's HEAD and for a fetch or an ack of an id it does
+// not hold, as revoked (PROTOCOL.md §11.15; dromas-dev/dromas-server#266):
+// what memory shows of its messages is held to the pass.
+func TestAProcessBehindAnswersAMailboxRevokedElsewhereAsRevoked(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		method string
+		held   bool // the id is of a message memory holds
+	}{
+		{"a message's HEAD", http.MethodHead, true},
+		{"a fetch of an id the mailbox does not hold", "GET", false},
+		{"an ack of an id the mailbox does not hold", "DELETE", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			x := newTwoProcesses(t)
+			a := x.a
+			from, to := a.raw().register(protocol.MaxPrekeyLifetime), a.raw().register(protocol.MaxPrekeyLifetime)
+			ct := sealFor(t, to, 1)
+			a.want(x.onB("POST", to.path("/messages"), to.sealed(1, ct), from.pass(1)), http.StatusCreated, "")
+			fed(t, x.follower)
+			id := [32]byte{1}
+			if c.held {
+				id = sha256.Sum256(ct)
+			}
+			path := to.path("/messages/" + hexID(id))
+			sig, err := protocol.Sign(to.signer, protocol.RevocationStatement(to.id.Address()), protocol.RevokeNamespace(to.id.Address()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			x.hold(true)
+			a.want(a.do("PUT", revocationPath(to.id.Address()), protocol.Revocations{Identity: to.id.Document(), Revocation: sig}, ""), http.StatusCreated, "")
+			if st, ok := x.follower.Held(to.id.Address()); !ok || st.State != Active {
+				t.Fatal("control: B does not hold the mailbox as active")
+			}
+			if c.method == http.MethodHead {
+				if got := x.headOnB(path, to.pass(1)); got != http.StatusGone {
+					t.Errorf("HEAD of the revoked mailbox's message: %d; want 410", got)
+				}
+			} else {
+				x.a.want(x.onB(c.method, path, nil, to.pass(1)), http.StatusGone, protocol.CodeRevoked)
+			}
+			x.hold(false)
+		})
+	}
+}
+
+// After a sender renews on A, B, behind, answers a post of a message the
+// recipient holds, sent again by the sender's replaced certificate, with no
+// receipt, and after the sender's address is revoked, a post by it of any
+// (PROTOCOL.md §11.10 step 6, §15.5; dromas-dev/dromas-server#266): the
+// dedupe is held to the sender's pass, as the write is.
+func TestAProcessBehindAnswersNoDuplicateOfASenderEndedElsewhere(t *testing.T) {
+	t.Parallel()
+	x := newTwoProcesses(t)
+	a := x.a
+	to := a.raw().register(protocol.MaxPrekeyLifetime)
+	from := a.raw()
+	from.registerCertified(protocol.MaxPrekeyLifetime)
+	again := to.sealed(1, sealFor(t, to, 1))
+	a.want(x.onB("POST", to.path("/messages"), again, from.pass(2)), http.StatusCreated, "")
+	fed(t, x.follower)
+	x.hold(true)
+	from.prekey(3, a.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+	a.want(a.do("PUT", from.path("/prekey"), from.upload(3), from.pass(3)), http.StatusOK, "")
+	a.wantNotCurrent(a.do("POST", to.path("/messages"), again, from.pass(2)), 3)
+	a.want(x.onB("POST", to.path("/messages"), again, from.pass(2)), http.StatusConflict, protocol.CodeMailboxChanged)
+	a.wantNotCurrent(x.onB("POST", to.path("/messages"), again, from.pass(2)), 3)
+	a.want(x.onB("POST", to.path("/messages"), again, from.pass(3)), http.StatusOK, "") // the sender's current pass: its receipt
+	sig, err := protocol.Sign(from.signer, protocol.RevocationStatement(from.id.Address()), protocol.RevokeNamespace(from.id.Address()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.want(a.do("PUT", revocationPath(from.id.Address()), protocol.Revocations{Identity: from.id.Document(), Revocation: sig}, ""), http.StatusCreated, "")
+	a.want(x.onB("POST", to.path("/messages"), again, from.pass(3)), http.StatusForbidden, protocol.CodeSenderRevoked)
+	if n := messagesOf(x, to.id.Address()); n != 1 {
+		t.Errorf("%d messages held; want 1, the first", n)
+	}
+	x.hold(false)
+}
+
+// A post of a message the recipient holds, sent again after the recipient
+// renewed on A, is answered with its receipt (PROTOCOL.md §11.10 step 6), on
+// B behind and once it has caught up: the dedupe is held to the sender's
+// pass, never to the recipient's record.
+func TestADuplicateAcrossARenewalElsewhereGetsItsReceipt(t *testing.T) {
+	t.Parallel()
+	x := newTwoProcesses(t)
+	a := x.a
+	from, to := a.raw().register(protocol.MaxPrekeyLifetime), a.raw().register(protocol.MaxPrekeyLifetime)
+	again := to.sealed(1, sealFor(t, to, 1))
+	first := x.onB("POST", to.path("/messages"), again, from.pass(1))
+	a.want(first, http.StatusCreated, "")
+	fed(t, x.follower)
+	x.hold(true)
+	to.prekey(2, a.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+	a.want(a.do("PUT", to.path("/prekey"), to.upload(2), to.pass(2)), http.StatusOK, "")
+	behind := x.onB("POST", to.path("/messages"), again, from.pass(1))
+	x.hold(false)
+	caught := x.onB("POST", to.path("/messages"), again, from.pass(1))
+	for name, r := range map[string]reply{"behind": behind, "caught up": caught} {
+		if r.status != http.StatusOK || !bytes.Equal(bytes.TrimSpace(r.body), bytes.TrimSpace(first.body)) {
+			t.Errorf("B %s: %d %s; want 200 and the receipt %s", name, r.status, r.body, first.body)
+		}
+	}
+	if n := messagesOf(x, to.id.Address()); n != 1 {
+		t.Errorf("%d messages held; want 1", n)
+	}
 }
 
 // After the identity revokes certificates through 2 on A, B, behind, takes

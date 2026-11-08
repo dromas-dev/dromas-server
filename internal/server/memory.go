@@ -472,10 +472,27 @@ func (s *Memory) Account(ctx context.Context, id string) (*Account, error) {
 	return a, nil
 }
 
-// Dedupe implements Store: the live message's row. A stale miss is caught by
-// PutMessage's conditional write.
-func (s *Memory) Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
-	return s.backend.Dedupe(ctx, mailbox, id)
+// Header implements Store: the live message's row, held to ctx's pass. A
+// stale miss of a send's dedupe is caught by PutMessage's conditional write.
+func (s *Memory) Header(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
+	h, err := s.backend.Header(ctx, mailbox, id)
+	s.stale(ctx, err)
+	return h, err
+}
+
+// PassHeld implements Store.
+func (s *Memory) PassHeld(ctx context.Context) error {
+	err := s.backend.PassHeld(ctx)
+	s.stale(ctx, err)
+	return err
+}
+
+// stale forgets the address of ctx's pass where a read held to it met
+// ErrStale: the pass no longer holds, so memory is behind.
+func (s *Memory) stale(ctx context.Context, err error) {
+	if p, ok := passOf(ctx); ok && errors.Is(err, ErrStale) {
+		s.forget(p.addr)
+	}
 }
 
 // PutMessage implements Store: stored, the message's mark joins memory; met

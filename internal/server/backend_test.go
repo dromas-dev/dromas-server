@@ -263,7 +263,7 @@ func backendWrites() map[string]backendWrite {
 
 // backendReads are the Backend's reads, and its feed's methods: every other
 // method is a write, and in backendWrites.
-var backendReads = []string{"ReadAddress", "ReadLive", "List", "Message", "Dedupe", "Account", "AdoptKey", "Start", "Ready"}
+var backendReads = []string{"ReadAddress", "ReadLive", "List", "Message", "Header", "PassHeld", "Account", "AdoptKey", "Start", "Ready"}
 
 // Every write of the Backend, whatever the backend, has one of three
 // outcomes, and the store's one choke point (Memory.write) makes each what
