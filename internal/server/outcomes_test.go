@@ -171,7 +171,9 @@ func TestAPutThatMeetsALiveRowIsADuplicate(t *testing.T) {
 		{"a second later", time.Second, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			to := protocol.Address{0x0e, byte(c.later / time.Second)}
+			// A mailbox's address: memory counts a message only where the
+			// address has a record.
+			to := newRecord(t).Addr
 			if _, err := s.Count(ctx, to); err != nil { // loaded, so its marks are counted
 				t.Fatal(err)
 			}

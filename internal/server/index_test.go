@@ -49,7 +49,7 @@ func TestIndex(t *testing.T) {
 	k2 := mark{tag: 2, id: 2, exp: now + 900}
 
 	t.Run("a set: inserts twice count once", func(t *testing.T) {
-		x := loaded(t, mailbox, mailboxRead{})
+		x := loaded(t, mailbox, mailboxRead{exists: true})
 		x.insert(mailbox, k1, now)
 		x.insert(mailbox, k1, now) // the feed's echo of our own write
 		x.insert(mailbox, k2, now)
@@ -59,7 +59,7 @@ func TestIndex(t *testing.T) {
 	})
 
 	t.Run("a late insert does not bring back an ack", func(t *testing.T) {
-		x := loaded(t, mailbox, mailboxRead{})
+		x := loaded(t, mailbox, mailboxRead{exists: true})
 		x.insert(mailbox, k1, now)
 		x.remove(mailbox, k1.tag, k1.exp, now, false) // our ack
 		x.insert(mailbox, k1, now)                    // the feed's late insert
@@ -73,7 +73,7 @@ func TestIndex(t *testing.T) {
 	})
 
 	t.Run("an ack of a message the feed has not shown yet", func(t *testing.T) {
-		x := loaded(t, mailbox, mailboxRead{})
+		x := loaded(t, mailbox, mailboxRead{exists: true})
 		x.remove(mailbox, k1.tag, k1.exp, now, false)
 		x.insert(mailbox, k1, now)
 		if n := x.count(mailbox, now); n != 0 {
@@ -82,7 +82,7 @@ func TestIndex(t *testing.T) {
 	})
 
 	t.Run("a tomb whose echo came first dies at its expiry", func(t *testing.T) {
-		x := loaded(t, mailbox, mailboxRead{})
+		x := loaded(t, mailbox, mailboxRead{exists: true})
 		x.insert(mailbox, k1, now)
 		x.deleted(mailbox, k1.tag, now)               // the echo, first
 		x.remove(mailbox, k1.tag, k1.exp, now, false) // then our own apply
@@ -93,7 +93,7 @@ func TestIndex(t *testing.T) {
 	})
 
 	t.Run("expiry, with no event", func(t *testing.T) {
-		x := loaded(t, mailbox, mailboxRead{})
+		x := loaded(t, mailbox, mailboxRead{exists: true})
 		x.insert(mailbox, k1, now)
 		x.insert(mailbox, k2, now)
 		if n := x.count(mailbox, k1.exp-1); n != 2 || !x.holds(mailbox, k1.tag, k1.exp-1) || !x.holds(mailbox, k2.tag, k1.exp-1) {
@@ -111,7 +111,7 @@ func TestIndex(t *testing.T) {
 	t.Run("a removal by image names the message, not just its id", func(t *testing.T) {
 		// The same ciphertext, resent after the first expired: the late
 		// removal of the first must not remove the second.
-		x := loaded(t, mailbox, mailboxRead{})
+		x := loaded(t, mailbox, mailboxRead{exists: true})
 		again := mark{tag: k1.tag, id: k1.id, exp: k1.exp + 1000}
 		x.insert(mailbox, again, k1.exp)
 		x.remove(mailbox, k1.tag, k1.exp, k1.exp, true)
@@ -128,7 +128,7 @@ func TestIndex(t *testing.T) {
 		// deletion's echo.
 		again := mark{tag: k1.tag, id: k1.id, exp: k1.exp + 100}
 		for _, ours := range []bool{true, false} {
-			x := loaded(t, mailbox, mailboxRead{})
+			x := loaded(t, mailbox, mailboxRead{exists: true})
 			x.insert(mailbox, k1, now)
 			if ours {
 				x.remove(mailbox, k1.tag, k1.exp, now, false)
@@ -143,7 +143,7 @@ func TestIndex(t *testing.T) {
 		// A deletion after the first expired, by the TTL, finds only the
 		// second: it goes, and the feed's insert of it, which comes after
 		// the deletion, brings it back.
-		x := loaded(t, mailbox, mailboxRead{})
+		x := loaded(t, mailbox, mailboxRead{exists: true})
 		x.insert(mailbox, again, k1.exp)
 		x.deleted(mailbox, k1.tag, k1.exp)
 		x.insert(mailbox, again, k1.exp)
@@ -193,6 +193,16 @@ func TestIndex(t *testing.T) {
 		x.setStanding(mailbox, Standing{State: Active, Rank: 7}, version{rev: 3})
 		if st, ok := x.standing(mailbox); !ok || st.State != Revoked {
 			t.Fatalf("a revoked address: %+v %v", st, ok)
+		}
+	})
+
+	t.Run("an address with no record takes no mark", func(t *testing.T) {
+		for name, read := range map[string]mailboxRead{"no record": {}, "revoked, no record": {revoked: true}} {
+			x := loaded(t, mailbox, read)
+			x.insert(mailbox, k1, now)
+			if n := x.count(mailbox, now); n != 0 || x.holds(mailbox, k1.tag, now) {
+				t.Fatalf("an address loaded with %s: count %d after an insert, want 0", name, n)
+			}
 		}
 	})
 
@@ -328,6 +338,56 @@ func TestIndexLoad(t *testing.T) {
 			t.Fatal("not loaded on the retry")
 		}
 	})
+}
+
+// The feed's late echo of a message's insert, landing while an address whose
+// record a revocation deleted with its messages is loaded again, counts
+// nothing: the load found no record, and no send stores a message where
+// there is none (dromas-dev/dromas-server#254). The load is held once its
+// read is done until the echo is queued on it, so the order is the test's,
+// not the feed's: on PostgreSQL every echo of the test's own writes is
+// applied first (fed), so none lands after it.
+func TestALateInsertDuringTheLoadOfAnAddressWithNoRecordCountsNothing(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t, relaxed())
+	m, ok := e.store.(*Memory)
+	if !ok {
+		t.Skipf("the store is %T, not memory", e.store)
+	}
+	a, b := e.mailbox(), e.mailbox()
+	addr := a.Address()
+	send(t, b, a, "waiting in A's mailbox when it is revoked")
+	live, err := m.backend.ReadLive(ctx, addr)
+	if err != nil || len(live) != 1 {
+		t.Fatalf("before the revocation the store holds %d messages for A (%v), want 1", len(live), err)
+	}
+	e.want(e.do("PUT", revocationPath(addr), record(t, a), ""), 201, "")
+	if rec, _, err := m.backend.ReadAddress(ctx, addr); err != nil || rec != nil {
+		t.Fatalf("after the revocation the record is %v (%v), want none", rec, err)
+	}
+	fed(t, m)
+	m.forget(addr) // as the purge's DeleteMailbox does: the next use loads the address
+
+	read, release := make(chan struct{}), make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- m.idx.ensure(ctx, addr, func() (mailboxRead, error) {
+			r, err := m.readMailbox(ctx, addr)
+			close(read)
+			<-release
+			return r, err
+		})
+	}()
+	<-read
+	m.apply(Change{Kind: MessageChange, Addr: addr, Header: &live[0], Live: true}) // the send's insert, echoed late
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if n, err := m.Count(ctx, addr); err != nil || n != 0 {
+		t.Fatalf("the address loaded with no record counts %d messages (%v) after the late insert, want none", n, err)
+	}
 }
 
 // Every change memory applies to a mailbox wakes the long polls on it, from
