@@ -944,3 +944,177 @@ func TestAWriteReadFromTheRecordBeforeIsRefusedByTheRecordMadeAgain(t *testing.T
 	}
 	held("a leave", cur.Rev, acc.ID)
 }
+
+// newMemEnv is newEnv on a store of its own in memory, whichever store the
+// run tests, for a test that changes the in-memory backend underneath memory.
+func newMemEnv(t *testing.T, l Limits) (*env, *Memory, *memBackend) {
+	t.Helper()
+	var m *Memory
+	e := newEnv(t, l, func(c *Config) { m = NewMemStore(c.Now); c.Store, c.Ready = m, nil })
+	e.store = m
+	return e, m, m.backend.(*memBackend)
+}
+
+// A record made again at its address once the sweep took the one before,
+// both changes not yet delivered to memory, which is behind as a second
+// process is: a send checked against the copy of the record before is held
+// to it by its version, its created beside its rev, stores nothing, and is
+// answered 409 mailbox_changed. On PostgreSQL,
+// TestAProcessBehindWritesNothingToARecordMadeAgainAtItsAddress holds it.
+func TestASendReadFromTheRecordBeforeStoresNothingInTheRecordMadeAgain(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e, m, mb := newMemEnv(t, relaxed())
+	to := e.raw().register(protocol.MaxPrekeyLifetime)
+	from := e.raw().register(protocol.MaxPrekeyLifetime)
+	box := to.id.Address()
+	old, err := m.Mailbox(ctx, box)
+	if err != nil || old.Rev != 1 {
+		t.Fatalf("control: %v %v", err, old)
+	}
+	again := cloneMailbox(old)
+	again.Created = old.Created.Add(time.Second)
+	mb.mu.Lock()
+	delete(mb.mailboxes, box) // as the sweep does
+	mb.changed(Change{Kind: RecordChange, Addr: box, Gone: true})
+	rec := storedRecord(again)
+	mb.mailboxes[box] = rec // made again, at rev 1
+	mb.changed(recordChange(rec))
+	mb.mu.Unlock()
+	if b, ok := m.Known(box); !ok || !b.Created.Equal(old.Created) || b.Rev != 1 {
+		t.Fatalf("control: memory holds no copy of the record before at rev 1: %v", b)
+	}
+	e.want(e.sendTo(to, 1, from, 1), http.StatusConflict, protocol.CodeMailboxChanged)
+	mb.mu.Lock()
+	n := len(mb.messages[box])
+	mb.mu.Unlock()
+	if n != 0 {
+		t.Errorf("a send read from the record before stored %d messages in the record made again", n)
+	}
+}
+
+// A revocation whose backend finds no record, the sweep having taken it
+// before memory learnt of it, leaves memory none: memory forgets the copy it
+// held, the record cache and the index both (Memory.Revoke), so nothing is
+// served from a record that is gone, whether the record cache still holds
+// the copy or has evicted it, the index holding its standing alone. On
+// PostgreSQL, TestAProcessBehindKeepsNoRecordItsRevocationFoundGone holds it.
+func TestARevocationThatFindsNoRecordLeavesMemoryNone(t *testing.T) {
+	t.Parallel()
+	for name, evict := range map[string]bool{"the record cached": false, "the record evicted, its standing held": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			w := newHeldWorld(t, false)
+			w.backend.mu.Lock()
+			delete(w.backend.mailboxes, w.a) // as the sweep does, its change not yet delivered
+			w.backend.mu.Unlock()
+			if evict {
+				w.s.cache.write(w.a, evicted[*Mailbox])
+			}
+			if _, ok := w.s.Held(w.a); !ok {
+				t.Fatal("control: memory holds no standing of the mailbox")
+			}
+			if b, ok := w.s.Known(w.a); evict == (ok && b.hasRecord()) {
+				t.Fatalf("control: the record cache holds %v", b)
+			}
+			if err := w.s.Revoke(t.Context(), w.a, &Revocations{Identity: w.rec.Identity, Certs: []byte("c"), CertsSig: []byte("s"), Through: 1}, ExpectAnything); err != nil {
+				t.Fatal(err)
+			}
+			if b, ok := w.s.Known(w.a); ok && b.hasRecord() {
+				t.Errorf("after a revocation that found no record, memory holds a copy of the record, at rev %d", b.Rev)
+			}
+			if st, ok := w.s.Held(w.a); ok {
+				t.Errorf("after a revocation that found no record, memory holds the mailbox's standing: %+v", st)
+			}
+		})
+	}
+}
+
+// A record registered at a time with a part below the millisecond, which
+// memory's copy, this process's own write, holds and the store keeps to the
+// millisecond: every write held to the record's version is still taken, a
+// renewal, an ACL, a send, an adopt, a leave and a revocation of
+// certificates, whose raised rev memory applies to its copy (version).
+func TestAWriteToARecordMadeBetweenMillisecondsIsTaken(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t, relaxed())
+	e.clock.Add(1234567 * time.Nanosecond)
+	to := e.raw()
+	to.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+	e.want(e.do("GET", to.path(""), nil, ""), http.StatusNotFound, protocol.CodeNoSuchMailbox) // remembered missing, so the registration's own write is memory's copy
+	e.want(e.do("PUT", to.path(""), to.registration(1), to.pass(1)), http.StatusCreated, "")
+	from := e.raw().register(protocol.MaxPrekeyLifetime)
+	box := to.id.Address()
+	if b, ok := e.store.Known(box); !ok || b == nil || b.Created.Nanosecond()%int(time.Millisecond) == 0 {
+		t.Fatalf("control: memory holds no copy made between milliseconds: %v", b)
+	}
+	to.prekey(2, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+	e.want(e.do("PUT", to.path("/prekey"), to.upload(2), to.pass(2)), http.StatusOK, "")
+	e.want(e.do("PUT", to.path("/acl"), aclOf([]string{"*"}, nil), to.pass(2)), http.StatusOK, "")
+	e.want(e.sendTo(to, 2, from, 1), http.StatusCreated, "")
+	acc, key := accountEnv(t, e, true, 1)
+	_, id, _ := parseAdopt(key)
+	cur, err := e.store.Mailbox(ctx, box)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.store.Adopt(ctx, cur, acc.ID, id); err != nil {
+		t.Errorf("an adopt: %v", err)
+	}
+	if cur, err = e.store.Mailbox(ctx, box); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.store.Leave(ctx, cur); err != nil {
+		t.Errorf("a leave: %v", err)
+	}
+	e.want(e.do("PUT", revocationPath(box), to.certs(1), ""), http.StatusOK, "")
+	if b, ok := e.store.Known(box); !ok || !b.hasRecord() {
+		t.Error("after its own revocation of certificates, memory holds no copy of the record")
+	}
+}
+
+// Each backend holds a message's HEAD (Header) and a fetch or an ack of an
+// id memory does not hold (PassHeld) to the pass its context carries, as
+// passHeldSQL holds them in the database: one that no longer holds is
+// ErrStale, the message held or not, and one that holds reads as the
+// message stands. On PostgreSQL PassHeld is one statement: it acquires one
+// connection of the pool, as each statement on the pool does (pgxpool's
+// Stat), and nothing else in the test uses that pool.
+func TestABackendHoldsAHeadAndAMissToTheirPass(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, relaxed())
+	a, b := e.mailbox(), e.mailbox()
+	id := idOf(t, send(t, a, b, "held"))
+	m := e.store.(*Memory)
+	fed(t, m)
+	box := b.Address()
+	held := withPass(t.Context(), passBy{addr: box, identity: true})
+	ended := withPass(t.Context(), passBy{addr: box, signer: [32]byte{9}}) // a certificate's, which is not the record's signer
+	if h, err := m.backend.Header(held, box, id); err != nil || h.ID != id {
+		t.Errorf("a held message's HEAD under a pass that holds: %v, %v", h, err)
+	}
+	if _, err := m.backend.Header(held, box, [32]byte{1}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("an unknown id's HEAD under a pass that holds: %v; want ErrNotFound", err)
+	}
+	if err := m.backend.PassHeld(held); err != nil {
+		t.Errorf("a miss under a pass that holds: %v", err)
+	}
+	if _, err := m.backend.Header(ended, box, id); !errors.Is(err, ErrStale) {
+		t.Errorf("a held message's HEAD under a pass that no longer holds: %v; want ErrStale", err)
+	}
+	if _, err := m.backend.Header(ended, box, [32]byte{1}); !errors.Is(err, ErrStale) {
+		t.Errorf("an unknown id's HEAD under a pass that no longer holds: %v; want ErrStale", err)
+	}
+	if err := m.backend.PassHeld(ended); !errors.Is(err, ErrStale) {
+		t.Errorf("a miss under a pass that no longer holds: %v; want ErrStale", err)
+	}
+	if pg, ok := onPg(m); ok {
+		before := pg.pool().Stat().AcquireCount()
+		_ = m.backend.PassHeld(held)
+		_ = m.backend.PassHeld(ended)
+		if n := pg.pool().Stat().AcquireCount() - before; n != 2 {
+			t.Errorf("two misses took %d statements of the pool; want one each", n)
+		}
+	}
+}

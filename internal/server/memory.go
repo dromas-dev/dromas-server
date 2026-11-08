@@ -396,7 +396,9 @@ func (s *Memory) DeleteMailbox(ctx context.Context, a protocol.Address) error {
 // later one already, the feed's echo of the revocation having reached it
 // first, raised where it holds the rev before, and forgotten otherwise
 // (Backend.Revoke). A copy of a record made at another time is of another
-// record of the address, whatever its rev (version), and is forgotten.
+// record of the address, whatever its rev (version), and is forgotten; so is
+// any record memory holds where the backend found none (version zero), the
+// sweep having taken it.
 func (s *Memory) Revoke(ctx context.Context, a protocol.Address, rv *Revocations, want Expect) error {
 	var held *Revocations
 	var v version
@@ -406,6 +408,9 @@ func (s *Memory) Revoke(ctx context.Context, a protocol.Address, rv *Revocations
 	}, func() {
 		s.applyRevocations(a, held)
 		if v.rev == 0 {
+			if b, ok := s.cache.get(a); ok && b.hasRecord() || s.idx.recorded(a) {
+				s.forget(a)
+			}
 			return
 		}
 		b, ok := s.cache.get(a)

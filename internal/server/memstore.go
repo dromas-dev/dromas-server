@@ -258,14 +258,16 @@ func (s *memBackend) PassHeld(ctx context.Context) error {
 }
 
 // PutMessage implements Backend: a live message of the id refuses it, as
-// the send's conditional insert does.
+// the send's conditional insert does, and one held to a recipient's record
+// (sendOf) is refused where the record is not at the version it was read
+// at, as sendHeldSQL refuses it.
 func (s *memBackend) PutMessage(ctx context.Context, mailbox protocol.Address, h *Header, body []byte) error {
 	s.deliver()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if held, ok := sendOf(ctx); ok {
 		rec := s.mailboxes[held.rcpt]
-		if rec == nil || !rec.Created.Equal(held.created) || rec.Rev != held.rev || !s.passHeldBy(held.from) {
+		if rec == nil || versionOf(rec) != (version{ms(held.created), held.rev}) || !s.passHeldBy(held.from) {
 			return ErrStale
 		}
 	}
