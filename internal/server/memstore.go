@@ -156,7 +156,7 @@ func (s *memBackend) CreateMailbox(_ context.Context, b *Mailbox) error {
 	if s.mailboxes[b.Addr] != nil {
 		return ErrExists
 	}
-	if rv := s.revocations[b.Addr]; rv != nil && (len(rv.Address) > 0 || rv.Through > 0 && rv.Through >= b.Rank) {
+	if rv := s.revocations[b.Addr]; rv != nil && (len(rv.Address) > 0 || b.Rank > 0 && rv.Through >= b.Rank) {
 		return ErrStale // a revocation its checks did not read
 	}
 	if _, err := identityWire(b.Identity); err != nil {
