@@ -177,7 +177,7 @@ func TestTheSweepDeletesWhatHasExpired(t *testing.T) {
 		table, column string
 		keep          time.Duration
 	}{{"messages", "received_at", protocol.Retention}, {"mailboxes", "expires_at", 0}, {"adopt_keys", "expires_at", 0}} {
-		if err := s.pg().sweepTable(ctx, x.table, x.column, x.keep); err != nil {
+		if err := s.pg().sweepExpired(ctx, x.table, x.column, x.keep); err != nil {
 			t.Fatalf("the sweep of %s: %v", x.table, err)
 		}
 	}

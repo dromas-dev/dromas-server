@@ -26,6 +26,13 @@ import (
 //   - unknown, which may have applied: ErrUnknown, wrapping its cause. Any
 //     other error is taken as unknown too.
 //
+// A call carries in its context what its checks read of memory and relied
+// on (held.go): the pass a mailbox's own call was taken under, which List,
+// Message, Retire, DeleteMessage, UpdateMailbox, Adopt and Leave are held
+// to, and a send's recipient record and sender's pass, which PutMessage is.
+// A call whose standing no longer holds is ErrStale, and reads or changes
+// nothing.
+//
 // A write of several steps is one operation, whose outcome is its row's
 // write: a send writes its body, then its row, and a body that fails is a
 // refusal, which changed nothing a reader of the list sees; an ack deletes
@@ -58,8 +65,9 @@ type Backend interface {
 	// ErrNotFound.
 	AdoptKey(ctx context.Context, account string, hash [32]byte) (*AdoptKey, error)
 
-	// CreateMailbox stores b's record, at b.Rev, if the address has none;
-	// otherwise ErrExists.
+	// CreateMailbox stores b's record, at b.Rev, if the address has none and
+	// no revocation of the address, or of certificates through b.Rank, is
+	// kept; otherwise ErrExists, or ErrStale for a revocation.
 	CreateMailbox(ctx context.Context, b *Mailbox) error
 	// UpdateMailbox stores b's record at b.Rev+1 if the stored one is at b.Rev;
 	// otherwise ErrStale. It writes nothing of the revocations, and leaves b
@@ -68,12 +76,15 @@ type Backend interface {
 	// DeleteMailbox deletes a's record, and keeps its revocations.
 	DeleteMailbox(ctx context.Context, a protocol.Address) error
 	// Revoke keeps what the identity of address a revoked (Store.Revoke),
-	// and returns the address's revocations as they now are; ErrStale if a
-	// revocation of certificates through as high a serial was stored first,
-	// or if the address's revocations row is not what want asks: there, or
-	// not. The row exists only holding a revocation, since none is written
-	// that holds neither, so that is whether any is held.
-	Revoke(ctx context.Context, a protocol.Address, rv *Revocations, want Expect) (*Revocations, error)
+	// and returns the address's revocations as they now are, and the rev its
+	// mailbox's record is raised to, 0 where it has none: a revocation raises
+	// it, so a write held to the record as read before (UpdateMailbox, a
+	// send's: sendHeld) is refused. ErrStale if a revocation of certificates
+	// through as high a serial was stored first, or if the address's
+	// revocations row is not what want asks: there, or not. The row exists
+	// only holding a revocation, since none is written that holds neither, so
+	// that is whether any is held.
+	Revoke(ctx context.Context, a protocol.Address, rv *Revocations, want Expect) (*Revocations, uint64, error)
 	// Adopt moves mailbox b, at b.Rev, into account, spending a use of the
 	// account's adopt key whose hash is key, in one write: ErrStale,
 	// ErrKeyRefused.

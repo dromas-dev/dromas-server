@@ -42,7 +42,7 @@ func (s *Server) aclTooLarge() *problem {
 // not be what was sent, and RFC 9110 §9.3.4 lets a PUT's answer carry a
 // validator only for content saved as it came.
 func (s *Server) putACL(w http.ResponseWriter, r *http.Request) error {
-	a, err := s.owner(r)
+	a, passed, err := s.owner(r)
 	if err != nil {
 		return err
 	}
@@ -85,7 +85,7 @@ func (s *Server) putACL(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	b.ACL = acl
-	ctx := detached(r.Context())
+	ctx := detached(passed)
 	if err := s.store.UpdateMailbox(ctx, b); err != nil {
 		if errors.Is(err, ErrStale) {
 			return fail(protocol.CodeMailboxChanged, "retry", "the mailbox changed during the request")
@@ -107,7 +107,7 @@ func (s *Server) putACL(w http.ResponseWriter, r *http.Request) error {
 // an If-None-Match that names the tag, compared weakly, is 304 with the ETag
 // and no body.
 func (s *Server) getACL(w http.ResponseWriter, r *http.Request) error {
-	a, err := s.owner(r)
+	a, _, err := s.owner(r)
 	if err != nil {
 		return err
 	}

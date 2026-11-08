@@ -816,33 +816,88 @@ func (s *pgBackend) ReadAddress(ctx context.Context, a protocol.Address) (*Mailb
 	return rec, rv, nil
 }
 
-// CreateMailbox implements Backend.
+// CreateMailbox implements Backend: under the address's lock, which a
+// revocation takes too (addressLock), so a revocation committed before the
+// lock is taken is seen, and one after it waits for the record.
 func (s *pgBackend) CreateMailbox(ctx context.Context, b *Mailbox) error {
 	if err := b.writable(); err != nil {
 		return refused(err)
 	}
-	n, err := s.exec(ctx, `INSERT INTO mailboxes (addr, identity, created, statement, statement_sig, rank, signer, senders, retired, acl, account, expires_at, rev)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT (addr) DO NOTHING`,
-		b.Addr[:], b.Identity, msTime(b.Created), b.Statement, b.Signature, numeric(b.Rank), b.Signer[:], sendersColumn(b), retiredColumn(b), aclColumn(b), accountColumn(b), expiresColumn(b), toInt(b.Rev))
-	if err != nil {
+	return s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, addressLock, b.Addr[:]); err != nil {
+			return err
+		}
+		var revoked bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM revocations WHERE addr = $1 AND (revocation IS NOT NULL OR through >= $2))`,
+			b.Addr[:], numeric(b.Rank)).Scan(&revoked); err != nil {
+			return err
+		}
+		if revoked {
+			return ErrStale // a revocation the registration's checks did not read
+		}
+		tag, err := tx.Exec(ctx, `INSERT INTO mailboxes (addr, identity, created, statement, statement_sig, rank, signer, senders, retired, acl, account, expires_at, rev)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT (addr) DO NOTHING`,
+			b.Addr[:], b.Identity, msTime(b.Created), b.Statement, b.Signature, numeric(b.Rank), b.Signer[:], sendersColumn(b), retiredColumn(b), aclColumn(b), accountColumn(b), expiresColumn(b), toInt(b.Rev))
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrExists // it has a record, whoever wrote it
+		}
+		return nil
+	})
+}
+
+// addressLock takes the transaction's lock on one address of the schema, $1:
+// a registration and a revocation of the address take it, so that neither
+// commits unseen by the other, where no row is there to lock.
+const addressLock = `SELECT pg_advisory_xact_lock(hashtextextended('dromas address ' || current_schema() || encode($1::bytea, 'hex'), 0))`
+
+// passHeld is the condition holding a statement to ctx's pass (passOf), its
+// arguments numbered from n: TRUE, with none, where the call carries none.
+func passHeld(ctx context.Context, n int) (string, []any) {
+	if p, ok := passOf(ctx); ok {
+		return passHeldSQL(p, n)
+	}
+	return "TRUE", nil
+}
+
+// querier is a pool or a transaction.
+type querier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// staleness is, for a statement held to ctx's pass that met no row,
+// ErrStale where the pass no longer holds, and nil where it holds or ctx
+// carries none: then the row was not there.
+func staleness(ctx context.Context, q querier) error {
+	p, ok := passOf(ctx)
+	if !ok {
+		return nil
+	}
+	cond, args := passHeldSQL(p, 1)
+	var held bool
+	if err := q.QueryRow(ctx, `SELECT `+cond, args...).Scan(&held); err != nil {
 		return err
 	}
-	if n == 0 {
-		return ErrExists // it has a record, whoever wrote it
+	if !held {
+		return ErrStale
 	}
 	return nil
 }
 
 // UpdateMailbox implements Backend: every column that can change, if the
-// record is still at b.Rev. The ACL is only set: no route removes one.
+// record is still at b.Rev and holds the call's pass. The ACL is only set:
+// no route removes one.
 func (s *pgBackend) UpdateMailbox(ctx context.Context, b *Mailbox) error {
 	if err := b.writable(); err != nil {
 		return refused(err)
 	}
+	held, hargs := passHeld(ctx, 11)
 	n, err := s.exec(ctx, `UPDATE mailboxes SET statement = $2, statement_sig = $3, rank = $4, signer = $5, senders = $6, retired = $7,
 		acl = COALESCE($8, acl), expires_at = $9, rev = rev + 1
-		WHERE addr = $1 AND rev = $10`,
-		b.Addr[:], b.Statement, b.Signature, numeric(b.Rank), b.Signer[:], sendersColumn(b), retiredColumn(b), aclColumn(b), expiresColumn(b), toInt(b.Rev))
+		WHERE addr = $1 AND rev = $10 AND `+held,
+		append([]any{b.Addr[:], b.Statement, b.Signature, numeric(b.Rank), b.Signer[:], sendersColumn(b), retiredColumn(b), aclColumn(b), expiresColumn(b), toInt(b.Rev)}, hargs...)...)
 	if err != nil {
 		return err
 	}
@@ -858,13 +913,14 @@ func (s *pgBackend) DeleteMailbox(ctx context.Context, a protocol.Address) error
 	return err
 }
 
-// Revoke implements Backend: one statement on the address's revocations row,
+// Revoke implements Backend: under the address's lock (addressLock), one
+// statement on the address's revocations row,
 // which keeps the revocation of the address once, whatever is beside it
 // (PROTOCOL.md §11.15), takes a revocation of certificates only through a
 // higher serial than the one it holds, is ErrStale where it brings neither,
 // and, where want asks it, writes only where the row exists, or only where
-// it does not.
-func (s *pgBackend) Revoke(ctx context.Context, a protocol.Address, rv *Revocations, want Expect) (*Revocations, error) {
+// it does not; then the mailbox's record's rev is raised.
+func (s *pgBackend) Revoke(ctx context.Context, a protocol.Address, rv *Revocations, want Expect) (*Revocations, uint64, error) {
 	var addrRev, certs, certsSig []byte
 	if len(rv.Address) > 0 {
 		addrRev = rv.Address
@@ -894,7 +950,11 @@ func (s *pgBackend) Revoke(ctx context.Context, a protocol.Address, rv *Revocati
 			ON CONFLICT (addr) DO UPDATE SET ` + set + ` WHERE ` + brings + ` RETURNING ` + revocationCols
 	}
 	var got row
+	var rev int64
 	err := s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, addressLock, a[:]); err != nil {
+			return err
+		}
 		rows, err := rowsOf(tx.Query(ctx, q, a[:], rv.Identity, addrRev, certs, certsSig, through))
 		if err != nil {
 			return err
@@ -903,16 +963,22 @@ func (s *pgBackend) Revoke(ctx context.Context, a protocol.Address, rv *Revocati
 			return ErrStale // it brings nothing the row lacks, or the row is not what want asks
 		}
 		got = rows[0]
-		return nil
+		// The record's rev raised, so a renewal or a send held to the record
+		// as read before waits on its row and changes nothing.
+		err = tx.QueryRow(ctx, `UPDATE mailboxes SET rev = rev + 1 WHERE addr = $1 RETURNING rev`, a[:]).Scan(&rev)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil // no mailbox
+		}
+		return err
 	})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	held, err := decodeRevocations(got)
 	if err != nil {
-		return nil, unknown(fmt.Errorf("applied, and its answer does not read: %w", err))
+		return nil, 0, unknown(fmt.Errorf("applied, and its answer does not read: %w", err))
 	}
-	return held, nil
+	return held, uint64(rev), nil //nolint:gosec // a rev, at least 1
 }
 
 // Messages.
@@ -949,15 +1015,25 @@ func header(id [32]byte, size int, recv uint64) (*Header, error) {
 }
 
 // getMsg reads a live message's row, and its body's key; ErrNotFound if
-// there is none or it has expired.
-func (s *pgBackend) getMsg(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, string, error) {
+// there is none or it has expired; held to ctx's pass where held is set.
+func (s *pgBackend) getMsg(ctx context.Context, mailbox protocol.Address, id [32]byte, held bool) (*Header, string, error) {
 	ctx, cancel := bounded(ctx)
 	defer cancel()
-	rows, err := rowsOf(s.pool.Query(ctx, `SELECT id, size, received_at, nonce FROM messages WHERE box = $1 AND id = $2 AND received_at >= $3`, mailbox[:], id[:], s.liveFrom()))
+	cond, hargs := "TRUE", []any(nil)
+	if held {
+		cond, hargs = passHeld(ctx, 4)
+	}
+	rows, err := rowsOf(s.pool.Query(ctx, `SELECT id, size, received_at, nonce FROM messages WHERE box = $1 AND id = $2 AND received_at >= $3 AND `+cond,
+		append([]any{mailbox[:], id[:], s.liveFrom()}, hargs...)...))
 	if err != nil {
 		return nil, "", err
 	}
 	if len(rows) == 0 {
+		if held {
+			if err := staleness(ctx, s.pool); err != nil {
+				return nil, "", err
+			}
+		}
 		return nil, "", ErrNotFound // the sweep deletes an expired one later
 	}
 	return msgOf(mailbox, rows[0])
@@ -979,22 +1055,23 @@ func msgOf(mailbox protocol.Address, r row) (*Header, string, error) {
 // Dedupe implements Backend: the live message's row. A miss a send makes
 // at once is caught by PutMessage's conditional write.
 func (s *pgBackend) Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
-	h, _, err := s.getMsg(ctx, mailbox, id)
+	h, _, err := s.getMsg(ctx, mailbox, id, false)
 	return h, err
 }
 
 // ReadLive implements Backend: the mailbox's live messages, oldest first.
 func (s *pgBackend) ReadLive(ctx context.Context, mailbox protocol.Address) ([]Header, error) {
-	return s.list(ctx, mailbox, nil, 0)
+	return s.list(ctx, mailbox, nil, 0, false)
 }
 
 // List implements Backend: a page of the mailbox's live messages, oldest
-// first by (received_at, id), after the cursor. Every read is consistent.
+// first by (received_at, id), after the cursor, held to the call's pass.
+// Every read is consistent.
 func (s *pgBackend) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, _ bool) ([]Header, error) {
-	return s.list(ctx, mailbox, after, limit)
+	return s.list(ctx, mailbox, after, limit, true)
 }
 
-func (s *pgBackend) list(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int) ([]Header, error) {
+func (s *pgBackend) list(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, held bool) ([]Header, error) {
 	ctx, cancel := bounded(ctx)
 	defer cancel()
 	q := `SELECT id, size, received_at FROM messages WHERE box = $1 AND received_at >= $2`
@@ -1002,6 +1079,11 @@ func (s *pgBackend) list(ctx context.Context, mailbox protocol.Address, after *C
 	if after != nil {
 		q += ` AND (received_at, id) > ($3, $4)`
 		args = append(args, msTime(after.ReceivedAt), after.ID[:])
+	}
+	if held {
+		cond, hargs := passHeld(ctx, len(args)+1)
+		q += ` AND ` + cond
+		args = append(args, hargs...)
 	}
 	q += ` ORDER BY received_at, id`
 	if limit > 0 {
@@ -1011,6 +1093,11 @@ func (s *pgBackend) list(ctx context.Context, mailbox protocol.Address, after *C
 	rows, err := rowsOf(s.pool.Query(ctx, q, args...))
 	if err != nil {
 		return nil, err
+	}
+	if len(rows) == 0 && held {
+		if err := staleness(ctx, s.pool); err != nil {
+			return nil, err
+		}
 	}
 	hs := make([]Header, 0, len(rows))
 	for _, r := range rows {
@@ -1024,7 +1111,8 @@ func (s *pgBackend) list(ctx context.Context, mailbox protocol.Address, after *C
 }
 
 // PutMessage implements Backend (ARCHITECTURE.md § Storage): the body, then
-// the row, if no live one has this id. A crash after the body leaves an
+// the row, if no live one has this id and what the send's checks read still
+// holds (sendHeld). A crash after the body leaves an
 // orphan, collected by age; a row the database refused deletes its body. A
 // body that fails stores nothing
 // (errNotStored). A live row met instead, an expired one aside, which the
@@ -1045,15 +1133,31 @@ func (s *pgBackend) PutMessage(ctx context.Context, mailbox protocol.Address, h 
 	if err := s.crashed("put: after the body"); err != nil {
 		return err
 	}
+	cond, hargs := "TRUE", []any(nil)
+	held, isHeld := sendOf(ctx)
+	if isHeld {
+		cond, hargs = sendHeldSQL(held, 7)
+	}
 	var met row
 	err = s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		rows, err := rowsOf(tx.Query(ctx, `INSERT INTO messages (box, id, size, received_at, nonce) VALUES ($1, $2, $3, $4, $5)
+		rows, err := rowsOf(tx.Query(ctx, `INSERT INTO messages (box, id, size, received_at, nonce)
+			SELECT $1::bytea, $2::bytea, $3::integer, $4::timestamptz, $5::bytea WHERE `+cond+`
 			ON CONFLICT (box, id) DO UPDATE SET size = EXCLUDED.size, received_at = EXCLUDED.received_at, nonce = EXCLUDED.nonce
 			WHERE messages.received_at < $6
 			RETURNING received_at`,
-			mailbox[:], h.ID[:], h.Size, at, nonce, s.liveFrom()))
+			append([]any{mailbox[:], h.ID[:], h.Size, at, nonce, s.liveFrom()}, hargs...)...))
 		if err != nil || len(rows) > 0 {
 			return err
+		}
+		if isHeld {
+			cond, hargs := sendHeldSQL(held, 1)
+			var ok bool
+			if err := tx.QueryRow(ctx, `SELECT `+cond, hargs...).Scan(&ok); err != nil {
+				return err
+			}
+			if !ok {
+				return ErrStale // the recipient's record or the sender's pass changed since the send's checks
+			}
 		}
 		// The row met is locked by the statement, so it is read as it is.
 		rows, err = rowsOf(tx.Query(ctx, `SELECT id, size, received_at, nonce FROM messages WHERE box = $1 AND id = $2`, mailbox[:], h.ID[:]))
@@ -1090,8 +1194,8 @@ func (s *pgBackend) PutMessage(ctx context.Context, mailbox protocol.Address, h 
 	return duplicate{orig}
 }
 
-// Retire implements Backend: the row is deleted, if it is live and, where
-// received is not zero, the one received then, and nothing of the message is
+// Retire implements Backend: the row is deleted, if it is live, the call's
+// pass holds and, where received is not zero, it is the one received then, and nothing of the message is
 // kept but a body, collected by age.
 func (s *pgBackend) Retire(ctx context.Context, mailbox protocol.Address, id [32]byte, received time.Time) (time.Time, error) {
 	_, recv, err := s.retire(ctx, mailbox, id, received)
@@ -1105,13 +1209,18 @@ func (s *pgBackend) retire(ctx context.Context, mailbox protocol.Address, id [32
 		at = &t
 	}
 	var got row
+	cond, hargs := passHeld(ctx, 5)
 	err := s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := rowsOf(tx.Query(ctx, `DELETE FROM messages WHERE box = $1 AND id = $2 AND received_at >= $3
-			AND ($4::timestamptz IS NULL OR received_at = $4) RETURNING id, size, received_at, nonce`, mailbox[:], id[:], s.liveFrom(), at))
+			AND ($4::timestamptz IS NULL OR received_at = $4) AND `+cond+` RETURNING id, size, received_at, nonce`,
+			append([]any{mailbox[:], id[:], s.liveFrom(), at}, hargs...)...))
 		if err != nil {
 			return err
 		}
 		if len(rows) == 0 {
+			if err := staleness(ctx, tx); err != nil {
+				return err
+			}
 			return ErrNotFound
 		}
 		got = rows[0]
@@ -1145,10 +1254,10 @@ func (s *pgBackend) DeleteMessage(ctx context.Context, mailbox protocol.Address,
 	return recv, nil
 }
 
-// Message implements Backend. A live message whose body is gone is
+// Message implements Backend, held to the call's pass. A live message whose body is gone is
 // errNoBody, with its header, whose received_at its retire names.
 func (s *pgBackend) Message(ctx context.Context, mailbox protocol.Address, id [32]byte, from int64) (*Header, []byte, error) {
-	h, key, err := s.getMsg(ctx, mailbox, id)
+	h, key, err := s.getMsg(ctx, mailbox, id, true)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1282,7 +1391,8 @@ func (s *pgBackend) AdoptKey(ctx context.Context, account string, hash [32]byte)
 // b.Rev, and a use of the adopt key spent, in one transaction.
 func (s *pgBackend) Adopt(ctx context.Context, b *Mailbox, account string, key [32]byte) error {
 	return s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE mailboxes SET account = $2, rev = rev + 1 WHERE addr = $1 AND rev = $3`, b.Addr[:], account, toInt(b.Rev))
+		held, hargs := passHeld(ctx, 4)
+		tag, err := tx.Exec(ctx, `UPDATE mailboxes SET account = $2, rev = rev + 1 WHERE addr = $1 AND rev = $3 AND `+held, append([]any{b.Addr[:], account, toInt(b.Rev)}, hargs...)...)
 		if err != nil {
 			return err
 		}
@@ -1302,7 +1412,8 @@ func (s *pgBackend) Adopt(ctx context.Context, b *Mailbox, account string, key [
 
 // Leave implements Backend.
 func (s *pgBackend) Leave(ctx context.Context, b *Mailbox) error {
-	n, err := s.exec(ctx, `UPDATE mailboxes SET account = NULL, rev = rev + 1 WHERE addr = $1 AND rev = $2`, b.Addr[:], toInt(b.Rev))
+	held, hargs := passHeld(ctx, 3)
+	n, err := s.exec(ctx, `UPDATE mailboxes SET account = NULL, rev = rev + 1 WHERE addr = $1 AND rev = $2 AND `+held, append([]any{b.Addr[:], toInt(b.Rev)}, hargs...)...)
 	if err != nil {
 		return err
 	}

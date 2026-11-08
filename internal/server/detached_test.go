@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"sync"
@@ -266,7 +267,11 @@ func TestACountIsKeptWhenItsWriteMayHaveBeenApplied(t *testing.T) {
 			s.mu.Lock()
 			s.err = errs[i]
 			s.mu.Unlock()
-			e.want(e.sendTo(to, 1, from, 1), http.StatusServiceUnavailable, protocol.CodeUnavailable)
+			if errors.Is(errs[i], ErrStale) { // a send whose checks the store says changed
+				e.want(e.sendTo(to, 1, from, 1), http.StatusConflict, protocol.CodeMailboxChanged)
+			} else {
+				e.want(e.sendTo(to, 1, from, 1), http.StatusServiceUnavailable, protocol.CodeUnavailable)
+			}
 			s.mu.Lock()
 			s.err = nil
 			s.mu.Unlock()

@@ -48,7 +48,7 @@ func keyRefused() *problem {
 // a retry whose answer was lost is 200 whether its key is spent, expired or gone
 // (PROTOCOL.md §11.16).
 func (s *Server) adopt(w http.ResponseWriter, r *http.Request) error {
-	a, err := s.owner(r)
+	a, held, err := s.owner(r)
 	if err != nil {
 		return err
 	}
@@ -95,7 +95,7 @@ func (s *Server) adopt(w http.ResponseWriter, r *http.Request) error {
 		if !k.good(s.now()) {
 			return keyRefused()
 		}
-		switch err := s.store.Adopt(detached(r.Context()), b, account, hash); {
+		switch err := s.store.Adopt(detached(held), b, account, hash); {
 		case errors.Is(err, ErrKeyRefused):
 			return keyRefused()
 		case errors.Is(err, ErrStale):
@@ -112,7 +112,7 @@ func (s *Server) adopt(w http.ResponseWriter, r *http.Request) error {
 // account, and has the server's limits again. A mailbox in no account is
 // already there.
 func (s *Server) leave(w http.ResponseWriter, r *http.Request) error {
-	a, err := s.owner(r)
+	a, held, err := s.owner(r)
 	if err != nil {
 		return err
 	}
@@ -130,7 +130,7 @@ func (s *Server) leave(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if b.Account != "" {
-		switch err := s.store.Leave(detached(r.Context()), b); {
+		switch err := s.store.Leave(detached(held), b); {
 		case errors.Is(err, ErrStale):
 			return fail(protocol.CodeMailboxChanged, "retry: dromas account leave", "the mailbox changed during the request")
 		case err != nil:

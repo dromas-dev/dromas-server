@@ -89,10 +89,11 @@ func ofAccount(id string) target          { return target{account: &id} }
 //
 //   - Applied: applied, if any, puts it in memory.
 //   - Refused, as the store stated: nothing changes, but a refusal of the
-//     write's condition on a mailbox's record or revocations (ErrStale,
-//     ErrExists) says the store holds what this process never applied, so
-//     the copy memory holds of the address is evicted, counted as a write
-//     (recCache.write), and a read begun before it puts nothing.
+//     write's condition on a mailbox's record, revocations or the call's
+//     standing (ErrStale, ErrExists) says the store holds what this process
+//     never applied, so memory forgets the address, its record and its
+//     standing (forget), counted as a write (recCache.write), and a read
+//     begun before it puts nothing: its next use reads it.
 //   - Unknown, ErrUnknown or any error the backend did not state as a
 //     refusal: memory forgets the address, the record cache and the index
 //     (forget), or evicts the account, so that the next use reads it; and
@@ -110,7 +111,7 @@ func (s *Memory) write(t target, do func() error, applied func()) error {
 		return nil
 	case isRefusal(err):
 		if t.addr != nil && (errors.Is(err, ErrStale) || errors.Is(err, ErrExists)) {
-			s.cache.write(*t.addr, evicted[*Mailbox])
+			s.forget(*t.addr)
 		}
 		return err
 	}
@@ -389,13 +390,28 @@ func (s *Memory) DeleteMailbox(ctx context.Context, a protocol.Address) error {
 	return s.write(ofAddress(a), func() error { return s.backend.DeleteMailbox(ctx, a) }, func() { s.forget(a) })
 }
 
-// Revoke implements Store.
+// Revoke implements Store. The record's rev the revocation raised is
+// applied to the copy memory holds of it, which is forgotten where it holds
+// another (Backend.Revoke).
 func (s *Memory) Revoke(ctx context.Context, a protocol.Address, rv *Revocations, want Expect) error {
 	var held *Revocations
+	var rev uint64
 	return s.write(ofAddress(a), func() (err error) {
-		held, err = s.backend.Revoke(ctx, a, rv, want)
+		held, rev, err = s.backend.Revoke(ctx, a, rv, want)
 		return err
-	}, func() { s.applyRevocations(a, held) })
+	}, func() {
+		s.applyRevocations(a, held)
+		if rev == 0 {
+			return
+		}
+		if b, ok := s.cache.get(a); ok && b.hasRecord() && b.Rev+1 == rev {
+			b = cloneMailbox(b)
+			b.Rev = rev
+			s.applyMailbox(b)
+		} else {
+			s.forget(a)
+		}
+	})
 }
 
 // Adopt implements Store.
@@ -461,6 +477,9 @@ func (s *Memory) PutMessage(ctx context.Context, mailbox protocol.Address, h *He
 	err := s.write(ofAddress(mailbox), func() error { return s.backend.PutMessage(ctx, mailbox, h, body) }, func() {
 		s.idx.insert(mailbox, s.idx.newMark(h.ID, ms(h.ReceivedAt)+ttlMs), s.nowMs())
 	})
+	if held, ok := sendOf(ctx); ok && errors.Is(err, ErrStale) {
+		s.forget(held.from.addr) // the sender's standing may be what changed
+	}
 	var d duplicate
 	if errors.As(err, &d) {
 		return d.h, nil
@@ -473,13 +492,21 @@ func (s *Memory) PutMessage(ctx context.Context, mailbox protocol.Address, h *He
 // poll, so the next one has it; a long poll's, which no later change may
 // wake, is read strongly consistent (Server.list).
 func (s *Memory) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error) {
-	return s.backend.List(ctx, mailbox, after, limit, consistent)
+	hs, err := s.backend.List(ctx, mailbox, after, limit, consistent)
+	if errors.Is(err, ErrStale) {
+		s.forget(mailbox) // the call's pass no longer holds: memory is behind
+	}
+	return hs, err
 }
 
 // Message implements Store. A live message whose body is gone (errNoBody)
 // is retired and answered as gone.
 func (s *Memory) Message(ctx context.Context, mailbox protocol.Address, id [32]byte, from int64) (*Header, []byte, error) {
 	h, body, err := s.backend.Message(ctx, mailbox, id, from)
+	if errors.Is(err, ErrStale) {
+		s.forget(mailbox) // the call's pass no longer holds: memory is behind
+		return nil, nil, err
+	}
 	if errors.Is(err, errNoBody) {
 		var at time.Time
 		if h != nil {

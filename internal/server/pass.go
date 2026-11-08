@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -208,6 +209,13 @@ const (
 // Limits.MissesPerMinute first, kept if the pass fails and given back if it
 // passes (s.miss). One the process remembers is a lookup in memory.
 func (s *Server) checkPass(r *http.Request, a protocol.Address, key string, signer [32]byte, rank uint64, listed bool, p *protocol.Pass) error {
+	_, err := s.passCheck(r, a, key, signer, rank, listed, p, true)
+	return err
+}
+
+// checkPassBy is checkPass, and the pass it took: by the identity, or by
+// signer, which the call's reads and writes are then held to (passBy).
+func (s *Server) checkPassBy(r *http.Request, a protocol.Address, key string, signer [32]byte, rank uint64, listed bool, p *protocol.Pass) (passBy, error) {
 	return s.passCheck(r, a, key, signer, rank, listed, p, true)
 }
 
@@ -215,26 +223,34 @@ func (s *Server) checkPass(r *http.Request, a protocol.Address, key string, sign
 // already bounds, a registration's (Limits.RegistrationsPerHour): its pass
 // is checked without a count of its own.
 func (s *Server) checkPassBounded(r *http.Request, a protocol.Address, key string, signer [32]byte, rank uint64) error {
-	return s.passCheck(r, a, key, signer, rank, false, nil, false)
+	_, err := s.passCheck(r, a, key, signer, rank, false, nil, false)
+	return err
 }
 
-func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, signer [32]byte, rank uint64, listed bool, p *protocol.Pass, count bool) (err error) {
+func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, signer [32]byte, rank uint64, listed bool, p *protocol.Pass, count bool) (_ passBy, err error) {
 	auth, one := authorization(r)
 	if !one || len(auth) > protocol.MaxPassAuthorization {
 		if !count {
-			return unauthorized(hintPass, "no pass, or not a pass")
+			return passBy{}, unauthorized(hintPass, "no pass, or not a pass")
 		}
-		return s.notAPass(r) // two lines, or longer than any pass can be: refused before it is hashed or parsed
+		return passBy{}, s.notAPass(r) // two lines, or longer than any pass can be: refused before it is hashed or parsed
 	}
 	now := s.now()
 	sum := sha256.Sum256([]byte(auth))
 	identity := sha256.Sum256([]byte(key))
-	remembered := func(sum [32]byte) bool {
-		return s.passes.has(a, sum, identity, now) || !listed && s.passes.has(a, sum, signer, now)
+	took := func(by [32]byte) passBy { return passBy{addr: a, identity: by == identity, signer: by} }
+	remembered := func(sum [32]byte) (passBy, bool) {
+		switch {
+		case s.passes.has(a, sum, identity, now):
+			return took(identity), true
+		case !listed && s.passes.has(a, sum, signer, now):
+			return took(signer), true
+		}
+		return passBy{}, false
 	}
-	if remembered(sum) {
+	if by, ok := remembered(sum); ok {
 		s.metrics.pass(true, nil)
-		return nil
+		return by, nil
 	}
 	if p == nil {
 		var err error
@@ -244,7 +260,7 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, sign
 				err = s.notAPass(r)
 			}
 			s.metrics.pass(false, err)
-			return err
+			return passBy{}, err
 		}
 	}
 	// A pass is remembered by protocol.Pass.Authorization, which writes its
@@ -255,9 +271,9 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, sign
 	// (dromas-dev/dromas-server#69).
 	raw := sum
 	if one := sha256.Sum256([]byte(p.Authorization())); one != sum {
-		if remembered(one) {
+		if by, ok := remembered(one); ok {
 			s.metrics.pass(true, nil)
-			return nil
+			return by, nil
 		}
 		sum = one
 	}
@@ -267,12 +283,12 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, sign
 	// mailbox learns its state whichever other pass it carries. A pass that names
 	// the identity's key goes on, and is judged as any pass is.
 	if listed && (p.Address != a || !p.CarriesKey(identity)) {
-		return listedCertificate()
+		return passBy{}, listedCertificate()
 	}
 	if count {
 		var m addressCount
 		if m, err = s.miss(r); err != nil {
-			return err
+			return passBy{}, err
 		}
 		defer func() {
 			if err != nil {
@@ -283,21 +299,21 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, sign
 		}()
 	}
 	if p.Address != a {
-		return unauthorized(hintPass, "the pass is another mailbox's")
+		return passBy{}, unauthorized(hintPass, "the pass is another mailbox's")
 	}
 	name, ours := s.serverName(r)
 	if !ours {
-		return unauthorized("call the server by the name in its URL", "this server does not take a pass made for the name this request names")
+		return passBy{}, unauthorized("call the server by the name in its URL", "this server does not take a pass made for the name this request names")
 	}
 	// Run out, or running out too far ahead: either way the mailbox signs another.
 	// A new pass cures neither if the caller's clock is off, so each says
 	// what this clock reads and which way the caller's is likely wrong.
 	if !now.Before(p.NotAfter) {
-		return fail(protocol.CodePassExpired, fmt.Sprintf("%s; refused again, this machine's clock reads %d minutes or more behind the server's: check it", hintNewPass, protocol.PassLifetime/time.Minute),
+		return passBy{}, fail(protocol.CodePassExpired, fmt.Sprintf("%s; refused again, this machine's clock reads %d minutes or more behind the server's: check it", hintNewPass, protocol.PassLifetime/time.Minute),
 			"the pass has run out")
 	}
 	if p.NotAfter.After(now.Add(protocol.MaxPassLifetime)) {
-		return fail(protocol.CodePassExpired, fmt.Sprintf("%s; refused again, this machine's clock reads more than %d minutes ahead of the server's: check it", hintNewPass, (protocol.MaxPassLifetime-protocol.PassLifetime)/time.Minute),
+		return passBy{}, fail(protocol.CodePassExpired, fmt.Sprintf("%s; refused again, this machine's clock reads more than %d minutes ahead of the server's: check it", hintNewPass, (protocol.MaxPassLifetime-protocol.PassLifetime)/time.Minute),
 			fmt.Sprintf("the pass runs out more than %d minutes from now", protocol.MaxPassLifetime/time.Minute))
 	}
 	// The signing key's hash, then the signature: what refuses a pass that
@@ -317,13 +333,13 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, sign
 	}
 	switch {
 	case errors.Is(err, protocol.ErrCertificate):
-		return otherSigner(rank)
+		return passBy{}, otherSigner(rank)
 	case errors.Is(err, protocol.ErrCertificateNotBegun):
-		return fail(protocol.CodePassExpired, "a certificate starts an hour before it is made: check this machine's clock, then dromas prekey renew", "the certificate the pass is signed under has not begun")
+		return passBy{}, fail(protocol.CodePassExpired, "a certificate starts an hour before it is made: check this machine's clock, then dromas prekey renew", "the certificate the pass is signed under has not begun")
 	case errors.Is(err, protocol.ErrCertificateTime):
-		return fail(protocol.CodePassExpired, "publish a new prekey, which comes with a new certificate: dromas prekey renew", "the certificate the pass is signed under has ended")
+		return passBy{}, fail(protocol.CodePassExpired, "publish a new prekey, which comes with a new certificate: dromas prekey renew", "the certificate the pass is signed under has ended")
 	case err != nil:
-		return unauthorized(hintNewPass, "the pass is not this mailbox's for this server")
+		return passBy{}, unauthorized(hintNewPass, "the pass is not this mailbox's for this server")
 	}
 	// Then the signer itself, against the mailbox's identity, as when it was
 	// put on record: a certificate by the identity's signature and every rule
@@ -336,14 +352,14 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, sign
 		if s.log != nil {
 			s.log.Printf("mailbox %s: the signer on record does not verify against the identity on record: %v", a, err) // the address redacted, as every line is
 		}
-		return wrongRecord(rank)
+		return passBy{}, wrongRecord(rank)
 	}
 	// A pass is never good for longer than the certificate it is under.
 	if until.IsZero() || p.NotAfter.Before(until) {
 		until = p.NotAfter
 	}
 	s.passes.keep(a, seenPass{sum: sum, raw: raw, signer: by, until: until}, now)
-	return nil
+	return took(by), nil
 }
 
 // otherSigner refuses a pass signed by neither the identity nor the signer
@@ -418,54 +434,67 @@ func checkSigner(key string, under ssh.PublicKey, a protocol.Address, now time.T
 }
 
 // owner authenticates a call a mailbox makes about itself: it returns the
-// address in the path, once the call has shown that mailbox's pass. A mailbox this
-// process holds is checked from memory; any other costs a read of its
-// record, which lookup limits for an address that names no mailbox. params are
-// the query parameters the call takes (pathAddr).
-func (s *Server) owner(r *http.Request, params ...string) (protocol.Address, error) {
+// address in the path, once the call has shown that mailbox's pass, and the
+// request's context carrying the pass it took, which the call's reads and
+// writes of the store are held to (withPass). A mailbox this process holds is
+// checked from memory; any other costs a read of its record, which lookup
+// limits for an address that names no mailbox. params are the query
+// parameters the call takes (pathAddr).
+func (s *Server) owner(r *http.Request, params ...string) (protocol.Address, context.Context, error) {
 	a, err := pathAddr(r, params...)
 	if err != nil {
-		return a, err
+		return a, nil, err
 	}
 	st, b, ok, err := s.standingOf(r, a)
+	listed := false
+	var p *protocol.Pass
 	switch {
 	case err != nil:
-		return a, err
+		return a, nil, err
 	case st.State == Revoked:
-		return a, s.revokedAt(a, b)
+		return a, nil, s.revokedAt(a, b)
 	case !ok, st.State != Active: // no mailbox, or none in the state that takes calls
-		return a, noSuchMailbox
+		return a, nil, noSuchMailbox
 	case st.Listed:
 		// Its current certificate is revoked: the state is answered before the
 		// pass, and only a pass that parses goes on, for the identity's alone
 		// to be taken (PROTOCOL.md §11.4 rule 1, §8).
 		auth, one := authorization(r)
-		p, err := protocol.ParsePass(auth)
-		if !one || err != nil {
-			return a, listedCertificate()
+		if p, err = protocol.ParsePass(auth); !one || err != nil {
+			return a, nil, listedCertificate()
 		}
-		return a, s.checkPass(r, a, st.Key, st.Signer, st.Rank, true, p)
+		listed = true
 	}
-	return a, s.checkPass(r, a, st.Key, st.Signer, st.Rank, false, nil)
+	by, err := s.checkPassBy(r, a, st.Key, st.Signer, st.Rank, listed, p)
+	if err != nil {
+		return a, nil, err
+	}
+	return a, withPass(r.Context(), by), nil
 }
 
 // sender authenticates a send: the sender is the mailbox the call's pass names
 // (PROTOCOL.md §11.10, step 1).
-func (s *Server) sender(r *http.Request) (protocol.Address, error) {
+// It returns the pass it took too, which the send's write is held to
+// (sendHeld).
+func (s *Server) sender(r *http.Request) (passBy, error) {
 	auth, one := authorization(r)
 	p, err := protocol.ParsePass(auth)
 	if !one || err != nil {
-		return protocol.Address{}, s.notAPass(r)
+		return passBy{}, s.notAPass(r)
 	}
 	a := p.Address
 	st, _, ok, err := s.standingOf(r, a)
 	switch {
 	case err != nil:
-		return a, err
+		return passBy{addr: a}, err
 	case st.State == Revoked:
-		return a, fail(protocol.CodeSenderRevoked, "your mailbox is revoked: make a new one, dromas init", "the sending mailbox is revoked")
+		return passBy{addr: a}, fail(protocol.CodeSenderRevoked, "your mailbox is revoked: make a new one, dromas init", "the sending mailbox is revoked")
 	case !ok, st.State != Active:
-		return a, fail(protocol.CodeUnknownSender, "register your own mailbox first: dromas init", "the mailbox the pass names is not registered")
+		return passBy{addr: a}, fail(protocol.CodeUnknownSender, "register your own mailbox first: dromas init", "the mailbox the pass names is not registered")
 	}
-	return a, s.checkPass(r, a, st.Key, st.Signer, st.Rank, st.Listed, p)
+	by, err := s.checkPassBy(r, a, st.Key, st.Signer, st.Rank, st.Listed, p)
+	if err != nil {
+		return passBy{addr: a}, err
+	}
+	return by, nil
 }

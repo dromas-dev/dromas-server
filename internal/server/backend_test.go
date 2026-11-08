@@ -372,15 +372,19 @@ func TestEveryWriteOfTheBackendReachesMemoryByItsOutcome(t *testing.T) {
 						if loaded || cachedOK {
 							t.Errorf("unknown: memory still holds the address: the index %v, the record cache %v", loaded, cachedOK)
 						}
+					case stale:
+						// The store holds what memory never applied, the
+						// record or the call's standing: memory forgets the
+						// address, so its next use reads it.
+						if loaded || cachedOK {
+							t.Errorf("refused for its condition: memory still holds the address: the index %v, the record cache %v", loaded, cachedOK)
+						}
 					case refusal != nil:
 						if !loaded {
 							t.Errorf("refused: the index dropped the mailbox")
 						}
 						if st, _ := w.s.Held(w.a); c.on == onMailbox && st != w.standing {
 							t.Errorf("refused: the index holds the mailbox's standing %+v, not %+v as before", st, w.standing)
-						}
-						if stale && cachedOK {
-							t.Errorf("refused for its condition: the record cache still holds the copy from before it")
 						}
 						if !stale && c.on == onMailbox && (!cachedOK || b == nil || b.Rev != w.rec.Rev) {
 							t.Errorf("refused: the record cache does not hold the record as before")

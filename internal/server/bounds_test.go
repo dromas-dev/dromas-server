@@ -162,7 +162,7 @@ func TestEveryCallOfTheBackendEndsAtItsBound(t *testing.T) {
 		"UpdateMailbox": func(ctx context.Context, b Backend) error { return b.UpdateMailbox(ctx, cloneMailbox(mailbox)) },
 		"DeleteMailbox": func(ctx context.Context, b Backend) error { return b.DeleteMailbox(ctx, mailbox.Addr) },
 		"Revoke": func(ctx context.Context, b Backend) error {
-			_, err := b.Revoke(ctx, mailbox.Addr, &Revocations{Identity: mailbox.Identity, Address: []byte("r")}, ExpectAnything)
+			_, _, err := b.Revoke(ctx, mailbox.Addr, &Revocations{Identity: mailbox.Identity, Address: []byte("r")}, ExpectAnything)
 			return err
 		},
 		"Adopt": func(ctx context.Context, b Backend) error {
@@ -210,7 +210,7 @@ func TestEveryCallOfTheBackendEndsAtItsBound(t *testing.T) {
 	sweep := silentBackend(t)
 	put, get, del, stalled := silentS3(t, false), silentS3(t, false), silentS3(t, false), silentS3(t, true)
 	calls = append(calls,
-		call{"the sweep's batch", storeTimeout, func(ctx context.Context) error { return sweep.sweepTable(ctx, "messages", "received_at", 0) }},
+		call{"the sweep's batch", storeTimeout, func(ctx context.Context) error { return sweep.sweepExpired(ctx, "messages", "received_at", 0) }},
 		call{"a body's write to S3", storeTimeout, func(ctx context.Context) error { return put.Put(ctx, "k", []byte("abc")) }},
 		call{"a body's read from S3", storeTimeout, func(ctx context.Context) error { _, err := get.Get(ctx, "k", 0, 3); return err }},
 		call{"a body's bytes from S3", storeTimeout, func(ctx context.Context) error { _, err := stalled.Get(ctx, "k", 0, 3); return err }},
