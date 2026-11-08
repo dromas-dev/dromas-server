@@ -155,7 +155,10 @@ func TestEveryCallOfTheBackendEndsAtItsBound(t *testing.T) {
 			_, _, err := b.Message(ctx, mailbox.Addr, msg.ID, 0)
 			return err
 		},
-		"Dedupe":        func(ctx context.Context, b Backend) error { _, err := b.Dedupe(ctx, mailbox.Addr, msg.ID); return err },
+		"Header": func(ctx context.Context, b Backend) error { _, err := b.Header(ctx, mailbox.Addr, msg.ID); return err },
+		"PassHeld": func(ctx context.Context, b Backend) error {
+			return b.PassHeld(withPass(ctx, passBy{addr: mailbox.Addr, identity: true}))
+		},
 		"Account":       func(ctx context.Context, b Backend) error { _, err := b.Account(ctx, "acct"); return err },
 		"AdoptKey":      func(ctx context.Context, b Backend) error { _, err := b.AdoptKey(ctx, "acct", [32]byte{1}); return err },
 		"CreateMailbox": func(ctx context.Context, b Backend) error { return b.CreateMailbox(ctx, cloneMailbox(mailbox)) },
@@ -304,7 +307,7 @@ func deadlineOf(ctx context.Context) time.Duration {
 	return -1
 }
 
-func (s *hangingDedupe) Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
+func (s *hangingDedupe) Header(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
 	if id == s.id {
 		s.reads.Add(1)
 		s.dedupeDeadline.Store(deadlineOf(ctx))
@@ -316,7 +319,7 @@ func (s *hangingDedupe) Dedupe(ctx context.Context, mailbox protocol.Address, id
 		case <-s.let:
 		}
 	}
-	return s.Store.Dedupe(ctx, mailbox, id)
+	return s.Store.Header(ctx, mailbox, id)
 }
 
 func (s *hangingDedupe) Known(a protocol.Address) (*Mailbox, bool) {
@@ -409,7 +412,7 @@ type holdDedupe struct {
 	ended   atomic.Bool
 }
 
-func (s *holdDedupe) Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
+func (s *holdDedupe) Header(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
 	if s.hold.CompareAndSwap(true, false) {
 		close(s.entered)
 		select {
@@ -419,7 +422,7 @@ func (s *holdDedupe) Dedupe(ctx context.Context, mailbox protocol.Address, id [3
 		case <-s.let:
 		}
 	}
-	return s.Store.Dedupe(ctx, mailbox, id)
+	return s.Store.Header(ctx, mailbox, id)
 }
 
 // A sender whose account lifts its cap posts a body past the free cap, and
@@ -500,11 +503,11 @@ func (s *readDeadlines) note(read string, ctx context.Context) {
 	s.seen[read] = deadlineOf(ctx)
 }
 
-func (s *readDeadlines) Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
+func (s *readDeadlines) Header(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
 	if mailbox == s.to {
-		s.note("Dedupe", ctx)
+		s.note("Header", ctx)
 	}
-	return s.Store.Dedupe(ctx, mailbox, id)
+	return s.Store.Header(ctx, mailbox, id)
 }
 
 func (s *readDeadlines) Count(ctx context.Context, mailbox protocol.Address) (int, error) {
@@ -552,7 +555,7 @@ func TestEveryReadOfASendsSharedCallIsBounded(t *testing.T) {
 	e.want(e.sendTo(to, 1, from, 1), http.StatusCreated, "")
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, read := range []string{"Dedupe", "Count", "Account", "Mailbox"} {
+	for _, read := range []string{"Header", "Count", "Account", "Mailbox"} {
 		d, ok := s.seen[read]
 		t.Logf("%s: deadline %v (-1: none)", read, d)
 		if !ok || d <= 0 || d > storeTimeout {

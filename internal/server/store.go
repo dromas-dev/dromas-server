@@ -635,9 +635,15 @@ type Store interface {
 	// of them, some held or none.
 	Revoke(ctx context.Context, a protocol.Address, rv *Revocations, want Expect) error
 
-	// Dedupe returns the header of the live message mailbox holds with this
-	// id, or ErrNotFound: nothing is kept of one acked or expired.
-	Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error)
+	// Header returns the header of the live message mailbox holds with this
+	// id, or ErrNotFound: nothing is kept of one acked or expired. It is held
+	// to ctx's pass, where it carries one (ErrStale): the mailbox's own on a
+	// message's HEAD, the sender's on a send's dedupe.
+	Header(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error)
+	// PassHeld reads whether ctx's pass still holds, in one statement: nil,
+	// or ErrStale, and memory forgets the pass's address. What a fetch or an
+	// ack of an id memory does not hold is held to.
+	PassHeld(ctx context.Context) error
 	// PutMessage stores a message: its body, then its header. If a live
 	// message of the id appeared first, it returns that one's header
 	// instead.

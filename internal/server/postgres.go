@@ -1057,11 +1057,18 @@ func msgOf(mailbox protocol.Address, r row) (*Header, string, error) {
 	return h, bodyKey(mailbox, h.ID, ms(h.ReceivedAt), nonce), nil
 }
 
-// Dedupe implements Backend: the live message's row. A miss a send makes
-// at once is caught by PutMessage's conditional write.
-func (s *pgBackend) Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
-	h, _, err := s.getMsg(ctx, mailbox, id, false)
+// Header implements Backend: the live message's row, held to ctx's pass. A
+// miss a send makes at once is caught by PutMessage's conditional write.
+func (s *pgBackend) Header(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
+	h, _, err := s.getMsg(ctx, mailbox, id, true)
 	return h, err
+}
+
+// PassHeld implements Backend: one statement, passHeldSQL.
+func (s *pgBackend) PassHeld(ctx context.Context) error {
+	ctx, cancel := bounded(ctx)
+	defer cancel()
+	return staleness(ctx, s.pool)
 }
 
 // ReadLive implements Backend: the mailbox's live messages, oldest first,

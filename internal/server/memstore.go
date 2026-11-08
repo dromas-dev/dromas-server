@@ -232,16 +232,29 @@ func (s *memBackend) Revoke(_ context.Context, a protocol.Address, rv *Revocatio
 // match it (version).
 func atVersion(cur, b *Mailbox) bool { return cur != nil && versionOf(cur) == versionOf(b) }
 
-// Dedupe implements Backend.
-func (s *memBackend) Dedupe(_ context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
+// Header implements Backend, held to ctx's pass.
+func (s *memBackend) Header(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.held(ctx) {
+		return nil, ErrStale
+	}
 	m, ok := s.live(mailbox)[id]
 	if !ok {
 		return nil, ErrNotFound
 	}
 	h := m.h
 	return &h, nil
+}
+
+// PassHeld implements Backend.
+func (s *memBackend) PassHeld(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.held(ctx) {
+		return ErrStale
+	}
+	return nil
 }
 
 // PutMessage implements Backend: a live message of the id refuses it, as

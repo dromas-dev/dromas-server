@@ -20,8 +20,8 @@ import (
 // began (PostgreSQL's docs, Transaction Isolation, read 2026-11-08), so a
 // call that starts after another's answer is held to it.
 
-// passBy is the pass a mailbox's own call was taken under (checkPassBy):
-// the identity's, taken while the address is not revoked and the mailbox
+// passBy is the pass a call was taken under (checkPassBy), a mailbox's own
+// call's or a send's sender's: the identity's, taken while the address is not revoked and the mailbox
 // has a record, or the signer's whose key's hash is signer, taken while it
 // is the record's signer and no revocation of certificates covers it.
 type passBy struct {
@@ -46,9 +46,9 @@ type (
 	sendKey struct{}
 )
 
-// withPass is ctx carrying the pass a mailbox's call was taken under: the
-// backend holds the call's reads of its messages and its writes of its
-// record to it (passOf).
+// withPass is ctx carrying the pass a call was taken under: the backend
+// holds a mailbox's reads of its messages and writes of its record to it,
+// and a send's dedupe to its sender's (passOf).
 func withPass(ctx context.Context, p passBy) context.Context {
 	return context.WithValue(ctx, passKey{}, p)
 }

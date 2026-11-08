@@ -217,7 +217,8 @@ func TestA304IsAPoll(t *testing.T) {
 }
 
 // An id that shares a held message's first 8 bytes is not that message: its
-// fetch and its ack are 404 from memory, and touch no storage.
+// fetch and its ack are 404 from memory, and read only whether the pass
+// holds (Store.PassHeld).
 func TestAnIDThatSharesAPrefixIsNotHeld(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
@@ -241,8 +242,8 @@ func TestAnIDThatSharesAPrefixIsNotHeld(t *testing.T) {
 		e2.want(e2.do(http.MethodDelete, path, nil, pass), http.StatusNotFound, protocol.CodeNoSuchMessage)
 		e2.want(e2.do(http.MethodGet, path, nil, pass), http.StatusNotFound, protocol.CodeNoSuchMessage)
 	}
-	if n := cs.calls.Load(); n != before {
-		t.Fatalf("%d storage calls for an id that only shares a held message's prefix", n-before)
+	if n := cs.calls.Load(); n != before+10 {
+		t.Fatalf("%d storage calls for 10 calls of an id that only shares a held message's prefix; want 10, a read of the pass each", n-before)
 	}
 	if res := receive(t, b); len(res.Delivered) != 1 {
 		t.Fatalf("the held message: delivered %d", len(res.Delivered))

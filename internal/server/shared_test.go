@@ -314,10 +314,16 @@ func (f *faults) Message(ctx context.Context, mailbox protocol.Address, id [32]b
 	return h, body, err
 }
 
-func (f *faults) Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
-	h, err := f.Backend.Dedupe(ctx, mailbox, id)
-	f.answered("Dedupe")
+func (f *faults) Header(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
+	h, err := f.Backend.Header(ctx, mailbox, id)
+	f.answered("Header")
 	return h, err
+}
+
+func (f *faults) PassHeld(ctx context.Context) error {
+	err := f.Backend.PassHeld(ctx)
+	f.answered("PassHeld")
+	return err
 }
 
 func (f *faults) Account(ctx context.Context, id string) (*Account, error) {
@@ -490,9 +496,14 @@ func (c *countingStore) Revoke(ctx context.Context, a protocol.Address, rv *Revo
 	return c.s.Revoke(ctx, a, rv, want)
 }
 
-func (c *countingStore) Dedupe(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
+func (c *countingStore) Header(ctx context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
 	c.count()
-	return c.s.Dedupe(ctx, mailbox, id)
+	return c.s.Header(ctx, mailbox, id)
+}
+
+func (c *countingStore) PassHeld(ctx context.Context) error {
+	c.count()
+	return c.s.PassHeld(ctx)
 }
 
 func (c *countingStore) PutMessage(ctx context.Context, mailbox protocol.Address, h *Header, body []byte) (*Header, error) {

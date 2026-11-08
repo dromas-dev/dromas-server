@@ -462,29 +462,54 @@ func gone() *problem {
 	return fail(protocol.CodeNoSuchMessage, "treat it as gone", "no message has this id: acked or expired")
 }
 
-// held answers gone, from memory, for an id the mailbox does not hold: a fetch
-// or an ack reads or writes storage only for a message that is there.
-func (s *Server) held(r *http.Request, mailbox protocol.Address, id [32]byte) error {
+// held answers gone for an id the mailbox does not hold, as memory shows it:
+// a fetch or an ack reads or writes a message's row only for a message that
+// is there (notHeld).
+func (s *Server) held(ctx context.Context, r *http.Request, mailbox protocol.Address, id [32]byte) error {
 	ok, err := s.store.Holds(r.Context(), mailbox, id)
 	if err != nil {
 		return err
 	}
 	if !ok {
-		return s.notHeld(r, mailbox)
+		return s.notHeld(ctx, r, mailbox)
 	}
 	return nil
 }
 
-// notHeld answers a fetch or an ack of an id mailbox a does not hold. A held
-// message's first fetch spends the mailbox's budget of messages taken out
-// (Limits.DrainBurst), and its ack is paid for by its receive; anything else
-// is a call, spent from the mailbox's budget (Limits.CallBurst): this, a false
+// notHeld answers a fetch or an ack of an id mailbox a does not hold, as
+// memory shows it: gone, once the pass ctx carries is read to hold
+// (Store.PassHeld), so a pass another process ended is refused here as a
+// fresh call would be (heldRead). A held message's first fetch spends the
+// mailbox's budget of messages taken out (Limits.DrainBurst), and its ack is
+// paid for by its receive; anything else is a call, spent from the mailbox's
+// budget (Limits.CallBurst) before anything is read: this, a false
 // precondition (precondition) and a message's HEAD.
-func (s *Server) notHeld(r *http.Request, a protocol.Address) error {
+func (s *Server) notHeld(ctx context.Context, r *http.Request, a protocol.Address) error {
 	if err := s.spendOwner(r.Context(), a); err != nil {
 		return err
 	}
+	if err := s.heldRead(ctx, r, s.store.PassHeld); err != nil {
+		return err
+	}
 	return gone()
+}
+
+// heldRead makes read, a store call held to the pass ctx carries, and where
+// it meets ErrStale, checks the pass again (recheck) and makes it once more
+// under the pass taken then: stale twice is mailbox_changed. Any other
+// error is read's.
+func (s *Server) heldRead(ctx context.Context, r *http.Request, read func(context.Context) error) error {
+	err := read(ctx)
+	if errors.Is(err, ErrStale) {
+		if ctx, err = s.recheck(r); err != nil {
+			return err
+		}
+		err = read(ctx)
+	}
+	if errors.Is(err, ErrStale) {
+		return changedDuring()
+	}
+	return err
 }
 
 // fetch is GET /v1/<address>/messages/<id>: the ciphertext's bytes and
@@ -496,8 +521,9 @@ func (s *Server) notHeld(r *http.Request, a protocol.Address) error {
 // other with the whole body (PROTOCOL.md §11.12; protocol.RangeAsked): a fetch
 // that was cut resumes so. A ranged fetch is counted as any fetch is. A
 // HEAD is no fetch (PROTOCOL.md §11.2): it reads only whether the mailbox holds
-// the message, takes no token of new messages and marks nothing, spends one of
-// the mailbox's calls, and carries no Content-Length and reads no Range.
+// the message, its row held to the pass (Store.Header), takes no token of new
+// messages and marks nothing, spends one of the mailbox's calls, and carries
+// no Content-Length and reads no Range.
 func (s *Server) fetch(w http.ResponseWriter, r *http.Request) error {
 	mailbox, ctx, err := s.owner(r)
 	if err != nil {
@@ -505,12 +531,12 @@ func (s *Server) fetch(w http.ResponseWriter, r *http.Request) error {
 	}
 	id, err := pathID(r)
 	if err != nil {
-		return s.notHeld(r, mailbox)
+		return s.notHeld(ctx, r, mailbox)
 	}
 	// Its target, from memory: whether the mailbox holds the message. Its
 	// preconditions are evaluated for one it holds, before anything is
 	// counted for it, and a false one is a call, the mailbox's (precondition).
-	if err := s.held(r, mailbox, id); err != nil {
+	if err := s.held(ctx, r, mailbox, id); err != nil {
 		return err
 	}
 	owner := func() error { return s.spendOwner(r.Context(), mailbox) }
@@ -519,6 +545,16 @@ func (s *Server) fetch(w http.ResponseWriter, r *http.Request) error {
 	}
 	if r.Method == http.MethodHead {
 		if err := owner(); err != nil {
+			return err
+		}
+		err := s.heldRead(ctx, r, func(ctx context.Context) error {
+			_, err := s.store.Header(ctx, mailbox, id)
+			return err
+		})
+		if errors.Is(err, ErrNotFound) {
+			return gone()
+		}
+		if err != nil {
 			return err
 		}
 		w.Header().Set("Content-Type", protocol.CiphertextContentType)
@@ -553,7 +589,7 @@ func (s *Server) fetch(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if !held {
-		return s.notHeld(r, mailbox)
+		return s.notHeld(ctx, r, mailbox)
 	}
 	// A message is fetched once and kept by its reader. Fetching it again is
 	// for catching up after a failure, so it has an allowance of its own, and
@@ -613,9 +649,9 @@ func (s *Server) ack(w http.ResponseWriter, r *http.Request) error {
 	}
 	id, err := pathID(r)
 	if err != nil {
-		return s.notHeld(r, mailbox)
+		return s.notHeld(ctx, r, mailbox)
 	}
-	if err := s.held(r, mailbox, id); err != nil {
+	if err := s.held(ctx, r, mailbox, id); err != nil {
 		return err
 	}
 	if err := precondition(r, targetState{exists: true, hint: hintConditions, spend: func() error { return s.spendOwner(r.Context(), mailbox) }}); err != nil {
