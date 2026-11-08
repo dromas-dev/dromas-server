@@ -154,7 +154,8 @@ func TestTheRuntimeRoleOnlyReadsTheVersions(t *testing.T) {
 // good, or to an account: delete either, take an address's revocation
 // back or change it, or lower a revocation of certificates or replace it at
 // its serial. Each refusal is the database's, so a server broken into cannot
-// either; and no role deletes a revocation, the owner included.
+// either; and no role deletes a revocation, the owner included, but by the
+// owner's DDL (a trigger dropped or disabled, or its function replaced).
 func TestTheRuntimeRoleCannotTakeARevocationBack(t *testing.T) {
 	t.Parallel()
 	if !onPostgres() {
@@ -206,7 +207,7 @@ func TestTheRuntimeRoleCannotTakeARevocationBack(t *testing.T) {
 		}
 	}
 	// Nor may the owner, whatever the grants: the triggers hold for every
-	// role (migration 00006).
+	// role (migration 00006) until the owner changes them.
 	for _, q := range []string{`DELETE FROM ` + schema + `.revocations`, `TRUNCATE ` + schema + `.revocations`} {
 		err := asTestRole(func(ctx context.Context, conn *pgx.Conn) error {
 			_, err := conn.Exec(ctx, q)

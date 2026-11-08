@@ -171,6 +171,7 @@ type pgFeed struct {
 	made    time.Time     // the commit time of the transaction begun
 	held    []fedChange   // its changes, held until its commit is visible, at most feedHeldMax
 	seen    string        // the newest snapshot sees read, pg_current_snapshot()'s text; "" before one
+	seenAt  time.Time     // when it was read
 	types   *pgtype.Map
 	// visible reports whether a transaction's commit is visible to a new
 	// snapshot: sees, or the backend's replacement in a test.
@@ -424,14 +425,13 @@ func (f *pgFeed) commit(ctx context.Context, end pglogrepl.LSN) error {
 // snapshot for every transaction committed before it, not one each. Else it
 // reads a new one on the feed's own connection, made again if it is lost.
 func (f *pgFeed) sees(ctx context.Context, xid uint32) (bool, error) {
-	if f.seen != "" {
-		if ok, err := snapshotSees(f.seen, xid); err == nil && ok {
-			return true, nil
-		}
+	if f.cachedSees(xid) {
+		return true, nil
 	}
 	rctx, cancel := context.WithTimeout(ctx, feedUnsyncedAfter)
 	defer cancel()
 	var snap string
+	at := time.Now()
 	err := f.snap.QueryRow(rctx, "SELECT pg_current_snapshot()::text").Scan(&snap)
 	if err != nil && f.snap.IsClosed() && rctx.Err() == nil {
 		c, cerr := pgx.ConnectConfig(rctx, f.s.pool.Config().ConnConfig.Copy())
@@ -445,8 +445,21 @@ func (f *pgFeed) sees(ctx context.Context, xid uint32) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	f.seen = snap
+	f.seen, f.seenAt = snap, at
 	return snapshotSees(snap, xid)
+}
+
+// cachedSees reports whether the newest snapshot read sees transaction xid
+// committed, while it is younger than feedUnsyncedAfter. snapshotSees takes
+// a 32-bit xid as the one nearest the snapshot's xmax, so against a snapshot
+// 2^31 or more transactions old a new transaction reads as one of the epoch
+// before, below xmin, and seen; no database runs 2^31 in the bound.
+func (f *pgFeed) cachedSees(xid uint32) bool {
+	if f.seen == "" || time.Since(f.seenAt) >= feedUnsyncedAfter {
+		return false
+	}
+	ok, err := snapshotSees(f.seen, xid)
+	return err == nil && ok
 }
 
 // snapshotSees reports whether a snapshot, pg_current_snapshot()'s text
@@ -565,7 +578,9 @@ func (f *pgFeed) row(r *pglogrepl.RelationMessage, tuple, old *pglogrepl.TupleDa
 		}
 		name, oid := r.Columns[i].Name, r.Columns[i].DataType
 		if col.DataType == pglogrepl.TupleDataTypeToast {
-			if old == nil || i >= len(old.Columns) || old.Columns[i].DataType == pglogrepl.TupleDataTypeToast {
+			// An old row's null is a key's old row's ('K') column beyond
+			// the key, never the value an update left alone.
+			if old == nil || i >= len(old.Columns) || old.Columns[i].DataType == pglogrepl.TupleDataTypeToast || old.Columns[i].DataType == pglogrepl.TupleDataTypeNull {
 				fail(fmt.Errorf("%s: an unchanged value not sent, and no old row holds it", name))
 				continue
 			}

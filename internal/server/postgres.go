@@ -137,7 +137,9 @@ func NewPostgresStore(ctx context.Context, c PostgresConfig) (*Memory, error) {
 	// the bound itself only closes the connection (pgconn's
 	// DeadlineContextWatcherHandler sends no cancel), and the database would
 	// run the statement on. A statement it ends answers as an ERROR, a
-	// refusal (pgOutcome), before the bound reads it as unknown.
+	// refusal (pgOutcome), before the bound reads it as unknown. Each bounds
+	// one statement, not the call: a call of several, or one that waited for
+	// a connection, can still be ended mid-statement, an unknown outcome.
 	for _, p := range []string{"statement_timeout", "lock_timeout"} {
 		pc.ConnConfig.RuntimeParams[p] = strconv.FormatInt((storeTimeout - storeTimeout/10).Milliseconds(), 10)
 	}
