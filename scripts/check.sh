@@ -5,7 +5,7 @@
 #
 #   scripts/check.sh         quick: gofmt, vet and the tests -short keeps, while working
 #   scripts/check.sh full    CI's test job: gofmt, vet, every test (in memory, then on PostgreSQL), the skip check, test/interop.sh
-#   scripts/check.sh push    full, then golangci-lint and govulncheck: before a push
+#   scripts/check.sh push    full, then golangci-lint, squawk (where installed) and govulncheck: before a push
 #   scripts/check.sh vuln    govulncheck alone, at the version pinned here
 #
 # The tests build with -tags dromas_nofsync, so the client they drive flushes
@@ -84,6 +84,9 @@ case ${1:-quick} in
   push)
     full
     golangci-lint run ./...
+    # The migrations, by .squawk.toml, as CI's lint job lints them; skipped
+    # where squawk is not installed, as GNU coreutils' and bash's paths are.
+    if command -v squawk > /dev/null; then squawk internal/server/migrations/*.sql; fi
     go run "$govulncheck" ./...
     ;;
   vuln) go run "$govulncheck" ./... ;;

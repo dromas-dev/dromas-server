@@ -99,6 +99,16 @@ jobs:
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.15.0
+      - name: migrations
+        # squawk on each migration, by its own action (squawk's docs,
+        # docs/github_app.md) at a version pinned here, as golangci-lint
+        # is by its own above. squawk reads .squawk.toml from the checkout;
+        # no comment on a pull request, so the run's result is the answer.
+        uses: sbdchd/squawk-action@f972c01c35289cf7611464dae9a214bb84cce5e4 # v2.2.0
+        with:
+          version: 2.70.0
+          pattern: internal/server/migrations/*.sql
+          upload-to-github: "false"
 
   govulncheck:
     runs-on: ubuntu-26.04
