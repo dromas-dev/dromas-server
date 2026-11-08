@@ -1059,9 +1059,26 @@ func (s *pgBackend) Dedupe(ctx context.Context, mailbox protocol.Address, id [32
 	return h, err
 }
 
-// ReadLive implements Backend: the mailbox's live messages, oldest first.
+// ReadLive implements Backend: the mailbox's live messages, oldest first,
+// read in pages of sweepBatch rows by (received_at, id), each a bounded
+// statement of its own, so that a mailbox of any size loads. A change committed
+// between two pages reaches memory by the feed after the load, as one
+// committed during a single read would.
 func (s *pgBackend) ReadLive(ctx context.Context, mailbox protocol.Address) ([]Header, error) {
-	return s.list(ctx, mailbox, nil, 0, false)
+	var all []Header
+	var after *Cursor
+	for {
+		page, err := s.list(ctx, mailbox, after, sweepBatch, false)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, page...)
+		if len(page) < sweepBatch {
+			return all, nil
+		}
+		last := page[len(page)-1]
+		after = &Cursor{ReceivedAt: last.ReceivedAt, ID: last.ID}
+	}
 }
 
 // List implements Backend: a page of the mailbox's live messages, oldest
@@ -1274,17 +1291,32 @@ func (s *pgBackend) Message(ctx context.Context, mailbox protocol.Address, id [3
 }
 
 // DeleteAll implements Backend: every live message of the mailbox, as acks
-// are, its rows in one statement, then their bodies. A message stored
-// before it is in it.
+// are, its rows in batches (deleteBatch), each batch's bodies after it. A
+// message stored before it is in it.
 func (s *pgBackend) DeleteAll(ctx context.Context, mailbox protocol.Address, retired func([32]byte, time.Time)) error {
+	for {
+		n, err := s.deleteBatch(ctx, mailbox, retired)
+		if err != nil || n < sweepBatch {
+			return err
+		}
+	}
+}
+
+// deleteBatch deletes up to sweepBatch of the mailbox's live messages in a
+// transaction of its own, as the sweep deletes in batches, so that no
+// transaction brings the feed more than feedHeldMax changes, then their
+// bodies. It returns how many rows it deleted.
+func (s *pgBackend) deleteBatch(ctx context.Context, mailbox protocol.Address, retired func([32]byte, time.Time)) (int, error) {
 	var got []row
 	err := s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		rows, err := rowsOf(tx.Query(ctx, `DELETE FROM messages WHERE box = $1 AND received_at >= $2 RETURNING id, size, received_at, nonce`, mailbox[:], s.liveFrom()))
+		rows, err := rowsOf(tx.Query(ctx, `DELETE FROM messages WHERE box = $1 AND received_at >= $2
+			AND id IN (SELECT id FROM messages WHERE box = $1 AND received_at >= $2 LIMIT $3)
+			RETURNING id, size, received_at, nonce`, mailbox[:], s.liveFrom(), sweepBatch))
 		got = rows
 		return err
 	})
 	if err != nil {
-		return err
+		return 0, err
 	}
 	keys := make([]string, 0, len(got))
 	var bad error
@@ -1303,9 +1335,9 @@ func (s *pgBackend) DeleteAll(ctx context.Context, mailbox protocol.Address, ret
 		s.logf("a mailbox's deleted messages' bodies were left to be collected: %v", err)
 	}
 	if bad != nil {
-		return unknown(fmt.Errorf("applied, and a row of its answer does not read: %w", bad))
+		return len(got), unknown(fmt.Errorf("applied, and a row of its answer does not read: %w", bad))
 	}
-	return nil
+	return len(got), nil
 }
 
 // Accounts and adopt keys.

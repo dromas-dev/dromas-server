@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -565,6 +566,91 @@ func TestATransactionPastWhatTheFeedHoldsLosesItsPlace(t *testing.T) {
 		}
 	case <-time.After(15 * time.Second):
 		t.Fatalf("a transaction of %d rows did not lose the place", feedHeldMax+1)
+	}
+}
+
+// insertLive puts n live rows for mailbox a straight into s's messages
+// table, one statement, received at one millisecond (as every write
+// truncates the time), so pages turn on the id alone.
+func insertLive(t *testing.T, s *Memory, a protocol.Address, n int) {
+	t.Helper()
+	if _, err := s.pool().Exec(context.Background(), `INSERT INTO messages (box, id, size, received_at, nonce)
+		SELECT $1, sha256(($3 || i)::bytea), 0, date_trunc('milliseconds', now()), '\x0000000000000000'::bytea FROM generate_series(1, $2::int) i`, a[:], n, randomHex(8)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A mailbox of more live messages than one page of ReadLive loads whole,
+// each once, in order.
+func TestAMailboxPastOnePageLoadsWhole(t *testing.T) {
+	t.Parallel()
+	if !onPostgres() {
+		t.Skip("needs PostgreSQL: DROMAS_TEST_POSTGRES")
+	}
+	schema, bodies := freshDatabase(t)
+	s := startPostgresIn(t, schema, bodies, nil, nil)
+	var a protocol.Address
+	rand.Read(a[:])
+	const n = 2*sweepBatch + 1
+	insertLive(t, s, a, n)
+	hs, err := s.pg().ReadLive(context.Background(), a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[[32]byte]bool{}
+	for i, h := range hs {
+		if seen[h.ID] {
+			t.Fatalf("message %d of the load is a repeat", i)
+		}
+		seen[h.ID] = true
+		if i > 0 && bytes.Compare(hs[i-1].ID[:], h.ID[:]) >= 0 {
+			t.Fatalf("message %d of the load is out of order", i)
+		}
+	}
+	if len(hs) != n {
+		t.Errorf("a mailbox of %d live messages loaded %d", n, len(hs))
+	}
+}
+
+// A revocation's delete of a mailbox of more live messages than the feed
+// holds of one transaction deletes every row and keeps the feed's place:
+// its batches are transactions of their own.
+func TestADeleteOfAMailboxPastWhatTheFeedHoldsKeepsItsPlace(t *testing.T) {
+	t.Parallel()
+	if !onPostgres() {
+		t.Skip("needs PostgreSQL: DROMAS_TEST_POSTGRES")
+	}
+	schema, bodies := freshDatabase(t)
+	lost := make(chan error, 1)
+	s := startPostgresIn(t, schema, bodies, nil, func(c *PostgresConfig) {
+		c.Fatal = func(err error) {
+			select {
+			case lost <- err:
+			default:
+			}
+		}
+	})
+	var a protocol.Address
+	rand.Read(a[:])
+	insertLive(t, s, a, feedHeldMax/2+1)
+	insertLive(t, s, a, feedHeldMax/2+1)
+	fed(t, s)
+	var retired int
+	if err := s.pg().DeleteAll(context.Background(), a, func([32]byte, time.Time) { retired++ }); err != nil {
+		t.Fatal(err)
+	}
+	fed(t, s)
+	select {
+	case err := <-lost:
+		t.Fatalf("the delete of %d rows lost the feed's place: %v", feedHeldMax+2, err)
+	default:
+	}
+	var left int
+	if err := s.pool().QueryRow(context.Background(), `SELECT count(*)::int FROM messages WHERE box = $1`, a[:]).Scan(&left); err != nil {
+		t.Fatal(err)
+	}
+	if left != 0 || retired != feedHeldMax+2 {
+		t.Errorf("the delete left %d rows and retired %d, want 0 and %d", left, retired, feedHeldMax+2)
 	}
 }
 
