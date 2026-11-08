@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -452,12 +453,15 @@ func TestARevocationOutlivesTheProcess(t *testing.T) {
 // the read of the messages table a revocation draws, and each Count. The next
 // failDeletes deletes fail before the store is asked, as a store down for a
 // moment fails, and while forgetful its Held knows no address, as a process
-// that has loaded none.
+// that has loaded none. held and lastCount are what its last Held and Count
+// answered.
 type watchedStore struct {
 	Store            // beneath: what is not watched goes straight to it
 	deleted, counted atomic.Int32
 	failDeletes      atomic.Int32
 	forgetful        atomic.Bool
+	held             atomic.Bool
+	lastCount        atomic.Int32
 }
 
 // watching is an option of newEnv that puts w between the server and its
@@ -469,14 +473,19 @@ func watching(w *watchedStore) func(*Config) {
 
 func (w *watchedStore) Held(a protocol.Address) (Standing, bool) {
 	if w.forgetful.Load() {
+		w.held.Store(false)
 		return Standing{}, false
 	}
-	return w.Store.Held(a)
+	st, ok := w.Store.Held(a)
+	w.held.Store(ok)
+	return st, ok
 }
 
 func (w *watchedStore) Count(ctx context.Context, a protocol.Address) (int, error) {
 	w.counted.Add(1)
-	return w.Store.Count(ctx, a)
+	n, err := w.Store.Count(ctx, a)
+	w.lastCount.Store(int32(n)) //nolint:gosec // a test mailbox's few messages
+	return n, err
 }
 
 func (w *watchedStore) DeleteMessages(ctx context.Context, a protocol.Address) error {
@@ -545,9 +554,13 @@ func TestARevocationRetriedAfterAFailedDeleteDeletes(t *testing.T) {
 	if n, err := e.store.Count(ctx, a.Address()); err != nil || n != 1 {
 		t.Fatalf("after a revocation whose delete failed the mailbox holds %d messages (%v), want the 1 it had", n, err)
 	}
+	counted, deleted := w.counted.Load(), w.deleted.Load()
 	e.want(e.do("PUT", path, rec, ""), 410, protocol.CodeRevoked)
 	if n, err := e.store.Count(ctx, a.Address()); err != nil || n != 0 {
-		t.Errorf("after the retry the revoked mailbox holds %d messages (%v), want none", n, err)
+		// What each read saw, so that a failure names the step that differed
+		// (dromas-dev/dromas-server#254).
+		t.Errorf("after the retry the revoked mailbox holds %d messages (%v), want none; the retry found it held %v, counted %d (%d reads), deleted %d times; the table holds %s",
+			n, err, w.held.Load(), w.lastCount.Load(), w.counted.Load()-counted, w.deleted.Load()-deleted, messageRows(e, a.Address()))
 	}
 	// With the mailbox empty, one more reads nothing.
 	e.want(e.do("PUT", path, rec, ""), 410, protocol.CodeRevoked)
@@ -775,4 +788,18 @@ func TestARevocationOfTheAddressIsReadBeforeWhatIsBesideIt(t *testing.T) {
 	half = r.certs(5)
 	half.Revocation, half.RevokedCertificates = rev, nil
 	e.want(e.do("PUT", r.path("/revocations"), half, ""), 400, protocol.CodeBadRequest)
+}
+
+// messageRows is the number of message rows of mailbox a in e's PostgreSQL
+// schema, read from the table itself, or "no table" on the in-memory store.
+func messageRows(e *env, a protocol.Address) string {
+	m, ok := onPg(e.store)
+	if !ok {
+		return "no table"
+	}
+	var n int
+	if err := m.pool().QueryRow(context.Background(), `SELECT count(*)::int FROM messages WHERE box = $1`, a[:]).Scan(&n); err != nil {
+		return err.Error()
+	}
+	return strconv.Itoa(n)
 }
