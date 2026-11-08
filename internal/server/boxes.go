@@ -471,7 +471,7 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 	} else if !replaces {
 		count = []perDay{s.certificatesADay()}
 	}
-	// The write holds what an If-Match held, the record at the rev read.
+	// The write holds what an If-Match held, the record at the version read.
 	if err := precondition(r, targetState{exists: true, hint: hintConditions}); err != nil {
 		return err
 	}

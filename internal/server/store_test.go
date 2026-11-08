@@ -880,3 +880,67 @@ func TestTheMailboxsStateAnswersBeforeItsPass(t *testing.T) {
 		}
 	}
 }
+
+// A record made again at its address, once the sweep took the one before,
+// starts its rev over: a write read from the record before names it by its
+// version, its created beside its rev, and is refused at the rev the new one
+// is at, a renewal's or an ACL's, an adopt and a leave
+// (dromas-dev/dromas-server#266).
+func TestAWriteReadFromTheRecordBeforeIsRefusedByTheRecordMadeAgain(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t, relaxed())
+	acc, key := accountEnv(t, e, true, 1)
+	_, id, _ := parseAdopt(key)
+	a := e.mailbox().Address()
+	old, err := e.store.Mailbox(ctx, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.store.DeleteMailbox(ctx, a); err != nil { // as the sweep does
+		t.Fatal(err)
+	}
+	e.clock.Add(time.Second)
+	again := cloneMailbox(old)
+	again.Created = e.clock.Now()
+	if err := e.store.CreateMailbox(ctx, again); err != nil {
+		t.Fatal(err)
+	}
+	for again.Rev < old.Rev {
+		if err := e.store.UpdateMailbox(ctx, again); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// held reads the record as stored, and fails unless it is the one made
+	// again at rev, in account.
+	held := func(what string, rev uint64, account string) *Mailbox {
+		t.Helper()
+		e.store.(*Memory).forget(a)
+		b, err := e.store.Mailbox(ctx, a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !b.Created.Equal(msTime(again.Created)) || b.Rev != rev || b.Account != account {
+			t.Errorf("after %s read from the record before: the record made at %v, at rev %d, in %q; want the one made again at %v, at rev %d, in %q",
+				what, b.Created, b.Rev, b.Account, msTime(again.Created), rev, account)
+		}
+		return b
+	}
+	if err := e.store.UpdateMailbox(ctx, cloneMailbox(old)); !errors.Is(err, ErrStale) {
+		t.Errorf("an update read from the record before: %v", err)
+	}
+	held("an update", old.Rev, "")
+	if err := e.store.Adopt(ctx, cloneMailbox(old), acc.ID, id); !errors.Is(err, ErrStale) {
+		t.Errorf("an adopt read from the record before: %v", err)
+	}
+	cur := held("an adopt", old.Rev, "")
+	if err := e.store.Adopt(ctx, cur, acc.ID, id); err != nil {
+		t.Fatalf("control: an adopt of the record made again: %v", err)
+	}
+	stale := cloneMailbox(old)
+	stale.Rev, stale.Account = cur.Rev, acc.ID
+	if err := e.store.Leave(ctx, stale); !errors.Is(err, ErrStale) {
+		t.Errorf("a leave read from the record before: %v", err)
+	}
+	held("a leave", cur.Rev, acc.ID)
+}

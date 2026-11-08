@@ -174,7 +174,7 @@ func (s *memBackend) UpdateMailbox(ctx context.Context, b *Mailbox) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cur := s.mailboxes[b.Addr]
-	if cur == nil || cur.Rev != b.Rev || !s.held(ctx) {
+	if !atVersion(cur, b) || !s.held(ctx) {
 		return ErrStale
 	}
 	rec := storedRecord(b)
@@ -197,34 +197,40 @@ func (s *memBackend) DeleteMailbox(_ context.Context, a protocol.Address) error 
 }
 
 // Revoke implements Backend.
-func (s *memBackend) Revoke(_ context.Context, a protocol.Address, rv *Revocations, want Expect) (*Revocations, uint64, error) {
+func (s *memBackend) Revoke(_ context.Context, a protocol.Address, rv *Revocations, want Expect) (*Revocations, version, error) {
 	s.deliver()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cur, ok := s.revocations[a]
 	if want == ExpectHeld && !ok || want == ExpectNone && ok {
-		return nil, 0, ErrStale
+		return nil, version{}, ErrStale
 	}
 	if !ok {
 		cur = &Revocations{}
 	}
 	if len(rv.Address) == 0 && rv.Through > 0 && cur.Through >= rv.Through {
-		return nil, 0, ErrStale // it brings nothing: a revocation of the address is kept whatever is beside it (merge)
+		return nil, version{}, ErrStale // it brings nothing: a revocation of the address is kept whatever is beside it (merge)
 	}
 	c := *cur
 	c.merge(rv)
 	s.revocations[a] = &c
 	held, echo := c, c
 	s.changed(Change{Kind: RevocationsChange, Addr: a, Revocations: &echo})
-	var rev uint64
+	var v version
 	if r := s.mailboxes[a]; r != nil {
 		rec := cloneMailbox(r)
 		rec.Rev++
-		s.mailboxes[a], rev = rec, rec.Rev
+		s.mailboxes[a], v = rec, versionOf(rec)
 		s.changed(recordChange(rec))
 	}
-	return &held, rev, nil
+	return &held, v, nil
 }
+
+// atVersion reports whether cur, the record held, is the one b was read
+// from, at its version: a record made again at the address once the sweep
+// took the one b was read from starts its rev over, so the rev alone may
+// match it (version).
+func atVersion(cur, b *Mailbox) bool { return cur != nil && versionOf(cur) == versionOf(b) }
 
 // Dedupe implements Backend.
 func (s *memBackend) Dedupe(_ context.Context, mailbox protocol.Address, id [32]byte) (*Header, error) {
@@ -420,7 +426,7 @@ func (s *memBackend) Adopt(ctx context.Context, b *Mailbox, account string, key 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cur := s.mailboxes[b.Addr]
-	if cur == nil || cur.Rev != b.Rev || !s.held(ctx) {
+	if !atVersion(cur, b) || !s.held(ctx) {
 		return ErrStale
 	}
 	k, ok := s.keys[adoptKeyRef{account, key}]
@@ -441,7 +447,7 @@ func (s *memBackend) Leave(ctx context.Context, b *Mailbox) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cur := s.mailboxes[b.Addr]
-	if cur == nil || cur.Rev != b.Rev || !s.held(ctx) {
+	if !atVersion(cur, b) || !s.held(ctx) {
 		return ErrStale
 	}
 	rec := cloneMailbox(cur)

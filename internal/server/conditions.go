@@ -47,7 +47,7 @@ func precondition(r *http.Request, t targetState) error {
 // is never true of one with none); an If-None-Match of "*" held, so it does
 // not (one of tags is true of it whatever it holds, so it asks nothing);
 // and neither asks nothing. A target with a tag, an ACL, is written under
-// its record's rev, which asks more.
+// its record's version, which asks more.
 func expected(r *http.Request) Expect {
 	switch {
 	case len(r.Header.Values("If-Match")) > 0:

@@ -78,7 +78,7 @@ func (s *Server) adopt(w http.ResponseWriter, r *http.Request) error {
 	}
 	// The target is the mailbox's place in an account: there is one once it is
 	// in any (precondition). The write holds what they held, the record at
-	// the rev read.
+	// the version read.
 	if err := precondition(r, targetState{exists: b.Account != "", hint: hintConditions}); err != nil {
 		return err
 	}

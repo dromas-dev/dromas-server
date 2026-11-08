@@ -343,14 +343,14 @@ func (f *faults) DeleteMailbox(ctx context.Context, a protocol.Address) error {
 	return f.write("DeleteMailbox", func() error { return f.Backend.DeleteMailbox(ctx, a) })
 }
 
-func (f *faults) Revoke(ctx context.Context, a protocol.Address, rv *Revocations, want Expect) (*Revocations, uint64, error) {
+func (f *faults) Revoke(ctx context.Context, a protocol.Address, rv *Revocations, want Expect) (*Revocations, version, error) {
 	var held *Revocations
-	var rev uint64
+	var v version
 	err := f.write("Revoke", func() (err error) {
-		held, rev, err = f.Backend.Revoke(ctx, a, rv, want)
+		held, v, err = f.Backend.Revoke(ctx, a, rv, want)
 		return err
 	})
-	return held, rev, err
+	return held, v, err
 }
 
 func (f *faults) Adopt(ctx context.Context, b *Mailbox, account string, key [32]byte) error {
