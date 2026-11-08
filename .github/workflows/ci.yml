@@ -61,13 +61,14 @@ jobs:
           docker exec postgres pg_isready -h 127.0.0.1 -U postgres -d dromas_test
       - name: tools
         run: |
-          go version; ssh -V; jq --version; curl --version | head -1; bash --version | head -1
+          go version; ssh -V; jq --version; curl --version | head -1; bash --version | head -1; nginx -v
           go list -m github.com/dromas-dev/dromas-client
           docker exec postgres postgres --version
       - name: check
         # gofmt, vet, every test in memory and again on PostgreSQL (a skip
         # fails the job, but the shared-store tests' in memory), and
-        # test/interop.sh on PostgreSQL: scripts/check.sh, which a laptop runs too.
+        # test/interop.sh on PostgreSQL, two shards behind the image's nginx:
+        # scripts/check.sh, which a laptop runs too.
         env:
           DROMAS_TEST_POSTGRES: "1"
           PGHOST: 127.0.0.1

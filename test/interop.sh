@@ -17,7 +17,8 @@
 #      posts;
 #   9. the sender ACL: a Go mailbox's block reaches this server, which refuses the recipe mailbox's send;
 #  10. the pass's name: the server runs with --names, so every pass above was checked for the name it is called by, and one made
-#      for another name is refused.
+#      for another name is refused;
+#  11. on PostgreSQL, two shards (ARCHITECTURE.md § Routing by address): no call misrouted, and each shard stored messages.
 # The recipe runs a mailbox of its own: the two clients meet over the wire, never in one mailbox directory.
 # Every script step runs in a FRESH shell (agents run each command in a new one). Every mailbox is post-quantum: where the
 # local age is older than 1.3, the client module's own (its go.mod's tool, built by go tool) goes first in PATH.
@@ -25,6 +26,8 @@
 #   test/interop.sh            SCRIPT=<path> overrides the dromas.sh it sources.
 # With DROMAS_TEST_POSTGRES set, dromas-server runs on PostgreSQL instead of --dev, the database libpq's environment names (PGHOST,
 # PGDATABASE, PGUSER, PGPASSWORD and the rest), its bodies in the work dir: a database kept for tests, never a running dromas-server's.
+# It runs there as two processes, --shard 1/2 and 2/2, behind nginx (also needed then), which sends each mailbox's calls to its
+# shard, and the recipe mailbox and the first Go mailbox are on different shards.
 # The work dir is mktemp -d's, under $TMPDIR or /tmp, its own for each run. A run that passes deletes it, since it may be
 # on tmpfs (memory) and it holds two builds; one that fails leaves it to look at, and names it.
 set -uo pipefail
@@ -33,7 +36,8 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/dromas-interop.XXXXXX") || { echo "no work dir
 pass=0; fail=0
 ok(){ echo "PASS $*"; pass=$((pass + 1)); }
 bad(){ echo "FAIL $*"; fail=$((fail + 1)); }
-trap 'rc=$?; [ -n "${srv:-}" ] && kill "$srv" 2> /dev/null; [ "$rc" -eq 0 ] || { echo "work dir: $work"; [ -s "$work/server.log" ] && { echo "the server'"'"'s log, its end:"; tail -n 40 "$work/server.log"; }; }' EXIT   # a run that fails, however it ends, names its work dir and shows the server's log
+procs=()   # every dromas-server process, and nginx in front of them
+trap 'rc=$?; for p in "${procs[@]}"; do kill "$p" 2> /dev/null; done; [ "$rc" -eq 0 ] || { echo "work dir: $work"; for l in "$work"/server*.log "$work/nginx/error.log"; do [ -s "$l" ] && { echo "${l##*/}, its end:"; tail -n 40 "$l"; }; done; }' EXIT   # a run that fails, however it ends, names its work dir and shows each process's log
 
 export PATH=$PATH:/usr/local/go/bin
 # The client is the module go.mod requires (go list -m answers with a go.work's checkout when there is one). Its commands are built in
@@ -49,21 +53,67 @@ echo "stock client: $SCRIPT ($(grep -c '^dr_[a-z_]*()' "$SCRIPT") functions)"
 age-keygen -pq > /dev/null 2>&1 || PATH=$(cd "$client" && dirname "$(go tool -n age)"):$(cd "$client" && dirname "$(go tool -n age-keygen)"):$PATH
 age-keygen -pq > /dev/null 2>&1 || { echo "no age that makes post-quantum keys"; exit 1; }
 echo "age: $(age --version)"
-port=$((20000 + RANDOM % 12768))   # below Linux's ephemeral ports (32768 up: ip_local_port_range), which an outgoing connection may hold
-if [ -n "${DROMAS_TEST_POSTGRES:-}" ]; then
-  store=(--bodies-dir "$work/bodies" --names "127.0.0.1:$port")
-  "$work/dromas-server" migrate 2> "$work/server.log" || { echo "dromas-server migrate failed"; exit 1; }   # as a deploy runs it, before serve
-else
-  store=(--dev --names "127.0.0.1:$port")   # --dev takes a pass made for any name without --names: with it, every pass's name is checked (PROTOCOL.md §8)
-fi
-echo "server: dromas-server serve ${store[*]:0:6}"
+port=$((20000 + RANDOM % 12760))   # with the next four, below Linux's ephemeral ports (32768 up: ip_local_port_range), which an outgoing connection may hold
 printf '{"poll_burst": 0, "registrations_per_hour": 0}\n' > "$work/limits.json"   # every mailbox here registers from one address
-"$work/dromas-server" serve "${store[@]}" --listen "127.0.0.1:$port" --limits "$work/limits.json" 2>> "$work/server.log" & srv=$!
+if [ -n "${DROMAS_TEST_POSTGRES:-}" ]; then
+  # Two processes, half the mailboxes each, behind nginx, which sends each mailbox's calls to its shard's process by the first
+  # character after /v1/d_ (ARCHITECTURE.md § Routing by address): the clients call nginx, on $port, and process I listens on
+  # $port + I, its metrics on $port + 2 + I.
+  shards=2
+  command -v nginx > /dev/null || { echo "no nginx: on PostgreSQL, dromas-server runs as two shards behind it"; exit 1; }
+  "$work/dromas-server" migrate 2> "$work/server.log" || { echo "dromas-server migrate failed"; exit 1; }   # as a deploy runs it, before serve
+  for i in 1 2; do
+    "$work/dromas-server" serve --shard "$i/2" --bodies-dir "$work/bodies" --names "127.0.0.1:$port" --trusted-proxy 127.0.0.1/32 \
+      --listen "127.0.0.1:$((port + i))" --metrics-listen "127.0.0.1:$((port + 2 + i))" --limits "$work/limits.json" 2>> "$work/server$i.log" & procs+=($!)
+  done
+  mkdir -p "$work/nginx"
+  cat > "$work/nginx/nginx.conf" <<EOF
+daemon off;
+worker_processes 1;
+pid $work/nginx/nginx.pid;
+events { worker_connections 1024; }
+http {
+    access_log off;
+    client_body_temp_path $work/nginx/body; proxy_temp_path $work/nginx/proxy;
+    fastcgi_temp_path $work/nginx/fastcgi; uwsgi_temp_path $work/nginx/uwsgi; scgi_temp_path $work/nginx/scgi;
+    large_client_header_buffers 4 32k;
+    client_max_body_size 16m;
+    map \$uri \$shard {
+        default            shard1;
+        ~^/v1/d_[A-Za-f]   shard1;
+        ~^/v1/d_[g-z0-9_-] shard2;
+    }
+    upstream shard1 { server 127.0.0.1:$((port + 1)); keepalive 8; }
+    upstream shard2 { server 127.0.0.1:$((port + 2)); keepalive 8; }
+    server {
+        listen 127.0.0.1:$port;
+        location / {
+            proxy_pass http://\$shard;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Host \$http_host;
+            proxy_set_header X-Forwarded-For \$remote_addr;
+            proxy_read_timeout 340s;
+        }
+    }
+}
+EOF
+  nginx -p "$work/nginx" -e "$work/nginx/error.log" -c "$work/nginx/nginx.conf" & procs+=($!)
+  echo "server: dromas-server serve --shard 1/2 and 2/2, on PostgreSQL, behind $(nginx -v 2>&1)"
+else
+  shards=1
+  "$work/dromas-server" serve --dev --names "127.0.0.1:$port" --listen "127.0.0.1:$port" --limits "$work/limits.json" 2>> "$work/server.log" & procs+=($!)   # --dev takes a pass made for any name without --names: with it, every pass's name is checked (PROTOCOL.md §8)
+  echo "server: dromas-server serve --dev"
+fi
 export DR_SERVER_URL="http://127.0.0.1:$port" DROMAS_SERVER_URL="http://127.0.0.1:$port"
-for _ in $(seq 300); do   # up once the API answers other than 503 (loading)
-  code=$(curl -s -o /dev/null -w '%{http_code}' "$DR_SERVER_URL/v1/d_$(printf 'a%.0s' $(seq 64))"); [ "$code" != 000 ] && [ "$code" != 503 ] && break; sleep 0.1
+b64=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_
+shardof(){ local c=${1:2:1} p; p=${b64%%"$c"*}; echo $(( ${#p} * shards / 64 + 1 )); }   # <address> → the shard it is, from 1 to $shards
+for a in "d_$(printf 'A%.0s' $(seq 64))" "d_$(printf 'g%.0s' $(seq 64))"; do   # one address of each shard: up once each answers other than 503 (loading)
+  for _ in $(seq 300); do
+    code=$(curl -s -o /dev/null -w '%{http_code}' "$DR_SERVER_URL/v1/$a"); [ "$code" != 000 ] && [ "$code" != 502 ] && [ "$code" != 503 ] && break; sleep 0.1
+  done
+  [ "$code" != 000 ] && [ "$code" != 502 ] && [ "$code" != 503 ] || { echo "the server did not answer on port $port for shard $(shardof "$a")"; exit 1; }
 done
-[ "$code" != 000 ] && [ "$code" != 503 ] || { echo "the server did not answer on port $port"; exit 1; }
 
 R="$work/r"; G="$work/g"
 recipe(){ local home=$1; shift; DR_HOME=$home bash -c ". '$SCRIPT'; $*"; }   # a fresh shell per call
@@ -85,7 +135,13 @@ look(){ curl -s -o /dev/null -w '%{http_code}' "$DR_SERVER_URL/v1/$1"; }   # <ad
 dr_hex(){ [[ $1 =~ ^[0-9a-f]{64}$ ]]; }      # a message's id
 dr_isaddr(){ [[ $1 =~ ^d_[A-Za-z0-9_-]{64}$ ]]; }      # an address
 RL=$(recipe "$R" "dr_init" | linkof) && RA=${RL##*/} && dr_isaddr "$RA" && [ "$RL" = "$DR_SERVER_URL/to/$RA" ] && ok "recipe init prints its link: $RL" || bad "recipe init: $RL"
-GL=$(gocli "$G" init | linkof) && GA=${GL##*/} && dr_isaddr "$GA" && [ "$GL" = "$DR_SERVER_URL/to/$GA" ] && ok "Go init prints its link: $GL" || bad "Go init: $GL"
+for _ in $(seq 20); do   # on two shards, the Go mailbox is on the other shard from the recipe's, so every exchange between them crosses
+  GL=$(gocli "$G" init | linkof) && GA=${GL##*/} || break
+  { [ "$shards" -eq 1 ] || [ "$(shardof "$GA")" != "$(shardof "$RA")" ]; } && break
+  rm -rf -- "${G:?}" "$G.toml"
+done
+GL=$(gocli "$G" addr | linkof) && GA=${GL##*/} && dr_isaddr "$GA" && [ "$GL" = "$DR_SERVER_URL/to/$GA" ] && { [ "$shards" -eq 1 ] || [ "$(shardof "$GA")" != "$(shardof "$RA")" ]; } \
+  && ok "Go init prints its link: $GL (shard $(shardof "$GA") of $shards, the recipe mailbox's $(shardof "$RA"))" || bad "Go init: $GL"
 for L in "$RL" "$GL"; do
   curl -sf "$L" | grep -qF "<code>${L##*/}</code>" && ok "the link opens its page: $L" || bad "no page at $L"
 done
@@ -289,6 +345,15 @@ other="127.0.0.2:$port"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $other" -H "Authorization: $(passof "$G" "$other")" "$DR_SERVER_URL/v1/$GA/acl")" = 401 ] \
   && [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: $(passof "$G")" "$DR_SERVER_URL/v1/$GA/acl")" = 200 ] \
   && ok "a pass made for a name the server is not called by is refused, and one made for the name it is called by is taken" || bad "the pass's name check"
+
+# --- 11. two shards: nginx sent every mailbox's calls to its own shard, and each shard stored messages ---
+if [ "$shards" -eq 2 ]; then
+  metric(){ curl -s "http://127.0.0.1:$((port + 2 + $1))/metrics" | awk -v m="$2" -v l="$3" 'index($0, m) == 1 && index($0, l) {s += $NF; n++} END {if (n) print s + 0}'; }   # <shard> <series> <label text> → the sum of its samples (a route's label holds a space)
+  for i in 1 2; do
+    mis=$(metric "$i" dromas_server_misrouted_total ""); sent=$(metric "$i" 'dromas_server_requests_total{' 'route="POST /v1/{addr}/messages",status="201"')
+    [ "$mis" = 0 ] && [ "${sent:-0}" -gt 0 ] && ok "shard $i/2: no call misrouted, and $sent sends stored" || bad "shard $i/2: misrouted ${mis:-none}, sends stored ${sent:-none}"
+  done
+fi
 
 echo "interop: $pass PASS, $fail FAIL"
 [ "$fail" -eq 0 ] || exit 1

@@ -385,7 +385,7 @@ A migration is never edited once it is on `main`; each file is one change.
 
 **All of them live in the public `dromas-client` repo** (§ Repo layout): the Go library and the `dromas` command; the echo mailbox, a deployment of it; and `sh/dromas.sh`, the proof that a mailbox of stock tools exchanges messages with a Go mailbox, on a mailbox of its own. A mailbox's files are at the top of that repo's `client/doc.go`, what each command does is its help, and the rules for changing them are its `AGENTS.md`. **Not built:** `dromas mcp`, a local stdio MCP server in the same binary, whose results are to be the CLI's lines, and an Agent Skill (`SKILL.md`).
 
-**What tests what.** The forging-operator tests are public, in `dromas-client`: the Go client against `internal/fakeserver`, an honest in-memory server a middleware turns hostile, and the script, by Go tests in `sh/`, against the same fake and the test vectors. This repo keeps the tests of what the real server enforces, and `dromas-server serve --dev`, the real server's logic and its memory on the in-memory backend, with no database, is what `test/interop.sh` runs both clients against.
+**What tests what.** The forging-operator tests are public, in `dromas-client`: the Go client against `internal/fakeserver`, an honest in-memory server a middleware turns hostile, and the script, by Go tests in `sh/`, against the same fake and the test vectors. This repo keeps the tests of what the real server enforces, and `dromas-server serve --dev`, the real server's logic and its memory on the in-memory backend, with no database, is what `test/interop.sh` runs both clients against, and on PostgreSQL two shards behind nginx (§ Routing by address).
 
 ## Repo layout: two repos
 
