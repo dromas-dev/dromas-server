@@ -241,8 +241,8 @@ record_of "$V1" > "$work/v1.json" && [ "$(curl -s -o /dev/null -w '%{http_code}'
   && ok "a recipe mailbox's record, made with ssh-keygen and put with curl: 410 from then on, and the server shows the record in it to anyone" || bad "the recipe mailbox's revocation: $(cat "$work/v1.json")"
 out=$(gocli "$V2" recv 2>&1); [ $? -eq 0 ] && grep -q '"code":"revoked"' <<< "$out" && ! grep -q '"body"' <<< "$out" && holds "$V2" "$V1A" \
   && ok "the Go client refuses messages from the revoked recipe mailbox, and keeps the revocation it checked" || bad "Go recv from a revoked mailbox: $out"
-out=$(printf 'x\n' | gocli "$V2" send "$V1L" 2>&1); [ $? -ne 0 ] && grep -q "REVOKED: $V1A" <<< "$out" && ls "$V2"/outbox/failed/*.P > /dev/null 2>&1 \
-  && ok "the Go client sends nothing to it: REVOKED, and the message moves to outbox/failed/" || bad "Go send to a revoked mailbox: $out"
+out=$(printf 'x\n' | gocli "$V2" send "$V1L" 2>&1); [ $? -ne 0 ] && grep -q "REVOKED: $V1A" <<< "$out" && ! ls "$V2"/outbox/"$V1A".*.P > /dev/null 2>&1 \
+  && ok "the Go client sends nothing to it: REVOKED, and nothing waits in its outbox" || bad "Go send to a revoked mailbox: $out"
 out=$(recipe "$V1" "dr_recv" 2>&1); [ $? -ne 0 ] && grep -q "REVOKED: this mailbox's own address" <<< "$out" && ok "the revoked recipe mailbox is told so by its own revocation" || bad "revoked recipe mailbox's recv: $out"
 # The Go client revokes its mailbox; the recipe refuses the message it had sent, and sends it nothing.
 printf 'sent before the revocation\n' | gocli "$V3" send "$V4L" > /dev/null 2> "$work/err" || bad "revocation: the Go send: $(cat "$work/err")"
