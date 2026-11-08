@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"net/http"
+	"net/textproto"
 	"strconv"
 	"strings"
 	"sync"
@@ -77,13 +78,16 @@ func gzipWith(zw *gzip.Writer, b []byte) []byte {
 // above zero, or else "*" with one. A coding named outright outranks "*". No
 // field takes none here: a client that asks for no coding gets none, though
 // the RFC would allow any. Named more than once, gzip counts by its last
-// weight: the RFC gives such a list no meaning.
+// weight: the RFC gives such a list no meaning. The whitespace around each
+// part is spaces and tabs (OWS, §5.6.3), which textproto.TrimString trims:
+// strings.TrimSpace would also read U+0085 and U+00A0, which net/http hands
+// on as field bytes, as whitespace.
 func acceptsGzip(fields []string) bool {
 	named, gz, star := false, false, false
 	for _, f := range fields {
 		for c := range strings.SplitSeq(f, ",") {
 			name, params, _ := strings.Cut(c, ";")
-			switch protocol.LowerASCII(strings.TrimSpace(name)) {
+			switch protocol.LowerASCII(textproto.TrimString(name)) {
 			case "gzip", "x-gzip":
 				named, gz = true, weighted(params)
 			case "*":
@@ -102,14 +106,14 @@ func acceptsGzip(fields []string) bool {
 // none. One it reads that is no qvalue by RFC 9110 §12.4.2 (1e-3, .5, 2, inf)
 // counts by its value, as §2.4 lets a recipient recover it.
 func weighted(params string) bool {
-	params = strings.TrimSpace(params)
+	params = textproto.TrimString(params)
 	if params == "" {
 		return true
 	}
 	name, q, ok := strings.Cut(params, "=")
-	if !ok || protocol.LowerASCII(strings.TrimSpace(name)) != "q" {
+	if !ok || protocol.LowerASCII(textproto.TrimString(name)) != "q" {
 		return false
 	}
-	n, err := strconv.ParseFloat(strings.TrimSpace(q), 64)
+	n, err := strconv.ParseFloat(textproto.TrimString(q), 64)
 	return err == nil && n > 0
 }

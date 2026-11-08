@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/textproto"
 	"net/url"
 	"os"
 	"regexp"
@@ -555,14 +556,15 @@ func (s *Server) whenReady(h http.Handler) http.Handler {
 // Go's httputil.ReverseProxy both append it, and nginx can set it alone);
 // otherwise, or when that entry is not an address, the peer's own. Entries
 // before the last were written by whoever called the proxy, and are never
-// read. Every X-Forwarded-For line is one list (RFC 9110 §5.3).
+// read. Every X-Forwarded-For line is one list (RFC 9110 §5.3), with spaces
+// and tabs around each entry (OWS, §5.6.3), as acceptsGzip reads one.
 func (s *Server) clientIP(r *http.Request) string {
 	if s.fromProxy(r) {
 		list := strings.Join(r.Header.Values("X-Forwarded-For"), ",")
 		if i := strings.LastIndexByte(list, ','); i >= 0 {
 			list = list[i+1:]
 		}
-		if ip, err := netip.ParseAddr(strings.TrimSpace(list)); err == nil {
+		if ip, err := netip.ParseAddr(textproto.TrimString(list)); err == nil {
 			return ip.WithZone("").String()
 		}
 	}

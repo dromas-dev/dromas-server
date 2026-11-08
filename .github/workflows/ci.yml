@@ -2,8 +2,10 @@
 # every pull request and every merge group (the merge queue's test of a pull
 # request on main and those queued ahead of it, GitHub's merge_group event),
 # so each commit's result is on the public record, and
-# once a day, when govulncheck meets advisories published since. release.yml
-# runs it all again on a release's tag before it builds (workflow_call).
+# once a day, when govulncheck meets advisories published since. The fuzz
+# targets run once a week, an hour each, as dromas-client's do (its ci.yml's
+# fuzz-targets and fuzz). release.yml runs it all again on a release's tag
+# before it builds (workflow_call).
 # Actions are pinned by commit, each with its release beside it. go.mod requires a
 # release of dromas-client; dromas-client's own CI runs `check.sh full` here
 # against its commit, through a go.work.
@@ -16,6 +18,7 @@ on:
   merge_group:
   schedule:
     - cron: "41 5 * * *"
+    - cron: "47 6 * * 6" # the weekly fuzz run
   workflow_dispatch:
   workflow_call:
 
@@ -113,3 +116,73 @@ jobs:
           # build would be saved first and the test job's never (#427).
           cache: false
       - run: scripts/check.sh vuln
+
+  fuzz-targets:
+    # The fuzz targets, listed from the code, as dromas-client's job lists
+    # its own: the weekly run alone, never on a push, a pull request, a merge
+    # group, the daily run, a hand-run or a call from release.yml (a called
+    # workflow sees its caller's event, and release.yml has no schedule), so
+    # neither job here is a check of a pull request or of the ruleset.
+    if: github.event.schedule == '47 6 * * 6'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    outputs:
+      targets: ${{ steps.list.outputs.targets }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          check-latest: true
+      - id: list
+        # With the tags every test here builds with (scripts/check.sh).
+        run: |
+          go test -tags dromas_nofsync -list '^Fuzz' ./... | awk '/^Fuzz/ { n[++k] = $1; next } /^ok/ { for (i = 1; i <= k; i++) print $2, n[i]; k = 0 }' > "$RUNNER_TEMP/targets"
+          [ -s "$RUNNER_TEMP/targets" ] || { echo "::error::no fuzz target listed"; exit 1; }
+          cat "$RUNNER_TEMP/targets"
+          echo "targets=$(jq -R -s -c 'split("\n") | map(select(length > 0) | split(" ") | {pkg: .[0], name: .[1]})' "$RUNNER_TEMP/targets")" >> "$GITHUB_OUTPUT"
+
+  fuzz:
+    # Each target in a job of its own, an hour, at most six at once, as
+    # dromas-client's fuzz job: the org's plan runs 20 jobs at a time, and a
+    # job at most six hours; on a day apart from dromas-client's weekly run,
+    # so the two never share those 20. From the corpus earlier runs have grown.
+    needs: fuzz-targets
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        target: ${{ fromJSON(needs.fuzz-targets.outputs.targets) }}
+    name: fuzz (${{ matrix.target.name }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 120
+    env:
+      FUZZTIME: 60m
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          check-latest: true
+      - id: corpus
+        run: echo "dir=$(go env GOCACHE)/fuzz" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.corpus.outputs.dir }}
+          key: fuzz-${{ matrix.target.name }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-${{ matrix.target.name }}-
+            fuzz-
+      - name: fuzz
+        env:
+          PKG: ${{ matrix.target.pkg }}
+          NAME: ${{ matrix.target.name }}
+        run: go test -tags dromas_nofsync -run '^$' -fuzz "^$NAME\$" -fuzztime "$FUZZTIME" "$PKG"
+      - name: the failing input
+        # go test writes it under the package's testdata/fuzz/, where a fix keeps it as a seed.
+        if: failure()
+        run: git ls-files --others --exclude-standard -- '*testdata/fuzz/*' | xargs -r tail -n +1

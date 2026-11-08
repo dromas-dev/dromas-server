@@ -17,7 +17,7 @@ var (
 
 // clientFile reads a file of the dromas-client module this one is built
 // against: the release go.mod requires, or the checkout a go.work names.
-func clientFile(t *testing.T, path string) []byte {
+func clientFile(t testing.TB, path string) []byte {
 	t.Helper()
 	clientDirOnce.Do(func() {
 		out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/dromas-dev/dromas-client").Output()
