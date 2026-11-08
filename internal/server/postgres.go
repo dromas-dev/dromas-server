@@ -828,7 +828,7 @@ func (s *pgBackend) CreateMailbox(ctx context.Context, b *Mailbox) error {
 			return err
 		}
 		var revoked bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM revocations WHERE addr = $1 AND (revocation IS NOT NULL OR through >= $2))`,
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM revocations WHERE addr = $1 AND (revocation IS NOT NULL OR ($2 > 0 AND through >= $2)))`,
 			b.Addr[:], numeric(b.Rank)).Scan(&revoked); err != nil {
 			return err
 		}

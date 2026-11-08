@@ -527,3 +527,22 @@ func TestAnIdenticalRegistrationUnderARevokedCertificateIsRefused(t *testing.T) 
 		e.want(e.do("PUT", r.path(""), r.registration(n), pass), 401, protocol.CodeCertificateRevoked)
 	}
 }
+
+// A revocation of certificates covers certificates only (PROTOCOL.md §5.1): an
+// address whose identity revoked certificates through 5 is still registered
+// by a statement the identity signs itself, rank 0, and refused one under a
+// certificate it covers.
+func TestTheIdentityRegistersPastItsRevokedCertificates(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, relaxed())
+	now := e.clock.Now()
+	r := e.raw()
+	e.want(e.do("PUT", r.path("/revocations"), r.certs(5), ""), 200, "")
+	r.underCertificates = false
+	r.prekey(1, now.Add(protocol.MaxPrekeyLifetime), nil)
+	e.want(e.do("PUT", r.path(""), r.registration(1), r.pass(1)), 201, "")
+	q := e.raw()
+	e.want(e.do("PUT", q.path("/revocations"), q.certs(5), ""), 200, "")
+	q.prekey(5, now.Add(protocol.MaxPrekeyLifetime), nil)
+	e.want(e.do("PUT", q.path(""), q.registration(5), q.pass(5)), 401, protocol.CodeCertificateRevoked)
+}
