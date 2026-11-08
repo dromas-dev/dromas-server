@@ -1,0 +1,37 @@
+# squawk's settings for the migrations (internal/server/migrations/), which
+# ci.yml's lint job and scripts/check.sh lint. squawk runs every rule but its
+# opt-in ones unless this file says otherwise (its docs, docs/cli.md); the
+# rules it leaves on are the ones that catch a locking or rewriting change.
+
+# The PostgreSQL the tests run on (test/postgres/compose.yaml).
+pg_version = "18"
+
+# goose runs each migration in a transaction of its own, and no file here
+# opts out with -- +goose NO TRANSACTION. A file that does (an index built
+# CONCURRENTLY) says so to squawk too, with -- squawk-disable-assume-in-transaction.
+assume_in_transaction = true
+
+excluded_rules = [
+    # 00003 and 00004 revoke privileges on purpose: the runtime role keeps
+    # SELECT alone on goose's table, and no role but the owner may delete a
+    # revocation or an account.
+    "ban-revoke",
+    # 00005 sets the mailboxes' REPLICA IDENTITY on purpose: the feed reads
+    # a record's update by its key alone.
+    "ban-replica-identity",
+    # An alias of require-lock-timeout and require-statement-timeout: migrate
+    # sets lock_timeout and statement_timeout on its session (migrate.go), so
+    # no file sets them itself.
+    "require-timeout-settings",
+]
+
+# A migration on main is never edited (AGENTS.md), so 00001 cannot take an
+# ignore comment, and its two integer columns, messages.size and
+# adopt_keys.uses, are small on purpose, each bounded by a CHECK. squawk
+# matches a pattern against the whole path it is given, so it starts with *.
+# prefer-bigint-over-int stays on for every later migration: a column small
+# on purpose there takes -- squawk-ignore prefer-bigint-over-int on the line
+# before its statement, with its reason beside it.
+excluded_paths = [
+    "*/migrations/00001_schema.sql",
+]
