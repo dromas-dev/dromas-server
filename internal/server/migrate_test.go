@@ -152,8 +152,9 @@ func TestTheRuntimeRoleOnlyReadsTheVersions(t *testing.T) {
 
 // What the role serve runs as may not do to a revocation, which is kept for
 // good, or to an account: delete either, take an address's revocation
-// back or change it, or lower a revocation of certificates. Each refusal
-// is the database's, so a server broken into cannot either.
+// back or change it, or lower a revocation of certificates or replace it at
+// its serial. Each refusal is the database's, so a server broken into cannot
+// either; and no role deletes a revocation, the owner included.
 func TestTheRuntimeRoleCannotTakeARevocationBack(t *testing.T) {
 	t.Parallel()
 	if !onPostgres() {
@@ -196,6 +197,7 @@ func TestTheRuntimeRoleCannotTakeARevocationBack(t *testing.T) {
 		{`UPDATE revocations SET revocation = NULL`, "23514"},
 		{`UPDATE revocations SET revoked_certs = 'c1', revoked_certs_sig = 's1', through = 1`, "23514"},
 		{`UPDATE revocations SET identity = 'j', addr = sha384('j')`, "23514"},
+		{`UPDATE revocations SET revoked_certs = 'c4', revoked_certs_sig = 's4'`, "23514"},
 		{`DROP TRIGGER revocations_only_add ON revocations`, "42501"},
 		{`ALTER TABLE revocations DISABLE TRIGGER revocations_only_add`, "42501"},
 	} {
@@ -203,10 +205,21 @@ func TestTheRuntimeRoleCannotTakeARevocationBack(t *testing.T) {
 			t.Errorf("%s as the runtime role: %v; want %s", c.q, err, c.code)
 		}
 	}
+	// Nor may the owner, whatever the grants: the triggers hold for every
+	// role (migration 00006).
+	for _, q := range []string{`DELETE FROM ` + schema + `.revocations`, `TRUNCATE ` + schema + `.revocations`} {
+		err := asTestRole(func(ctx context.Context, conn *pgx.Conn) error {
+			_, err := conn.Exec(ctx, q)
+			return err
+		})
+		if !isPgCode(err, "23514") {
+			t.Errorf("%s as the owner: %v; want 23514", q, err)
+		}
+	}
 	var through int
-	var rev []byte
-	if err := conn.QueryRow(ctx, `SELECT through, revocation FROM revocations`).Scan(&through, &rev); err != nil || through != 3 || string(rev) != "r" {
-		t.Errorf("the revocations kept: through %d, revocation %q, %v; want 3 and r", through, rev, err)
+	var rev, certs []byte
+	if err := conn.QueryRow(ctx, `SELECT through, revocation, revoked_certs FROM revocations`).Scan(&through, &rev, &certs); err != nil || through != 3 || string(rev) != "r" || string(certs) != "c3" {
+		t.Errorf("the revocations kept: through %d, revocation %q, revoked_certs %q, %v; want 3, r and c3", through, rev, certs, err)
 	}
 }
 

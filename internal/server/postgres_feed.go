@@ -48,6 +48,14 @@ const (
 	// feedVisibleEvery is how long the feed waits before it asks again
 	// whether a commit it has received is visible.
 	feedVisibleEvery = time.Millisecond
+	// feedHeldMax bounds the changes one transaction brings memory, which
+	// the feed holds from its Begin to its Commit: a mailbox record held is
+	// about 6 kB, so the bound is tens of MB. Every write of dromas-server's,
+	// and each of the sweep's batches, changes far fewer rows; a transaction
+	// past it (a migration's fill in one statement) loses the place, and the
+	// process restarts, which rebuilds memory from the tables
+	// (ARCHITECTURE.md § Storage, the migrations' rules).
+	feedHeldMax = 10000
 )
 
 // feedTarget is a flushed WAL position, and the wall time it was read at.
@@ -102,6 +110,7 @@ func (s *pgBackend) Start(ctx context.Context, apply func(Change)) error {
 		_ = pos.Close(context.Background())
 		return fmt.Errorf("postgres: the feed's snapshot reader: %w", err)
 	}
+	s.snapPID.Store(snap.PgConn().PID())
 	fctx, stop := context.WithCancel(ctx)
 	f := &pgFeed{s: s, conn: conn, pos: pos, snap: snap, applied: from, relations: map[uint32]*pglogrepl.RelationMessage{}, types: pgtype.NewMap()}
 	f.visible = f.sees
@@ -160,7 +169,8 @@ type pgFeed struct {
 	inTxn   bool          // a transaction is begun and not yet applied
 	xid     uint32        // the transaction begun
 	made    time.Time     // the commit time of the transaction begun
-	held    []fedChange   // its changes, held until its commit is visible
+	held    []fedChange   // its changes, held until its commit is visible, at most feedHeldMax
+	seen    string        // the newest snapshot sees read, pg_current_snapshot()'s text; "" before one
 	types   *pgtype.Map
 	// visible reports whether a transaction's commit is visible to a new
 	// snapshot: sees, or the backend's replacement in a test.
@@ -342,8 +352,7 @@ func (f *pgFeed) heard(end pglogrepl.LSN) {
 
 // logical takes one message of pgoutput's. A transaction's changes are
 // held from its Begin and applied at its Commit, once the commit is visible
-// (commit). What is held is bounded by the transaction, and every write and
-// each of the sweep's batches is a transaction of bounded size.
+// (commit), at most feedHeldMax of them.
 func (f *pgFeed) logical(ctx context.Context, lm pglogrepl.Message) error {
 	switch m := lm.(type) {
 	case *pglogrepl.RelationMessage:
@@ -353,11 +362,11 @@ func (f *pgFeed) logical(ctx context.Context, lm pglogrepl.Message) error {
 	case *pglogrepl.CommitMessage:
 		return f.commit(ctx, m.TransactionEndLSN)
 	case *pglogrepl.InsertMessage:
-		f.hold(m.RelationID, m.Tuple, nil, false)
+		return f.hold(m.RelationID, m.Tuple, nil, false)
 	case *pglogrepl.UpdateMessage:
-		f.hold(m.RelationID, m.NewTuple, m.OldTuple, false)
+		return f.hold(m.RelationID, m.NewTuple, m.OldTuple, false)
 	case *pglogrepl.DeleteMessage:
-		f.hold(m.RelationID, m.OldTuple, nil, true)
+		return f.hold(m.RelationID, m.OldTuple, nil, true)
 	case *pglogrepl.TruncateMessage:
 		return errors.New("a table was truncated")
 	}
@@ -400,21 +409,43 @@ func (f *pgFeed) commit(ctx context.Context, end pglogrepl.LSN) error {
 		f.held[i] = fedChange{}
 	}
 	f.held, f.inTxn = f.held[:0], false
+	if cap(f.held) > feedHeldMax/10 {
+		f.held = nil // a large transaction's array is not kept for the next
+	}
 	if end > f.applied {
 		f.applied = end
 	}
 	return nil
 }
 
-// sees reads a new snapshot on the feed's own connection and reports
-// whether it sees transaction xid committed.
+// sees reports whether transaction xid's commit is visible to a new
+// snapshot. The newest snapshot read answers first, since a snapshot that
+// sees a commit is followed by none that does not: a feed behind reads one
+// snapshot for every transaction committed before it, not one each. Else it
+// reads a new one on the feed's own connection, made again if it is lost.
 func (f *pgFeed) sees(ctx context.Context, xid uint32) (bool, error) {
+	if f.seen != "" {
+		if ok, err := snapshotSees(f.seen, xid); err == nil && ok {
+			return true, nil
+		}
+	}
 	rctx, cancel := context.WithTimeout(ctx, feedUnsyncedAfter)
 	defer cancel()
 	var snap string
-	if err := f.snap.QueryRow(rctx, "SELECT pg_current_snapshot()::text").Scan(&snap); err != nil {
+	err := f.snap.QueryRow(rctx, "SELECT pg_current_snapshot()::text").Scan(&snap)
+	if err != nil && f.snap.IsClosed() && rctx.Err() == nil {
+		c, cerr := pgx.ConnectConfig(rctx, f.s.pool.Config().ConnConfig.Copy())
+		if cerr != nil {
+			return false, fmt.Errorf("%w; the snapshot reader made again: %w", err, cerr)
+		}
+		f.snap = c
+		f.s.snapPID.Store(c.PgConn().PID())
+		err = f.snap.QueryRow(rctx, "SELECT pg_current_snapshot()::text").Scan(&snap)
+	}
+	if err != nil {
 		return false, err
 	}
+	f.seen = snap
 	return snapshotSees(snap, xid)
 }
 
@@ -471,11 +502,17 @@ type fedChange struct {
 }
 
 // hold decodes one row's change, and holds it until its transaction is
-// applied.
-func (f *pgFeed) hold(rel uint32, tuple, old *pglogrepl.TupleData, gone bool) {
-	if fc, ok := f.decode(rel, tuple, old, gone); ok {
-		f.held = append(f.held, fc)
+// applied; past feedHeldMax the place is lost.
+func (f *pgFeed) hold(rel uint32, tuple, old *pglogrepl.TupleData, gone bool) error {
+	fc, ok := f.decode(rel, tuple, old, gone)
+	if !ok {
+		return nil
 	}
+	if len(f.held) >= feedHeldMax {
+		return fmt.Errorf("transaction %d changes more than %d rows memory holds", f.xid, feedHeldMax)
+	}
+	f.held = append(f.held, fc)
+	return nil
 }
 
 // decode decodes one row's change, and reports whether it is of a table
@@ -512,8 +549,9 @@ func (f *pgFeed) hand(fc fedChange) {
 // row decodes a tuple by its relation's columns: every column that reads,
 // and the first error of one that does not, so the key can still be read. A
 // column stored out of line that an update left alone comes without its
-// value ('u'), which the old row, sent whole under REPLICA IDENTITY FULL,
-// holds.
+// value ('u'): the old row holds it where it is sent whole (REPLICA IDENTITY
+// FULL, the revocations table's), and the row does not read where it is not
+// (the mailboxes table's, whose old row is its key).
 func (f *pgFeed) row(r *pglogrepl.RelationMessage, tuple, old *pglogrepl.TupleData) (out row, first error) {
 	out = make(row, len(tuple.Columns))
 	fail := func(err error) {
@@ -568,7 +606,8 @@ func (f *pgFeed) row(r *pglogrepl.RelationMessage, tuple, old *pglogrepl.TupleDa
 }
 
 // changeOf is the change a row of table makes to what memory holds. A
-// deleted row carries its key (and, under REPLICA IDENTITY FULL, the rest).
+// deleted row carries its key (and, under REPLICA IDENTITY FULL, the rest),
+// and only the key is read.
 func changeOf(table string, r row, gone bool) (Change, error) {
 	switch table {
 	case "mailboxes":
