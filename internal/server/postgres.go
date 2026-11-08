@@ -55,7 +55,8 @@ type pgBackend struct {
 
 	apply   func(Change) // what Start was given
 	started atomic.Bool
-	synced  atomic.Int64 // the time (monoNanos) through which the feed has applied every change; 0, never
+	synced  atomic.Int64  // the time (monoNanos) through which the feed has applied every change; 0, never
+	snapPID atomic.Uint32 // the backend PID of the feed's snapshot reader, for a test to end it
 
 	// crash, in tests, fails a write of two steps between them, as a
 	// crash there would leave it: "put: after the body", "ack: after the
@@ -131,6 +132,16 @@ func NewPostgresStore(ctx context.Context, c PostgresConfig) (*Memory, error) {
 	// A write is answered once its WAL is flushed, which the feed's
 	// "synced through" reads (postgres_feed.go): never later.
 	pc.ConnConfig.RuntimeParams["synchronous_commit"] = "on"
+	// The database ends a statement, a lock's wait or a transaction left
+	// idle that outlasts a call's bound (storeTimeout), and lets its locks go:
+	// the bound itself only closes the connection (pgconn's
+	// DeadlineContextWatcherHandler sends no cancel), and the database would
+	// run the statement on. A statement it ends answers as an ERROR, a
+	// refusal (pgOutcome), before the bound reads it as unknown.
+	for _, p := range []string{"statement_timeout", "lock_timeout"} {
+		pc.ConnConfig.RuntimeParams[p] = strconv.FormatInt((storeTimeout - storeTimeout/10).Milliseconds(), 10)
+	}
+	pc.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"] = strconv.FormatInt(storeTimeout.Milliseconds(), 10)
 	if c.MaxConns > 0 {
 		pc.MaxConns = c.MaxConns
 	}
@@ -1012,7 +1023,8 @@ func (s *pgBackend) list(ctx context.Context, mailbox protocol.Address, after *C
 
 // PutMessage implements Backend (ARCHITECTURE.md § Storage): the body, then
 // the row, if no live one has this id. A crash after the body leaves an
-// orphan, collected by age. A body that fails stores nothing
+// orphan, collected by age; a row the database refused deletes its body. A
+// body that fails stores nothing
 // (errNotStored). A live row met instead, an expired one aside, which the
 // write replaces, is a duplicate, whose header is handed back; the body just
 // put, under a key of this send's own, is deleted.
@@ -1052,6 +1064,15 @@ func (s *pgBackend) PutMessage(ctx context.Context, mailbox protocol.Address, h 
 		met = rows[0]
 		return nil
 	})
+	if err != nil && isRefusal(err) {
+		// The row is certainly not written, so nothing names the body: it
+		// goes even when the refusal was the call's context ending.
+		dctx, cancel := bounded(context.WithoutCancel(ctx))
+		defer cancel()
+		if derr := s.bodies.Delete(dctx, key); derr != nil {
+			s.logf("a refused send's body was left to be collected: %v", derr)
+		}
+	}
 	if err != nil || met == nil {
 		return err
 	}

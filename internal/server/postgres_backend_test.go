@@ -16,17 +16,20 @@ import (
 
 	"github.com/dromas-dev/dromas-client/protocol"
 	"github.com/jackc/pglogrepl"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // The PostgreSQL backend's own risks: what its feed, its sweep and its
 // bodies directory do that no other backend does.
 
-// A mailbox record past 2 kB, its ACL stored out of line, reaches another
-// process's memory whole through the feed when an update leaves the ACL
-// alone, as an adopt does: pgoutput sends an unchanged out-of-line value
-// without its bytes, and the old row, which REPLICA IDENTITY FULL sends
-// whole, holds them.
+// A mailbox record past 2 kB, its ACL stored out of line, is never held in
+// part by another process. An update that writes the ACL anew, as a renewal
+// does, reaches it whole through the feed. One that leaves the ACL alone, as
+// an adopt does, comes without the ACL's bytes (pgoutput's unchanged
+// out-of-line value, under the table's REPLICA IDENTITY DEFAULT, which logs
+// no old row): the other process forgets the record, and its next read
+// reads it whole.
 func TestALargeRecordReachesAnotherProcessWhole(t *testing.T) {
 	t.Parallel()
 	e, s := sharedEnv(t)
@@ -67,19 +70,56 @@ func TestALargeRecordReachesAnotherProcessWhole(t *testing.T) {
 		rec, ok := other.Known(a)
 		return ok && rec != nil && rec.ACL != nil
 	})
+	whole := func(what string, there *Mailbox) {
+		t.Helper()
+		fed(t, s)
+		here, err := s.Mailbox(ctx, a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if there.Rev != here.Rev || there.ACL == nil || there.ACL.Deny.Len() != len(deny) || !there.ACL.SameLists(here.ACL) {
+			t.Fatalf("%s: the other process holds rev %d without its ACL whole (%+v); here rev %d", what, there.Rev, there.ACL, here.Rev)
+		}
+	}
+	// A renewal's update writes the ACL anew: the other process takes the
+	// change in place, and holds the record at its new revision with no read.
+	held, err := s.Mailbox(ctx, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renewed := *held
+	renewed.Expires = renewed.Expires.Add(time.Minute)
+	if err := s.pg().UpdateMailbox(ctx, &renewed); err != nil {
+		t.Fatal(err)
+	}
+	waitFor("the renewal reaching the other process in place", func() bool {
+		rec, ok := other.Known(a)
+		if !ok {
+			t.Fatal("the other process forgot the record a renewal wrote whole")
+		}
+		return rec != nil && rec.Rev == held.Rev+1
+	})
+	there, _ := other.Known(a)
+	whole("the renewal", there)
+	// An adopt leaves the ACL alone: the other process forgets the record,
+	// and reads it whole on its next use.
 	acc, key := accountEnv(t, e, false, 1)
 	adopt(t, b, key)
 	waitFor("the adopt reaching the other process", func() bool {
 		rec, ok := other.Known(a)
-		return ok && rec != nil && rec.Account == acc.ID
+		return !ok || rec != nil && rec.Account == acc.ID
 	})
-	here, err := s.Mailbox(ctx, a)
+	if rec, ok := other.Known(a); ok && rec.Account == acc.ID {
+		t.Fatal("control: the adopt reached the other process in place, so its update sent the ACL")
+	}
+	there, err = other.Mailbox(ctx, a)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if there, _ := other.Known(a); there.ACL == nil || there.ACL.Deny.Len() != len(deny) || !there.ACL.SameLists(here.ACL) {
-		t.Fatalf("the other process holds the record adopted without its ACL whole: %+v", there.ACL)
+	if there.Account != acc.ID {
+		t.Fatalf("the other process read the record adopted with account %q; want %q", there.Account, acc.ID)
 	}
+	whole("the adopt", there)
 }
 
 // The sweep deletes the rows past their expiry, in batches, of messages,
@@ -482,5 +522,137 @@ func TestTheSweepTakesItsIndex(t *testing.T) {
 		if strings.Contains(plan.String(), "Seq Scan") || !strings.Contains(plan.String(), "Index") {
 			t.Errorf("the sweep of %s reads it without its index:\n%s", x[0], plan.String())
 		}
+	}
+}
+
+// A transaction that brings memory more changes than the feed holds loses
+// its place, and the process restarts, rather than holding it whole; one of
+// exactly as many is applied.
+func TestATransactionPastWhatTheFeedHoldsLosesItsPlace(t *testing.T) {
+	t.Parallel()
+	if !onPostgres() {
+		t.Skip("needs PostgreSQL: DROMAS_TEST_POSTGRES")
+	}
+	schema, bodies := freshDatabase(t)
+	lost := make(chan error, 1)
+	s := startPostgresIn(t, schema, bodies, nil, func(c *PostgresConfig) {
+		c.Fatal = func(err error) {
+			select {
+			case lost <- err:
+			default:
+			}
+		}
+	})
+	insert := func(n int) {
+		t.Helper()
+		if _, err := s.pool().Exec(context.Background(), `INSERT INTO messages (box, id, size, received_at, nonce)
+			SELECT sha384(($2 || i)::bytea), sha256(($2 || i)::bytea), 0, now(), '\x0000000000000000'::bytea FROM generate_series(1, $1::int) i`, n, randomHex(4)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert(feedHeldMax)
+	fed(t, s)
+	select {
+	case err := <-lost:
+		t.Fatalf("control: a transaction of %d rows lost the place: %v", feedHeldMax, err)
+	default:
+	}
+	insert(feedHeldMax + 1)
+	select {
+	case err := <-lost:
+		if !strings.Contains(err.Error(), "more than") {
+			t.Fatalf("the place was lost for another reason: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatalf("a transaction of %d rows did not lose the place", feedHeldMax+1)
+	}
+}
+
+// The newest snapshot the feed read answers for a transaction it already
+// sees committed, with no read of its own: the feed has no connection here.
+func TestTheNewestSnapshotAnswersWhatItSees(t *testing.T) {
+	t.Parallel()
+	f := &pgFeed{seen: "100:105:102"}
+	for _, xid := range []uint32{99, 101, 103} {
+		if ok, err := f.sees(context.Background(), xid); err != nil || !ok {
+			t.Errorf("transaction %d against %q: %v, %v; want seen, with no read", xid, f.seen, ok, err)
+		}
+	}
+}
+
+// The feed's snapshot reader, ended by the database, is made again, and the
+// feed keeps its place: a write after it reaches memory.
+func TestTheSnapshotReaderIsMadeAgain(t *testing.T) {
+	t.Parallel()
+	e, s := sharedEnv(t)
+	pid := s.pg().snapPID.Load()
+	err := asTestRole(func(ctx context.Context, conn *pgx.Conn) error {
+		var ok bool
+		if err := conn.QueryRow(ctx, `SELECT pg_terminate_backend($1)`, int32(pid)).Scan(&ok); err != nil || !ok {
+			return fmt.Errorf("pg_terminate_backend(%d): %v, %w", pid, ok, err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := e.mailbox()
+	e.want(e.do("PUT", "/v1/"+b.Address().String()+"/acl", aclOf([]string{"*"}, nil), e.pass(b)), 200, "")
+	fed(t, s)
+	for start := time.Now(); s.pg().snapPID.Load() == pid; time.Sleep(10 * time.Millisecond) {
+		if time.Since(start) > 15*time.Second {
+			t.Fatal("the snapshot reader was not made again")
+		}
+	}
+	if !s.pg().Ready() {
+		t.Fatal("the feed is not ready after its snapshot reader was made again")
+	}
+}
+
+// Each connection of the pool has the database bound its statements, its
+// lock waits and a transaction left idle by a call's bound, so a call its
+// bound ends leaves nothing running there.
+func TestTheDatabaseBoundsEveryCall(t *testing.T) {
+	t.Parallel()
+	if !onPostgres() {
+		t.Skip("needs PostgreSQL: DROMAS_TEST_POSTGRES")
+	}
+	s := startPostgres(t, nil)
+	for p, want := range map[string]time.Duration{
+		"statement_timeout":                   storeTimeout - storeTimeout/10,
+		"lock_timeout":                        storeTimeout - storeTimeout/10,
+		"idle_in_transaction_session_timeout": storeTimeout,
+	} {
+		var ms int64
+		if err := s.pool().QueryRow(context.Background(), `SELECT setting::bigint FROM pg_settings WHERE name = $1`, p).Scan(&ms); err != nil {
+			t.Fatal(err)
+		}
+		if got := time.Duration(ms) * time.Millisecond; got != want {
+			t.Errorf("%s = %v; want %v", p, got, want)
+		}
+	}
+}
+
+// A send whose row the database refuses deletes the body it put first:
+// nothing names it.
+func TestARefusedSendLeavesNoBody(t *testing.T) {
+	t.Parallel()
+	if !onPostgres() {
+		t.Skip("needs PostgreSQL: DROMAS_TEST_POSTGRES")
+	}
+	schema, bodies := freshDatabase(t)
+	s := startPostgresIn(t, schema, bodies, nil, nil)
+	var box protocol.Address
+	_, _ = rand.Read(box[:])
+	var id [32]byte
+	_, _ = rand.Read(id[:])
+	// A size past the column's CHECK: the database refuses the row.
+	h := &Header{ID: id, Size: 16777217, ReceivedAt: time.Now()}
+	err := s.pg().PutMessage(context.Background(), box, h, []byte("body"))
+	if err == nil || !isRefusal(err) {
+		t.Fatalf("the send: %v; want a refusal", err)
+	}
+	if keys := s.bodiesOf(t, box); len(keys) != 0 {
+		t.Fatalf("a refused send left its body: %v", keys)
 	}
 }
