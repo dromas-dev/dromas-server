@@ -45,7 +45,7 @@ func Migrate(ctx context.Context, url, schema string, l *log.Logger) (applied []
 	if err != nil {
 		return nil, 0, fmt.Errorf("postgres: %w", err)
 	}
-	cc.RuntimeParams["search_path"] = schema
+	cc.RuntimeParams["search_path"] = quotedSchema(schema)
 	cc.RuntimeParams["lock_timeout"] = migrateLockTimeout
 	cc.RuntimeParams["statement_timeout"] = migrateStatementTimeout
 	db := stdlib.OpenDB(*cc)
@@ -53,7 +53,7 @@ func Migrate(ctx context.Context, url, schema string, l *log.Logger) (applied []
 	if err := checkServer(ctx, db, l); err != nil {
 		return nil, 0, err
 	}
-	if _, err := db.ExecContext(ctx, "CREATE SCHEMA IF NOT EXISTS "+schema); err != nil && !isPgCode(err, "42P06", "23505") {
+	if _, err := db.ExecContext(ctx, "CREATE SCHEMA IF NOT EXISTS "+quotedSchema(schema)); err != nil && !isPgCode(err, "42P06", "23505") {
 		return nil, 0, fmt.Errorf("postgres: %w", err)
 	}
 	h := fnv.New64a()
@@ -173,8 +173,11 @@ func checkServer(ctx context.Context, db *sql.DB, l *log.Logger) error {
 	return nil
 }
 
-// schemaName is schema, or public if empty, if it is an identifier that
-// needs no quoting.
+// schemaName is schema, or public if empty, if it is a lowercase identifier
+// and no system schema's: PostgreSQL keeps every name that begins pg_ for
+// itself (CREATE SCHEMA's docs, read 2026-11-08), and information_schema is
+// the standard's. It is written quoted wherever it is written (quotedSchema),
+// so a reserved word names a schema too.
 func schemaName(schema string) (string, error) {
 	if schema == "" {
 		schema = "public"
@@ -182,8 +185,14 @@ func schemaName(schema string) (string, error) {
 	if !pgIdent(schema) {
 		return "", fmt.Errorf("postgres: schema %q is not a lowercase identifier", schema)
 	}
+	if strings.HasPrefix(schema, "pg_") || schema == "information_schema" {
+		return "", fmt.Errorf("postgres: schema %q is a system schema's name", schema)
+	}
 	return schema, nil
 }
+
+// quotedSchema is schema as an identifier in SQL and in search_path, quoted.
+func quotedSchema(schema string) string { return pgx.Identifier{schema}.Sanitize() }
 
 // publicationName is the feed's publication in schema, as migration 00002
 // names it: dromas_publication in public, dromas_publication_<schema> in

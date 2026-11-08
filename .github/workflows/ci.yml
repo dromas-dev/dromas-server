@@ -49,12 +49,11 @@ jobs:
           go-version: stable
           check-latest: true
       - name: postgres
-        # The test database: logical replication on, a replication slot and a
-        # WAL sender for each store the tests run at once. A job's services
-        # take no server options, so it is started here (docker run).
+        # The test database, test/postgres/compose.yaml: a job's services take
+        # no server options, so it is started here, from the file Dependabot
+        # keeps pinned.
         run: |
-          docker run -d --name postgres -e POSTGRES_PASSWORD=dromas -e POSTGRES_DB=dromas_test -p 127.0.0.1:5432:5432 \
-            postgres:18 -c wal_level=logical -c max_replication_slots=200 -c max_wal_senders=200 -c max_connections=1000
+          docker compose -f test/postgres/compose.yaml up -d
           # Over TCP: the image's first start runs its initialisation on a
           # server that listens on the Unix socket alone, then restarts.
           for _ in $(seq 60); do docker exec postgres pg_isready -h 127.0.0.1 -U postgres -d dromas_test && break; sleep 1; done

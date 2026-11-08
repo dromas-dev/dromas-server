@@ -116,7 +116,7 @@ func dropSchema(schema string) error {
 	if _, err := conn.Exec(ctx, "DROP PUBLICATION IF EXISTS dromas_"+schema+", "+publicationName(schema)); err != nil {
 		return err
 	}
-	_, err = conn.Exec(ctx, "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
+	_, err = conn.Exec(ctx, "DROP SCHEMA IF EXISTS "+quotedSchema(schema)+" CASCADE")
 	return err
 }
 
@@ -149,9 +149,9 @@ func pgURL(t testing.TB, schema string) string {
 	once, _ := migrated.LoadOrStore(schema, sync.OnceValue(func() error {
 		err := asTestRole(func(ctx context.Context, conn *pgx.Conn) error {
 			for _, q := range []string{
-				"CREATE SCHEMA IF NOT EXISTS " + schema,
-				"GRANT USAGE ON SCHEMA " + schema + " TO " + appRole.name,
-				"ALTER DEFAULT PRIVILEGES IN SCHEMA " + schema + " GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO " + appRole.name,
+				"CREATE SCHEMA IF NOT EXISTS " + quotedSchema(schema),
+				"GRANT USAGE ON SCHEMA " + quotedSchema(schema) + " TO " + appRole.name,
+				"ALTER DEFAULT PRIVILEGES IN SCHEMA " + quotedSchema(schema) + " GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO " + appRole.name,
 			} {
 				if _, err := conn.Exec(ctx, q); err != nil {
 					return err
@@ -430,5 +430,57 @@ func (s *Memory) lists(t *testing.T, account string, a protocol.Address, want bo
 	}
 	if (n > 0) != want {
 		t.Fatalf("the mailboxes table lists %s under %q: %v, want %v", a, account, n > 0, want)
+	}
+}
+
+// A schema is a lowercase identifier and no system schema's name.
+func TestASchemaNameIsNoSystemSchemas(t *testing.T) {
+	t.Parallel()
+	for _, bad := range []string{"pg_catalog", "pg_toast", "pg_dromas", "information_schema", "Dromas", "1dromas"} {
+		if got, err := schemaName(bad); err == nil {
+			t.Errorf("schema %q taken as %q", bad, got)
+		}
+	}
+	for _, good := range []string{"public", "dromas", "user", "order", "pgdromas"} {
+		if got, err := schemaName(good); err != nil || got != good {
+			t.Errorf("schema %q: %q, %v", good, got, err)
+		}
+	}
+	if got := quotedSchema("user"); got != `"user"` {
+		t.Errorf("schema user is written %s", got)
+	}
+}
+
+// A schema named by a reserved word is made, migrated and served: its name
+// is written quoted wherever it is written.
+func TestASchemaNamedByAReservedWordIsServed(t *testing.T) {
+	t.Parallel()
+	if !onPostgres() {
+		t.Skip("needs PostgreSQL: DROMAS_TEST_POSTGRES")
+	}
+	const schema = "order"
+	ctx := context.Background()
+	// The name is a word, not a run's own: one run of this test at a time on
+	// the database, from a schema dropped first.
+	lock, err := pgx.Connect(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lock.Close(context.Background()) })
+	if _, err := lock.Exec(ctx, "SELECT pg_advisory_lock(hashtext('dromas test schema order'))"); err != nil {
+		t.Fatal(err)
+	}
+	if err := dropSchema(schema); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := dropSchema(schema); err != nil {
+			t.Error(err)
+		}
+	})
+	s := startPostgresIn(t, schema, t.TempDir(), nil, nil)
+	var n int
+	if err := s.pool().QueryRow(ctx, "SELECT count(*)::int FROM mailboxes").Scan(&n); err != nil || n != 0 {
+		t.Fatalf("the mailboxes of schema %q: %d, %v", schema, n, err)
 	}
 }
