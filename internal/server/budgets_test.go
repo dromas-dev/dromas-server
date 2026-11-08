@@ -1101,3 +1101,30 @@ func TestABucketLargerThanItsNumberADay(t *testing.T) {
 		t.Fatalf("a second send after one came back: %v, want rate_limited", err)
 	}
 }
+
+// With the mailbox's calls spent, a fetch or an ack of an id it does not
+// hold and a message's HEAD are refused before anything is read (LIMITS.md
+// rule 1): none makes a call of the store, the read of its pass included,
+// so the spend comes before the read.
+func TestASpentMailboxReadsNothingForAMissOrAHead(t *testing.T) {
+	t.Parallel()
+	l := relaxed()
+	e := newEnv(t, l)
+	a, b := e.mailbox(), e.mailbox()
+	id := send(t, a, b, "held").ID
+	l.CallBurst, l.CallRefill = 1, time.Hour
+	e2, cs := counted(t, e, l)
+	pass := e2.pass(b)
+	messages := "/v1/" + b.Address().String() + "/messages/"
+	unknown := messages + strings.Repeat("ab", 32)
+	e2.want(e2.do(http.MethodDelete, unknown, nil, pass), http.StatusNotFound, protocol.CodeNoSuchMessage) // the mailbox's one call
+	before := cs.calls.Load()
+	e2.want(e2.do(http.MethodGet, unknown, nil, pass), http.StatusTooManyRequests, protocol.CodeRateLimited)
+	e2.want(e2.do(http.MethodDelete, unknown, nil, pass), http.StatusTooManyRequests, protocol.CodeRateLimited)
+	if r := e2.head(messages+id, pass); r.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("a message's HEAD with the mailbox's calls spent: %d; want 429", r.StatusCode)
+	}
+	if n := cs.calls.Load() - before; n != 0 {
+		t.Errorf("with the mailbox's calls spent, a fetch and an ack of an id it does not hold and a message's HEAD made %d storage calls; want none", n)
+	}
+}

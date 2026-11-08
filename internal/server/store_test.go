@@ -1073,3 +1073,48 @@ func TestAWriteToARecordMadeBetweenMillisecondsIsTaken(t *testing.T) {
 		t.Error("after its own revocation of certificates, memory holds no copy of the record")
 	}
 }
+
+// Each backend holds a message's HEAD (Header) and a fetch or an ack of an
+// id memory does not hold (PassHeld) to the pass its context carries, as
+// passHeldSQL holds them in the database: one that no longer holds is
+// ErrStale, the message held or not, and one that holds reads as the
+// message stands. On PostgreSQL PassHeld is one statement: it acquires one
+// connection of the pool, as each statement on the pool does (pgxpool's
+// Stat), and nothing else in the test uses that pool.
+func TestABackendHoldsAHeadAndAMissToTheirPass(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, relaxed())
+	a, b := e.mailbox(), e.mailbox()
+	id := idOf(t, send(t, a, b, "held"))
+	m := e.store.(*Memory)
+	fed(t, m)
+	box := b.Address()
+	held := withPass(t.Context(), passBy{addr: box, identity: true})
+	ended := withPass(t.Context(), passBy{addr: box, signer: [32]byte{9}}) // a certificate's, which is not the record's signer
+	if h, err := m.backend.Header(held, box, id); err != nil || h.ID != id {
+		t.Errorf("a held message's HEAD under a pass that holds: %v, %v", h, err)
+	}
+	if _, err := m.backend.Header(held, box, [32]byte{1}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("an unknown id's HEAD under a pass that holds: %v; want ErrNotFound", err)
+	}
+	if err := m.backend.PassHeld(held); err != nil {
+		t.Errorf("a miss under a pass that holds: %v", err)
+	}
+	if _, err := m.backend.Header(ended, box, id); !errors.Is(err, ErrStale) {
+		t.Errorf("a held message's HEAD under a pass that no longer holds: %v; want ErrStale", err)
+	}
+	if _, err := m.backend.Header(ended, box, [32]byte{1}); !errors.Is(err, ErrStale) {
+		t.Errorf("an unknown id's HEAD under a pass that no longer holds: %v; want ErrStale", err)
+	}
+	if err := m.backend.PassHeld(ended); !errors.Is(err, ErrStale) {
+		t.Errorf("a miss under a pass that no longer holds: %v; want ErrStale", err)
+	}
+	if pg, ok := onPg(m); ok {
+		before := pg.pool().Stat().AcquireCount()
+		_ = m.backend.PassHeld(held)
+		_ = m.backend.PassHeld(ended)
+		if n := pg.pool().Stat().AcquireCount() - before; n != 2 {
+			t.Errorf("two misses took %d statements of the pool; want one each", n)
+		}
+	}
+}
