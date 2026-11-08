@@ -497,7 +497,8 @@ var errNotStored = errors.New("not stored")
 // one comparison of two records of an address: the record cache's
 // (putLocked, image, mergeViews), the index's (setStanding), a write's
 // condition on the record it read (UpdateMailbox, Adopt, Leave, a send's
-// sendHeld) and memory's copy of the record a revocation raised
+// sendHeld; memBackend's atVersion and PutMessage) and memory's copy of the
+// record a revocation raised
 // (Memory.Revoke). An account's has its rev alone: dromas-server deletes no
 // account, and the role serve runs as may not (migration 00004), nor make
 // one (00007), so none is made again.

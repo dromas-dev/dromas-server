@@ -458,6 +458,16 @@ func (x *index) forget(a protocol.Address) {
 	}
 }
 
+// recorded reports whether memory holds a record of a, or is loading a, whose
+// load may read one.
+func (x *index) recorded(a protocol.Address) bool {
+	sh := x.shard(a)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	m := sh.mailboxes[a]
+	return m != nil && (m.loading != nil || m.exists)
+}
+
 // standing returns a loaded mailbox's standing, and whether it has one: a
 // revoked address has, whether or not a record is left, and an address with
 // no record has none.

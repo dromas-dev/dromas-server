@@ -488,22 +488,27 @@ func TestTheSweepTakesWhatARevokedAddressLeft(t *testing.T) {
 // before, starts its rev over, so B, behind, holds a copy of the record
 // before at the rev the new one is at. A write on B is held to the record by
 // its version, its created beside its rev, and changes nothing of the new
-// one; and B's own revocation of certificates, which raises the new record's
-// rev, leaves B no copy of the record before (dromas-dev/dromas-server#266).
+// one, a send sealed to the record before among them, which stores nothing
+// (409 mailbox_changed); and B's own revocation of certificates, which
+// raises the new record's rev, leaves B no copy of the record before
+// (dromas-dev/dromas-server#266).
 func TestAProcessBehindWritesNothingToARecordMadeAgainAtItsAddress(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name string
-		call func(t *testing.T, x *twoProcesses, to *raw)
+		call func(t *testing.T, x *twoProcesses, to, from *raw)
 	}{
-		{"a renewal", func(t *testing.T, x *twoProcesses, to *raw) {
+		{"a renewal", func(t *testing.T, x *twoProcesses, to, _ *raw) {
 			to.prekey(3, x.a.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 			x.a.want(x.onB("PUT", to.path("/prekey"), to.upload(3), to.pass(3)), http.StatusConflict, protocol.CodeMailboxChanged)
 		}},
-		{"an ACL", func(t *testing.T, x *twoProcesses, to *raw) {
+		{"an ACL", func(t *testing.T, x *twoProcesses, to, _ *raw) {
 			x.a.want(x.onB("PUT", to.path("/acl"), aclOf([]string{"*"}, nil), to.pass(2)), http.StatusConflict, protocol.CodeMailboxChanged)
 		}},
-		{"a revocation of certificates, after which B reads the record made again", func(t *testing.T, x *twoProcesses, to *raw) {
+		{"a send sealed to the record before", func(t *testing.T, x *twoProcesses, to, from *raw) {
+			x.a.want(x.onB("POST", to.path("/messages"), to.sealed(1, sealFor(t, to, 1)), from.pass(1)), http.StatusConflict, protocol.CodeMailboxChanged)
+		}},
+		{"a revocation of certificates, after which B reads the record made again", func(t *testing.T, x *twoProcesses, to, _ *raw) {
 			x.a.want(x.onB("PUT", revocationPath(to.id.Address()), to.certs(1), ""), http.StatusOK, "")
 			rep := x.onB("GET", to.path(""), nil, "")
 			x.a.want(rep, http.StatusOK, "")
@@ -522,8 +527,10 @@ func TestAProcessBehindWritesNothingToARecordMadeAgainAtItsAddress(t *testing.T)
 			x := newTwoProcesses(t)
 			a := x.a
 			to := a.raw().register(protocol.MaxPrekeyLifetime) // statement 1, at rev 1
+			from := a.raw().register(protocol.MaxPrekeyLifetime)
 			box := to.id.Address()
 			a.want(x.onB("GET", to.path("/messages"), nil, to.pass(1)), http.StatusOK, "")
+			a.want(x.onB("GET", from.path("/messages"), nil, from.pass(1)), http.StatusOK, "")
 			fed(t, x.follower)
 			x.hold(true)
 			if err := x.writer.DeleteMailbox(context.Background(), box); err != nil { // as the sweep does
@@ -538,7 +545,10 @@ func TestAProcessBehindWritesNothingToARecordMadeAgainAtItsAddress(t *testing.T)
 			if n := x.count(`SELECT count(*)::int FROM mailboxes WHERE addr = $1 AND rev = 1`, box[:]); n != 1 {
 				t.Fatal("control: the record made again is not at rev 1")
 			}
-			c.call(t, x, to)
+			c.call(t, x, to, from)
+			if n := messagesOf(x, box); n != 0 {
+				t.Errorf("B's call, read from the record before, stored %d messages for the record made again", n)
+			}
 			var stmt []byte
 			var acl bool
 			if err := x.writer.pool().QueryRow(context.Background(), `SELECT statement, acl IS NOT NULL FROM mailboxes WHERE addr = $1`, box[:]).Scan(&stmt, &acl); err != nil {
@@ -550,4 +560,37 @@ func TestAProcessBehindWritesNothingToARecordMadeAgainAtItsAddress(t *testing.T)
 			x.hold(false)
 		})
 	}
+}
+
+// B, behind, holds a copy of a record the sweep took on A. B's own
+// revocation of certificates finds no record in the database, and B then
+// holds none either: it forgets the copy (Memory.Revoke), so it serves
+// nothing the database no longer holds.
+func TestAProcessBehindKeepsNoRecordItsRevocationFoundGone(t *testing.T) {
+	t.Parallel()
+	x := newTwoProcesses(t)
+	a := x.a
+	to := a.raw().register(protocol.MaxPrekeyLifetime)
+	box := to.id.Address()
+	a.want(x.onB("GET", to.path("/messages"), nil, to.pass(1)), http.StatusOK, "")
+	fed(t, x.follower)
+	x.hold(true)
+	if err := x.writer.DeleteMailbox(context.Background(), box); err != nil { // as the sweep does
+		t.Fatal(err)
+	}
+	if b, ok := x.follower.Known(box); !ok || !b.hasRecord() {
+		t.Fatal("control: B holds no copy of the record")
+	}
+	a.want(x.onB("PUT", revocationPath(box), to.certs(1), ""), http.StatusOK, "")
+	if n := x.count(`SELECT count(*)::int FROM mailboxes WHERE addr = $1`, box[:]); n != 0 {
+		t.Fatal("control: the database holds a record")
+	}
+	if b, ok := x.follower.Known(box); ok && b.hasRecord() {
+		t.Errorf("after its own revocation found no record, B holds a copy of the record the sweep took, at rev %d", b.Rev)
+	}
+	if st, ok := x.follower.Held(box); ok {
+		t.Errorf("after its own revocation found no record, B holds the mailbox's standing: %+v", st)
+	}
+	a.want(x.onB("GET", to.path(""), nil, ""), http.StatusNotFound, protocol.CodeNoSuchMailbox)
+	x.hold(false)
 }
