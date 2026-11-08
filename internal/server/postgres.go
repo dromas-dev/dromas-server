@@ -887,17 +887,17 @@ func staleness(ctx context.Context, q querier) error {
 }
 
 // UpdateMailbox implements Backend: every column that can change, if the
-// record is still at b.Rev and holds the call's pass. The ACL is only set:
-// no route removes one.
+// record is still b's, at its version (b.Created, b.Rev), and holds the
+// call's pass. The ACL is only set: no route removes one.
 func (s *pgBackend) UpdateMailbox(ctx context.Context, b *Mailbox) error {
 	if err := b.writable(); err != nil {
 		return refused(err)
 	}
-	held, hargs := passHeld(ctx, 11)
+	held, hargs := passHeld(ctx, 12)
 	n, err := s.exec(ctx, `UPDATE mailboxes SET statement = $2, statement_sig = $3, rank = $4, signer = $5, senders = $6, retired = $7,
 		acl = COALESCE($8, acl), expires_at = $9, rev = rev + 1
-		WHERE addr = $1 AND rev = $10 AND `+held,
-		append([]any{b.Addr[:], b.Statement, b.Signature, numeric(b.Rank), b.Signer[:], sendersColumn(b), retiredColumn(b), aclColumn(b), expiresColumn(b), toInt(b.Rev)}, hargs...)...)
+		WHERE addr = $1 AND created = $10 AND rev = $11 AND `+held,
+		append([]any{b.Addr[:], b.Statement, b.Signature, numeric(b.Rank), b.Signer[:], sendersColumn(b), retiredColumn(b), aclColumn(b), expiresColumn(b), msTime(b.Created), toInt(b.Rev)}, hargs...)...)
 	if err != nil {
 		return err
 	}
@@ -919,8 +919,9 @@ func (s *pgBackend) DeleteMailbox(ctx context.Context, a protocol.Address) error
 // (PROTOCOL.md §11.15), takes a revocation of certificates only through a
 // higher serial than the one it holds, is ErrStale where it brings neither,
 // and, where want asks it, writes only where the row exists, or only where
-// it does not; then the mailbox's record's rev is raised.
-func (s *pgBackend) Revoke(ctx context.Context, a protocol.Address, rv *Revocations, want Expect) (*Revocations, uint64, error) {
+// it does not; then the mailbox's record's rev is raised, and its version
+// returned.
+func (s *pgBackend) Revoke(ctx context.Context, a protocol.Address, rv *Revocations, want Expect) (*Revocations, version, error) {
 	var addrRev, certs, certsSig []byte
 	if len(rv.Address) > 0 {
 		addrRev = rv.Address
@@ -950,6 +951,7 @@ func (s *pgBackend) Revoke(ctx context.Context, a protocol.Address, rv *Revocati
 			ON CONFLICT (addr) DO UPDATE SET ` + set + ` WHERE ` + brings + ` RETURNING ` + revocationCols
 	}
 	var got row
+	var created time.Time
 	var rev int64
 	err := s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, addressLock, a[:]); err != nil {
@@ -965,20 +967,23 @@ func (s *pgBackend) Revoke(ctx context.Context, a protocol.Address, rv *Revocati
 		got = rows[0]
 		// The record's rev raised, so a renewal or a send held to the record
 		// as read before waits on its row and changes nothing.
-		err = tx.QueryRow(ctx, `UPDATE mailboxes SET rev = rev + 1 WHERE addr = $1 RETURNING rev`, a[:]).Scan(&rev)
+		err = tx.QueryRow(ctx, `UPDATE mailboxes SET rev = rev + 1 WHERE addr = $1 RETURNING created, rev`, a[:]).Scan(&created, &rev)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil // no mailbox
 		}
 		return err
 	})
 	if err != nil {
-		return nil, 0, err
+		return nil, version{}, err
 	}
 	held, err := decodeRevocations(got)
 	if err != nil {
-		return nil, 0, unknown(fmt.Errorf("applied, and its answer does not read: %w", err))
+		return nil, version{}, unknown(fmt.Errorf("applied, and its answer does not read: %w", err))
 	}
-	return held, uint64(rev), nil //nolint:gosec // a rev, at least 1
+	if rev == 0 {
+		return held, version{}, nil // no mailbox
+	}
+	return held, version{ms(created), uint64(rev)}, nil //nolint:gosec // a rev, at least 1
 }
 
 // Messages.
@@ -1420,11 +1425,13 @@ func (s *pgBackend) AdoptKey(ctx context.Context, account string, hash [32]byte)
 }
 
 // Adopt implements Backend: the mailbox's record moved into the account, at
-// b.Rev, and a use of the adopt key spent, in one transaction.
+// its version (b.Created, b.Rev), and a use of the adopt key spent, in one
+// transaction.
 func (s *pgBackend) Adopt(ctx context.Context, b *Mailbox, account string, key [32]byte) error {
 	return s.write(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		held, hargs := passHeld(ctx, 4)
-		tag, err := tx.Exec(ctx, `UPDATE mailboxes SET account = $2, rev = rev + 1 WHERE addr = $1 AND rev = $3 AND `+held, append([]any{b.Addr[:], account, toInt(b.Rev)}, hargs...)...)
+		held, hargs := passHeld(ctx, 5)
+		tag, err := tx.Exec(ctx, `UPDATE mailboxes SET account = $2, rev = rev + 1 WHERE addr = $1 AND created = $3 AND rev = $4 AND `+held,
+			append([]any{b.Addr[:], account, msTime(b.Created), toInt(b.Rev)}, hargs...)...)
 		if err != nil {
 			return err
 		}
@@ -1442,10 +1449,11 @@ func (s *pgBackend) Adopt(ctx context.Context, b *Mailbox, account string, key [
 	})
 }
 
-// Leave implements Backend.
+// Leave implements Backend: at the record's version (b.Created, b.Rev).
 func (s *pgBackend) Leave(ctx context.Context, b *Mailbox) error {
-	held, hargs := passHeld(ctx, 3)
-	n, err := s.exec(ctx, `UPDATE mailboxes SET account = NULL, rev = rev + 1 WHERE addr = $1 AND rev = $2 AND `+held, append([]any{b.Addr[:], toInt(b.Rev)}, hargs...)...)
+	held, hargs := passHeld(ctx, 4)
+	n, err := s.exec(ctx, `UPDATE mailboxes SET account = NULL, rev = rev + 1 WHERE addr = $1 AND created = $2 AND rev = $3 AND `+held,
+		append([]any{b.Addr[:], msTime(b.Created), toInt(b.Rev)}, hargs...)...)
 	if err != nil {
 		return err
 	}

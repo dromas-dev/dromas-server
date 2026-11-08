@@ -490,10 +490,17 @@ var errNotStored = errors.New("not stored")
 // version is a record's place in its address's history: the time its mailbox
 // registered, to the millisecond as the store keeps it, then its rev. A mailbox
 // registered again once the sweep took its record starts at rev 1 again, and
-// later (dromas-dev/dromas-client#407 item 2). It is the one comparison
-// of two records of an address: the record cache's (putLocked, image,
-// mergeViews) and the index's (setStanding). An account's has its rev
-// alone.
+// later (dromas-dev/dromas-client#407 item 2), so a rev names a record only
+// beside its created, as a Kubernetes precondition names its target by its
+// UID, "unique in time and space", beside its resourceVersion
+// (k8s.io/apimachinery's meta/v1 Preconditions, read 2026-11-08). It is the
+// one comparison of two records of an address: the record cache's
+// (putLocked, image, mergeViews), the index's (setStanding), a write's
+// condition on the record it read (UpdateMailbox, Adopt, Leave, a send's
+// sendHeld) and memory's copy of the record a revocation raised
+// (Memory.Revoke). An account's has its rev alone: dromas-server deletes no
+// account, and the role serve runs as may not (migration 00004), so none is
+// made again.
 type version struct{ created, rev uint64 }
 
 // after reports whether v is a later record than o.
@@ -614,8 +621,9 @@ type Store interface {
 	// CreateMailbox stores a new mailbox's record at Rev 1, or returns ErrExists if
 	// the address has one.
 	CreateMailbox(ctx context.Context, b *Mailbox) error
-	// UpdateMailbox stores b's record if the stored one is still at b.Rev, and
-	// bumps b.Rev; otherwise ErrStale. It writes nothing of the revocations.
+	// UpdateMailbox stores b's record if the stored one is still b's, at its
+	// version (b.Created, b.Rev), and bumps b.Rev; otherwise ErrStale. It
+	// writes nothing of the revocations.
 	UpdateMailbox(ctx context.Context, b *Mailbox) error
 	// DeleteMailbox deletes a's record, and keeps its revocations.
 	DeleteMailbox(ctx context.Context, a protocol.Address) error
@@ -665,7 +673,7 @@ type Store interface {
 	AdoptKey(ctx context.Context, account string, hash [32]byte) (*AdoptKey, error)
 	// Adopt moves mailbox b, as read, into account, spending a use of account's
 	// adopt key whose hash is given, in one write: ErrStale if the record
-	// changed, ErrKeyRefused if the key is spent, expired or gone. It sets
+	// changed or is another, ErrKeyRefused if the key is spent, expired or gone. It sets
 	// b.Account and bumps b.Rev.
 	Adopt(ctx context.Context, b *Mailbox, account string, key [32]byte) error
 	// Leave takes mailbox b, as read, out of its account, or returns ErrStale.

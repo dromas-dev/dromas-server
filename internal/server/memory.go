@@ -390,27 +390,31 @@ func (s *Memory) DeleteMailbox(ctx context.Context, a protocol.Address) error {
 	return s.write(ofAddress(a), func() error { return s.backend.DeleteMailbox(ctx, a) }, func() { s.forget(a) })
 }
 
-// Revoke implements Store. The record's rev the revocation raised is
-// applied to the copy memory holds of it, which is kept where it holds that
-// rev or a later one already, the feed's echo of the revocation having
-// reached it first, and forgotten where it holds an earlier (Backend.Revoke).
+// Revoke implements Store. The record's version the revocation raised is
+// applied to the copy memory holds of it, where that copy is of the same
+// record, made at the same time: it is kept where it holds that rev or a
+// later one already, the feed's echo of the revocation having reached it
+// first, raised where it holds the rev before, and forgotten otherwise
+// (Backend.Revoke). A copy of a record made at another time is of another
+// record of the address, whatever its rev (version), and is forgotten.
 func (s *Memory) Revoke(ctx context.Context, a protocol.Address, rv *Revocations, want Expect) error {
 	var held *Revocations
-	var rev uint64
+	var v version
 	return s.write(ofAddress(a), func() (err error) {
-		held, rev, err = s.backend.Revoke(ctx, a, rv, want)
+		held, v, err = s.backend.Revoke(ctx, a, rv, want)
 		return err
 	}, func() {
 		s.applyRevocations(a, held)
-		if rev == 0 {
+		if v.rev == 0 {
 			return
 		}
 		b, ok := s.cache.get(a)
+		same := ok && b.hasRecord() && versionOf(b).created == v.created
 		switch {
-		case ok && b.hasRecord() && b.Rev >= rev:
-		case ok && b.hasRecord() && b.Rev+1 == rev:
+		case same && b.Rev >= v.rev:
+		case same && b.Rev+1 == v.rev:
 			b = cloneMailbox(b)
-			b.Rev = rev
+			b.Rev = v.rev
 			s.applyMailbox(b)
 		default:
 			s.forget(a)

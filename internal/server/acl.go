@@ -36,7 +36,7 @@ func (s *Server) aclTooLarge() *problem {
 // before its body is read, as RFC 9110 §13.2.1 has an origin server evaluate
 // them (precondition): a false If-Match is 412, and so is an If-None-Match
 // that is "*" or names the held ACL's tag, and nothing changes. The write is
-// conditional on the record's revision, so the ACL the If-Match was held to
+// conditional on the record's version, its created and rev, so the ACL the If-Match was held to
 // is the one replaced. It refuses later sends, and deletes no messages. It answers the ACL as held with
 // no ETag: the lists are sorted and each entry kept once, so what is held may
 // not be what was sent, and RFC 9110 §9.3.4 lets a PUT's answer carry a
