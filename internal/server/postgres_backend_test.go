@@ -572,11 +572,49 @@ func TestATransactionPastWhatTheFeedHoldsLosesItsPlace(t *testing.T) {
 // sees committed, with no read of its own: the feed has no connection here.
 func TestTheNewestSnapshotAnswersWhatItSees(t *testing.T) {
 	t.Parallel()
-	f := &pgFeed{seen: "100:105:102"}
+	f := &pgFeed{seen: "100:105:102", seenAt: time.Now()}
 	for _, xid := range []uint32{99, 101, 103} {
 		if ok, err := f.sees(context.Background(), xid); err != nil || !ok {
 			t.Errorf("transaction %d against %q: %v, %v; want seen, with no read", xid, f.seen, ok, err)
 		}
+	}
+}
+
+// A snapshot older than feedUnsyncedAfter answers nothing: against one 2^31
+// transactions old, a new transaction's 32-bit xid reads as one of the
+// epoch before, below its xmin, and seen.
+func TestAnOldSnapshotAnswersNothing(t *testing.T) {
+	t.Parallel()
+	const xid = uint32(100 + 1<<31 + 5) // 2^31+5 past the snapshot's xmax, in its epoch
+	f := &pgFeed{seen: "4294967396:4294967396:", seenAt: time.Now()}
+	if !f.cachedSees(xid) {
+		t.Fatalf("transaction %d against a young %q: not seen; the test no longer makes the case", xid, f.seen)
+	}
+	f.seenAt = time.Now().Add(-feedUnsyncedAfter)
+	if f.cachedSees(xid) {
+		t.Errorf("transaction %d against %q read %v ago: seen; want a new snapshot read", xid, f.seen, feedUnsyncedAfter)
+	}
+}
+
+// A column an update left alone ('u') takes its value from the old row only
+// where the old row holds it: under a key's old row ('K') every other
+// column is null, and the row does not read, never reads it as null.
+func TestAnUnchangedColumnIsNeverTakenFromAKeysOldRow(t *testing.T) {
+	t.Parallel()
+	f := &pgFeed{types: pgtype.NewMap()}
+	rel := &pglogrepl.RelationMessage{RelationID: 1, Namespace: "s", RelationName: "mailboxes", Columns: []*pglogrepl.RelationMessageColumn{
+		{Name: "addr", DataType: pgtype.ByteaOID},
+		{Name: "acl", DataType: pgtype.ByteaOID},
+	}}
+	key := &pglogrepl.TupleDataColumn{DataType: pglogrepl.TupleDataTypeBinary, Data: []byte{7}}
+	tuple := &pglogrepl.TupleData{Columns: []*pglogrepl.TupleDataColumn{key, {DataType: pglogrepl.TupleDataTypeToast}}}
+	whole := &pglogrepl.TupleData{Columns: []*pglogrepl.TupleDataColumn{key, {DataType: pglogrepl.TupleDataTypeBinary, Data: []byte("acl")}}}
+	if r, err := f.row(rel, tuple, whole); err != nil || string(r["acl"].([]byte)) != "acl" {
+		t.Fatalf("under a whole old row: %v, %v; want the old row's value", r, err)
+	}
+	keyOnly := &pglogrepl.TupleData{Columns: []*pglogrepl.TupleDataColumn{key, {DataType: pglogrepl.TupleDataTypeNull}}}
+	if r, err := f.row(rel, tuple, keyOnly); err == nil {
+		t.Errorf("under a key's old row: %v; want a row that does not read", r)
 	}
 }
 
