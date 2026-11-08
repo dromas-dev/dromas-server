@@ -107,8 +107,8 @@ type PostgresConfig struct {
 }
 
 // minServerVersion is the oldest PostgreSQL this backend runs on
-// (server_version_num).
-const minServerVersion = 150000
+// (server_version_num): the major version CI tests (test/postgres/compose.yaml).
+const minServerVersion = 180000
 
 //go:embed migrations/*.sql
 var migrations embed.FS
@@ -128,7 +128,7 @@ func NewPostgresStore(ctx context.Context, c PostgresConfig) (*Memory, error) {
 	if err != nil {
 		return nil, fmt.Errorf("postgres: %w", err)
 	}
-	pc.ConnConfig.RuntimeParams["search_path"] = schema
+	pc.ConnConfig.RuntimeParams["search_path"] = quotedSchema(schema)
 	// A write is answered once its WAL is flushed, which the feed's
 	// "synced through" reads (postgres_feed.go): never later.
 	pc.ConnConfig.RuntimeParams["synchronous_commit"] = "on"

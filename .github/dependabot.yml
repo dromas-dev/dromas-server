@@ -32,6 +32,18 @@ updates:
     commit-message:
       prefix: ci
 
+  # The test database CI starts (test/postgres/compose.yaml), pinned the same
+  # way.
+  - package-ecosystem: docker-compose
+    directory: /test/postgres
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    commit-message:
+      prefix: test
+
   # The Dockerfile's base image, a tag pinned by its index digest: a new
   # digest of the tag comes as a pull request.
   - package-ecosystem: docker

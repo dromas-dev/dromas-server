@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -802,4 +803,25 @@ func messageRows(e *env, a protocol.Address) string {
 		return err.Error()
 	}
 	return strconv.Itoa(n)
+}
+
+// A revoked address is answered 410 with its record for any body, ahead of
+// every other refusal of the call (PROTOCOL.md §11.15): one that is no JSON,
+// and one whose identity document is another address's.
+func TestARevokedAddressIsAnswered410ForAnyBody(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, relaxed())
+	a, other := e.mailbox(), e.mailbox()
+	path := revocationPath(a.Address())
+	e.want(e.do("PUT", path, record(t, a), ""), 201, "")
+	for name, body := range map[string]any{
+		"no JSON":                 []byte("not json"),
+		"another identity's body": record(t, other),
+	} {
+		r := e.do("PUT", path, body, "")
+		e.want(r, 410, protocol.CodeRevoked)
+		if !strings.Contains(string(r.body), `"record"`) {
+			t.Errorf("%s: the 410 carries no record: %s", name, r.body)
+		}
+	}
 }

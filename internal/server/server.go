@@ -844,11 +844,20 @@ func queryProblem(err error, hint string) error {
 // decodeBody reads a JSON request body of at most limit bytes into v: exactly
 // one object, no unknown fields.
 func decodeBody(w http.ResponseWriter, r *http.Request, limit int64, v any) error {
-	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
+	data, err := readBody(w, r, limit)
 	if err != nil {
-		return readProblem(err, fail(protocol.CodeTooLarge, "send less", "the request body is over %d bytes", limitValue(int(limit))))
+		return err
 	}
 	return decodeJSON(data, v)
+}
+
+// readBody reads the request's body whole, up to limit bytes.
+func readBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, error) {
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
+	if err != nil {
+		return nil, readProblem(err, fail(protocol.CodeTooLarge, "send less", "the request body is over %d bytes", limitValue(int(limit))))
+	}
+	return data, nil
 }
 
 // readProblem is the answer to a body that could not be read whole: past

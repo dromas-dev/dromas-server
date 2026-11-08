@@ -613,8 +613,28 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	data, err := readBody(w, r, registerLimit)
+	if err != nil {
+		return err
+	}
+	b, err := s.lookup(r, h)
+	if err != nil {
+		return err
+	}
+	// A revoked address takes nothing more, whatever the body (PROTOCOL.md
+	// §11.15, ahead of every other refusal of this call): it is ended, and
+	// that says which of its certificates still stand. Its mailbox's messages
+	// and record are deleted again while memory shows them, as they are when
+	// the first delete failed: a revocation sent back must not draw a read of
+	// the messages table each time.
+	if b != nil && b.State == Revoked {
+		if err := s.deleteHeld(detached(r.Context()), b); err != nil {
+			return err
+		}
+		return revokedWith(b)
+	}
 	var req protocol.Revocations
-	if err := decodeBody(w, r, registerLimit, &req); err != nil {
+	if err := decodeJSON(data, &req); err != nil {
 		return err
 	}
 	if err := required("identity", req.Identity); err != nil {
@@ -631,21 +651,6 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) error {
 	}
 	if protocol.AddressOf(req.Identity) != h {
 		return fail(protocol.CodeIdentityMismatch, hintDocument, "the identity document does not hash to the address")
-	}
-	b, err := s.lookup(r, h)
-	if err != nil {
-		return err
-	}
-	// A revoked address takes nothing more: it is ended, and that says which
-	// of its certificates still stand. Its mailbox's messages and record are deleted
-	// again while memory shows them, as they are when the first delete
-	// failed: a revocation sent back must not draw a read of the messages
-	// table each time.
-	if b != nil && b.State == Revoked {
-		if err := s.deleteHeld(detached(r.Context()), b); err != nil {
-			return err
-		}
-		return revokedWith(b)
 	}
 	var held *protocol.RevokedCertificates
 	if b != nil && len(b.RevokedCerts) > 0 {
