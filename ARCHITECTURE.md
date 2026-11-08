@@ -17,7 +17,7 @@
 
 | What | How many | Notes |
 |---|---|---|
-| `dromas-server` | 1 today, then one per host; a scaled shape is ~4 hosts of 4 cores | All identical; each runs the sweep, one process at a time by an advisory lock (§ The sweep), and each follows the database by a replication slot of its own (§ Following the feed). **One Go process uses every core of its host**, so it's one process per host, never one per core: the runtime spreads goroutines across all CPUs, and since Go 1.25 it reads the container's CPU limit too. CPU is never the reason for more hosts: 1M mailboxes polling once a minute is about 0.9 vCPU, 0.57 for the polls at 34 µs each and 0.32 for the check of each mailbox's new pass every ten minutes at 190 µs (measured 2026-10-13, § Estimates and measurements) |
+| `dromas-server` | One for each shard (`--shard`, § Routing by address), or one that answers for every mailbox | Identical but for their shards; each runs the sweep, one process at a time by an advisory lock (§ The sweep), and each follows the database by a replication slot of its own (§ Following the feed). **One Go process uses every core of its host**, so CPU is never the reason for another process or another host: the runtime spreads goroutines across all CPUs, and since Go 1.25 it reads the container's CPU limit too. 1M mailboxes polling once a minute is about 0.9 vCPU, 0.57 for the polls at 34 µs each and 0.32 for the check of each mailbox's new pass every ten minutes at 190 µs (measured 2026-10-13, § Estimates and measurements) |
 | Echo mailbox | 1 | A `dromas` client with its own keys, never inside `dromas-server` |
 | PostgreSQL | 1 | 15 or later, with `wal_level = logical`: five tables, mailboxes, revocations, messages, accounts and adopt keys, the one durable store of everything but bodies (§ Storage) |
 | Bodies | — | An S3 bucket, a directory bucket or a general purpose one (`--bucket`), or a directory (`--bodies-dir`) |
@@ -43,7 +43,7 @@ flowchart LR
    - Every change is a committed write to PostgreSQL, which its write-ahead log holds before the commit returns (`synchronous_commit` on, its default), even if the writer dies the next instant.
    - Every process follows that log by logical replication, one stream of every committed transaction to the published tables, in commit order (§ Following the feed), and applies it to its memory.
    - This is the durable, ordered change log the design needs.
-4. **Propagation is as far behind as the feed** (`dromas_server_stream_record_age_seconds`, § Metrics). With more than one process it opens these windows, each that long:
+4. **Propagation is as far behind as the feed** (`dromas_server_stream_record_age_seconds`, § Metrics). Under routing by address each mailbox's calls are its shard's process's alone (§ Routing by address), so what a process learns from the feed of another's writes is a sender's record, for the pass a send carries, which the send's write is also held to (§ Storage, "What a call's checks read"); accounts; and edits made to the tables by hand. Two processes that answer for the same mailboxes (with no `--shard`; a change of shards never runs two at once) open these windows besides, each that long:
    - a new message appears on another process late, and until it does that process answers a fetch or an ack of it `404` from memory (a fetch or an ack reads storage only for a message that memory holds): the client gets it at its next poll;
    - a just-acked message can reappear in a list another process serves. Clients skip ids they've acked and treat a 404 on fetch as already gone;
    - a pass under a certificate the mailbox has since replaced or its identity has since revoked, and a revoked mailbox's pass, are still taken on the other processes for what memory answers there alone: a count, an empty page and a long poll's hold. Every read of a message and every write a call makes is held in its statement to what the call's checks read (§ Storage, "What a call's checks read"), so a fetch, an ack, a page, a renewal, an ACL and a send there are each refused as a fresh call would be once that process reads the address again;
@@ -253,9 +253,9 @@ sequenceDiagram
 ### Limits
 
 **Every limit, who pays for it and the known weaknesses → [`LIMITS.md`](LIMITS.md).** What is architecture about them:
-- **Every budget and count is per process,** in memory, because a poll can't afford a round trip: with N processes a mailbox could spend N times each. Sharding by address at the edge (§ Routing by address) or sticky routing would put each mailbox's calls on one process; with neither, each process is to enforce a 1/N share (not built: one process enforces the whole of each), which keeps the bill ceiling, and rules at an edge in front can sit on top, keyed by /64 and /48 for IPv6.
-- **The mailbox total (`mailbox_cap`) is global**: it reads layer 1's marks, which the feed keeps on every process, as far behind as the feed, with no extra writes; a process's own sends count at once. **Sends per sender a day, and the counts of renewals, certificates and raises of a revocation of certificates,** are each process's own today. Every accepted send and every renewal arrives on the feed, so each process can count across all of them: that is stage 2, not built.
-- **The passes remembered are per process,** so with N processes a mailbox's new pass is checked once on each it calls.
+- **Every budget and count is per process,** in memory, because a poll can't afford a round trip. Under routing by address a mailbox's own counts are exact, on its shard's process; one keyed by a sender or by the caller's IP address is spent on each process it reaches, so up to N times with N shards (§ Routing by address). Rules at an edge in front can sit on top, keyed by /64 and /48 for IPv6.
+- **The mailbox total (`mailbox_cap`)** reads layer 1's marks, with no extra writes: every send to a mailbox lands on its shard's process, which counts it at once. **The counts of renewals, certificates and raises of a revocation of certificates** are the mailbox's own calls, so exact on its shard; **sends per sender a day** are spent on each recipient's process. Every accepted send and every renewal arrives on the feed, so each process could count across all of them; that is not built.
+- **The passes remembered are per process:** a mailbox's own calls reach its shard's process alone, and its pass on a send is checked once on each recipient's process.
 - **Every limit is a bucket, the numbers a day among them:** a number a day is one back each day divided by it, into a bucket its `-burst` flag sets apart, as Let's Encrypt sets a limit by its burst, count and period, so no window empties at midnight and every refusal's wait is its key's own (the client repo's `PRECEDENTS.md`). A start refuses a number a day that is on with a bucket of nothing (`bursts`).
 - **A bucket is one time per key, when it is full again (the GCRA form of a token bucket, as Let's Encrypt's limiter keeps it, and a count given back as it refunds one: the client repo's `PRECEDENTS.md`),** so a token comes back by arithmetic at the next call and nothing runs in the background (`buckets` in `internal/server/limits.go`). `prune` drops the keys whose buckets are full, inside a call, at most once in the time an empty bucket takes to fill, and only calls on that bucket set wait for it: over 100,000 keys it took 0.93 ms when it kept them all and 14 ms when it deleted them all (measured 2026-10-18, one AWS Graviton4 core).
 
@@ -302,7 +302,7 @@ sequenceDiagram
 | Failure | What happens | Recovery |
 |---|---|---|
 | Memory pressure | Layer 2 (once built) shrinks, down to off; lists come from the messages table, as all of them do today; polls are unaffected | Automatic |
-| Layer 1 alone outgrows memory | Capacity, not a fault: every process holds all of it | A bigger instance; ~50 B per live message makes this distant. At the extreme, shard by address (§ Routing by address) |
+| Layer 1 alone outgrows memory | Capacity, not a fault: each process holds the mailboxes of its shard used since it started | A bigger instance, or more shards (§ Routing by address); ~50 B per live message makes this distant |
 | A writer dies right after its commit | The commit is in the WAL, and the feed delivers the change to every process | Automatic |
 | PostgreSQL unavailable | Reads and writes fail, and their callers are answered `503` + `Retry-After`; the feed cannot be shown current, so the process is not ready and answers `503`, and the replication session, once it ends, is a lost place (below) | Wait; the restart rebuilds memory |
 | A lost replication session (the walsender, the network, the database's restart, a `TRUNCATE`, an error the walsender sends) | The process exits (§ Following the feed) | The restart makes a new slot: memory starts empty, and each mailbox is read again on its first use (§ Startup) |
@@ -421,10 +421,9 @@ dromas-server (this repo)
 | Stage | Shape |
 |---|---|
 | Dev | `dromas-server serve --dev`, the in-memory backend |
-| 1: first production (**live**, with the echo mailbox) | one host: a reverse proxy terminating TLS, one `dromas-server` and its database, and the echo mailbox beside it |
-| 2: availability and scale | first a second host for availability, then hosts across AZs, one `dromas-server` each using every core (e.g. 4 hosts of 4 cores), behind a load balancer, as many as the database's replication slots and WAL senders allow (§ Following the feed) |
+| 1: first production (**live**, with the echo mailbox) | one host: a reverse proxy terminating TLS, `dromas-server` as one process for each shard, the proxy sending each mailbox's calls to its shard's (§ Routing by address), its database, and the echo mailbox beside it |
+| 2: availability and scale | a second host for availability, then hosts across AZs, the shards' processes spread over them behind a load balancer, as many as the database's replication slots and WAL senders allow (§ Following the feed) |
 | Later, only if measured | Redis if exact global limits are ever needed |
-| By address | each mailbox's calls to one process, chosen by its address at the reverse proxy in front (§ Routing by address) |
 
 ## Build order
 
@@ -434,7 +433,8 @@ dromas-server (this repo)
 4. ✅ **The PostgreSQL store, with bodies in S3 or a directory, the feed, the sweep and layer 1**, with the poll path answered from memory (lazy per mailbox, § Startup). Every test of `dromas-server` runs on both backends, under the one memory (on PostgreSQL against a database kept for tests), and the crash between a write's two steps is tested. One process, `Dockerfile` here.
 5. **`dromas.sh` in the public repo, named in `llms.txt`** — built, with its forging tests (Go tests in `sh/` on the client's fake server), held to the Go client only on the vectors that are the proof and on the five outcomes a difference could let through (the client repo's `AGENTS.md` § The shell client), and interop with the Go client, all in dromas-client.
 6. **`dromas mcp` and `SKILL.md`.** The echo mailbox is built and live.
-7. **Layer 2 with its byte budget, global limits from the feed, readiness gating, and a second process.** That's stage 2, and with the second process a send refused at its counts reads the dedupe again: the posts of one ciphertext in flight are one call only within a process.
+7. ✅ **A second process: routing by address** (§ Routing by address), one process for each shard behind the reverse proxy, which `test/interop.sh` runs on PostgreSQL behind nginx.
+8. **Layer 2 with its byte budget, counts shared across processes, and readiness gating for a load balancer (`/readyz`).** That's stage 2.
 
 ## Open
 
