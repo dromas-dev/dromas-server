@@ -1139,9 +1139,13 @@ func TestAWriteToARecordMadeBetweenMillisecondsIsTaken(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
 	e.clock.Add(1234567 * time.Nanosecond)
-	to := e.raw()
+	var to *raw
+	rememberedMiss(t, e.store.(*Memory), func() protocol.Address { // remembered missing, so the registration's own write is memory's copy
+		to = e.raw()
+		e.want(e.do("GET", to.path(""), nil, ""), http.StatusNotFound, protocol.CodeNoSuchMailbox)
+		return to.id.Address()
+	})
 	to.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
-	e.want(e.do("GET", to.path(""), nil, ""), http.StatusNotFound, protocol.CodeNoSuchMailbox) // remembered missing, so the registration's own write is memory's copy
 	e.want(e.do("PUT", to.path(""), to.registration(1), to.pass(1)), http.StatusCreated, "")
 	from := e.raw().register(protocol.MaxPrekeyLifetime)
 	box := to.id.Address()
