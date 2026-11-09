@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -997,24 +998,33 @@ func TestASendReadFromTheRecordBeforeStoresNothingInTheRecordMadeAgain(t *testin
 // before memory learnt of it, leaves memory none: memory forgets the copy it
 // held, the record cache and the index both (Memory.Revoke), so nothing is
 // served from a record that is gone, whether the record cache still holds
-// the copy or has evicted it, the index holding its standing alone. On
-// PostgreSQL, TestAProcessBehindKeepsNoRecordItsRevocationFoundGone holds it.
+// the copy or has evicted it, the index holding its standing alone, or the
+// record cache holds it alone, as a sender's lookup fills it for a mailbox
+// this process never loaded. On PostgreSQL,
+// TestAProcessBehindKeepsNoRecordItsRevocationFoundGone holds it.
 func TestARevocationThatFindsNoRecordLeavesMemoryNone(t *testing.T) {
 	t.Parallel()
-	for name, evict := range map[string]bool{"the record cached": false, "the record evicted, its standing held": true} {
+	for name, c := range map[string]struct{ evict, unload bool }{
+		"the record cached":                         {},
+		"the record evicted, its standing held":     {evict: true},
+		"the record cached, the mailbox not loaded": {unload: true},
+	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			w := newHeldWorld(t, false)
+			if c.unload {
+				w.s.idx.forget(w.a)
+			}
 			w.backend.mu.Lock()
 			delete(w.backend.mailboxes, w.a) // as the sweep does, its change not yet delivered
 			w.backend.mu.Unlock()
-			if evict {
+			if c.evict {
 				w.s.cache.write(w.a, evicted[*Mailbox])
 			}
-			if _, ok := w.s.Held(w.a); !ok {
-				t.Fatal("control: memory holds no standing of the mailbox")
+			if _, ok := w.s.Held(w.a); ok == c.unload {
+				t.Fatalf("control: memory holds the mailbox's standing: %v", ok)
 			}
-			if b, ok := w.s.Known(w.a); evict == (ok && b.hasRecord()) {
+			if b, ok := w.s.Known(w.a); c.evict == (ok && b.hasRecord()) {
 				t.Fatalf("control: the record cache holds %v", b)
 			}
 			if err := w.s.Revoke(t.Context(), w.a, &Revocations{Identity: w.rec.Identity, Certs: []byte("c"), CertsSig: []byte("s"), Through: 1}, ExpectAnything); err != nil {
@@ -1025,6 +1035,95 @@ func TestARevocationThatFindsNoRecordLeavesMemoryNone(t *testing.T) {
 			}
 			if st, ok := w.s.Held(w.a); ok {
 				t.Errorf("after a revocation that found no record, memory holds the mailbox's standing: %+v", st)
+			}
+		})
+	}
+}
+
+// pausedRead is a backend whose next ReadAddress, once armed, reads and
+// then waits before it returns: a read in flight, its copy not yet put.
+type pausedRead struct {
+	Backend
+	armed        atomic.Bool
+	read, resume chan struct{}
+}
+
+func (p *pausedRead) ReadAddress(ctx context.Context, a protocol.Address) (*Mailbox, *Revocations, error) {
+	rec, rv, err := p.Backend.ReadAddress(ctx, a)
+	if p.armed.CompareAndSwap(true, false) {
+		close(p.read)
+		<-p.resume
+	}
+	return rec, rv, err
+}
+
+// A read of an address begun before its record's delete, and done after
+// memory learnt of the delete, puts no copy of the record back
+// (recCache.fill, index.ensure): a load of the mailbox across a revocation
+// that found no record, and a lookup across that revocation or the feed's
+// delete, with a lookup made after it having put the address's revocations
+// alone, so that the cache holds the address when the first copy comes.
+func TestAReadBegunBeforeARecordsDeletePutsNoCopyOfItBack(t *testing.T) {
+	t.Parallel()
+	revoke := func(t *testing.T, w *heldWorld) {
+		t.Helper()
+		if err := w.s.Revoke(t.Context(), w.a, &Revocations{Identity: w.rec.Identity, Certs: []byte("c"), CertsSig: []byte("s"), Through: 1}, ExpectAnything); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, c := range map[string]struct{ load, fed bool }{
+		"a load, across a revocation that found no record":   {load: true},
+		"a lookup, across a revocation that found no record": {},
+		"a lookup, across the feed's delete":                 {fed: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			w := newHeldWorld(t, false)
+			if c.fed {
+				revoke(t, w) // so that a lookup after the delete finds the address's revocations
+				w.backend.deliver()
+			}
+			w.s.forget(w.a)
+			p := &pausedRead{Backend: w.backend, read: make(chan struct{}), resume: make(chan struct{})}
+			w.s.backend = p
+			p.armed.Store(true)
+			done := make(chan error, 1)
+			go func() {
+				var err error
+				if c.load {
+					_, err = w.s.Count(context.Background(), w.a)
+				} else {
+					_, err = w.s.Mailbox(context.Background(), w.a)
+				}
+				done <- err
+			}()
+			<-p.read
+			w.backend.mu.Lock()
+			delete(w.backend.mailboxes, w.a) // the sweep
+			if c.fed {
+				w.backend.changed(Change{Kind: RecordChange, Addr: w.a, Gone: true})
+			}
+			w.backend.mu.Unlock()
+			if c.fed {
+				w.backend.deliver()
+			} else {
+				revoke(t, w)
+			}
+			if !c.load {
+				later, err := w.s.Mailbox(t.Context(), w.a)
+				if err != nil || later.hasRecord() || len(later.RevokedCerts) == 0 {
+					t.Fatalf("control: a lookup after the delete: %v, %v", later, err)
+				}
+			}
+			close(p.resume)
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			if b, ok := w.s.Known(w.a); ok && b.hasRecord() {
+				t.Errorf("memory holds a copy of the record deleted, at rev %d", b.Rev)
+			}
+			if st, ok := w.s.Held(w.a); ok {
+				t.Errorf("memory holds the deleted record's standing: %+v", st)
 			}
 		})
 	}
