@@ -19,10 +19,10 @@ import (
 // each shard of its keys, and a write is counted and applied in one step
 // under its lock (write), from this process or the feed, once the write
 // has committed. A read takes its shard's count, a token, before it reads
-// (begin); its copy is put in one step under the lock (fill), where the
-// cache holds the key, every write since applied to it, or else only while
-// no write to the shard was counted since the token. A copy refused is
-// never put, so no reader is given it.
+// (begin); its copy is put in one step under the lock (fill), only while no
+// write to the shard was counted since the token, as a memcache lease is
+// (Nishtala et al., "Scaling Memcache at Facebook", NSDI '13 §3.2.1,
+// read 2026-11-08). A copy refused is never put, so no reader is given it.
 type recCache[K comparable, V any] struct {
 	mu  takings
 	max int // 0: no cache
@@ -133,11 +133,15 @@ func (c *recCache[K, V]) begin(k K) token {
 	return token(c.writes[c.shard(k)])
 }
 
-// fill caches v, a copy read at tok, unless the cache holds a newer record
-// of it, or merges it with the copy held. For a key the cache does not hold,
-// it puts v only while no write to the key's shard was counted since tok:
-// the write's image found the key not held and changed nothing, so v may be
-// older than it. The check and the put are one step under the lock.
+// fill caches v, a copy read at tok, only while no write to the key's
+// shard was counted since tok, whether or not the cache holds the key: a
+// write counted since may be newer than v, a deletion among them, and what
+// the cache holds already has it applied. A revocation v holds that the
+// cached copy lacks is applied when the revocation's own write is counted.
+// Where the cache holds the key, v is merged with its copy where the cache
+// merges (merge: the mailbox cache's keeps every revocation either holds),
+// and otherwise replaces an older record. The check and the put are one
+// step under the lock.
 func (c *recCache[K, V]) fill(v V, tok token) {
 	if c.max == 0 {
 		return
@@ -146,7 +150,7 @@ func (c *recCache[K, V]) fill(v V, tok token) {
 	defer c.mu.Unlock()
 	checked := c.mu.n
 	k := c.key(v)
-	if _, held := c.m[k]; !held && token(c.writes[c.shard(k)]) != tok {
+	if token(c.writes[c.shard(k)]) != tok {
 		return
 	}
 	c.stepped(checked)

@@ -65,8 +65,10 @@ func (s *Memory) logf(format string, args ...any) {
 // Start follows the backend's feed: from then on every change it hands
 // over is applied (apply). Memory starts empty, and a mailbox is loaded on its
 // first use, after the feed is followed: a change made before its load is
-// in the load, one made after reaches memory by the feed, or both, and
-// applying it twice is harmless (ARCHITECTURE.md § Startup). Nothing is
+// in the load, one made after reaches memory by the feed, or both; applying
+// it twice is harmless but for the cases ARCHITECTURE.md § The in-process
+// plan, rule 5, names, each wrong only until the changes after it on the
+// feed are applied (§ Startup). Nothing is
 // kept across restarts.
 func (s *Memory) Start(ctx context.Context) error { return s.backend.Start(ctx, s.apply) }
 
