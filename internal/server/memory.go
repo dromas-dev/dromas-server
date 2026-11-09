@@ -66,7 +66,9 @@ func (s *Memory) logf(format string, args ...any) {
 // over is applied (apply). Memory starts empty, and a mailbox is loaded on its
 // first use, after the feed is followed: a change made before its load is
 // in the load, one made after reaches memory by the feed, or both, and
-// applying it twice is harmless (ARCHITECTURE.md § Startup). Nothing is
+// applying it twice is harmless, but for an insert whose removal the load
+// read too, which counts until the removal arrives (ARCHITECTURE.md
+// § Startup, and § The in-process plan, rule 5). Nothing is
 // kept across restarts.
 func (s *Memory) Start(ctx context.Context) error { return s.backend.Start(ctx, s.apply) }
 

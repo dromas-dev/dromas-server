@@ -1177,9 +1177,8 @@ func TestAWriteToARecordMadeBetweenMillisecondsIsTaken(t *testing.T) {
 // id memory does not hold (PassHeld) to the pass its context carries, as
 // passHeldSQL holds them in the database: one that no longer holds is
 // ErrStale, the message held or not, and one that holds reads as the
-// message stands. On PostgreSQL PassHeld is one statement: it acquires one
-// connection of the pool, as each statement on the pool does (pgxpool's
-// Stat), and nothing else in the test uses that pool.
+// message stands. On PostgreSQL PassHeld acquires one connection of the
+// pool (pgxpool's Stat), and nothing else in the test uses that pool.
 func TestABackendHoldsAHeadAndAMissToTheirPass(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
@@ -1213,7 +1212,7 @@ func TestABackendHoldsAHeadAndAMissToTheirPass(t *testing.T) {
 		_ = m.backend.PassHeld(held)
 		_ = m.backend.PassHeld(ended)
 		if n := pg.pool().Stat().AcquireCount() - before; n != 2 {
-			t.Errorf("two misses took %d statements of the pool; want one each", n)
+			t.Errorf("two misses acquired %d connections of the pool; want one each", n)
 		}
 	}
 }

@@ -20,10 +20,13 @@ import (
 // current after that by this process's own writes and by the feed. A
 // change to a mailbox memory does not hold is dropped, since its first use reads
 // it; a change that arrives while the mailbox loads waits, and is applied after
-// the load, in order. Applying a change twice, or late, is harmless:
-// messages are a set keyed by (id, expiry), a count is the size of the set,
-// and a standing only moves to a newer record (version). A deletion, which
-// names no expiry, is the exception (deleted).
+// the load, in order. Applying a change twice is harmless: messages are a
+// set keyed by (id, expiry), a count is the size of the set, and a standing
+// only moves to a newer record (version). A deletion, which names no expiry,
+// is one exception (deleted). An insert committed before the load and
+// applied after it is the other: it counts a message the load found
+// removed until the removal, behind it on the feed, is applied
+// (ARCHITECTURE.md § The in-process plan, rule 5).
 type index struct {
 	shards [256]indexShard // by the address's first byte
 	// key tags each mark (markTag): random, made with the index.
