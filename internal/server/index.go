@@ -22,11 +22,11 @@ import (
 // it; a change that arrives while the mailbox loads waits, and is applied after
 // the load, in order. Applying a change twice is harmless: messages are a
 // set keyed by (id, expiry), a count is the size of the set, and a standing
-// only moves to a newer record (version). A deletion, which names no expiry,
-// is one exception (deleted). An insert committed before the load and
-// applied after it is the other: it counts a message the load found
-// removed until the removal, behind it on the feed, is applied
-// (ARCHITECTURE.md § The in-process plan, rule 5).
+// only moves to a newer record (version). Two changes read wrong for a
+// while: a deletion, which names no expiry (deleted), and an insert
+// committed before the load and applied after it, which counts a message
+// the load found removed until its deletion, after it on the feed, is
+// applied (ARCHITECTURE.md § The in-process plan, rule 5).
 type index struct {
 	shards [256]indexShard // by the address's first byte
 	// key tags each mark (markTag): random, made with the index.

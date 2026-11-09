@@ -133,13 +133,15 @@ func (c *recCache[K, V]) begin(k K) token {
 	return token(c.writes[c.shard(k)])
 }
 
-// fill caches v, a copy read at tok, unless the cache holds a newer record
-// of it, or merges it with the copy held. It puts v only while no write to
-// the key's shard was counted since tok, whether or not the cache holds the
-// key: v may be older than that write, a deletion among them, and what the
-// cache holds has every write counted applied to it. A revocation v holds
-// that the cache does not reaches it by its own write. The check and the
-// put are one step under the lock.
+// fill caches v, a copy read at tok, only while no write to the key's
+// shard was counted since tok, whether or not the cache holds the key: a
+// write counted since may be newer than v, a deletion among them, and what
+// the cache holds already has it applied. A revocation v holds that the
+// cached copy lacks is applied when the revocation's own write is counted.
+// Where the cache holds the key, v is merged with its copy where the cache
+// merges (merge: the mailbox cache's keeps every revocation either holds),
+// and otherwise replaces an older record. The check and the put are one
+// step under the lock.
 func (c *recCache[K, V]) fill(v V, tok token) {
 	if c.max == 0 {
 		return
