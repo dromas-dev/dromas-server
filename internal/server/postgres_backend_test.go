@@ -7,8 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
-	"path/filepath"
+	"path"
 	"slices"
 	"strings"
 	"sync"
@@ -194,10 +193,13 @@ func TestTheSweepDeletesWhatHasExpired(t *testing.T) {
 	}
 }
 
-// The bodies directory's collection deletes every body last written before
-// its cutoff, and keeps the others; a directory it empties goes on a later
-// pass, and the directory's root stays.
-func TestTheBodiesDirectoryCollectsOldBodies(t *testing.T) {
+// The bodies directory keeps each body under the hour its send was
+// received in, by the time its key names, whatever the file's own.
+// Collection removes an hour whole once every send in it was received before
+// the cutoff, a crash's temporary file in it included, and keeps the hour
+// the cutoff falls in, whose sends before the cutoff among them; a name that
+// is no hour's stays.
+func TestTheBodiesDirectoryRemovesWholeHours(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	root := t.TempDir()
@@ -205,53 +207,103 @@ func TestTheBodiesDirectoryCollectsOldBodies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var oldBox, newBox protocol.Address
-	oldBox[0], newBox[0] = 1, 2
+	hour := time.UnixMilli(1_800_000_000_000).Truncate(bodySpan) // an hour's start
+	cutoff := hour.Add(30 * time.Minute)
+	keys := map[string]time.Time{ // a body each, by when its send was received
+		"two hours before":           hour.Add(-2 * time.Hour),
+		"the hour before, its end":   hour.Add(-time.Millisecond),
+		"the cutoff's hour, before":  hour.Add(10 * time.Minute),
+		"the cutoff's hour, after":   hour.Add(50 * time.Minute),
+		"an hour after the cutoff's": hour.Add(time.Hour),
+	}
+	key := map[string]string{}
+	var box protocol.Address
+	for what, at := range keys {
+		box[0]++
+		key[what] = bodyKey(box, [32]byte{box[0]}, ms(at), []byte{box[0]})
+		if err := d.Put(ctx, key[what], []byte("ciphertext")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := d.root.Stat(hourName(at) + "/" + key[what]); err != nil {
+			t.Errorf("the body of a send received %s: %v; want it under its hour, %s", what, err, hourName(at))
+		}
+	}
+	old := hourName(hour.Add(-2 * time.Hour))
+	if err := d.root.WriteFile(old+"/.put-left", nil, 0o600); err != nil { // a crash's
+		t.Fatal(err)
+	}
+	if err := d.root.WriteFile("stray", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.collect(cutoff); err != nil {
+		t.Fatal(err)
+	}
+	for what := range keys {
+		_, err := d.Get(ctx, key[what], 0, 0)
+		gone := keys[what].Before(hour)
+		if gone != errors.Is(err, errNoBody) || (!gone && err != nil) {
+			t.Errorf("the body of a send received %s: %v; want it gone %v", what, err, gone)
+		}
+	}
+	names, err := fs.ReadDir(d.root.FS(), ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var left []string
+	for _, n := range names {
+		left = append(left, n.Name())
+	}
+	want := []string{hourName(hour), hourName(hour.Add(time.Hour)), "stray"}
+	slices.Sort(want)
+	if !slices.Equal(left, want) {
+		t.Errorf("the directory holds %v; want %v", left, want)
+	}
+}
+
+// A delete takes the directories its body leaves empty with it, up to its
+// hour's, and none another body is in; a body put there again is kept.
+func TestTheBodiesDirectoryDeletesTheDirectoriesItEmpties(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	d, err := newDirBodies(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	now := time.Now()
-	// Judged by the time its key names, whatever the file's own: a body
-	// written just now under an old send's key goes, and a new send's stays.
-	oldKey, newKey := bodyKey(oldBox, [32]byte{1}, ms(now.Add(-2*time.Hour)), []byte{1}), bodyKey(newBox, [32]byte{2}, ms(now), []byte{2})
-	for _, k := range []string{oldKey, newKey} {
+	var box protocol.Address
+	box[0] = 1
+	first, second := bodyKey(box, [32]byte{1}, ms(now), []byte{1}), bodyKey(box, [32]byte{2}, ms(now), []byte{2})
+	for _, k := range []string{first, second} {
 		if err := d.Put(ctx, k, []byte("ciphertext")); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// A file that is no body's key, a write a crash left, by its own time.
-	if err := d.root.WriteFile("stray", nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.root.Chtimes("stray", now.Add(-2*time.Hour), now.Add(-2*time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.collect(now.Add(-time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := d.Get(ctx, oldKey, 0, 0); !errors.Is(err, errNoBody) {
-		t.Errorf("a body written before the cutoff: %v; want it gone", err)
-	}
-	if body, err := d.Get(ctx, newKey, 0, 0); err != nil || string(body) != "ciphertext" {
-		t.Errorf("a body written after the cutoff: %q %v; want it kept", body, err)
-	}
-	if _, err := d.root.Stat("stray"); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("a file that is no key, written before the cutoff: %v; want it gone", err)
-	}
-	for range 3 { // one directory a pass, from the deepest
-		if err := d.collect(now.Add(-time.Hour)); err != nil {
+	at := hourName(now)
+	exists := func(p string) bool {
+		_, err := d.root.Stat(p)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			t.Fatal(err)
 		}
+		return err == nil
 	}
-	var left []string
-	if err := filepath.WalkDir(root, func(p string, _ os.DirEntry, err error) error {
-		if err == nil && p != root {
-			left = append(left, filepath.ToSlash(strings.TrimPrefix(p, root+string(filepath.Separator))))
-		}
-		return err
-	}); err != nil {
+	if err := d.Delete(ctx, first); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{newBox.String(), newBox.String() + "/" + hexID([32]byte{2}), newKey}
-	if !slices.Equal(left, want) {
-		t.Errorf("the directory holds %v; want %v", left, want)
+	if exists(at+"/"+path.Dir(first)) || !exists(at+"/"+box.String()) || !exists(at+"/"+second) {
+		t.Errorf("after a delete of one of a mailbox's two bodies: its directory %v, the mailbox's %v, the other body %v; want false, true, true",
+			exists(at+"/"+path.Dir(first)), exists(at+"/"+box.String()), exists(at+"/"+second))
+	}
+	if err := d.Delete(ctx, second, second); err != nil { // one gone is no error
+		t.Fatal(err)
+	}
+	if exists(at+"/"+box.String()) || !exists(at) {
+		t.Errorf("after a delete of the mailbox's last body: the mailbox's directory %v, the hour's %v; want false, true", exists(at+"/"+box.String()), exists(at))
+	}
+	if err := d.Put(ctx, first, []byte("again")); err != nil {
+		t.Fatal(err)
+	}
+	if body, err := d.Get(ctx, first, 0, 0); err != nil || string(body) != "again" {
+		t.Errorf("a body put again: %q %v; want it kept", body, err)
 	}
 }
 

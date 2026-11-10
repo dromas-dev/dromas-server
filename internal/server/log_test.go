@@ -229,7 +229,7 @@ func TestAFollowersPanicIsLoggedRedactedAndEndsTheProcess(t *testing.T) {
 	var logged bytes.Buffer
 	ended := make(chan error, 1)
 	s, err := NewPostgresStore(ctx, PostgresConfig{
-		URL: pgURL(t, schema), Schema: schema, BodiesDir: bodies, MaxConns: 2,
+		URL: pgURL(t, schema), Schema: schema, DataDir: bodies, MaxConns: 2,
 		Log:   log.New(lockedWriter{&mu, &logged}, "", 0),
 		Fatal: func(err error) { ended <- err },
 	})
