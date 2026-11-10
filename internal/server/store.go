@@ -490,7 +490,9 @@ var errNotStored = errors.New("not stored")
 // version is a record's place in its address's history: the time its mailbox
 // registered, to the millisecond as the store keeps it, then its rev. A mailbox
 // registered again once the sweep took its record starts at rev 1 again, and
-// later (dromas-dev/dromas-client#407 item 2), so a rev names a record only
+// later by dromas-server's clock, which a clock days behind defeats
+// (ARCHITECTURE.md § The in-process plan, rule 5; dromas-dev/dromas-client#407
+// item 2), so a rev names a record only
 // beside its created, as a Kubernetes precondition names its target by its
 // UID, "unique in time and space", beside its resourceVersion
 // (k8s.io/apimachinery's meta/v1 Preconditions, read 2026-11-08). It is the
