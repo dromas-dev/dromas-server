@@ -341,7 +341,9 @@ func (s *Server) subtree(mux *http.ServeMux, prefix string, inner *http.ServeMux
 // address has open until its route has answered (openBody).
 func (s *Server) gate(pass passRule, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.boxsCall(pass, r) {
+		if a, ok := s.boxsCall(pass, r); ok {
+			r = r.WithContext(context.WithValue(r.Context(), gateKey{}, a))
+		} else {
 			if p := s.spendRequest(r); p != nil {
 				writeProblem(w, p)
 				return
@@ -390,16 +392,40 @@ func (s *Server) openBody(r *http.Request) (func(), *problem) {
 // (pass), and the mailbox is live in this process's memory (live). All this
 // reads is the Authorization line, its hash, and lookups in memory, which
 // cost what reading its bytes does. Whether the pass is by the mailbox's
-// current signer, the route's own check of it says (checkPass).
-func (s *Server) boxsCall(pass passRule, r *http.Request) bool {
+// current signer, the route's own check of it says (checkPass). It returns
+// the mailbox, which the gate puts on the request's context (gateMailbox).
+func (s *Server) boxsCall(pass passRule, r *http.Request) (protocol.Address, bool) {
 	if pass == passNone {
-		return false
+		return protocol.Address{}, false
 	}
 	a, ok := s.checked(r)
 	if !ok || pass == passPathMailbox && r.PathValue("address") != a.String() {
-		return false
+		return protocol.Address{}, false
 	}
-	return s.live(a)
+	return a, s.live(a)
+}
+
+type gateKey struct{}
+
+// gateMailbox is the mailbox whose call the gate took r as (boxsCall), if it
+// took it as one: such a call spent none of its address's flood budget.
+func gateMailbox(r *http.Request) (protocol.Address, bool) {
+	a, ok := r.Context().Value(gateKey{}).(protocol.Address)
+	return a, ok
+}
+
+// refusedForm answers a call its route refuses for its path or its query,
+// before the route has spent anything for it (pathAddr, and a list's wait
+// and cursor). A call the gate took as its mailbox's spent nothing there, so
+// it spends one of the mailbox's calls first, and past them is refused for
+// that instead (LIMITS.md, rule 1); any other was counted at the gate.
+func (s *Server) refusedForm(r *http.Request, err error) error {
+	if a, ok := gateMailbox(r); ok {
+		if spent := s.spendOwner(r.Context(), a); spent != nil {
+			return spent
+		}
+	}
+	return err
 }
 
 // live reports whether this process's memory holds mailbox a as live, with no

@@ -198,9 +198,15 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 		method, path, _ := strings.Cut(r.pattern, " ")
 		for _, st := range states {
 			p := strings.NewReplacer("{address}", st.addr, "{id}", strings.Repeat("0", 64), "{$}", "").Replace(path)
-			targets = append(targets, target{method, p, r.pass, st.addr, st.pass, false})
-			if method == http.MethodGet { // a pattern of GET matches HEAD too (http.ServeMux)
-				targets = append(targets, target{http.MethodHead, p, r.pass, st.addr, st.pass, false})
+			paths := []string{p}
+			if st.name == "live" { // and with a query its route refuses, before it spends anything
+				paths = append(paths, p+"?nope=1", p+"?wait=x", p+"?cursor=x")
+			}
+			for _, p := range paths {
+				targets = append(targets, target{method, p, r.pass, st.addr, st.pass, false})
+				if method == http.MethodGet { // a pattern of GET matches HEAD too (http.ServeMux)
+					targets = append(targets, target{http.MethodHead, p, r.pass, st.addr, st.pass, false})
+				}
 			}
 		}
 	}

@@ -443,7 +443,7 @@ func checkSigner(key string, under ssh.PublicKey, a protocol.Address, now time.T
 func (s *Server) owner(r *http.Request, params ...string) (protocol.Address, context.Context, error) {
 	a, err := pathAddr(r, params...)
 	if err != nil {
-		return a, nil, err
+		return a, nil, s.refusedForm(r, err)
 	}
 	st, b, ok, err := s.standingOf(r, a)
 	listed := false

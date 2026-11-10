@@ -37,18 +37,18 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
 	// The path and the query first, the cursor's decode among them, before
 	// the pass (PROTOCOL.md §11.11).
 	if _, err := pathAddr(r, cursorParam, waitParam); err != nil {
-		return err
+		return s.refusedForm(r, err)
 	}
 	cursor, hasCursor := r.URL.Query()[cursorParam]
 	wait, err := listWait(r, hasCursor)
 	if err != nil {
-		return err
+		return s.refusedForm(r, err)
 	}
 	var after *Cursor
 	if hasCursor {
 		var err error
 		if after, err = parseCursor(cursor[0]); err != nil {
-			return err
+			return s.refusedForm(r, err)
 		}
 	}
 	mailbox, ctx, err := s.owner(r, cursorParam, waitParam)
