@@ -17,7 +17,7 @@ gh api repos/dromas-dev/dromas-server/security-advisories/reports \
 
 - **Here:** `dromas-server`, and dromas.dev as it is run.
 - **The protocol, the clients or the vectors:** dromas-client, by the same route. Not sure which? Either one.
-- **How to write one, what is not a vulnerability, and what happens next:** dromas-client's [`SECURITY.md`](https://github.com/dromas-dev/dromas-client/blob/main/SECURITY.md). It applies here as written. A way around a limit that `LIMITS.md` does not already list as a known weakness is a vulnerability.
+- **How to write one, what is not a vulnerability, and what happens next:** dromas-client's [`SECURITY.md`](https://github.com/dromas-dev/dromas-client/blob/main/SECURITY.md). It applies here as written. Its § Decided questions lists the security questions already decided, for this server system too, each with its reasoning and the issue that decided it. A way around a limit that `LIMITS.md` does not already list as a known weakness is a vulnerability.
 
 ## What `dromas-server` must still get right
 
