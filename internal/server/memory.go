@@ -355,6 +355,23 @@ func (s *Memory) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, err
 	return b, nil
 }
 
+// Reread implements Store. An address it finds nothing of is not remembered
+// as missing: memory may hold a record the feed has yet to bring the delete
+// of.
+func (s *Memory) Reread(ctx context.Context, a protocol.Address) (*Mailbox, error) {
+	tok := s.cache.begin(a)
+	rec, rv, err := s.backend.ReadAddress(ctx, a)
+	if err != nil {
+		return nil, err
+	}
+	b := view(a, rec, rv)
+	if b == nil {
+		return nil, ErrNotFound
+	}
+	s.cache.fill(b, tok)
+	return b, nil
+}
+
 // Known implements Store: the record cache, or the memory of a mailbox a read did
 // not find.
 func (s *Memory) Known(a protocol.Address) (*Mailbox, bool) {

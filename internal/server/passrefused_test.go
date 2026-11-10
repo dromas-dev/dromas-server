@@ -442,3 +442,76 @@ func TestAPassOfEitherForm(t *testing.T) {
 		}
 	}
 }
+
+// A send whose sender this process holds an older record of, as a process the
+// feed has not yet brought the sender's renewal to holds it, is taken: its pass
+// carries neither key of that record, so the sender's record is read again
+// (Server.reread), and the read brings memory's copy forward. A pass under a
+// certificate the sender never put on record is still refused after that read
+// (ARCHITECTURE.md § The in-process plan, rule 4).
+func TestASendUnderARenewalMemoryHasNotSeenIsTaken(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, relaxed())
+	m, ok := e.store.(*Memory)
+	if !ok {
+		t.Skipf("the store is %T, not memory", e.store)
+	}
+	now := e.clock.Now()
+	to := e.mailbox()
+	r := e.raw().register(protocol.MaxPrekeyLifetime) // the identity signs
+	a := r.id.Address()
+	before, known := m.Known(a)
+	if !known || before == nil || before.Rank != 0 {
+		t.Fatalf("the identity's record is not held: %v", before)
+	}
+	r.underCertificates = true
+	r.prekey(2, now.Add(protocol.MaxPrekeyLifetime), nil)
+	e.want(e.do("PUT", r.path("/prekey"), r.upload(2), r.pass(2)), 200, "")
+	// Memory behind the renewal: the record before it, and no load of the
+	// sender, as on a process the sender's calls do not reach.
+	m.idx.forget(a)
+	m.cache.evict(a)
+	m.cache.fill(before, m.cache.begin(a))
+	if b, _ := m.Known(a); b == nil || b.Rank != 0 {
+		t.Fatalf("memory is not behind the renewal: %v", b)
+	}
+	send := "/v1/" + to.Address().String() + "/messages"
+	e.want(e.do("POST", send, e.sealTo(to), r.pass(2)), 201, "")
+	if b, _ := m.Known(a); b == nil || b.Rank != 2 {
+		t.Errorf("the read did not bring memory's copy of the sender forward: %v", b)
+	}
+	r.prekey(3, now.Add(protocol.MaxPrekeyLifetime), nil) // certificate 3, never on record
+	e.want(e.do("POST", send, e.sealTo(to), r.pass(3)), 401, protocol.CodeCertificateSuperseded)
+}
+
+// The sender's second read is counted as a miss, given back where it finds the
+// pass's key and kept where it does not (Server.reread): a send memory was
+// behind on costs its caller no miss, and a pass under a certificate the sender
+// never put on record costs two, the read's and the pass's.
+func TestASendersSecondReadIsCountedAsAMiss(t *testing.T) {
+	t.Parallel()
+	l := relaxed()
+	l.MissesPerMinute = 2
+	e := newEnv(t, l)
+	m, ok := e.store.(*Memory)
+	if !ok {
+		t.Skipf("the store is %T, not memory", e.store)
+	}
+	now := e.clock.Now()
+	to := e.mailbox()
+	r := e.raw().register(protocol.MaxPrekeyLifetime)
+	a := r.id.Address()
+	before, _ := m.Known(a)
+	r.underCertificates = true
+	r.prekey(2, now.Add(protocol.MaxPrekeyLifetime), nil)
+	e.want(e.do("PUT", r.path("/prekey"), r.upload(2), r.pass(2)), 200, "")
+	m.idx.forget(a)
+	m.cache.evict(a)
+	m.cache.fill(before, m.cache.begin(a))
+	send := "/v1/" + to.Address().String() + "/messages"
+	e.want(e.do("POST", send, e.sealTo(to), r.pass(2)), 201, "")
+	r.prekey(3, now.Add(protocol.MaxPrekeyLifetime), nil) // certificate 3, never on record
+	e.want(e.do("POST", send, e.sealTo(to), r.pass(3)), 401, protocol.CodeCertificateSuperseded)
+	var nobody protocol.Address
+	e.limited(e.do("GET", "/v1/"+nobody.String(), nil, ""), protocol.QuotaMisses)
+}
