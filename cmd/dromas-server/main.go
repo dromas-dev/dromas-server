@@ -1,6 +1,6 @@
 // Command dromas-server is the dromas.dev server.
 //
-//	dromas-server serve (--bucket B | --bodies-dir DIR) --names NAMES [--listen addr] [options] [limits]
+//	dromas-server serve (--bucket B | --data-dir DIR) --names NAMES [--listen addr] [options] [limits]
 //	dromas-server serve --dev [--listen addr] [limits]
 //	dromas-server migrate
 //	dromas-server account create [--id NAME] [--unmetered]
@@ -72,7 +72,7 @@ func main() {
 	case len(os.Args) >= 3 && os.Args[1] == "limits":
 		err = limits(os.Args[2], os.Args[3:])
 	default:
-		fmt.Fprintln(os.Stderr, "usage: dromas-server serve ((--bucket B | --bodies-dir DIR) --names NAMES | --dev) [--listen addr] [--limits FILE] [options]")
+		fmt.Fprintln(os.Stderr, "usage: dromas-server serve ((--bucket B | --data-dir DIR) --names NAMES | --dev) [--listen addr] [--limits FILE] [options]")
 		fmt.Fprintln(os.Stderr, "       dromas-server migrate")
 		fmt.Fprintln(os.Stderr, "       dromas-server account (create | key | drop) [flags]")
 		fmt.Fprintln(os.Stderr, "       dromas-server limits default")
@@ -90,8 +90,8 @@ func serve(args []string) error {
 	dev := fs.Bool("dev", false, "keep everything in memory, with no database")
 	listen := fs.String("listen", "127.0.0.1:8080", "comma-separated TCP addresses to listen on, each served alike: a reverse proxy in front spreads its connections across several, and each is one more range of its ephemeral ports")
 	bucket := fs.String("bucket", "", "the S3 bucket that keeps messages' bodies, a directory bucket or an unversioned general purpose one, with a lifecycle rule that deletes what is older than the message TTL")
-	bodiesDir := fs.String("bodies-dir", "", "the directory that keeps messages' bodies, in place of --bucket: shared by several processes only on one host or a shared filesystem")
-	sweepEvery := fs.Duration("sweep-interval", 10*time.Minute, "how often the rows past their expiry are deleted, one process at a time, and bodies under --bodies-dir past the message TTL collected (0: never)")
+	dataDir := fs.String("data-dir", "", "the directory dromas-server keeps its data in, in place of --bucket: the messages' bodies, in its bodies/, by the hour they were received. One host's: its processes may share it; a network filesystem is not supported")
+	sweepEvery := fs.Duration("sweep-interval", 10*time.Minute, "how often the rows past their expiry are deleted, one process at a time, and each hour of bodies under --data-dir past the message TTL removed (0: never)")
 	sweepGrace := fs.Duration("sweep-grace", time.Hour, "how long past its expiry, by the database's clock, a row is kept before the sweep deletes it")
 	names := fs.String("names", "", "comma-separated names clients call this server by: the host of its URL, lowercase, with a port only when that is neither 80 nor 443; a pass is taken only for one of them")
 	idTypes := fs.String("identity-types", strings.Join(protocol.IdentityTypes(), ","), "comma-separated identity key types a mailbox may register with, of those this build verifies; "+protocol.IdentityEd25519+" is always one of them")
@@ -182,17 +182,17 @@ func serve(args []string) error {
 	var start func() error
 	switch {
 	case *dev:
-		if *bucket != "" || *bodiesDir != "" {
-			return errors.New("--dev takes no --bucket or --bodies-dir")
+		if *bucket != "" || *dataDir != "" {
+			return errors.New("--dev takes no --bucket or --data-dir")
 		}
 		cfg.Store = server.NewMemStore(time.Now)
 		logger.Printf("dromas-server --dev on %s (in memory: nothing survives a restart)", *listen)
-	case (*bucket == "") == (*bodiesDir == "") || len(cfg.Names) == 0:
-		return errors.New("name --bucket or --bodies-dir, and --names, or run --dev")
+	case (*bucket == "") == (*dataDir == "") || len(cfg.Names) == 0:
+		return errors.New("name --bucket or --data-dir, and --names, or run --dev")
 	default:
 		pc := server.PostgresConfig{
 			Bucket:        *bucket,
-			BodiesDir:     *bodiesDir,
+			DataDir:       *dataDir,
 			MailboxCache:  *mailboxCache,
 			MaxConns:      int32(min(max(*dbConns, 0), math.MaxInt32)),
 			SweepInterval: *sweepEvery,
@@ -200,7 +200,7 @@ func serve(args []string) error {
 			Log:           logger,
 			Metrics:       cfg.Metrics,
 		}
-		where := "bodies in " + *bodiesDir
+		where := "bodies under " + *dataDir
 		if *bucket != "" {
 			awsCfg, err := loadAWS(ctx, *region)
 			if err != nil {

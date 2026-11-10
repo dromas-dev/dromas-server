@@ -47,8 +47,8 @@ func (s *pgBackend) sweep(ctx context.Context) {
 		}
 		s.sweepRevoked(ctx)
 		if s.bodiesDir != nil {
-			// By the database's clock, as the rows' sweep: a body's key
-			// names when its send was received.
+			// By the database's clock, as the rows' sweep: an hour's
+			// name says when its sends were received.
 			var now time.Time
 			rctx, cancel := bounded(ctx)
 			err := s.pool.QueryRow(rctx, "SELECT now()").Scan(&now)

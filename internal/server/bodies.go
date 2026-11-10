@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -165,10 +166,20 @@ func isNoSuchKey(err error) bool {
 	return errors.As(err, &nsk) || errors.As(err, &nf)
 }
 
-// dirBodies keeps bodies in a directory, one file a body at its key's path,
-// every operation held inside it (os.Root), a symlink placed in it included.
-// Each is written to a temporary file, flushed, renamed into place and its
-// directory flushed, so a body is whole or absent. Orphans go by collect.
+// dataBodies is where the data directory dir keeps bodies: its bodies/.
+func dataBodies(dir string) string { return filepath.Join(dir, "bodies") }
+
+// bodySpan is how much time one directory of a dirBodies holds: the bodies
+// of the sends received in one hour.
+const bodySpan = time.Hour
+
+// dirBodies keeps bodies in a directory, one file a body, at its key's path
+// under the hour its send was received in (hourName), every operation held
+// inside it (os.Root), a symlink placed in it included. Each is written to a
+// temporary file, flushed, renamed into place and its directory flushed, so
+// a body is whole or absent. A delete takes the directories it leaves empty
+// with it, up to its hour's; collect removes an hour whole, once all of it
+// is past its cutoff (PRECEDENTS.md Part 3, in the client repo).
 type dirBodies struct{ root *os.Root }
 
 // newDirBodies is the bodies kept under dir, made if it is not there.
@@ -183,12 +194,32 @@ func newDirBodies(dir string) (*dirBodies, error) {
 	return &dirBodies{root}, nil
 }
 
+// hourName is the name of the directory that holds the bodies of the sends
+// received in at's hour: the hour's start, in ms since the Unix epoch, as a
+// key names its send's time.
+func hourName(at time.Time) string {
+	ms := at.UnixMilli()
+	return strconv.FormatInt(ms-ms%bodySpan.Milliseconds(), 10)
+}
+
+// file is where key's body is kept: under the hour its key names.
+func (b *dirBodies) file(key string) (string, error) {
+	at, ok := keyReceived(key)
+	if !ok {
+		return "", fmt.Errorf("no body's key: %q", key)
+	}
+	return hourName(at) + "/" + key, nil
+}
+
 func (b *dirBodies) Put(_ context.Context, key string, body []byte) error {
-	dir := path.Dir(key)
+	name, err := b.file(key)
+	if err != nil {
+		return err
+	}
+	dir := path.Dir(name)
 	tmp := path.Join(dir, ".put-"+randomHex(8))
 	var f *os.File
-	var err error
-	for range 2 { // collect may take the directory, empty, between the two
+	for range 2 { // a delete may take the directory, empty, between the two
 		if err = b.root.MkdirAll(dir, 0o700); err != nil {
 			return err
 		}
@@ -211,7 +242,7 @@ func (b *dirBodies) Put(_ context.Context, key string, body []byte) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := b.root.Rename(tmp, key); err != nil {
+	if err := b.root.Rename(tmp, name); err != nil {
 		return err
 	}
 	d, err := b.root.Open(dir)
@@ -223,7 +254,11 @@ func (b *dirBodies) Put(_ context.Context, key string, body []byte) error {
 }
 
 func (b *dirBodies) Get(_ context.Context, key string, from int64, size int) ([]byte, error) {
-	f, err := b.root.Open(key)
+	name, err := b.file(key)
+	if err != nil {
+		return nil, err
+	}
+	f, err := b.root.Open(name)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, errNoBody
 	}
@@ -239,49 +274,50 @@ func (b *dirBodies) Get(_ context.Context, key string, from int64, size int) ([]
 	return io.ReadAll(f)
 }
 
+// Delete deletes each body, then each directory above it that it leaves
+// empty, up to its hour's, which collect removes.
 func (b *dirBodies) Delete(_ context.Context, keys ...string) error {
 	for _, k := range keys {
-		if err := b.root.Remove(k); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		name, err := b.file(k)
+		if err != nil {
 			return err
+		}
+		if err := b.root.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		for dir := path.Dir(name); strings.Contains(dir, "/"); dir = path.Dir(dir) {
+			if b.root.Remove(dir) != nil { // not empty, or gone
+				break
+			}
 		}
 	}
 	return nil
 }
 
-// collect deletes every body whose send was received before cutoff, by
-// its key, and every other file last written before it (a write a crash
-// left), and the directories left empty: an orphan, or a body whose
-// message has expired. cutoff is the database's clock's, so no process's
-// clock decides. Several processes may collect one directory at once.
+// collect removes, whole, each hour whose every send was received before
+// cutoff, with whatever else is in it (a temporary file a crash left); a
+// name that is no hour's is left alone. cutoff is the database's clock's, so
+// no process's clock decides. It reads one directory, a name an hour, and
+// several processes may collect it at once: an hour two remove is removed.
 func (b *dirBodies) collect(cutoff time.Time) error {
-	return fs.WalkDir(b.root.FS(), ".", func(p string, d fs.DirEntry, err error) error {
-		switch {
-		case errors.Is(err, fs.ErrNotExist):
-			return nil
-		case err != nil:
-			return err
-		case d.IsDir():
-			if p != "." {
-				_ = b.root.Remove(p) // only if empty; a later pass takes one emptied now
-			}
-			return nil
+	f, err := b.root.Open(".")
+	if err != nil {
+		return err
+	}
+	names, err := f.Readdirnames(-1)
+	_ = f.Close()
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, n := range names {
+		ms, err := strconv.ParseInt(n, 10, 64)
+		if err != nil || ms < 0 || n != hourName(time.UnixMilli(ms)) || time.UnixMilli(ms).Add(bodySpan).After(cutoff) {
+			continue
 		}
-		at, ok := keyReceived(p)
-		if !ok {
-			info, err := d.Info()
-			if errors.Is(err, fs.ErrNotExist) {
-				return nil
-			}
-			if err != nil {
-				return err
-			}
-			at = info.ModTime()
+		if err := b.root.RemoveAll(n); err != nil {
+			errs = append(errs, err)
 		}
-		if at.Before(cutoff) {
-			if err := b.root.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return err
-			}
-		}
-		return nil
-	})
+	}
+	return errors.Join(errs...)
 }

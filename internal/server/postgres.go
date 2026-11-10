@@ -77,13 +77,13 @@ type PostgresConfig struct {
 	// Schema holds the tables, and names the publication the feed reads
 	// (publicationName); empty: public.
 	Schema string
-	// Bodies are kept in a bucket, through AWS, or under a directory: one
-	// of the two, or neither for a store that keeps no messages (the
-	// operator's account commands).
-	AWS       aws.Config
-	Bucket    string
-	BodiesDir string
-	Now       func() time.Time // time.Now if nil
+	// Bodies are kept in a bucket, through AWS, or under the data
+	// directory, in its bodies/ (dataBodies): one of the two, or neither for
+	// a store that keeps no messages (the operator's account commands).
+	AWS     aws.Config
+	Bucket  string
+	DataDir string
+	Now     func() time.Time // time.Now if nil
 	// MailboxCache is how many mailbox records memory holds, as many account
 	// records, and as many mailboxes remembered as missing; 0: none.
 	MailboxCache int
@@ -117,8 +117,8 @@ var migrations embed.FS
 // PostgreSQL backend, on a schema Migrate has brought up to date, not ready
 // until Start returns. The pool is closed when ctx ends.
 func NewPostgresStore(ctx context.Context, c PostgresConfig) (*Memory, error) {
-	if c.Bucket != "" && c.BodiesDir != "" {
-		return nil, errors.New("postgres: name a bucket or a bodies directory, not both")
+	if c.Bucket != "" && c.DataDir != "" {
+		return nil, errors.New("postgres: name a bucket or a data directory, not both")
 	}
 	schema, err := schemaName(c.Schema)
 	if err != nil {
@@ -179,11 +179,11 @@ func NewPostgresStore(ctx context.Context, c PostgresConfig) (*Memory, error) {
 	switch {
 	case c.Bucket != "":
 		p.bodies = s3Bodies{newS3(c.AWS), c.Bucket}
-	case c.BodiesDir != "":
-		d, err := newDirBodies(c.BodiesDir)
+	case c.DataDir != "":
+		d, err := newDirBodies(dataBodies(c.DataDir))
 		if err != nil {
 			pool.Close()
-			return nil, fmt.Errorf("--bodies-dir: %w", err)
+			return nil, fmt.Errorf("--data-dir: %w", err)
 		}
 		p.bodies, p.bodiesDir = d, d
 	}

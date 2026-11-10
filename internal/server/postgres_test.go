@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -237,7 +238,7 @@ func newPostgresIn(t testing.TB, schema, bodies string, now func() time.Time, wi
 	c := PostgresConfig{
 		URL:          pgURL(t, schema),
 		Schema:       schema,
-		BodiesDir:    bodies,
+		DataDir:      bodies,
 		Now:          now,
 		MailboxCache: 100,
 		MaxConns:     4,
@@ -416,12 +417,12 @@ func (s *Memory) bodyKeyOf(t *testing.T, mailbox protocol.Address, id [32]byte) 
 func (s *Memory) bodiesOf(t *testing.T, mailbox protocol.Address) []string {
 	t.Helper()
 	var keys []string
-	err := fs.WalkDir(s.pg().bodiesDir.root.FS(), mailbox.String(), func(p string, d fs.DirEntry, err error) error {
-		if err == nil && !d.IsDir() {
-			keys = append(keys, p)
-		}
+	err := fs.WalkDir(s.pg().bodiesDir.root.FS(), ".", func(p string, d fs.DirEntry, err error) error {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil
+		}
+		if _, key, ok := strings.Cut(p, "/"); err == nil && ok && !d.IsDir() && strings.HasPrefix(key, mailbox.String()+"/") {
+			keys = append(keys, key) // under its hour
 		}
 		return err
 	})

@@ -25,7 +25,7 @@
 # Needs: go, bash ≥ 4, ssh-keygen, curl, jq, sha256sum, sha384sum, openssl, base64, od, GNU date (passof's date -d). Run from anywhere:
 #   test/interop.sh            SCRIPT=<path> overrides the dromas.sh it sources.
 # With DROMAS_TEST_POSTGRES set, dromas-server runs on PostgreSQL instead of --dev, the database libpq's environment names (PGHOST,
-# PGDATABASE, PGUSER, PGPASSWORD and the rest), its bodies in the work dir: a database kept for tests, never a running dromas-server's.
+# PGDATABASE, PGUSER, PGPASSWORD and the rest), its data directory in the work dir: a database kept for tests, never a running dromas-server's.
 # It runs there as two processes, --shard 1/2 and 2/2, behind nginx (also needed then), which sends each mailbox's calls to its
 # shard, and the recipe mailbox and the first Go mailbox are on different shards.
 # The work dir is mktemp -d's, under $TMPDIR or /tmp, its own for each run. A run that passes deletes it, since it may be
@@ -63,7 +63,7 @@ if [ -n "${DROMAS_TEST_POSTGRES:-}" ]; then
   command -v nginx > /dev/null || { echo "no nginx: on PostgreSQL, dromas-server runs as two shards behind it"; exit 1; }
   "$work/dromas-server" migrate 2> "$work/server.log" || { echo "dromas-server migrate failed"; exit 1; }   # as a deploy runs it, before serve
   for i in 1 2; do
-    "$work/dromas-server" serve --shard "$i/2" --bodies-dir "$work/bodies" --names "127.0.0.1:$port" --trusted-proxy 127.0.0.1/32 \
+    "$work/dromas-server" serve --shard "$i/2" --data-dir "$work/data" --names "127.0.0.1:$port" --trusted-proxy 127.0.0.1/32 \
       --listen "127.0.0.1:$((port + i))" --metrics-listen "127.0.0.1:$((port + 2 + i))" --limits "$work/limits.json" 2>> "$work/server$i.log" & procs+=($!)
   done
   mkdir -p "$work/nginx"
