@@ -74,7 +74,7 @@ type Limits struct {
 	// MaxCertificateLifetime is the longest a certificate the server takes
 	// when it first takes one may run, its valid-before less its valid-after
 	// (PROTOCOL.md §11.7), in whole seconds: served as
-	// max_certificate_lifetime in the server's document (§11.18). A renewal
+	// max_certificate_lifetime_seconds in the server's document (§11.18). A renewal
 	// under the mailbox's current certificate is not held to it. It must be
 	// above protocol.TTL and protocol.MaxSkew together and at most
 	// protocol.MaxCertificateLifetime, or dromas-server serve does not start:

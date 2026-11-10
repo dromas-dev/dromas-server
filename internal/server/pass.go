@@ -171,8 +171,8 @@ func authorization(r *http.Request) (auth string, one bool) {
 	return "", false
 }
 
-func unauthorized(hint, detail string) *problem {
-	return fail(protocol.CodeUnauthorized, hint, detail)
+func invalidPass(hint, detail string) *problem {
+	return fail(protocol.CodeInvalidPass, hint, detail)
 }
 
 // listedCertificate refuses a pass of a mailbox whose current certificate its
@@ -201,7 +201,7 @@ const (
 // otherwise nil.
 //
 // A pass by another key is certificate_revoked where listed, and otherwise
-// certificate_not_current, naming the certificate's serial where the signer
+// certificate_superseded, naming the certificate's serial where the signer
 // is one.
 //
 // A pass this process does not remember costs signature checks, and anyone
@@ -231,7 +231,7 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, sign
 	auth, one := authorization(r)
 	if !one || len(auth) > protocol.MaxPassAuthorization {
 		if !count {
-			return passBy{}, unauthorized(hintPass, "no pass, or not a pass")
+			return passBy{}, invalidPass(hintPass, "no pass, or not a pass")
 		}
 		return passBy{}, s.notAPass(r) // two lines, or longer than any pass can be: refused before it is hashed or parsed
 	}
@@ -255,7 +255,7 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, sign
 	if p == nil {
 		var err error
 		if p, err = protocol.ParsePass(auth); err != nil {
-			err = unauthorized(hintPass, "no pass, or not a pass")
+			err = invalidPass(hintPass, "no pass, or not a pass")
 			if count {
 				err = s.notAPass(r)
 			}
@@ -299,11 +299,11 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, sign
 		}()
 	}
 	if p.Address != a {
-		return passBy{}, unauthorized(hintPass, "the pass is another mailbox's")
+		return passBy{}, invalidPass(hintPass, "the pass is another mailbox's")
 	}
 	name, ours := s.serverName(r)
 	if !ours {
-		return passBy{}, unauthorized("call the server by the name in its URL", "this server does not take a pass made for the name this request names")
+		return passBy{}, invalidPass("call the server by the name in its URL", "this server does not take a pass made for the name this request names")
 	}
 	// Run out, or running out too far ahead: either way the mailbox signs another.
 	// A new pass cures neither if the caller's clock is off, so each says
@@ -339,7 +339,7 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, sign
 	case errors.Is(err, protocol.ErrCertificateTime):
 		return passBy{}, fail(protocol.CodePassExpired, "publish a new prekey, which comes with a new certificate: dromas prekey renew", "the certificate the pass is signed under has ended")
 	case err != nil:
-		return passBy{}, unauthorized(hintNewPass, "the pass is not this mailbox's for this server")
+		return passBy{}, invalidPass(hintNewPass, "the pass is not this mailbox's for this server")
 	}
 	// Then the signer itself, against the mailbox's identity, as when it was
 	// put on record: a certificate by the identity's signature and every rule
@@ -363,13 +363,13 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, sign
 }
 
 // otherSigner refuses a pass signed by neither the identity nor the signer
-// the call takes a pass by, of rank rank: certificate_not_current, naming no
+// the call takes a pass by, of rank rank: certificate_superseded, naming no
 // certificate where the signer is the identity. No signature was checked.
 func otherSigner(rank uint64) error {
 	if rank == 0 {
-		return fail(protocol.CodeCertificateNotCurrent, "sign the pass with the mailbox's identity, the signer of its current prekey: dromas does", "the pass is not signed by the mailbox's identity, which signs its current prekey")
+		return fail(protocol.CodeCertificateSuperseded, "sign the pass with the mailbox's identity, the signer of its current prekey: dromas does", "the pass is not signed by the mailbox's identity, which signs its current prekey")
 	}
-	return fail(protocol.CodeCertificateNotCurrent, "sign the pass with the identity, or the working key of the mailbox's newest prekey: dromas does", "the pass is signed by neither the identity nor certificate %d, the one this call takes a pass under", certificateSerialValue(rank))
+	return fail(protocol.CodeCertificateSuperseded, "sign the pass with the identity, or the working key of the mailbox's newest prekey: dromas does", "the pass is signed by neither the identity nor certificate %d, the one this call takes a pass under", certificateSerialValue(rank))
 }
 
 // wrongRecord is the answer to a pass whose signer on record, of rank rank,
@@ -377,9 +377,9 @@ func otherSigner(rank uint64) error {
 func wrongRecord(rank uint64) *problem {
 	const hint = "publish a new prekey: dromas prekey renew"
 	if rank == 0 {
-		return fail(protocol.CodeCertificateNotCurrent, hint, "the mailbox's signer on record is not its identity")
+		return fail(protocol.CodeCertificateSuperseded, hint, "the mailbox's signer on record is not its identity")
 	}
-	return fail(protocol.CodeCertificateNotCurrent, hint, "the mailbox's certificate on record, %d, does not verify against its identity", certificateSerialValue(rank))
+	return fail(protocol.CodeCertificateSuperseded, hint, "the mailbox's certificate on record, %d, does not verify against its identity", certificateSerialValue(rank))
 }
 
 // notAPass refuses a call whose Authorization holds no pass, and counts it
@@ -388,7 +388,7 @@ func (s *Server) notAPass(r *http.Request) error {
 	if err := s.failed(r); err != nil {
 		return err
 	}
-	return unauthorized(hintPass, "no pass, or not a pass")
+	return invalidPass(hintPass, "no pass, or not a pass")
 }
 
 // failed counts a check that failed against the caller's address, for one
@@ -490,7 +490,7 @@ func (s *Server) sender(r *http.Request) (passBy, error) {
 	case st.State == Revoked:
 		return passBy{addr: a}, fail(protocol.CodeSenderRevoked, "your mailbox is revoked: make a new one, dromas init", "the sending mailbox is revoked")
 	case !ok, st.State != Active:
-		return passBy{addr: a}, fail(protocol.CodeUnknownSender, "register your own mailbox first: dromas init", "the mailbox the pass names is not registered")
+		return passBy{addr: a}, fail(protocol.CodeSenderNotRegistered, "register your own mailbox first: dromas init", "the mailbox the pass names is not registered")
 	}
 	by, err := s.checkPassBy(r, a, st.Key, st.Signer, st.Rank, st.Listed, p)
 	if err != nil {

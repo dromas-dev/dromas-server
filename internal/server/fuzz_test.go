@@ -38,7 +38,7 @@ import (
 
 // parseCursor takes only strict unpadded base64url of 40 bytes, and what it
 // takes formatCursor writes back as the same string, a cursor the client's
-// check of one takes (protocol.CheckCursor); a refusal is bad_request, with
+// check of one takes (protocol.CheckCursor); a refusal is invalid_request, with
 // no cursor beside it.
 func FuzzParseCursor(f *testing.F) {
 	for _, h := range []Header{
@@ -60,7 +60,7 @@ func FuzzParseCursor(f *testing.F) {
 			if c != nil {
 				t.Fatal("refused, with a cursor beside it")
 			}
-			if p, ok := errors.AsType[*problem](err); !ok || p.code != protocol.CodeBadRequest {
+			if p, ok := errors.AsType[*problem](err); !ok || p.code != protocol.CodeInvalidRequest {
 				t.Fatalf("refused as %v", err)
 			}
 			if cursor {
@@ -434,9 +434,9 @@ func FuzzParseVersionPolicy(f *testing.F) {
 	l := DefaultLimits()
 	for _, s := range []string{
 		policyText("1.2", "1.5"), `{}`, `{"min_version":"1.2"}`, `{"latest_version":"18446744073709551615.0.1"}`,
-		`{"deprecations":[{"below":"1.4","at":"2027-01-01T00:00:00Z"}],"sunsets":[{"below":"1.1","at":"2026-12-01T00:00:00Z"}]}`,
-		`{"sunsets":[{"below":"1.1","at":"2026-12-01T00:00:00.5Z"}]}`, `{"deprecations":[{"below":"1.4"}]}`,
-		`{"min_version":"1.2","capabilities":[]}`, `{"max_certificate_lifetime":3891600}`, `{"min_version":"01.2"}`,
+		`{"deprecations":[{"below":"1.4","effective_at":"2027-01-01T00:00:00Z"}],"sunsets":[{"below":"1.1","effective_at":"2026-12-01T00:00:00Z"}]}`,
+		`{"sunsets":[{"below":"1.1","effective_at":"2026-12-01T00:00:00.5Z"}]}`, `{"deprecations":[{"below":"1.4"}]}`,
+		`{"min_version":"1.2","capabilities":[]}`, `{"max_certificate_lifetime_seconds":3891600}`, `{"min_version":"01.2"}`,
 		`{"min_version":"1.2","min_version":"1.3"}`, `{"min_version":1.2}`, `{"deprecations":null,"sunsets":[]}`, `[]`, ``,
 	} {
 		f.Add([]byte(s))
@@ -576,9 +576,9 @@ func readFuzzVectors(f *testing.F) fuzzVectors {
 		{"GET", path("c", ""), "", at("If-None-Match: *"), nil},
 		{"GET", "/v1/d_", "", at(""), nil},
 		{"PUT", path("a", "/prekey"), pass("a"), at(""), js(protocol.PrekeyRequest{Prekey: read("a/prekey-2.txt"), PrekeySignature: read("a/prekey-2.txt.sig")})},
-		{"PUT", path("a", "/revocations"), "", at(""), js(protocol.Revocations{Identity: read("a/identity.doc"), RevokedCertificates: read("a/revoked-certs.txt"), RevokedCertificatesSignature: read("a/revoked-certs.sig")})},
-		{"PUT", path("a", "/revocations"), "", at(""), js(protocol.Revocations{Identity: read("a/identity.doc"), Revocation: read("a/revoke.sig")})},
-		{"GET", path("a", "/revocations"), "", at(""), nil},
+		{"PUT", path("a", "/revocation"), "", at(""), js(protocol.Revocations{Identity: read("a/identity.doc"), RevokedCertificates: read("a/revoked-certs.txt"), RevokedCertificatesSignature: read("a/revoked-certs.sig")})},
+		{"PUT", path("a", "/revocation"), "", at(""), js(protocol.Revocations{Identity: read("a/identity.doc"), Revocation: read("a/revoke.sig")})},
+		{"GET", path("a", "/revocation"), "", at(""), nil},
 		{"PUT", path("b", "/acl"), pass("b"), at("If-Match: *"), acl},
 		{"GET", path("b", "/acl"), pass("b"), at(""), nil},
 		{"PUT", path("b", "/account"), pass("b"), at(""), js(protocol.AdoptRequest{Key: "not a key"})},

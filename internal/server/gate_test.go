@@ -149,13 +149,13 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 	sender.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(call(fresh(), "PUT", sender.path(""), sender.registration(1), sender.pass(1)), http.StatusCreated, "")
 	senderPass := sender.pass(1)
-	e.want(call(fresh(), "POST", other.path("/messages"), nil, senderPass), http.StatusBadRequest, protocol.CodeBadRequest)
+	e.want(call(fresh(), "POST", other.path("/messages"), nil, senderPass), http.StatusBadRequest, protocol.CodeInvalidRequest)
 	revoked, revokedPass := checked()
 	rev, err := protocol.SignRevocation(revoked.signer, revoked.id.Address())
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.want(call(fresh(), "PUT", revoked.path("/revocations"), protocol.Revocations{Identity: revoked.id.Document(), Revocation: rev}, ""), http.StatusCreated, "")
+	e.want(call(fresh(), "PUT", revoked.path("/revocation"), protocol.Revocations{Identity: revoked.id.Document(), Revocation: rev}, ""), http.StatusCreated, "")
 	forgotten, forgottenPass := checked()
 	if err := e.store.DeleteMailbox(t.Context(), forgotten.id.Address()); err != nil { // as the TTL deletes it
 		t.Fatal(err)
@@ -167,7 +167,7 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 	e.want(call(fresh(), "PUT", listed.path(""), listed.registration(2), listed.pass(2)), http.StatusCreated, "")
 	listedPass := listed.pass(2)
 	e.want(call(fresh(), "GET", listed.path("/messages"), nil, listedPass), http.StatusOK, "")
-	e.want(call(fresh(), "PUT", listed.path("/revocations"), listed.certs(2), ""), http.StatusOK, "")
+	e.want(call(fresh(), "PUT", listed.path("/revocation"), listed.certs(2), ""), http.StatusOK, "")
 	e.clock.Add(time.Second)
 	nobody := "d_" + strings.Repeat("ab", 32) // an address the server holds nothing of
 
@@ -197,7 +197,7 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 	for _, r := range e.server.routes() {
 		method, path, _ := strings.Cut(r.pattern, " ")
 		for _, st := range states {
-			p := strings.NewReplacer("{addr}", st.addr, "{id}", strings.Repeat("0", 64), "{$}", "").Replace(path)
+			p := strings.NewReplacer("{address}", st.addr, "{id}", strings.Repeat("0", 64), "{$}", "").Replace(path)
 			targets = append(targets, target{method, p, r.pass, st.addr, st.pass, false})
 			if method == http.MethodGet { // a pattern of GET matches HEAD too (http.ServeMux)
 				targets = append(targets, target{http.MethodHead, p, r.pass, st.addr, st.pass, false})
@@ -287,7 +287,7 @@ func TestAServerNotReadyCountsFirst(t *testing.T) {
 	nobody := "d_" + strings.Repeat("ab", 32)
 	for i, r := range e.server.routes() {
 		method, path, _ := strings.Cut(r.pattern, " ")
-		path = strings.NewReplacer("{addr}", nobody, "{id}", strings.Repeat("0", 64), "{$}", "").Replace(path)
+		path = strings.NewReplacer("{address}", nobody, "{id}", strings.Repeat("0", 64), "{$}", "").Replace(path)
 		ip := fmt.Sprintf("10.1.0.%d", i+1)
 		e.want(call(ip, method, path, nil, ""), http.StatusServiceUnavailable, protocol.CodeUnavailable)
 		if got := call(ip, method, path, nil, ""); got.status != http.StatusTooManyRequests {
@@ -431,8 +431,8 @@ func TestAPassHasOneFormAndBothValuesOfS(t *testing.T) {
 	flipped[len(flipped)-1] ^= 1
 	forms["a bit flipped in the signature"] = protocol.Armor(flipped)
 	for name, a := range forms {
-		if r := poll(b.Address(), with(pass, a)); r.status != http.StatusUnauthorized || r.code() != protocol.CodeUnauthorized {
-			t.Errorf("%s: %d %s, want 401 unauthorized", name, r.status, r.body)
+		if r := poll(b.Address(), with(pass, a)); r.status != http.StatusUnauthorized || r.code() != protocol.CodeInvalidPass {
+			t.Errorf("%s: %d %s, want 401 invalid_pass", name, r.status, r.body)
 		}
 	}
 

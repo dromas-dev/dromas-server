@@ -45,9 +45,15 @@ func (v value) Format(f fmt.State, verb rune) { _, _ = fmt.Fprintf(f, fmt.Format
 
 func u64(n uint64) *uint64 { return &n }
 
-// limitValue is the limit hit: bytes, entries, or a day's count.
+// limitValue is the limit a content_too_large hit: bytes, or entries.
 func limitValue(n int) value {
 	return value{n, func(p *protocol.Problem) { p.Limit = u64(uint64(max(n, 0))) }}
+}
+
+// quotaValue is how many a day a rate_limited's limit takes, for one counted
+// by the day.
+func quotaValue(n int) value {
+	return value{n, func(p *protocol.Problem) { p.QuotaValue = u64(uint64(max(n, 0))) }}
 }
 
 func prekeySerialValue(v uint64) value {

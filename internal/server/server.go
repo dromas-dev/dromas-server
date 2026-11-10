@@ -71,7 +71,7 @@ type Config struct {
 	// under /v1/ is held to (versioned), and which its file's Reloader
 	// replaces (Server.VersionPolicy); its caller holds it to
 	// protocol.ServerDocument.Check (ReadVersionPolicy). Its
-	// max_certificate_lifetime is Limits'. None: no floor, no deprecation,
+	// max_certificate_lifetime_seconds is Limits'. None: no floor, no deprecation,
 	// no sunset and no latest version.
 	Policy protocol.ServerDocument
 	// Shard is the part of the addresses this process answers for, when the
@@ -164,16 +164,16 @@ func New(c Config) *Server {
 		metrics:       c.Metrics,
 		polls:         newBuckets(string(protocol.QuotaPolls), 0, 0),
 		pages:         newBuckets(string(protocol.QuotaPages), 0, 0),
-		repeats:       newBuckets(string(protocol.CodeFetchPaced), 0, 0),
+		repeats:       newBuckets(string(protocol.CodeFetchRateLimited), 0, 0),
 		regs:          newAddressLimit(protocol.QuotaRegistrations, protocol.QuotaRegistrationsRange, "registrations"),
 		sendIPs:       newAddressLimit(protocol.QuotaSendsBeforePass, protocol.QuotaSendsBeforePassRange, "sends"),
 		misses:        newAddressLimit(protocol.QuotaMisses, protocol.QuotaMissesRange, "calls"),
 		requests:      newAddressLimit(protocol.QuotaRequests, protocol.QuotaRequestsRange, "calls"),
 		bodies:        newOpenBodies(),
 		calls:         newBuckets(string(protocol.QuotaCalls), 0, 0),
-		receives:      newBuckets(string(protocol.CodeMailboxBusy), 0, 0),
-		lifted:        newBuckets(string(protocol.CodeMailboxBusy), 0, 0),
-		drained:       newBuckets(string(protocol.CodeFetchPaced), 0, 0),
+		receives:      newBuckets(string(protocol.CodeMailboxRateLimited), 0, 0),
+		lifted:        newBuckets(string(protocol.CodeMailboxRateLimited), 0, 0),
+		drained:       newBuckets(string(protocol.CodeFetchRateLimited), 0, 0),
 		sends:         newBuckets(string(protocol.QuotaSends), 0, 0),
 		renewals:      newBuckets(string(protocol.QuotaRenewals), 0, 0),
 		certs:         newBuckets(string(protocol.QuotaCertificates), 0, 0),
@@ -270,26 +270,26 @@ const (
 func (s *Server) routes() []route {
 	return []route{
 		{"GET " + protocol.DocumentPath + "{$}", s.document, passNone}, // it takes no pass
-		{"GET /v1/{addr}", s.getMailbox, passNone},                     // it takes no pass
-		{"PUT /v1/{addr}", s.register, passNone},                       // its pass is read after its body
-		{"PUT /v1/{addr}/prekey", s.prekey, passNone},                  // its pass is read after its body
-		{"PUT /v1/{addr}/revocations", s.revoke, passNone},
-		{"GET /v1/{addr}/revocations", s.getRevocations, passNone},
-		{"PUT /v1/{addr}/acl", s.putACL, passPathMailbox},
-		{"GET /v1/{addr}/acl", s.getACL, passPathMailbox},
-		{"PUT /v1/{addr}/account", s.adopt, passPathMailbox},
-		{"DELETE /v1/{addr}/account", s.leave, passPathMailbox},
-		{"POST /v1/{addr}/messages", s.send, passAnyMailbox},
-		{"GET /v1/{addr}/messages", s.list, passPathMailbox},
-		{"GET /v1/{addr}/messages/{id}", s.fetch, passPathMailbox},
-		{"DELETE /v1/{addr}/messages/{id}", s.ack, passPathMailbox},
+		{"GET /v1/{address}", s.getMailbox, passNone},                  // it takes no pass
+		{"PUT /v1/{address}", s.register, passNone},                    // its pass is read after its body
+		{"PUT /v1/{address}/prekey", s.prekey, passNone},               // its pass is read after its body
+		{"PUT /v1/{address}/revocation", s.revoke, passNone},
+		{"GET /v1/{address}/revocation", s.getRevocations, passNone},
+		{"PUT /v1/{address}/acl", s.putACL, passPathMailbox},
+		{"GET /v1/{address}/acl", s.getACL, passPathMailbox},
+		{"PUT /v1/{address}/account", s.adopt, passPathMailbox},
+		{"DELETE /v1/{address}/account", s.leave, passPathMailbox},
+		{"POST /v1/{address}/messages", s.send, passAnyMailbox},
+		{"GET /v1/{address}/messages", s.list, passPathMailbox},
+		{"GET /v1/{address}/messages/{id}", s.fetch, passPathMailbox},
+		{"DELETE /v1/{address}/messages/{id}", s.ack, passPathMailbox},
 	}
 }
 
 // linkRoute is the page a mailbox's link opens, the server's one route outside
 // /v1/, under /to/, which is the server's too; a site, when there is one,
 // answers the rest.
-const linkRoute = "GET " + protocol.LinkPath + "{addr}"
+const linkRoute = "GET " + protocol.LinkPath + "{address}"
 
 // Handler returns the API's routes, the page a mailbox's link opens, and the
 // site, if there is one. Every answer is paced, and every request is counted
@@ -396,7 +396,7 @@ func (s *Server) boxsCall(pass passRule, r *http.Request) bool {
 		return false
 	}
 	a, ok := s.checked(r)
-	if !ok || pass == passPathMailbox && r.PathValue("addr") != a.String() {
+	if !ok || pass == passPathMailbox && r.PathValue("address") != a.String() {
 		return false
 	}
 	return s.live(a)
@@ -812,9 +812,9 @@ func (p *pacedWriter) Unwrap() http.ResponseWriter { return p.ResponseWriter }
 // or the bytes bare among them, is no address. Then it holds the query to params, the parameters the call takes
 // (queryOf).
 func pathAddr(r *http.Request, params ...string) (protocol.Address, error) {
-	a, err := protocol.ParseAddress(r.PathValue("addr"))
+	a, err := protocol.ParseAddress(r.PathValue("address"))
 	if err != nil {
-		return a, fail(protocol.CodeBadAddress, "an address is \"d_\" and 64 characters of base64url", "the path does not name an address")
+		return a, fail(protocol.CodeInvalidAddress, "an address is \"d_\" and 64 characters of base64url", "the path does not name an address")
 	}
 	if _, err := queryOf(r, params...); err != nil {
 		return a, err
@@ -838,9 +838,9 @@ func queryOf(r *http.Request, params ...string) (map[string]string, error) {
 func queryProblem(err error, hint string) error {
 	var qe *protocol.QueryError
 	if !errors.As(err, &qe) || qe.Param == "" {
-		return fail(protocol.CodeBadRequest, hint, "the query does not parse")
+		return fail(protocol.CodeInvalidRequest, hint, "the query does not parse")
 	}
-	return fail(protocol.CodeBadRequest, hint, "the query parameter %s is not one this call takes, is given twice, or is not of its form", memberValue(qe.Param))
+	return fail(protocol.CodeInvalidRequest, hint, "the query parameter %s is not one this call takes, is given twice, or is not of its form", memberValue(qe.Param))
 }
 
 // decodeBody reads a JSON request body of at most limit bytes into v: exactly
@@ -857,7 +857,7 @@ func decodeBody(w http.ResponseWriter, r *http.Request, limit int64, v any) erro
 func readBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, error) {
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err != nil {
-		return nil, readProblem(err, fail(protocol.CodeTooLarge, "send less", "the request body is over %d bytes", limitValue(int(limit))))
+		return nil, readProblem(err, fail(protocol.CodeContentTooLarge, "send less", "the request body is over %d bytes", limitValue(int(limit))))
 	}
 	return data, nil
 }
@@ -873,7 +873,7 @@ func readProblem(err, tooLarge error) error {
 	case errors.Is(err, os.ErrDeadlineExceeded):
 		return bodyTimedOut()
 	}
-	return fail(protocol.CodeBadRequest, "", "the request body could not be read")
+	return fail(protocol.CodeInvalidRequest, "", "the request body could not be read")
 }
 
 // bodyTimedOut is the answer to a body cut off at its deadline (paced): 408
@@ -891,9 +891,9 @@ func decodeJSON(data []byte, v any) error {
 	case err == nil:
 		return nil
 	case errors.Is(err, protocol.ErrNotBase64):
-		return failErr(protocol.CodeBadRequest, "base64 of the exact file bytes", err)
+		return failErr(protocol.CodeInvalidRequest, "base64 of the exact file bytes", err)
 	default:
-		return failErr(protocol.CodeBadRequest, "", fmt.Errorf("the body is not the JSON object expected: %w", err))
+		return failErr(protocol.CodeInvalidRequest, "", fmt.Errorf("the body is not the JSON object expected: %w", err))
 	}
 }
 
@@ -901,7 +901,7 @@ func decodeJSON(data []byte, v any) error {
 func required(fields ...any) error {
 	for i := 0; i+1 < len(fields); i += 2 {
 		if fields[i+1].(protocol.Bytes) == nil {
-			return fail(protocol.CodeBadRequest, "", "missing field %q", memberValue(fields[i].(string)))
+			return fail(protocol.CodeInvalidRequest, "", "missing field %q", memberValue(fields[i].(string)))
 		}
 	}
 	return nil
@@ -1063,7 +1063,7 @@ type perDay struct {
 
 // refusal is the answer to a call past d, waiting wait.
 func (d perDay) refusal(wait time.Duration) *problem {
-	return rateLimited(protocol.Quota(d.bs.name), wait, d.words, limitValue(d.n))
+	return rateLimited(protocol.Quota(d.bs.name), wait, d.words, quotaValue(d.n))
 }
 
 // The mailbox's numbers a day, as a refusal names them.
@@ -1141,14 +1141,14 @@ func (s *Server) spendOwner(ctx context.Context, a protocol.Address, also ...per
 	return s.spendCall(a, lim, also...)
 }
 
-var noSuchMailbox = fail(protocol.CodeNoSuchMailbox, "check the address", "no mailbox has this address")
+var noSuchMailbox = fail(protocol.CodeMailboxNotFound, "check the address", "no mailbox has this address")
 
 func revoked() *problem {
-	return fail(protocol.CodeRevoked, "the mailbox you named is revoked, forever: ask its owner for their new address", "this mailbox is revoked")
+	return fail(protocol.CodeMailboxRevoked, "the mailbox you named is revoked, forever: ask its owner for their new address", "this mailbox is revoked")
 }
 
 // revokedWith is revoked carrying the record b holds of the revoked
-// address, its identity with what the identity revoked: every 410 revoked
+// address, its identity with what the identity revoked: every 410 mailbox_revoked
 // answered from what is held of an address carries it, so a client checks
 // it with no second call (PROTOCOL.md §11.3; dromas-dev/dromas-client#353).
 func revokedWith(b *Mailbox) *problem {
@@ -1160,7 +1160,7 @@ func revokedWith(b *Mailbox) *problem {
 // fetchedAlready refuses a fetch of a message the mailbox has fetched before, once
 // its allowance for that is spent (fetch in messages.go).
 func fetchedAlready(wait time.Duration) *problem {
-	p := fail(protocol.CodeFetchPaced, "keep each message when you fetch it, then ack it (dromas recv does both); to fetch this one again, wait for Retry-After",
+	p := fail(protocol.CodeFetchRateLimited, "keep each message when you fetch it, then ack it (dromas recv does both); to fetch this one again, wait for Retry-After",
 		"this message was fetched before, and the mailbox's allowance for fetching again is spent")
 	p.retryAfter = wait
 	return p
@@ -1196,7 +1196,7 @@ func pathID(r *http.Request) ([32]byte, error) {
 	var id [32]byte
 	s := r.PathValue("id")
 	if !hex64.MatchString(s) {
-		return id, fail(protocol.CodeNoSuchMessage, "treat it as gone", "no message has this id")
+		return id, fail(protocol.CodeMessageNotFound, "treat it as gone", "no message has this id")
 	}
 	_, err := hex.Decode(id[:], []byte(s))
 	return id, err

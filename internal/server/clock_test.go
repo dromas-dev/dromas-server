@@ -101,7 +101,7 @@ func TestAMailboxWhoseClockIsTooFarOffIsRefusedAndTold(t *testing.T) {
 	}{
 		{-11 * time.Minute, protocol.CodePassExpired},
 		{51 * time.Minute, protocol.CodePassExpired},
-		{61 * time.Minute, protocol.CodePrekeyTime},
+		{61 * time.Minute, protocol.CodeInvalidValidityPeriod},
 	} {
 		e := newEnv(t, relaxed())
 		off, dir := c.off, t.TempDir()
@@ -192,7 +192,7 @@ func TestThePrekeyCeilingAndTheDateOnAnAnswer(t *testing.T) {
 		{protocol.PrekeyLifetime, http.StatusCreated, ""},
 		{protocol.PrekeyLifetime + 2*time.Second, http.StatusCreated, ""},
 		{protocol.MaxPrekeyLifetime, http.StatusCreated, ""},
-		{protocol.MaxPrekeyLifetime + time.Second, http.StatusBadRequest, protocol.CodePrekeyTime},
+		{protocol.MaxPrekeyLifetime + time.Second, http.StatusBadRequest, protocol.CodeInvalidValidityPeriod},
 	} {
 		r := e.raw()
 		r.prekey(1, now.Add(c.ends), nil)

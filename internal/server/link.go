@@ -46,7 +46,7 @@ var linkCSP = func() string {
 func (s *Server) linkPage() http.Handler {
 	t := htmltemplate.Must(htmltemplate.New("to.html").Option("missingkey=error").Parse(toHTML))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		a, err := protocol.ParseAddress(r.PathValue("addr"))
+		a, err := protocol.ParseAddress(r.PathValue("address"))
 		if err != nil {
 			http.NotFound(w, r)
 			return

@@ -40,7 +40,7 @@ func TestTheRoutesAreTheDescriptions(t *testing.T) {
 
 // The read of a mailbox is GET /v1/<address>, and the read of its identity it
 // replaced is no route of this server: GET …/identity gets the router's plain
-// 404. GET …/revocations is a route, the read of what the server keeps of an
+// 404. GET …/revocation is a route, the read of what the server keeps of an
 // address (TestTheRevocationsOfAnyAddressAreServed).
 func TestTheReadTheMailboxReplacedIsGone(t *testing.T) {
 	t.Parallel()

@@ -49,14 +49,14 @@ func TestTheOperatorClearsAnAddress(t *testing.T) {
 	}
 
 	for range l.MissesPerMinute {
-		api.want(api.do(http.MethodGet, missing(), nil, ""), http.StatusNotFound, protocol.CodeNoSuchMailbox)
+		api.want(api.do(http.MethodGet, missing(), nil, ""), http.StatusNotFound, protocol.CodeMailboxNotFound)
 	}
 	api.want(api.do(http.MethodGet, missing(), nil, ""), http.StatusTooManyRequests, protocol.CodeRateLimited)
 	if code, key, cleared := clear("127.0.0.1"); code != http.StatusOK || key != "127.0.0.1" || !slices.Equal(cleared, []string{"misses"}) {
 		t.Fatalf("clear: %d %q %v, want the address's misses", code, key, cleared)
 	}
 	for range l.MissesPerMinute {
-		api.want(api.do(http.MethodGet, missing(), nil, ""), http.StatusNotFound, protocol.CodeNoSuchMailbox)
+		api.want(api.do(http.MethodGet, missing(), nil, ""), http.StatusNotFound, protocol.CodeMailboxNotFound)
 	}
 	api.want(api.do(http.MethodGet, missing(), nil, ""), http.StatusTooManyRequests, protocol.CodeRateLimited)
 

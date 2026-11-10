@@ -95,7 +95,7 @@ func TestEveryRouteEvaluatesItsPreconditions(t *testing.T) {
 			r.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 			return call{"PUT", r.path(""), r.registration(1), r.pass(1)}
 		}, unchanged: func(e *env, c call) {
-			e.want(e.do("GET", c.path, nil, ""), http.StatusNotFound, protocol.CodeNoSuchMailbox)
+			e.want(e.do("GET", c.path, nil, ""), http.StatusNotFound, protocol.CodeMailboxNotFound)
 		}},
 		{name: "a renewal's identical retry", exists: true, ok: 200, setup: func(e *env) call {
 			r := e.raw().register(protocol.MaxPrekeyLifetime)
@@ -112,18 +112,18 @@ func TestEveryRouteEvaluatesItsPreconditions(t *testing.T) {
 		}},
 		{name: "the read of the revocations held", exists: true, ok: 200, setup: func(e *env) call {
 			r := e.raw().register(protocol.MaxPrekeyLifetime)
-			e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), http.StatusOK, "")
-			return call{"GET", r.path("/revocations"), nil, ""}
+			e.want(e.do("PUT", r.path("/revocation"), r.certs(1), ""), http.StatusOK, "")
+			return call{"GET", r.path("/revocation"), nil, ""}
 		}},
 		{name: "a revocation, through the serial held again", exists: true, ok: 200, setup: func(e *env) call {
 			r := e.raw().register(protocol.MaxPrekeyLifetime)
-			e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), http.StatusOK, "")
-			return call{"PUT", r.path("/revocations"), r.certs(1), ""}
+			e.want(e.do("PUT", r.path("/revocation"), r.certs(1), ""), http.StatusOK, "")
+			return call{"PUT", r.path("/revocation"), r.certs(1), ""}
 		}},
 		{name: "a revocation, raised", exists: true, ok: 200, setup: func(e *env) call {
 			r := e.raw().register(protocol.MaxPrekeyLifetime)
-			e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), http.StatusOK, "")
-			return call{"PUT", r.path("/revocations"), r.certs(2), ""}
+			e.want(e.do("PUT", r.path("/revocation"), r.certs(1), ""), http.StatusOK, "")
+			return call{"PUT", r.path("/revocation"), r.certs(2), ""}
 		}, unchanged: func(e *env, c call) {
 			var held protocol.Revocations
 			if err := protocol.Unmarshal(e.do("GET", c.path, nil, "").body, &held); err != nil || bytes.Equal(held.RevokedCertificates, c.body.(protocol.Revocations).RevokedCertificates) {
@@ -132,9 +132,9 @@ func TestEveryRouteEvaluatesItsPreconditions(t *testing.T) {
 		}},
 		{name: "a revocation, of an address with none held", exists: false, ok: 200, setup: func(e *env) call {
 			r := e.raw().register(protocol.MaxPrekeyLifetime)
-			return call{"PUT", r.path("/revocations"), r.certs(1), ""}
+			return call{"PUT", r.path("/revocation"), r.certs(1), ""}
 		}, unchanged: func(e *env, c call) {
-			e.want(e.do("GET", c.path, nil, ""), http.StatusNotFound, protocol.CodeNotRevoked)
+			e.want(e.do("GET", c.path, nil, ""), http.StatusNotFound, protocol.CodeRevocationNotFound)
 		}},
 		{name: "putting the ACL", exists: true, ok: 200, setup: func(e *env) call {
 			r := e.raw().register(protocol.MaxPrekeyLifetime)
@@ -278,22 +278,22 @@ func TestAPreconditionIsIgnoredWhereTheAnswerWouldBeARefusal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.want(e.do("PUT", gone.path("/revocations"), protocol.Revocations{Identity: gone.id.Document(), Revocation: rev}, ""), http.StatusCreated, "")
+	e.want(e.do("PUT", gone.path("/revocation"), protocol.Revocations{Identity: gone.id.Document(), Revocation: rev}, ""), http.StatusCreated, "")
 	for _, c := range []struct {
 		name   string
 		q      call
 		status int
 		code   protocol.Code
 	}{
-		{"the ACL with no pass", call{"GET", r.path("/acl"), nil, ""}, 401, protocol.CodeUnauthorized},
-		{"the ACL with another mailbox's pass", call{"PUT", r.path("/acl"), aclOf([]string{"*"}, []string{}), other.pass(1)}, 401, protocol.CodeUnauthorized},
-		{"a send with no pass", call{"POST", r.path("/messages"), r.sealed(1, ciphertextTo(t, r)), ""}, 401, protocol.CodeUnauthorized},
-		{"the read of no mailbox", call{"GET", nobody.path(""), nil, ""}, 404, protocol.CodeNoSuchMailbox},
-		{"a renewal of no mailbox", call{"PUT", nobody.path("/prekey"), nobody.upload(1), nobody.pass(1)}, 404, protocol.CodeNoSuchMailbox},
-		{"the revocations of an address with none", call{"GET", r.path("/revocations"), nil, ""}, 404, protocol.CodeNotRevoked},
-		{"a revocation of a revoked address", call{"PUT", gone.path("/revocations"), gone.certs(1), ""}, 410, protocol.CodeRevoked},
-		{"a registration whose body is not JSON", call{"PUT", nobody.path(""), []byte(`not json`), nobody.pass(1)}, 400, protocol.CodeBadRequest},
-		{"a send that is not an age file", call{"POST", r.path("/messages"), r.sealed(1, []byte("not age")), other.pass(1)}, 400, protocol.CodeBadRequest},
+		{"the ACL with no pass", call{"GET", r.path("/acl"), nil, ""}, 401, protocol.CodeInvalidPass},
+		{"the ACL with another mailbox's pass", call{"PUT", r.path("/acl"), aclOf([]string{"*"}, []string{}), other.pass(1)}, 401, protocol.CodeInvalidPass},
+		{"a send with no pass", call{"POST", r.path("/messages"), r.sealed(1, ciphertextTo(t, r)), ""}, 401, protocol.CodeInvalidPass},
+		{"the read of no mailbox", call{"GET", nobody.path(""), nil, ""}, 404, protocol.CodeMailboxNotFound},
+		{"a renewal of no mailbox", call{"PUT", nobody.path("/prekey"), nobody.upload(1), nobody.pass(1)}, 404, protocol.CodeMailboxNotFound},
+		{"the revocations of an address with none", call{"GET", r.path("/revocation"), nil, ""}, 404, protocol.CodeRevocationNotFound},
+		{"a revocation of a revoked address", call{"PUT", gone.path("/revocation"), gone.certs(1), ""}, 410, protocol.CodeMailboxRevoked},
+		{"a registration whose body is not JSON", call{"PUT", nobody.path(""), []byte(`not json`), nobody.pass(1)}, 400, protocol.CodeInvalidRequest},
+		{"a send that is not an age file", call{"POST", r.path("/messages"), r.sealed(1, []byte("not age")), other.pass(1)}, 400, protocol.CodeInvalidRequest},
 	} {
 		for _, h := range [][2]string{{"If-Match", `"x"`}, {"If-None-Match", "*"}} {
 			got := e.doWith(c.q.method, c.q.path, c.q.body, c.q.pass, h[0], h[1])

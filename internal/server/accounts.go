@@ -39,7 +39,7 @@ func NewAccount(id string, unmetered bool) (*Account, error) {
 }
 
 func keyRefused() *problem {
-	return fail(protocol.CodeAdoptKeyRefused, "ask the account for a new adopt key", "the adopt key is spent, expired, revoked or not this server's")
+	return fail(protocol.CodeInvalidAdoptKey, "ask the account for a new adopt key", "the adopt key is spent, expired, revoked or not this server's")
 }
 
 // adopt is PUT /v1/<address>/account (with the pass): the mailbox joins the account its
@@ -63,7 +63,7 @@ func (s *Server) adopt(w http.ResponseWriter, r *http.Request) error {
 	// parameter sent without a value is an omitted one (RFC 6749 §3.1): the
 	// request is wrong, not the key.
 	if req.Key == "" {
-		return fail(protocol.CodeBadRequest, "dromas account adopt sends the key it reads on stdin", "missing field %q", memberValue("key"))
+		return fail(protocol.CodeInvalidRequest, "dromas account adopt sends the key it reads on stdin", "missing field %q", memberValue("key"))
 	}
 	account, hash, ok := parseAdopt(req.Key)
 	if !ok {
@@ -99,7 +99,7 @@ func (s *Server) adopt(w http.ResponseWriter, r *http.Request) error {
 		case errors.Is(err, ErrKeyRefused):
 			return keyRefused()
 		case errors.Is(err, ErrStale):
-			return fail(protocol.CodeMailboxChanged, "retry: dromas account adopt", "the mailbox changed during the request")
+			return fail(protocol.CodeConcurrentModification, "retry: dromas account adopt", "the mailbox changed during the request")
 		case err != nil:
 			return err
 		}
@@ -132,7 +132,7 @@ func (s *Server) leave(w http.ResponseWriter, r *http.Request) error {
 	if b.Account != "" {
 		switch err := s.store.Leave(detached(held), b); {
 		case errors.Is(err, ErrStale):
-			return fail(protocol.CodeMailboxChanged, "retry: dromas account leave", "the mailbox changed during the request")
+			return fail(protocol.CodeConcurrentModification, "retry: dromas account leave", "the mailbox changed during the request")
 		case err != nil:
 			return err
 		}

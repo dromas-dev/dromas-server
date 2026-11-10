@@ -46,7 +46,7 @@ func TestAStoredListThatDoesNotParseIsAnError(t *testing.T) {
 	for name, got := range map[string]reply{
 		"a list under the mailbox's certificate": e.do("GET", r.path("/messages"), nil, r.pass(n)),
 		"a send to the mailbox":                  e.sendTo(r, n, other, 1),
-		"a revocation of its certificates":       e.do("PUT", r.path("/revocations"), r.certs(1), ""),
+		"a revocation of its certificates":       e.do("PUT", r.path("/revocation"), r.certs(1), ""),
 	} {
 		if got.status != 503 {
 			t.Errorf("%s, with a stored list that does not parse: %d %s", name, got.status, got.body)
@@ -69,7 +69,7 @@ func TestRevokedCertificates(t *testing.T) {
 	put := func(serial, under uint64) reply {
 		return e.do("PUT", r.path("/prekey"), r.upload(serial), r.pass(under))
 	}
-	path := r.path("/revocations")
+	path := r.path("/revocation")
 	good := r.certs(1) // of a mailbox whose identity signs its statements
 	work := r.certify(2)
 
@@ -93,20 +93,20 @@ func TestRevokedCertificates(t *testing.T) {
 		body any
 		code protocol.Code
 	}{
-		"a working key of the mailbox, under its certificate": {protocol.Revocations{Identity: r.id.Document(), RevokedCertificates: good.RevokedCertificates, RevokedCertificatesSignature: byWork}, protocol.CodeBadRevocation},
-		"another mailbox's, with this mailbox's document":     {protocol.Revocations{Identity: r.id.Document(), RevokedCertificates: theirs.RevokedCertificates, RevokedCertificatesSignature: theirs.RevokedCertificatesSignature}, protocol.CodeBadRevocation},
-		"the identity's signature in another namespace":       {protocol.Revocations{Identity: r.id.Document(), RevokedCertificates: good.RevokedCertificates, RevokedCertificatesSignature: asRevocation}, protocol.CodeBadRevocation},
-		"a blank line after it, which the identity signed":    {protocol.Revocations{Identity: r.id.Document(), RevokedCertificates: blank, RevokedCertificatesSignature: blankSig}, protocol.CodeBadRevocation},
+		"a working key of the mailbox, under its certificate": {protocol.Revocations{Identity: r.id.Document(), RevokedCertificates: good.RevokedCertificates, RevokedCertificatesSignature: byWork}, protocol.CodeInvalidRevocation},
+		"another mailbox's, with this mailbox's document":     {protocol.Revocations{Identity: r.id.Document(), RevokedCertificates: theirs.RevokedCertificates, RevokedCertificatesSignature: theirs.RevokedCertificatesSignature}, protocol.CodeInvalidRevocation},
+		"the identity's signature in another namespace":       {protocol.Revocations{Identity: r.id.Document(), RevokedCertificates: good.RevokedCertificates, RevokedCertificatesSignature: asRevocation}, protocol.CodeInvalidRevocation},
+		"a blank line after it, which the identity signed":    {protocol.Revocations{Identity: r.id.Document(), RevokedCertificates: blank, RevokedCertificatesSignature: blankSig}, protocol.CodeInvalidRevocation},
 		"another mailbox's whole record":                      {theirs, protocol.CodeIdentityMismatch},
-		"a statement and no signature":                        {[]byte(`{"identity":"` + string(mustJSONBytes(t, r.id.Document())) + `","revoked_certificates":"eA=="}`), protocol.CodeBadRequest},
-		"a signature and no statement":                        {[]byte(`{"identity":"` + string(mustJSONBytes(t, r.id.Document())) + `","revoked_certificates_signature":"eA=="}`), protocol.CodeBadRequest},
+		"a statement and no signature":                        {[]byte(`{"identity":"` + string(mustJSONBytes(t, r.id.Document())) + `","revoked_certificates":"eA=="}`), protocol.CodeInvalidRequest},
+		"a signature and no statement":                        {[]byte(`{"identity":"` + string(mustJSONBytes(t, r.id.Document())) + `","revoked_certificates_signature":"eA=="}`), protocol.CodeInvalidRequest},
 	} {
 		if got := e.do("PUT", path, bad.body, ""); got.status != 400 || got.code() != bad.code {
 			t.Errorf("%s: %d %s, want 400 %s: %s", name, got.status, got.code(), bad.code, got.body)
 		}
 	}
 	// A pass does not help: the identity's signature is the authority.
-	e.want(e.do("PUT", path, protocol.Revocations{Identity: r.id.Document(), RevokedCertificates: good.RevokedCertificates, RevokedCertificatesSignature: byWork}, r.pass(1)), 400, protocol.CodeBadRevocation)
+	e.want(e.do("PUT", path, protocol.Revocations{Identity: r.id.Document(), RevokedCertificates: good.RevokedCertificates, RevokedCertificatesSignature: byWork}, r.pass(1)), 400, protocol.CodeInvalidRevocation)
 	unrevoked := e.do("GET", r.path(""), nil, "")
 	e.want(unrevoked, 200, "")
 	if got := held(t, unrevoked); got != nil {
@@ -161,7 +161,7 @@ func TestRevokedCertificates(t *testing.T) {
 	e.want(e.do("PUT", path, current, ""), 200, "")
 	// The highest stands: one through a lower serial is refused, so what was
 	// revoked stays revoked.
-	e.want(e.do("PUT", path, good, ""), 409, protocol.CodeConflict)
+	e.want(e.do("PUT", path, good, ""), 409, protocol.CodeSerialTooLow)
 	e.want(e.do("GET", r.path("/messages"), nil, seen), 401, protocol.CodeCertificateRevoked)
 	e.want(e.do("GET", r.path("/messages"), nil, r.pass(2)), 401, protocol.CodeCertificateRevoked)
 	e.want(e.do("GET", r.path("/acl"), nil, r.pass(2)), 401, protocol.CodeCertificateRevoked)
@@ -185,7 +185,7 @@ func TestRevokedCertificates(t *testing.T) {
 	r.prekey(3, now.Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(put(3, 3), 200, "")
 	e.want(e.do("GET", r.path("/messages"), nil, r.pass(3)), 200, "")
-	e.want(e.sendTo(r, 2, other, 1), 409, protocol.CodeStalePrekey)
+	e.want(e.sendTo(r, 2, other, 1), 409, protocol.CodePrekeySuperseded)
 	e.want(e.sendTo(r, 3, other, 1), 201, "")
 	e.want(e.sendTo(other, 1, r, 3), 201, "")
 
@@ -206,7 +206,7 @@ func TestRevokedCertificates(t *testing.T) {
 	}
 	halfList := both
 	halfList.Revocation = []byte("revoke it")
-	e.want(e.do("PUT", other.path("/revocations"), halfList, ""), 400, protocol.CodeBadRevocation)
+	e.want(e.do("PUT", other.path("/revocation"), halfList, ""), 400, protocol.CodeInvalidRevocation)
 	if stored, err = e.store.Mailbox(ctx, other.id.Address()); err != nil || stored.State != Active || len(stored.RevokedCerts) != 0 || len(stored.Revocation) != 0 {
 		t.Fatalf("a body that verified in part changed the record: %+v, %v", stored, err)
 	}
@@ -218,9 +218,9 @@ func TestRevokedCertificates(t *testing.T) {
 	// Whole, both are kept, and both are shown: the mailbox's read is 410 with a
 	// record of both. A revoked mailbox takes nothing more: whatever is sent for
 	// it is answered from its record.
-	e.want(e.do("PUT", other.path("/revocations"), both, ""), 201, "")
+	e.want(e.do("PUT", other.path("/revocation"), both, ""), 201, "")
 	shown = e.do("GET", other.path(""), nil, "")
-	e.want(shown, 410, protocol.CodeRevoked)
+	e.want(shown, 410, protocol.CodeMailboxRevoked)
 	if got = held(t, shown); got == nil || !bytes.Equal(got.Revocation, both.Revocation) ||
 		!bytes.Equal(got.RevokedCertificates, both.RevokedCertificates) || !bytes.Equal(got.RevokedCertificatesSignature, both.RevokedCertificatesSignature) {
 		t.Fatalf("a revoked mailbox that had its certificates revoked is not read with both: %s", shown.body)
@@ -234,8 +234,8 @@ func TestRevokedCertificates(t *testing.T) {
 	if written, members := recordOf(t, shown); len(members) != 5 || string(members["type"]) != `"revocation_record"` || !bytes.HasPrefix(written, []byte(`{"type":"revocation_record",`)) {
 		t.Errorf("the record served for a revoked mailbox that had its certificates revoked has %d members, want its type first and 4: %s", len(members), shown.body)
 	}
-	e.want(e.do("PUT", other.path("/revocations"), other.certs(2), ""), 410, protocol.CodeRevoked)
-	e.want(e.do("PUT", other.path("/revocations"), both, ""), 410, protocol.CodeRevoked)
+	e.want(e.do("PUT", other.path("/revocation"), other.certs(2), ""), 410, protocol.CodeMailboxRevoked)
+	e.want(e.do("PUT", other.path("/revocation"), both, ""), 410, protocol.CodeMailboxRevoked)
 }
 
 // A mailbox whose certificates were revoked is read with the revocation: the 200
@@ -272,9 +272,9 @@ func TestAMailboxIsReadWithTheRevocationOfItsCertificates(t *testing.T) {
 	}{
 		{three, 200, ""},
 		{five, 200, ""},
-		{three, 409, protocol.CodeConflict}, // the highest stands
+		{three, 409, protocol.CodeSerialTooLow}, // the highest stands
 	} {
-		e.want(e.do("PUT", r.path("/revocations"), c.put, ""), c.status, c.code)
+		e.want(e.do("PUT", r.path("/revocation"), c.put, ""), c.status, c.code)
 	}
 	b := read()
 	rec := b.Record()
@@ -296,9 +296,9 @@ func TestJunkRevocationsOfCertificatesAreLimited(t *testing.T) {
 	e := newEnv(t, l)
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	junk := protocol.Revocations{Identity: r.id.Document(), RevokedCertificates: []byte("every certificate\n"), RevokedCertificatesSignature: []byte("revoke them")}
-	path := r.path("/revocations")
-	e.want(e.do("PUT", path, junk, ""), 400, protocol.CodeBadRevocation)
-	e.want(e.do("PUT", path, junk, ""), 400, protocol.CodeBadRevocation)
+	path := r.path("/revocation")
+	e.want(e.do("PUT", path, junk, ""), 400, protocol.CodeInvalidRevocation)
+	e.want(e.do("PUT", path, junk, ""), 400, protocol.CodeInvalidRevocation)
 	e.want(e.do("PUT", path, junk, ""), 429, protocol.CodeRateLimited)
 	e.clock.Add(protocol.MaxSkew) // long past the limit's minute
 	e.want(e.do("PUT", path, r.certs(1), ""), 200, "")
@@ -340,7 +340,7 @@ func TestTheClientRevokesItsEarlierCertificates(t *testing.T) {
 
 	send(t, a, b, "under A's second certificate")
 	res := receive(t, b)
-	if len(res.Delivered) != 1 || len(res.Refused) != 1 || res.Refused[0].Code != client.RefusedCertificate || string(res.Delivered[0].Envelope.Body) != `"under A's second certificate"` {
+	if len(res.Delivered) != 1 || len(res.Refused) != 1 || res.Refused[0].Code != client.RefusedCertificateRevoked || string(res.Delivered[0].Envelope.Body) != `"under A's second certificate"` {
 		t.Fatalf("B's drain of messages from a mailbox that revoked its first certificate: %+v", res)
 	}
 	send(t, b, a, "to A at its second certificate")
@@ -392,7 +392,7 @@ func TestARevocationOfCertificatesOutlivesTheProcess(t *testing.T) {
 	e, _ := sharedEnv(t)
 	r := e.raw().certified().register(protocol.MaxPrekeyLifetime)
 	rec := r.certs(1)
-	e.want(e.do("PUT", r.path("/revocations"), rec, ""), 200, "")
+	e.want(e.do("PUT", r.path("/revocation"), rec, ""), 200, "")
 
 	later := startPostgres(t, e.clock.Now) // its memory holds nothing of the mailbox
 	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: later, Limits: relaxed(), Now: e.clock.Now, Ready: later.Ready}).Handler()))
@@ -411,7 +411,7 @@ func TestARevocationOfCertificatesOutlivesTheProcess(t *testing.T) {
 	if _, err := protocol.VerifyRevokedCertificates(r.id.Address(), got.Identity, got.RevokedCertificates, got.RevokedCertificatesSignature); err != nil || !bytes.Equal(got.RevokedCertificates, rec.RevokedCertificates) {
 		t.Fatalf("what a later process shows for a mailbox with its certificates revoked: %v", err)
 	}
-	e2.want(e2.do("PUT", r.path("/revocations"), rec, ""), 200, "")
+	e2.want(e2.do("PUT", r.path("/revocation"), rec, ""), 200, "")
 	r2.prekey(2, e.clock.Now().Add(time.Hour), nil)
 	e2.want(e2.do("PUT", r.path("/prekey"), r2.upload(2), r2.pass(2)), 200, "")
 	e2.want(e2.do("GET", r.path("/messages"), nil, r2.pass(2)), 200, "")
@@ -442,7 +442,7 @@ func TestTheStandingKnowsTheRevokedCertificates(t *testing.T) {
 		{3, true},
 	} {
 		if c.through != 0 {
-			e.want(e.do("PUT", r.path("/revocations"), r.certs(c.through), ""), 200, "")
+			e.want(e.do("PUT", r.path("/revocation"), r.certs(c.through), ""), 200, "")
 		}
 		b, err := e.store.Mailbox(ctx, r.id.Address())
 		if err != nil {
@@ -521,7 +521,7 @@ func TestAnIdenticalRegistrationUnderARevokedCertificateIsRefused(t *testing.T) 
 	r := e.raw()
 	n := r.registerCertified(protocol.MaxPrekeyLifetime)
 	e.want(e.do("PUT", r.path(""), r.registration(n), r.pass(n)), 200, "")
-	e.want(e.do("PUT", r.path("/revocations"), r.certs(n), ""), 200, "")
+	e.want(e.do("PUT", r.path("/revocation"), r.certs(n), ""), 200, "")
 	for _, pass := range []string{r.pass(n), "", e.passFor(r.signer, r.id.Address(), e.name())} {
 		e.want(e.do("PUT", r.path("/prekey"), r.upload(n), pass), 401, protocol.CodeCertificateRevoked)
 		e.want(e.do("PUT", r.path(""), r.registration(n), pass), 401, protocol.CodeCertificateRevoked)
@@ -537,12 +537,12 @@ func TestTheIdentityRegistersPastItsRevokedCertificates(t *testing.T) {
 	e := newEnv(t, relaxed())
 	now := e.clock.Now()
 	r := e.raw()
-	e.want(e.do("PUT", r.path("/revocations"), r.certs(5), ""), 200, "")
+	e.want(e.do("PUT", r.path("/revocation"), r.certs(5), ""), 200, "")
 	r.underCertificates = false
 	r.prekey(1, now.Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", r.path(""), r.registration(1), r.pass(1)), 201, "")
 	q := e.raw()
-	e.want(e.do("PUT", q.path("/revocations"), q.certs(5), ""), 200, "")
+	e.want(e.do("PUT", q.path("/revocation"), q.certs(5), ""), 200, "")
 	q.prekey(5, now.Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", q.path(""), q.registration(5), q.pass(5)), 401, protocol.CodeCertificateRevoked)
 }

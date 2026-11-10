@@ -113,7 +113,7 @@ func (r *Reloader) Run(ctx context.Context, hup <-chan os.Signal, every time.Dur
 // more than the largest the document's form allows, 64 deprecations and 64
 // sunsets of the longest versions, written with indents
 // (TestTheLargestPolicyFits).
-const MaxVersionPolicy = 24 << 10
+const MaxVersionPolicy = 28 << 10
 
 // The version policy's file name in the metrics.
 const versionPolicyFile = "version-policy"
@@ -122,7 +122,7 @@ const versionPolicyFile = "version-policy"
 // --version-policy): a JSON object in the form GET /v1/ answers
 // (PROTOCOL.md §11.18), its min_version, latest_version, deprecations and
 // sunsets, each optional, and no member else; capabilities are the code's,
-// and max_certificate_lifetime the setting's, not the policy's. It returns
+// and max_certificate_lifetime_seconds the setting's, not the policy's. It returns
 // the document the server answers with the policy in force, the setting of
 // l among it, held to the document's form (protocol.ServerDocument.Check).
 // Its errors name a member at most, never a value.

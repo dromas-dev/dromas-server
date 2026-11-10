@@ -360,7 +360,7 @@ func TestARevocationWhoseAnswerWasLostIsInTheNextPassCheck(t *testing.T) {
 }
 
 // A Leave whose write may have been applied is answered as any write whose
-// outcome is unknown, 503, never 409 mailbox_changed. The control: a Leave
+// outcome is unknown, 503, never 409 concurrent_modification. The control: a Leave
 // whose condition failed is 409 (dromas-dev/dromas-server#89).
 func TestALeaveTheStoreMayHaveAppliedIsNot409(t *testing.T) {
 	t.Parallel()
@@ -370,7 +370,7 @@ func TestALeaveTheStoreMayHaveAppliedIsNot409(t *testing.T) {
 		code   protocol.Code
 	}{
 		{unknownAfter, http.StatusServiceUnavailable, protocol.CodeUnavailable},
-		{refusedBefore, http.StatusConflict, protocol.CodeMailboxChanged},
+		{refusedBefore, http.StatusConflict, protocol.CodeConcurrentModification},
 	} {
 		t.Run(c.fault.String(), func(t *testing.T) {
 			ctx := t.Context()

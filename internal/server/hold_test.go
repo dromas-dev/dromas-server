@@ -108,7 +108,7 @@ func TestAWaitOfAnotherFormIsRefused(t *testing.T) {
 	_, to, _ := emptyTag(e)
 	for _, q := range []string{"wait=", "wait=-1", "wait=1.5", "wait=1&wait=2", "wait=5&cursor=abc"} {
 		r := e.do("GET", to.path("/messages?"+q), nil, to.pass(1))
-		e.want(r, http.StatusBadRequest, protocol.CodeBadRequest)
+		e.want(r, http.StatusBadRequest, protocol.CodeInvalidRequest)
 	}
 }
 
@@ -327,7 +327,7 @@ func TestALongPollIsAnsweredWhenAMessageExpires(t *testing.T) {
 	e.clock.Add(protocol.Retention - left) // the message has half a second left
 	r := e.do("GET", to.path("/messages"), nil, to.pass(1))
 	e.want(r, http.StatusOK, "")
-	if !bytes.Contains(r.body, []byte(`"count":1`)) {
+	if !bytes.Contains(r.body, []byte(`"total_count":1`)) {
 		t.Fatalf("control: the page does not hold the message: %s", r.body)
 	}
 	tag := r.header.Get("ETag")
@@ -336,7 +336,7 @@ func TestALongPollIsAnsweredWhenAMessageExpires(t *testing.T) {
 	e.clock.Add(left) // it expires now, by the server's clock
 	got := <-c
 	e.want(got.r, http.StatusOK, "")
-	if got.took >= l.MaxWait-time.Second || got.r.header.Get("ETag") == tag || !bytes.Contains(got.r.body, []byte(`"count":0`)) {
+	if got.took >= l.MaxWait-time.Second || got.r.header.Get("ETag") == tag || !bytes.Contains(got.r.body, []byte(`"total_count":0`)) {
 		t.Fatalf("the long poll was answered after %v, tag %q, %s; want the empty page as the message expired", got.took, got.r.header.Get("ETag"), got.r.body)
 	}
 }
@@ -437,7 +437,7 @@ func TestACallerThatLeavesALongPollIsReleasedAndRecordedGone(t *testing.T) {
 	cancel()
 	<-done
 	holdingNow(t, e.server, 0)
-	const route = "GET /v1/{addr}/messages"
+	const route = "GET /v1/{address}/messages"
 	gone := func() float64 { return testutil.ToFloat64(m.requests.WithLabelValues(route, "499", "")) }
 	deadline := time.Now().Add(5 * time.Second)
 	for gone() == 0 && time.Now().Before(deadline) {

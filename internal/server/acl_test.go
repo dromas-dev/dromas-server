@@ -32,10 +32,10 @@ func TestACLRoute(t *testing.T) {
 	const open = `{"allow":["*"],"deny":[]}`
 
 	// The mailbox's own pass, and only that.
-	e.want(e.do("GET", path, nil, ""), 401, protocol.CodeUnauthorized)
-	e.want(e.do("PUT", path, aclOf([]string{"*"}, nil), ""), 401, protocol.CodeUnauthorized)
-	e.want(e.do("GET", path, nil, e.pass(other)), 401, protocol.CodeUnauthorized)
-	e.want(e.do("PUT", path, aclOf([]string{"*"}, nil), e.pass(other)), 401, protocol.CodeUnauthorized)
+	e.want(e.do("GET", path, nil, ""), 401, protocol.CodeInvalidPass)
+	e.want(e.do("PUT", path, aclOf([]string{"*"}, nil), ""), 401, protocol.CodeInvalidPass)
+	e.want(e.do("GET", path, nil, e.pass(other)), 401, protocol.CodeInvalidPass)
+	e.want(e.do("PUT", path, aclOf([]string{"*"}, nil), e.pass(other)), 401, protocol.CodeInvalidPass)
 
 	// A mailbox that has put none lets everyone in, and has a tag for that.
 	got := e.do("GET", path, nil, pass)
@@ -53,8 +53,8 @@ func TestACLRoute(t *testing.T) {
 		"a member it lacks":  []byte(`{"allow":["*"],"block":[]}`),
 		"not JSON":           []byte(`allow everyone`),
 	} {
-		if r := e.do("PUT", path, body, pass); r.status != 400 || r.code() != protocol.CodeBadRequest {
-			t.Errorf("%s: %d %s, want 400 %s: %s", name, r.status, r.code(), protocol.CodeBadRequest, r.body)
+		if r := e.do("PUT", path, body, pass); r.status != 400 || r.code() != protocol.CodeInvalidRequest {
+			t.Errorf("%s: %d %s, want 400 %s: %s", name, r.status, r.code(), protocol.CodeInvalidRequest, r.body)
 		}
 	}
 	if r := e.do("PUT", path, []byte(`{"version":1,"allow":["*"]}`), pass); r.problem().Member != "version" {
@@ -62,11 +62,11 @@ func TestACLRoute(t *testing.T) {
 	}
 	// Over the entries, and over the body's bound drawn from them, which is
 	// refused before it is parsed: the limit is the entries either way
-	// (PROTOCOL.md §11.3: a too_large on an ACL is entries).
+	// (PROTOCOL.md §11.3: a content_too_large on an ACL is entries).
 	huge := aclOf([]string{"*"}, []string{strings.Repeat(" ", int(e.server.aclBodyLimit()))})
 	for _, body := range []any{aclOf([]string{"*", x}, []string{y, x}), huge} {
 		r := e.do("PUT", path, body, pass)
-		e.want(r, 413, protocol.CodeTooLarge)
+		e.want(r, 413, protocol.CodeContentTooLarge)
 		if p := r.problem(); p.Limit == nil || *p.Limit != 3 {
 			t.Errorf("an ACL over 3 entries is told the limit %v, want its 3 entries: %s", p.Limit, r.body)
 		}
@@ -232,7 +232,7 @@ func (o *onRead) Read(p []byte) (int, error) {
 
 // A PUT's If-Match is held to the ACL its write replaces (PROTOCOL.md
 // §11.2): another writer's ACL that lands while the PUT reads its body, after
-// its If-Match was evaluated, makes the PUT 409 mailbox_changed, and the other
+// its If-Match was evaluated, makes the PUT 409 concurrent_modification, and the other
 // writer's ACL stays; the same PUT sent again meets an If-Match that is
 // false (412), and one with the tag now held is taken
 // (dromas-dev/dromas-server#88).
@@ -267,7 +267,7 @@ func TestAnACLsIfMatchIsHeldToTheACLItsWriteReplaces(t *testing.T) {
 	r := e.doWith("PUT", path, pause, pass, "If-Match", tag)
 	e.setMiddle(nil)
 	now := e.do("GET", path, nil, pass)
-	if raced.Load() != 1 || r.status != http.StatusConflict || r.code() != protocol.CodeMailboxChanged {
+	if raced.Load() != 1 || r.status != http.StatusConflict || r.code() != protocol.CodeConcurrentModification {
 		t.Errorf("a PUT whose record changed while it read its body: %d %s (raced %d); the ACL held after: %s", r.status, r.body, raced.Load(), now.body)
 	}
 	if !strings.Contains(string(now.body), x.Address().String()) || now.header.Get("ETag") == tag {
@@ -325,8 +325,8 @@ func TestAnACLsGETReadsItsPreconditions(t *testing.T) {
 	}
 	// Only where the answer would be 200: no pass, or no mailbox, is answered as
 	// it is without them.
-	e.want(e.doWith("GET", path, nil, "", "If-Match", `"other"`), 401, protocol.CodeUnauthorized)
-	e.want(e.doWith("GET", path, nil, e.pass(other), "If-None-Match", tag), 401, protocol.CodeUnauthorized)
+	e.want(e.doWith("GET", path, nil, "", "If-Match", `"other"`), 401, protocol.CodeInvalidPass)
+	e.want(e.doWith("GET", path, nil, e.pass(other), "If-None-Match", tag), 401, protocol.CodeInvalidPass)
 }
 
 // A send the ACL refuses is refused with one code and one wording, whether

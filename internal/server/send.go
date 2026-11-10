@@ -53,7 +53,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 	case sender != nil && sender.State == Revoked:
 		return fail(protocol.CodeSenderRevoked, "your mailbox is revoked: make a new one, dromas init", "the sending mailbox is revoked")
 	case !sender.open():
-		return fail(protocol.CodeUnknownSender, "register your own mailbox first: dromas init", "the mailbox the pass names is not registered")
+		return fail(protocol.CodeSenderNotRegistered, "register your own mailbox first: dromas init", "the mailbox the pass names is not registered")
 	}
 	// Where its current certificate is revoked, only the identity's pass is
 	// taken (PROTOCOL.md §8): the pass is held to that again, a lookup in
@@ -91,7 +91,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 	// for the one allowance for large reads, which only a sender whose cap is
 	// larger ever takes.
 	free, limit := int64(s.limits().MaxSize), int64(lim.MaxSize)
-	tooLarge := fail(protocol.CodeTooLarge, "send less", "the ciphertext is over %d bytes", limitValue(lim.MaxSize))
+	tooLarge := fail(protocol.CodeContentTooLarge, "send less", "the ciphertext is over %d bytes", limitValue(lim.MaxSize))
 	if r.ContentLength > limit {
 		return tooLarge
 	}
@@ -136,7 +136,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 	// 4. It is an age file: its stanzas read as a reader reads them.
 	stanzas, err := protocol.ReadStanzas(ciphertext)
 	if err != nil {
-		return fail(protocol.CodeBadRequest, "encrypt with age to the mailbox's prekey", "the ciphertext is not an age file")
+		return fail(protocol.CodeInvalidRequest, "encrypt with age to the mailbox's prekey", "the ciphertext is not an age file")
 	}
 
 	// 5. The recipient is registered and active.
@@ -275,13 +275,13 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 	// an error and no receipt for a message the recipient would have refused on
 	// reading it.
 	if t := identityType(p.sender.Identity); !protocol.AcceptsSender(rcpt.SenderKeyTypes, t) {
-		return delivered{}, fail(protocol.CodeSenderKeyType, "a mailbox whose identity is an ssh-ed25519 key, as dromas init makes one, can write to any mailbox",
+		return delivered{}, fail(protocol.CodeUnsupportedSenderKeyType, "a mailbox whose identity is an ssh-ed25519 key, as dromas init makes one, can write to any mailbox",
 			"this mailbox's client does not verify identities of your mailbox's key type, %s", keyTypeValue(t))
 	}
 	// A send names its statement by the hash of its bytes as served: the
 	// statement's hash is the current one's, or another is current.
 	if q.Statement != protocol.StatementHash(rcpt.Statement) {
-		return delivered{}, fail(protocol.CodeStalePrekey, "a newer prekey exists: read GET /v1/<address> again and re-encrypt the same envelope (dromas does this)", "the mailbox's current prekey statement is another")
+		return delivered{}, fail(protocol.CodePrekeySuperseded, "a newer prekey exists: read GET /v1/<address> again and re-encrypt the same envelope (dromas does this)", "the mailbox's current prekey statement is another")
 	}
 	if refused := checkStanzas(p.stanzas, rcpt); refused != nil {
 		return delivered{}, refused
@@ -333,7 +333,7 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 	if rlim.ReceiveBurst > 0 {
 		recv, ok, wait := s.receivesAt(rlim).reserve(ctx, to.String(), s.now)
 		if !ok {
-			busy := fail(protocol.CodeMailboxBusy, "the mailbox takes only so many new messages at a time: post it again after Retry-After (dromas outbox flush does)", "the mailbox has taken as many new messages as it takes for now")
+			busy := fail(protocol.CodeMailboxRateLimited, "the mailbox takes only so many new messages at a time: post it again after Retry-After (dromas outbox flush does)", "the mailbox has taken as many new messages as it takes for now")
 			busy.retryAfter = wait
 			return delivered{}, busy
 		}
@@ -395,7 +395,7 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 
 // changedSend answers a send whose write met a change since its checks
 // (ErrStale): as the recipient and the sender stand once read again, revoked
-// or gone as a fresh send is answered, and otherwise mailbox_changed, which
+// or gone as a fresh send is answered, and otherwise concurrent_modification, which
 // the sender's client posts again as it is (PROTOCOL.md §11.2).
 func (s *Server) changedSend(ctx context.Context, to, from protocol.Address) error {
 	read, cancel := bounded(ctx)
@@ -416,9 +416,9 @@ func (s *Server) changedSend(ctx context.Context, to, from protocol.Address) err
 	case sender != nil && sender.State == Revoked:
 		return fail(protocol.CodeSenderRevoked, "your mailbox is revoked: make a new one, dromas init", "the sending mailbox is revoked")
 	case !sender.open():
-		return fail(protocol.CodeUnknownSender, "register your own mailbox first: dromas init", "the mailbox the pass names is not registered")
+		return fail(protocol.CodeSenderNotRegistered, "register your own mailbox first: dromas init", "the mailbox the pass names is not registered")
 	}
-	return fail(protocol.CodeMailboxChanged, "post it again as it is: dromas outbox flush does", "the mailbox, or the sending mailbox, changed during the request")
+	return fail(protocol.CodeConcurrentModification, "post it again as it is: dromas outbox flush does", "the mailbox, or the sending mailbox, changed during the request")
 }
 
 // inFlight is, for each mailbox, the sends this process has let past the mailbox
@@ -500,13 +500,13 @@ func (s *Server) duplicate(w http.ResponseWriter, orig *Header) error {
 func checkStanzas(st protocol.Stanzas, b *Mailbox) *problem {
 	switch {
 	case st.Other:
-		return fail(protocol.CodeWrongRecipientType, "encrypt to the mailbox's prekey", "the file has a stanza of a type no prekey has")
+		return fail(protocol.CodeInvalidRecipients, "encrypt to the mailbox's prekey", "the file has a stanza of a type no prekey has")
 	case len(st.Native) == 0:
-		return fail(protocol.CodeWrongRecipientType, "the file has no recipient: encrypt to the mailbox's prekey", "the file has no native stanza, only grease")
+		return fail(protocol.CodeInvalidRecipients, "the file has no recipient: encrypt to the mailbox's prekey", "the file has no native stanza, only grease")
 	case len(st.Native) > 1:
-		return fail(protocol.CodeWrongRecipientType, "encrypt to one recipient only", "the file has more than one native stanza")
+		return fail(protocol.CodeInvalidRecipients, "encrypt to one recipient only", "the file has more than one native stanza")
 	case st.Native[0] == b.Prekey.Type():
 		return nil
 	}
-	return fail(protocol.CodeWrongRecipientType, "re-fetch the mailbox's prekey", "the file's stanza is not of the type of the mailbox's prekey")
+	return fail(protocol.CodeInvalidRecipients, "re-fetch the mailbox's prekey", "the file's stanza is not of the type of the mailbox's prekey")
 }

@@ -113,22 +113,22 @@ func (s *revokeRace) Revoke(ctx context.Context, a protocol.Address, rv *Revocat
 // A revocation's If-None-Match: *, evaluated while none is held, is held to
 // what its write replaces (the client repo's #412 item 3): a revocation
 // written by another request between the evaluation and the write fails it,
-// 409 mailbox_changed, and what that other request wrote stands.
+// 409 concurrent_modification, and what that other request wrote stands.
 func TestARevocationsIfNoneMatchIsHeldToWhatItsWriteReplaces(t *testing.T) {
 	t.Parallel()
 	race := &revokeRace{through: 2}
 	e := newEnv(t, relaxed(), func(c *Config) { race.Store = c.Store; c.Store = race })
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
-	race.then = func() { e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), http.StatusOK, "") }
-	got := e.doWith("PUT", r.path("/revocations"), r.certs(2), "", "If-None-Match", "*")
+	race.then = func() { e.want(e.do("PUT", r.path("/revocation"), r.certs(1), ""), http.StatusOK, "") }
+	got := e.doWith("PUT", r.path("/revocation"), r.certs(2), "", "If-None-Match", "*")
 	var held protocol.Revocations
-	_ = json.Unmarshal(e.do("GET", r.path("/revocations"), nil, "").body, &held)
+	_ = json.Unmarshal(e.do("GET", r.path("/revocation"), nil, "").body, &held)
 	through := uint64(0)
 	if f, err := protocol.ParseRevokedCertificates(held.RevokedCertificates); err == nil {
 		through = f.Through
 	}
-	if got.status != http.StatusConflict || got.code() != protocol.CodeMailboxChanged || through != 1 {
-		t.Errorf("PUT …/revocations through 2 with If-None-Match: *, a revocation through 1 written after its evaluation: %d %s, held through %d; want 409 mailbox_changed, held through 1", got.status, got.code(), through)
+	if got.status != http.StatusConflict || got.code() != protocol.CodeConcurrentModification || through != 1 {
+		t.Errorf("PUT …/revocation through 2 with If-None-Match: *, a revocation through 1 written after its evaluation: %d %s, held through %d; want 409 concurrent_modification, held through 1", got.status, got.code(), through)
 	}
 }
 
@@ -165,16 +165,16 @@ func TestAHeadIsItsGetWithoutContent(t *testing.T) {
 	e := newEnv(t, relaxed())
 	to, msg := holding(e)
 	revoking := e.raw().register(protocol.MaxPrekeyLifetime)
-	e.want(e.do("PUT", revoking.path("/revocations"), revoking.certs(1), ""), http.StatusOK, "")
+	e.want(e.do("PUT", revoking.path("/revocation"), revoking.certs(1), ""), http.StatusOK, "")
 	pass := to.pass(1)
 	paths := map[string]string{
-		"GET /v1/{$}":                  protocol.DocumentPath,
-		"GET /v1/{addr}":               to.path(""),
-		"GET /v1/{addr}/revocations":   revoking.path("/revocations"),
-		"GET /v1/{addr}/acl":           to.path("/acl"),
-		"GET /v1/{addr}/messages":      to.path("/messages"),
-		"GET /v1/{addr}/messages/{id}": msg,
-		linkRoute:                      protocol.LinkPath + to.id.Address().String(),
+		"GET /v1/{$}":                     protocol.DocumentPath,
+		"GET /v1/{address}":               to.path(""),
+		"GET /v1/{address}/revocation":    revoking.path("/revocation"),
+		"GET /v1/{address}/acl":           to.path("/acl"),
+		"GET /v1/{address}/messages":      to.path("/messages"),
+		"GET /v1/{address}/messages/{id}": msg,
+		linkRoute:                         protocol.LinkPath + to.id.Address().String(),
 	}
 	patterns := []string{linkRoute}
 	for _, r := range e.server.routes() {
@@ -194,7 +194,7 @@ func TestAHeadIsItsGetWithoutContent(t *testing.T) {
 		if h.StatusCode != http.StatusOK || get.status != http.StatusOK {
 			t.Errorf("%s: HEAD %d, GET %d", p, h.StatusCode, get.status)
 		}
-		message := p == "GET /v1/{addr}/messages/{id}"
+		message := p == "GET /v1/{address}/messages/{id}"
 		if message && h.Header.Get("Content-Length") != "" {
 			t.Errorf("HEAD %s: Content-Length %s", p, h.Header.Get("Content-Length"))
 		}
@@ -233,7 +233,7 @@ func TestAMessagesHeadTakesNoTokenAndMarksNothing(t *testing.T) {
 	}
 	e.want(e.do(http.MethodGet, msg, nil, pass), http.StatusOK, "")
 	e.want(e.do(http.MethodGet, msg, nil, pass), http.StatusOK, "")
-	e.want(e.do(http.MethodGet, msg, nil, pass), http.StatusTooManyRequests, protocol.CodeFetchPaced)
+	e.want(e.do(http.MethodGet, msg, nil, pass), http.StatusTooManyRequests, protocol.CodeFetchRateLimited)
 }
 
 // A send's retry, the same bytes the mailbox holds, whose precondition is false
@@ -270,7 +270,7 @@ func TestAFetchWithAFalsePreconditionLeavesTheMessageUnfetched(t *testing.T) {
 	}
 	for i, want := range []int{http.StatusOK, http.StatusOK, http.StatusTooManyRequests} {
 		if got := e.do("GET", msg, nil, pass); got.status != want {
-			t.Errorf("fetch %d after the two with a false precondition: %d %s, want %d (the first, one repeat, then fetch_paced)", i+1, got.status, got.code(), want)
+			t.Errorf("fetch %d after the two with a false precondition: %d %s, want %d (the first, one repeat, then fetch_rate_limited)", i+1, got.status, got.code(), want)
 		}
 	}
 }
@@ -444,10 +444,10 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 		// The server's document answers the same to every caller, and the
 		// client repo's api/openapi.yaml gives it no 304 and no 412.
 		"GET /v1/{$}": nil,
-		"GET /v1/{addr}": {{"a live mailbox", true, none, func(e *env) (call, string) {
+		"GET /v1/{address}": {{"a live mailbox", true, none, func(e *env) (call, string) {
 			return call{"GET", live(e).path(""), nil, ""}, ""
 		}}},
-		"PUT /v1/{addr}": {
+		"PUT /v1/{address}": {
 			{"a mailbox not registered", false, map[string]int{string(protocol.QuotaRegistrations): 1}, func(e *env) (call, string) {
 				r := e.raw()
 				r.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
@@ -458,7 +458,7 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 				return call{"PUT", r.path(""), r.registration(1), r.pass(1)}, ""
 			}},
 		},
-		"PUT /v1/{addr}/prekey": {
+		"PUT /v1/{address}/prekey": {
 			{"an identical retry", true, calls, func(e *env) (call, string) {
 				r := live(e)
 				return call{"PUT", r.path("/prekey"), r.upload(1), r.pass(1)}, ""
@@ -471,59 +471,59 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 			{"a renewal that replaces a revoked certificate", true, none, func(e *env) (call, string) {
 				r := e.raw()
 				n := r.registerCertified(protocol.MaxPrekeyLifetime)
-				e.want(e.do("PUT", r.path("/revocations"), r.certs(n), ""), http.StatusOK, "")
+				e.want(e.do("PUT", r.path("/revocation"), r.certs(n), ""), http.StatusOK, "")
 				r.prekey(n+1, e.clock.Now().Add(protocol.PrekeyLifetime), nil)
 				return call{"PUT", r.path("/prekey"), r.upload(n + 1), r.pass(n + 1)}, ""
 			}},
 		},
-		"PUT /v1/{addr}/revocations": {
+		"PUT /v1/{address}/revocation": {
 			{"through the serial held again", true, none, func(e *env) (call, string) {
 				r := live(e)
-				e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), http.StatusOK, "")
-				return call{"PUT", r.path("/revocations"), r.certs(1), ""}, ""
+				e.want(e.do("PUT", r.path("/revocation"), r.certs(1), ""), http.StatusOK, "")
+				return call{"PUT", r.path("/revocation"), r.certs(1), ""}, ""
 			}},
 			{"a raise", true, none, func(e *env) (call, string) {
 				r := live(e)
-				e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), http.StatusOK, "")
-				return call{"PUT", r.path("/revocations"), r.certs(2), ""}, ""
+				e.want(e.do("PUT", r.path("/revocation"), r.certs(1), ""), http.StatusOK, "")
+				return call{"PUT", r.path("/revocation"), r.certs(2), ""}, ""
 			}},
 			{"through a lower serial", true, none, func(e *env) (call, string) {
 				r := live(e)
-				e.want(e.do("PUT", r.path("/revocations"), r.certs(2), ""), http.StatusOK, "")
-				return call{"PUT", r.path("/revocations"), r.certs(1), ""}, ""
+				e.want(e.do("PUT", r.path("/revocation"), r.certs(2), ""), http.StatusOK, "")
+				return call{"PUT", r.path("/revocation"), r.certs(1), ""}, ""
 			}},
 			{"the address's, with its certificates revoked", true, none, func(e *env) (call, string) {
 				r := live(e)
-				e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), http.StatusOK, "")
+				e.want(e.do("PUT", r.path("/revocation"), r.certs(1), ""), http.StatusOK, "")
 				rev, err := protocol.SignRevocation(r.signer, r.id.Address())
 				if err != nil {
 					e.t.Fatal(err)
 				}
-				return call{"PUT", r.path("/revocations"), protocol.Revocations{Identity: r.id.Document(), Revocation: rev}, ""}, ""
+				return call{"PUT", r.path("/revocation"), protocol.Revocations{Identity: r.id.Document(), Revocation: rev}, ""}, ""
 			}},
 			{"of a mailbox with none held", false, none, func(e *env) (call, string) {
 				r := live(e)
-				return call{"PUT", r.path("/revocations"), r.certs(1), ""}, ""
+				return call{"PUT", r.path("/revocation"), r.certs(1), ""}, ""
 			}},
 			{"of an address the server holds nothing of", false, map[string]int{string(protocol.QuotaMisses): 1}, func(e *env) (call, string) {
 				r := e.raw()
-				return call{"PUT", r.path("/revocations"), r.certs(1), ""}, ""
+				return call{"PUT", r.path("/revocation"), r.certs(1), ""}, ""
 			}},
 		},
-		"GET /v1/{addr}/revocations": {{"revocations held", true, none, func(e *env) (call, string) {
+		"GET /v1/{address}/revocation": {{"revocations held", true, none, func(e *env) (call, string) {
 			r := live(e)
-			e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), http.StatusOK, "")
-			return call{"GET", r.path("/revocations"), nil, ""}, ""
+			e.want(e.do("PUT", r.path("/revocation"), r.certs(1), ""), http.StatusOK, "")
+			return call{"GET", r.path("/revocation"), nil, ""}, ""
 		}}},
-		"PUT /v1/{addr}/acl": {{"a live mailbox", true, calls, func(e *env) (call, string) {
+		"PUT /v1/{address}/acl": {{"a live mailbox", true, calls, func(e *env) (call, string) {
 			r := live(e)
 			return call{"PUT", r.path("/acl"), aclOf([]string{}, []string{"*"}), r.pass(1)}, warmed(e, r, r.pass(1))
 		}}},
-		"GET /v1/{addr}/acl": {{"a live mailbox", true, calls, func(e *env) (call, string) {
+		"GET /v1/{address}/acl": {{"a live mailbox", true, calls, func(e *env) (call, string) {
 			r := live(e)
 			return call{"GET", r.path("/acl"), nil, r.pass(1)}, warmed(e, r, r.pass(1))
 		}}},
-		"PUT /v1/{addr}/account": {
+		"PUT /v1/{address}/account": {
 			{"a mailbox in an account", true, calls, func(e *env) (call, string) {
 				r := live(e)
 				key := inAccount(e, r, 1)
@@ -537,7 +537,7 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 				return call{"PUT", r.path("/account"), protocol.AdoptRequest{Key: key}, r.pass(1)}, ""
 			}},
 		},
-		"DELETE /v1/{addr}/account": {
+		"DELETE /v1/{address}/account": {
 			{"a mailbox in an account", true, calls, func(e *env) (call, string) {
 				r := live(e)
 				inAccount(e, r, 0)
@@ -550,7 +550,7 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 				return call{"DELETE", r.path("/account"), nil, r.pass(1)}, ""
 			}},
 		},
-		"POST /v1/{addr}/messages": {
+		"POST /v1/{address}/messages": {
 			{"a first post", true, map[string]int{string(protocol.QuotaCalls): 1, string(protocol.QuotaSendsBeforePass): 1}, func(e *env) (call, string) {
 				from, to := live(e), live(e)
 				warmed(e, from, from.pass(1))
@@ -564,7 +564,7 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 				return call{"POST", to.path("/messages"), post, from.pass(1)}, ""
 			}},
 		},
-		"GET /v1/{addr}/messages": {
+		"GET /v1/{address}/messages": {
 			{"a first page of a mailbox with none", true, map[string]int{string(protocol.QuotaPolls): 1}, func(e *env) (call, string) {
 				r := live(e)
 				warmed(e, r, r.pass(1))
@@ -593,7 +593,7 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 				return call{"GET", to.path("/messages?cursor=" + formatCursor(Header{ReceivedAt: e.clock.Now()})), nil, to.pass(1)}, ""
 			}},
 		},
-		"GET /v1/{addr}/messages/{id}": {
+		"GET /v1/{address}/messages/{id}": {
 			{"a message never fetched", true, calls, func(e *env) (call, string) {
 				to, msg := holding(e)
 				warmed(e, to, to.pass(1))
@@ -605,7 +605,7 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 				return call{"GET", msg, nil, to.pass(1)}, ""
 			}},
 		},
-		"DELETE /v1/{addr}/messages/{id}": {{"a message held", true, calls, func(e *env) (call, string) {
+		"DELETE /v1/{address}/messages/{id}": {{"a message held", true, calls, func(e *env) (call, string) {
 			to, msg := holding(e)
 			warmed(e, to, to.pass(1))
 			return call{"DELETE", msg, nil, to.pass(1)}, ""
@@ -616,7 +616,7 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 	}
 	// refusedFirst is the refusal of each state refused before its
 	// preconditions, by its route's pattern and its name.
-	refusedFirst := map[string]protocol.Code{"PUT /v1/{addr}/revocations through a lower serial": protocol.CodeConflict}
+	refusedFirst := map[string]protocol.Code{"PUT /v1/{address}/revocation through a lower serial": protocol.CodeSerialTooLow}
 	type route struct {
 		pattern string // the pattern its states are kept under
 		method  string

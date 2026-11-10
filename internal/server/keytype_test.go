@@ -53,13 +53,13 @@ func TestAMailboxWhoseIdentityIsP256(t *testing.T) {
 		t.Fatalf("the mailbox's identity is a %s key", p.id.Type())
 	}
 	e.want(e.do("GET", p.path("/messages"), nil, p.pass(1)), 200, "")
-	e.want(e.do("GET", p.path("/messages"), nil, ""), 401, protocol.CodeUnauthorized)
+	e.want(e.do("GET", p.path("/messages"), nil, ""), 401, protocol.CodeInvalidPass)
 
 	// Another P-256 mailbox's pass is not this one's, and neither is a pass an
 	// Ed25519 mailbox signs for this address.
 	q, ed := e.rawP256().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
-	e.want(e.do("GET", p.path("/messages"), nil, q.pass(1)), 401, protocol.CodeUnauthorized)
-	e.want(e.do("GET", p.path("/messages"), nil, e.passFor(ed.by[1], p.id.Address(), e.name())), 401, protocol.CodeCertificateNotCurrent)
+	e.want(e.do("GET", p.path("/messages"), nil, q.pass(1)), 401, protocol.CodeInvalidPass)
+	e.want(e.do("GET", p.path("/messages"), nil, e.passFor(ed.by[1], p.id.Address(), e.name())), 401, protocol.CodeCertificateSuperseded)
 
 	// A certificate, by a prekey published under it: its passes are taken,
 	// and the identity's still are.
@@ -90,7 +90,7 @@ func TestAMailboxWhoseIdentityIsP256(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.prekeyUnder(under, 3, now.Add(protocol.MaxPrekeyLifetime), nil)
-	e.want(e.do("PUT", p.path("/prekey"), p.upload(3), e.passFor(under, p.id.Address(), e.name())), 400, protocol.CodeBadKey)
+	e.want(e.do("PUT", p.path("/prekey"), p.upload(3), e.passFor(under, p.id.Address(), e.name())), 400, protocol.CodeInvalidKey)
 }
 
 // A pass's signature does not cover the key it names, and a mailbox's signing
@@ -123,7 +123,7 @@ func TestAPassThatCarriesAnotherMailboxsCertificate(t *testing.T) {
 			if _, err := protocol.ParsePass(pass); err != nil {
 				t.Fatalf("%s, under a certificate %v: the forged pass does not parse: %v", name, working, err)
 			}
-			e.want(e.do("GET", victim.path("/messages"), nil, pass), 401, protocol.CodeUnauthorized)
+			e.want(e.do("GET", victim.path("/messages"), nil, pass), 401, protocol.CodeInvalidPass)
 			// Control: the victim's own pass, by the same signer, is taken.
 			e.want(e.do("GET", victim.path("/messages"), nil, victim.pass(serial)), 200, "")
 		}
@@ -398,6 +398,6 @@ func TestTheSenderKeyTypesAMailboxDeclared(t *testing.T) {
 	bad := e.raw()
 	bad.prekey(1, now.Add(protocol.MaxPrekeyLifetime), nil)
 	reg, _ := json.Marshal(bad.registration(1))
-	e.want(e.do("PUT", bad.path(""), bytes.Replace(reg, []byte("}"), []byte(`,"sender_key_types":"ssh-ed25519"}`), 1), bad.pass(1)), 400, protocol.CodeBadRequest)
-	e.want(e.do("PUT", bad.path(""), bytes.Replace(reg, []byte("}"), []byte(`,"sender_key_types":[1]}`), 1), bad.pass(1)), 400, protocol.CodeBadRequest)
+	e.want(e.do("PUT", bad.path(""), bytes.Replace(reg, []byte("}"), []byte(`,"sender_key_types":"ssh-ed25519"}`), 1), bad.pass(1)), 400, protocol.CodeInvalidRequest)
+	e.want(e.do("PUT", bad.path(""), bytes.Replace(reg, []byte("}"), []byte(`,"sender_key_types":[1]}`), 1), bad.pass(1)), 400, protocol.CodeInvalidRequest)
 }

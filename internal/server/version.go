@@ -9,7 +9,7 @@ import (
 )
 
 // The states of a request's version by the policy, as the metrics count
-// them (Metrics.version): retired, answered 410 version_retired; sunset, a
+// them (Metrics.version): retired, answered 410 client_version_unsupported; sunset, a
 // sunset covers it and its date has not passed; deprecated, a deprecation
 // covers it and no sunset does; current, neither.
 const (
@@ -69,7 +69,7 @@ func implementationOf(bi *debug.BuildInfo, ok bool) *protocol.Implementation {
 // (PROTOCOL.md §11.17): Deprecation where a deprecation covers it and Sunset
 // where a sunset does, each the earliest date of those that cover it, on
 // whatever answer it gets. A request whose version is retired at the
-// server's clock is answered 410 version_retired, with min_version where
+// server's clock is answered 410 client_version_unsupported, with min_version where
 // there is a floor, before it is routed and with nothing of it read, its pass
 // included, but on the document, GET /v1/, which takes every version (§11.4
 // rule 0). It counts against nothing but its address's flood budget, as a
@@ -101,13 +101,13 @@ func (s *Server) versioned(h http.Handler) http.Handler {
 }
 
 // retiredVersion is the answer to a request of a retired version: 410
-// version_retired, naming the floor where there is one.
+// client_version_unsupported, naming the floor where there is one.
 func retiredVersion(floor string) *problem {
 	const hint = "upgrade this client"
 	if floor == "" {
-		return fail(protocol.CodeVersionRetired, hint, "this server no longer takes this client's version")
+		return fail(protocol.CodeClientVersionUnsupported, hint, "this server no longer takes this client's version")
 	}
-	return fail(protocol.CodeVersionRetired, hint, "this server no longer takes this client's version: it takes %s and later",
+	return fail(protocol.CodeClientVersionUnsupported, hint, "this server no longer takes this client's version: it takes %s and later",
 		value{floor, func(p *protocol.Problem) { p.MinVersion = floor }})
 }
 

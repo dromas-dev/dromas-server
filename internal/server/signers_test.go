@@ -43,7 +43,7 @@ func TestACertificateIsTakenAboveTheRevocationHeld(t *testing.T) {
 	e.want(e.do("PUT", m.path("/prekey"), m.upload(2), m.pass(2)), http.StatusOK, "")
 
 	n := e.raw()
-	e.want(e.do("PUT", n.path("/revocations"), n.certs(3), ""), http.StatusOK, "")
+	e.want(e.do("PUT", n.path("/revocation"), n.certs(3), ""), http.StatusOK, "")
 	identity := e.passFor(n.signer, n.id.Address(), e.name())
 	for _, serial := range []uint64{2, 3} {
 		n.prekeyUnder(n.certify(serial), 1, until, nil)
@@ -59,7 +59,7 @@ func TestACertificateIsTakenAboveTheRevocationHeld(t *testing.T) {
 
 // Statements are one way: once a statement under a certificate is taken, one
 // the identity signs stands below it, rank 0, and is refused
-// certificate_not_current, naming the certificate it must be above, whatever
+// certificate_superseded, naming the certificate it must be above, whatever
 // its prekey serial and whichever pass it carries; as is a statement under a
 // lower certificate.
 func TestAnIdentityStatementAfterACertificateIsRefused(t *testing.T) {
@@ -116,7 +116,7 @@ func TestTheIdentitysPassIsAlwaysTaken(t *testing.T) {
 	}
 	e.want(e.do("POST", o.path("/messages"), o.sealed(1, ciphertextTo(t, o)), identity()), http.StatusCreated, "")
 
-	e.want(e.do("PUT", r.path("/revocations"), r.certs(serial), ""), http.StatusOK, "")
+	e.want(e.do("PUT", r.path("/revocation"), r.certs(serial), ""), http.StatusOK, "")
 	misses := debts(e.server, e.clock.Now())[string(protocol.QuotaMisses)]
 	for _, c := range calls[:4] {
 		if got := e.do(c.method, r.path(c.path), c.body, identity()); got.status == http.StatusUnauthorized {
@@ -158,7 +158,7 @@ func TestTheIdentityIsNeverListedRevoked(t *testing.T) {
 	if _, err := e.store.Count(ctx, r.id.Address()); err != nil { // a process that has loaded it
 		t.Fatal(err)
 	}
-	e.want(e.do("PUT", r.path("/revocations"), r.certs(protocol.MaxSerial), ""), http.StatusOK, "")
+	e.want(e.do("PUT", r.path("/revocation"), r.certs(protocol.MaxSerial), ""), http.StatusOK, "")
 	b, err := e.store.Mailbox(ctx, r.id.Address())
 	if err != nil {
 		t.Fatal(err)
@@ -201,7 +201,7 @@ func certAt(t *testing.T, r *raw, serial uint64, after, before time.Time) ssh.Si
 // A certificate is held to the sanity refusals when it is first taken, each
 // exact at the server's clock (PROTOCOL.md §11.7 step 6): begun, not ended,
 // and no longer than the server's maximum, which the refusal carries in
-// max_certificate_lifetime. Nothing more: one begun this second is taken. One
+// max_certificate_lifetime_seconds. Nothing more: one begun this second is taken. One
 // longer than the protocol's maximum is no certificate any verifier takes
 // (PROTOCOL.md §5.2), whatever the server's maximum. A renewal under the
 // mailbox's current certificate is not held to the maximum again, so a lower
@@ -220,13 +220,13 @@ func TestTheSanityRefusals(t *testing.T) {
 		status        int
 		code          protocol.Code
 	}{
-		{"begun a second from now", now.Add(time.Second), now.Add(time.Hour), http.StatusBadRequest, protocol.CodePrekeyTime},
+		{"begun a second from now", now.Add(time.Second), now.Add(time.Hour), http.StatusBadRequest, protocol.CodeInvalidValidityPeriod},
 		{"begun this second", now, now.Add(time.Hour), http.StatusCreated, ""},
-		{"ended this second", now.Add(-time.Hour), now, http.StatusBadRequest, protocol.CodePrekeyTime},
+		{"ended this second", now.Add(-time.Hour), now, http.StatusBadRequest, protocol.CodeInvalidValidityPeriod},
 		{"ending a second from now", now.Add(-time.Hour), now.Add(time.Second), http.StatusCreated, ""},
 		{"the maximum", now.Add(-protocol.MaxSkew), now.Add(-protocol.MaxSkew).Add(most), http.StatusCreated, ""},
-		{"a second past the maximum", now.Add(-protocol.MaxSkew), now.Add(-protocol.MaxSkew).Add(most + time.Second), http.StatusBadRequest, protocol.CodeCertificateTooLong},
-		{"a second past the protocol's maximum", now.Add(-protocol.MaxSkew), now.Add(-protocol.MaxSkew).Add(protocol.MaxCertificateLifetime + time.Second), http.StatusBadRequest, protocol.CodeBadKey},
+		{"a second past the maximum", now.Add(-protocol.MaxSkew), now.Add(-protocol.MaxSkew).Add(most + time.Second), http.StatusBadRequest, protocol.CodeCertificateLifetimeTooLong},
+		{"a second past the protocol's maximum", now.Add(-protocol.MaxSkew), now.Add(-protocol.MaxSkew).Add(protocol.MaxCertificateLifetime + time.Second), http.StatusBadRequest, protocol.CodeInvalidKey},
 	} {
 		r := e.raw().certified()
 		r.prekeyUnder(certAt(t, r, 2, c.after, c.before), 1, until, nil)
@@ -234,8 +234,8 @@ func TestTheSanityRefusals(t *testing.T) {
 		if got.status != c.status || got.code() != c.code {
 			t.Errorf("a certificate %s: %d %s, want %d %s", c.name, got.status, got.body, c.status, c.code)
 		}
-		if p := got.problem(); c.code == protocol.CodeCertificateTooLong && (p.MaxCertificateLifetime == nil || *p.MaxCertificateLifetime != uint64(most/time.Second)) {
-			t.Errorf("a certificate %s: max_certificate_lifetime %v, want %d", c.name, p.MaxCertificateLifetime, most/time.Second)
+		if p := got.problem(); c.code == protocol.CodeCertificateLifetimeTooLong && (p.MaxCertificateLifetime == nil || *p.MaxCertificateLifetime != uint64(most/time.Second)) {
+			t.Errorf("a certificate %s: max_certificate_lifetime_seconds %v, want %d", c.name, p.MaxCertificateLifetime, most/time.Second)
 		}
 	}
 
@@ -253,7 +253,7 @@ func TestTheSanityRefusals(t *testing.T) {
 	at2 := func(serial uint64) string { return e2.passFor(r.by[serial], r.id.Address(), e2.name()) }
 	e2.want(e2.do("PUT", r.path("/prekey"), r.upload(2), at2(2)), http.StatusOK, "")
 	r.prekeyUnder(r.certifyFor(3, protocol.MaxCertificateLifetime), 3, e1.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
-	e2.want(e2.do("PUT", r.path("/prekey"), r.upload(3), at2(3)), http.StatusBadRequest, protocol.CodeCertificateTooLong)
+	e2.want(e2.do("PUT", r.path("/prekey"), r.upload(3), at2(3)), http.StatusBadRequest, protocol.CodeCertificateLifetimeTooLong)
 	r.prekeyUnder(r.certifyFor(3, most), 3, e1.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	e2.want(e2.do("PUT", r.path("/prekey"), r.upload(3), at2(3)), http.StatusOK, "")
 }

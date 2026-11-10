@@ -33,8 +33,8 @@ type stateAnswer struct {
 
 // A call made with a mailbox's pass, or about a mailbox, answers that mailbox's state
 // before it judges the pass, whatever pass it carries (PROTOCOL.md §11.4 rule
-// 1): never registered or forgotten 404 no_such_mailbox, a
-// revoked address 410 revoked with its record, a mailbox whose current
+// 1): never registered or forgotten 404 mailbox_not_found, a
+// revoked address 410 mailbox_revoked with its record, a mailbox whose current
 // certificate its identity revoked 401 certificate_revoked. So a mailbox learns
 // its own state whatever pass it carries. Every route of routes(), and HEAD
 // on each that answers GET, in each state, with no pass, one that is no
@@ -77,14 +77,14 @@ func TestEveryCallAboutAMailboxAnswersItsStateBeforeItsPass(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		e.want(e.do("PUT", r.path("/revocations"), protocol.Revocations{Identity: r.id.Document(), Revocation: rev}, ""), http.StatusCreated, "")
+		e.want(e.do("PUT", r.path("/revocation"), protocol.Revocations{Identity: r.id.Document(), Revocation: rev}, ""), http.StatusCreated, "")
 	})
 	// A mailbox under certificate 1, its pass checked, then that certificate
 	// revoked.
 	listed := e.raw().certified().register(protocol.MaxPrekeyLifetime)
 	listedPass := listed.pass(1)
 	e.want(e.do("GET", listed.path("/messages"), nil, listedPass), http.StatusOK, "")
-	e.want(e.do("PUT", listed.path("/revocations"), listed.certs(1), ""), http.StatusOK, "")
+	e.want(e.do("PUT", listed.path("/revocation"), listed.certs(1), ""), http.StatusOK, "")
 	states := []struct {
 		name string
 		r    *raw
@@ -97,8 +97,8 @@ func TestEveryCallAboutAMailboxAnswersItsStateBeforeItsPass(t *testing.T) {
 	}
 
 	var (
-		noMailbox   = stateAnswer{http.StatusNotFound, protocol.CodeNoSuchMailbox, false}
-		gone        = stateAnswer{http.StatusGone, protocol.CodeRevoked, true}
+		noMailbox   = stateAnswer{http.StatusNotFound, protocol.CodeMailboxNotFound, false}
+		gone        = stateAnswer{http.StatusGone, protocol.CodeMailboxRevoked, true}
 		revokedCert = stateAnswer{http.StatusUnauthorized, protocol.CodeCertificateRevoked, false}
 		goesOn      = stateAnswer{} // the state has no answer of its own on this route: the call goes on
 		owner       = map[string]stateAnswer{"never registered": noMailbox, "forgotten": noMailbox, "revoked": gone, "its current certificate revoked": revokedCert}
@@ -113,30 +113,30 @@ func TestEveryCallAboutAMailboxAnswersItsStateBeforeItsPass(t *testing.T) {
 	routes := map[string]route{
 		"GET /v1/{$}": {answers: map[string]stateAnswer{ // the server's document names no mailbox
 			"never registered": goesOn, "forgotten": goesOn, "revoked": goesOn, "its current certificate revoked": goesOn}},
-		"GET /v1/{addr}": {answers: map[string]stateAnswer{"never registered": noMailbox, "forgotten": noMailbox, "revoked": gone,
+		"GET /v1/{address}": {answers: map[string]stateAnswer{"never registered": noMailbox, "forgotten": noMailbox, "revoked": gone,
 			"its current certificate revoked": {http.StatusOK, "", false}}}, // the read serves a mailbox whose certificate is revoked, with what revoked it
-		"PUT /v1/{addr}": {answers: map[string]stateAnswer{
+		"PUT /v1/{address}": {answers: map[string]stateAnswer{
 			"never registered": goesOn, "forgotten": goesOn, // a registration of an address with no mailbox makes one, and judges its pass
 			"revoked": gone, "its current certificate revoked": revokedCert,
 		}, body: func(r *raw) any { return r.registration(1) }}, // the mailbox's own registration, sent again
-		"PUT /v1/{addr}/prekey": {answers: owner, body: func(r *raw) any { return r.upload(1) }}, // the mailbox's own statement, sent again
-		"PUT /v1/{addr}/revocations": {answers: map[string]stateAnswer{
+		"PUT /v1/{address}/prekey": {answers: owner, body: func(r *raw) any { return r.upload(1) }}, // the mailbox's own statement, sent again
+		"PUT /v1/{address}/revocation": {answers: map[string]stateAnswer{
 			"never registered": goesOn, "forgotten": goesOn, "its current certificate revoked": goesOn, // kept, mailbox or none (PROTOCOL.md §11.6), or raised
 			"revoked": gone,
 		}, body: func(r *raw) any { return r.certs(2) }},
-		"GET /v1/{addr}/revocations": {answers: map[string]stateAnswer{ // what is held of the address's revocations, mailbox or none
-			"never registered": {http.StatusNotFound, protocol.CodeNotRevoked, false}, "forgotten": {http.StatusNotFound, protocol.CodeNotRevoked, false},
+		"GET /v1/{address}/revocation": {answers: map[string]stateAnswer{ // what is held of the address's revocations, mailbox or none
+			"never registered": {http.StatusNotFound, protocol.CodeRevocationNotFound, false}, "forgotten": {http.StatusNotFound, protocol.CodeRevocationNotFound, false},
 			"revoked": {http.StatusOK, "", true}, "its current certificate revoked": {http.StatusOK, "", true},
 		}},
-		"PUT /v1/{addr}/acl":              {answers: owner},
-		"GET /v1/{addr}/acl":              {answers: owner},
-		"PUT /v1/{addr}/account":          {answers: owner},
-		"DELETE /v1/{addr}/account":       {answers: owner},
-		"GET /v1/{addr}/messages":         {answers: owner},
-		"GET /v1/{addr}/messages/{id}":    {answers: owner},
-		"DELETE /v1/{addr}/messages/{id}": {answers: owner},
-		"POST /v1/{addr}/messages": {answers: map[string]stateAnswer{ // the sender's state, by a sender's codes (PROTOCOL.md §11.4)
-			"never registered": {http.StatusForbidden, protocol.CodeUnknownSender, false}, "forgotten": {http.StatusForbidden, protocol.CodeUnknownSender, false},
+		"PUT /v1/{address}/acl":              {answers: owner},
+		"GET /v1/{address}/acl":              {answers: owner},
+		"PUT /v1/{address}/account":          {answers: owner},
+		"DELETE /v1/{address}/account":       {answers: owner},
+		"GET /v1/{address}/messages":         {answers: owner},
+		"GET /v1/{address}/messages/{id}":    {answers: owner},
+		"DELETE /v1/{address}/messages/{id}": {answers: owner},
+		"POST /v1/{address}/messages": {answers: map[string]stateAnswer{ // the sender's state, by a sender's codes (PROTOCOL.md §11.4)
+			"never registered": {http.StatusForbidden, protocol.CodeSenderNotRegistered, false}, "forgotten": {http.StatusForbidden, protocol.CodeSenderNotRegistered, false},
 			"revoked": {http.StatusForbidden, protocol.CodeSenderRevoked, false}, "its current certificate revoked": revokedCert,
 		}, sender: true},
 	}
@@ -196,7 +196,7 @@ func TestEveryCallAboutAMailboxAnswersItsStateBeforeItsPass(t *testing.T) {
 			if want.sender {
 				at = live.id.Address().String()
 			}
-			path := strings.NewReplacer("{addr}", at, "{id}", strings.Repeat("0", 64), "{$}", "").Replace(pattern)
+			path := strings.NewReplacer("{address}", at, "{id}", strings.Repeat("0", 64), "{$}", "").Replace(pattern)
 			var body any
 			if want.body != nil {
 				body = want.body(st.r)
@@ -238,7 +238,7 @@ var retryRoles = map[string]string{
 	string(protocol.QuotaCertificates):           "made new by a renewal",
 	string(protocol.QuotaCertificateRevocations): "made new by a raise of the revocation of certificates",
 	string(protocol.QuotaSends):                  "made new by a send",
-	string(protocol.CodeMailboxBusy):             "made new by a send",
+	string(protocol.CodeMailboxRateLimited):      "made new by a send",
 	string(protocol.QuotaRequests):               "the call's own: its address's flood budget, which may defer it",
 	string(protocol.QuotaRequestsRange):          "the call's own: its address's flood budget, which may defer it",
 	string(protocol.QuotaCalls):                  "the call's own: its mailbox's calls, which may defer it",
@@ -248,7 +248,7 @@ var retryRoles = map[string]string{
 	string(protocol.QuotaMissesRange):            "the bound of a read that may find no mailbox and of a pass that may fail, reserved before either",
 	string(protocol.QuotaPolls):                  "a list's",
 	string(protocol.QuotaPages):                  "a list's",
-	string(protocol.CodeFetchPaced):              "a fetch's",
+	string(protocol.CodeFetchRateLimited):        "a fetch's",
 }
 
 // madeNew reports whether the limit named name counts what a call makes new
@@ -281,7 +281,7 @@ func emptyOK(_, got reply) string {
 // revocation of an address held nothing of spends spent, 410 with the
 // record; and a revocation of certificates through the serial held, with
 // the raises a day spent, 200 {}, and one through a lower serial 409
-// conflict. Each count is spent alone, by the call the retry repeats, and
+// serial_too_low. Each count is spent alone, by the call the retry repeats, and
 // then all of a kind's together, in a process whose memory holds the mailbox and
 // in one that reads it. The control is a new call of the kind, refused by a
 // count spent; and the retry spends none of what any call makes new. The
@@ -348,9 +348,9 @@ func TestARetryIsAnsweredFromWhatIsKeptWhateverItWouldMakeNew(t *testing.T) {
 			return first, retries, func() reply { return call(ip, "PUT", r.path("/prekey"), r.upload(base+3), r.pass(base+3)) }
 		}},
 		{"send", map[string]func(*Limits){
-			string(protocol.QuotaSends):      func(l *Limits) { l.SendsPerDay, l.SendsBurst = 1, 1 },
-			string(protocol.CodeMailboxFull): func(l *Limits) { l.MailboxCap = 1 },
-			string(protocol.CodeMailboxBusy): func(l *Limits) { l.ReceiveBurst, l.ReceiveRefill = 1, time.Hour },
+			string(protocol.QuotaSends):             func(l *Limits) { l.SendsPerDay, l.SendsBurst = 1, 1 },
+			string(protocol.CodeMailboxFull):        func(l *Limits) { l.MailboxCap = 1 },
+			string(protocol.CodeMailboxRateLimited): func(l *Limits) { l.ReceiveBurst, l.ReceiveRefill = 1, time.Hour },
 		}, func(e *env, call caller, _ []string) (reply, []retried, func() reply) {
 			from, to, other := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 			post := to.sealed(1, ciphertextTo(e.t, to))
@@ -384,18 +384,18 @@ func TestARetryIsAnsweredFromWhatIsKeptWhateverItWouldMakeNew(t *testing.T) {
 				r := e.raw()
 				r.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 				e.want(call("192.0.2.80", "PUT", r.path(""), r.registration(1), r.pass(1)), http.StatusCreated, "") // from an address of its own
-				if first = call(ip, "PUT", r.path("/revocations"), r.certs(5), ""); first.status != http.StatusOK {
+				if first = call(ip, "PUT", r.path("/revocation"), r.certs(5), ""); first.status != http.StatusOK {
 					return first, nil, nil
 				}
 				retries = append(retries,
-					retried{"through the serial held", func() reply { return call(ip, "PUT", r.path("/revocations"), r.certs(5), "") }, emptyOK},
-					retried{"through a lower serial", func() reply { return call(ip, "PUT", r.path("/revocations"), r.certs(3), "") }, func(_, got reply) string {
-						if got.status != http.StatusConflict || got.code() != protocol.CodeConflict {
-							return fmt.Sprintf("%d %s, want 409 conflict", got.status, got.body)
+					retried{"through the serial held", func() reply { return call(ip, "PUT", r.path("/revocation"), r.certs(5), "") }, emptyOK},
+					retried{"through a lower serial", func() reply { return call(ip, "PUT", r.path("/revocation"), r.certs(3), "") }, func(_, got reply) string {
+						if got.status != http.StatusConflict || got.code() != protocol.CodeSerialTooLow {
+							return fmt.Sprintf("%d %s, want 409 serial_too_low", got.status, got.body)
 						}
 						return ""
 					}})
-				control = func() reply { return call(ip, "PUT", r.path("/revocations"), r.certs(7), "") }
+				control = func() reply { return call(ip, "PUT", r.path("/revocation"), r.certs(7), "") }
 			}
 			if slices.ContainsFunc(spent, func(n string) bool { return n != string(protocol.QuotaCertificateRevocations) }) {
 				r, other := e.raw(), e.raw()
@@ -406,19 +406,19 @@ func TestARetryIsAnsweredFromWhatIsKeptWhateverItWouldMakeNew(t *testing.T) {
 					}
 					return protocol.Revocations{Identity: r.id.Document(), Revocation: rev}
 				}
-				if first = call(ip, "PUT", r.path("/revocations"), revocation(r), ""); first.status != http.StatusCreated {
+				if first = call(ip, "PUT", r.path("/revocation"), revocation(r), ""); first.status != http.StatusCreated {
 					return first, nil, nil
 				}
-				retries = append(retries, retried{"of the address held revoked", func() reply { return call(ip, "PUT", r.path("/revocations"), revocation(r), "") }, func(_, got reply) string {
+				retries = append(retries, retried{"of the address held revoked", func() reply { return call(ip, "PUT", r.path("/revocation"), revocation(r), "") }, func(_, got reply) string {
 					var p struct {
 						Record *protocol.Revocations `json:"record"`
 					}
-					if got.status != http.StatusGone || got.code() != protocol.CodeRevoked || json.Unmarshal(got.body, &p) != nil || p.Record == nil || string(p.Record.Identity) != string(r.id.Document()) {
-						return fmt.Sprintf("%d %s, want 410 revoked with the address's record", got.status, got.body)
+					if got.status != http.StatusGone || got.code() != protocol.CodeMailboxRevoked || json.Unmarshal(got.body, &p) != nil || p.Record == nil || string(p.Record.Identity) != string(r.id.Document()) {
+						return fmt.Sprintf("%d %s, want 410 mailbox_revoked with the address's record", got.status, got.body)
 					}
 					return ""
 				}})
-				control = func() reply { return call(ip, "PUT", other.path("/revocations"), revocation(other), "") }
+				control = func() reply { return call(ip, "PUT", other.path("/revocation"), revocation(other), "") }
 			}
 			return first, retries, control
 		}},

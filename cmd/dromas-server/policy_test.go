@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dromas-dev/dromas-server/internal/server"
 )
 
 // refused runs serve with args, and reports what it returned: a refusal
@@ -45,10 +47,10 @@ func TestServeRefusesAVersionPolicyThatBreaksItsForm(t *testing.T) {
 		{"capabilities", `{"capabilities":[]}`},
 		{"bad-floor", `{"min_version":"v1.2-secretish"}`},
 		{"bad-latest", `{"latest_version":"1.2.3.4"}`},
-		{"both", `{"deprecations":[{"below":"1.2","version":"1.3","at":"` + at + `"}]}`},
-		{"bad-time", `{"sunsets":[{"below":"1.2","at":"2027-01-01"}]}`},
-		{"sunset-first", `{"deprecations":[{"below":"1.2","at":"` + later + `"}],"sunsets":[{"below":"1.2","at":"` + at + `"}]}`},
-		{"too-large", `{"min_version":"1.2"}` + strings.Repeat(" ", 25<<10)},
+		{"both", `{"deprecations":[{"below":"1.2","version":"1.3","effective_at":"` + at + `"}]}`},
+		{"bad-time", `{"sunsets":[{"below":"1.2","effective_at":"2027-01-01"}]}`},
+		{"sunset-first", `{"deprecations":[{"below":"1.2","effective_at":"` + later + `"}],"sunsets":[{"below":"1.2","effective_at":"` + at + `"}]}`},
+		{"too-large", `{"min_version":"1.2"}` + strings.Repeat(" ", server.MaxVersionPolicy)},
 	} {
 		p := file(c.name+".json", c.body)
 		err := refused(t, "--version-policy", p)
@@ -59,7 +61,7 @@ func TestServeRefusesAVersionPolicyThatBreaksItsForm(t *testing.T) {
 	if err := refused(t, "--version-policy", filepath.Join(dir, "missing.json")); err == nil || !strings.HasPrefix(err.Error(), "--version-policy: ") {
 		t.Errorf("a missing file: %v", err)
 	}
-	good := file("good.json", `{"min_version":"1.2","latest_version":"1.5.1","deprecations":[{"below":"1.4","at":"`+at+`"}],"sunsets":[{"below":"1.4","at":"`+later+`"}]}`)
+	good := file("good.json", `{"min_version":"1.2","latest_version":"1.5.1","deprecations":[{"below":"1.4","effective_at":"`+at+`"}],"sunsets":[{"below":"1.4","effective_at":"`+later+`"}]}`)
 	if err := refused(t, "--version-policy", good, "--listen", "not an address"); err == nil || strings.HasPrefix(err.Error(), "--version-policy") {
 		t.Errorf("control, a file of its form: %v, want the refusal of --listen", err)
 	}

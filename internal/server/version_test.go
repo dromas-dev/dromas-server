@@ -63,7 +63,7 @@ func (e *env) asVersion(v string) {
 }
 
 // A request whose version is below the floor, or covered by a sunset whose
-// date has passed at the server's clock, is answered 410 version_retired,
+// date has passed at the server's clock, is answered 410 client_version_unsupported,
 // with min_version where there is a floor (PROTOCOL.md §11.17). A request
 // with no Dromas-Version, or one of another form, is of version 0.0.0, below
 // the floor. A pre-release is below its release. Controls: a version at the
@@ -75,8 +75,8 @@ func TestARetiredVersionIsAnswered410(t *testing.T) {
 	nobody := "/v1/" + "d_" + strings.Repeat("ab", 32)
 	retired := func(r reply, what string) {
 		t.Helper()
-		if r.status != http.StatusGone || r.code() != protocol.CodeVersionRetired || r.problem().MinVersion != "1.2" {
-			t.Errorf("%s: %d %s, want 410 version_retired with min_version 1.2", what, r.status, r.body)
+		if r.status != http.StatusGone || r.code() != protocol.CodeClientVersionUnsupported || r.problem().MinVersion != "1.2" {
+			t.Errorf("%s: %d %s, want 410 client_version_unsupported with min_version 1.2", what, r.status, r.body)
 		}
 	}
 	for _, v := range []string{"1.1.9", "1.2.0-rc.1", "0.0.0", "1.1", "v1.5.0", "1.5.0+build", "1.5", "garbage"} {
@@ -85,7 +85,7 @@ func TestARetiredVersionIsAnswered410(t *testing.T) {
 	retired(e.do("GET", nobody, nil, ""), "no Dromas-Version")
 	// At the floor and past it, the call goes on: the address is unknown.
 	for _, v := range []string{"1.2.0", "1.3.7", "1.5.0", "2.0.0-alpha"} {
-		e.want(e.doWith("GET", nobody, nil, "", protocol.VersionHeader, v), http.StatusNotFound, protocol.CodeNoSuchMailbox)
+		e.want(e.doWith("GET", nobody, nil, "", protocol.VersionHeader, v), http.StatusNotFound, protocol.CodeMailboxNotFound)
 	}
 	// Outside /v1/, nothing is the policy's: the link page takes any version.
 	e.want(e.do("GET", protocol.LinkPath+"d_"+strings.Repeat("ab", 32), nil, ""), http.StatusOK, "")
@@ -93,20 +93,20 @@ func TestARetiredVersionIsAnswered410(t *testing.T) {
 	// The sunsets, by the server's clock: 1.3.x's an hour on, every version
 	// below 1.4's two hours on.
 	e.clock.Add(time.Hour - time.Second)
-	e.want(e.doWith("GET", nobody, nil, "", protocol.VersionHeader, "1.3.7"), http.StatusNotFound, protocol.CodeNoSuchMailbox)
+	e.want(e.doWith("GET", nobody, nil, "", protocol.VersionHeader, "1.3.7"), http.StatusNotFound, protocol.CodeMailboxNotFound)
 	e.clock.Add(time.Second)
 	retired(e.doWith("GET", nobody, nil, "", protocol.VersionHeader, "1.3.7"), "1.3.7 at its sunset")
 	retired(e.doWith("GET", nobody, nil, "", protocol.VersionHeader, "1.3.0-rc.1"), "a pre-release of 1.3 at its sunset")
-	e.want(e.doWith("GET", nobody, nil, "", protocol.VersionHeader, "1.2.5"), http.StatusNotFound, protocol.CodeNoSuchMailbox)
+	e.want(e.doWith("GET", nobody, nil, "", protocol.VersionHeader, "1.2.5"), http.StatusNotFound, protocol.CodeMailboxNotFound)
 	e.clock.Add(time.Hour)
 	retired(e.doWith("GET", nobody, nil, "", protocol.VersionHeader, "1.2.5"), "1.2.5 at its sunset")
-	e.want(e.doWith("GET", nobody, nil, "", protocol.VersionHeader, "1.4.0"), http.StatusNotFound, protocol.CodeNoSuchMailbox)
+	e.want(e.doWith("GET", nobody, nil, "", protocol.VersionHeader, "1.4.0"), http.StatusNotFound, protocol.CodeMailboxNotFound)
 }
 
 // A sunset is passed by the server's clock, not the mailbox's (AGENTS.md §
 // Clocks): a mailbox whose clock is past its version's sunset works while
 // the server's is not, and one whose clock is before it is refused once the
-// server's is past. The mailbox is told version_retired, the code it reads
+// server's is past. The mailbox is told client_version_unsupported, the code it reads
 // (the client repo's client/errors.go).
 func TestASunsetIsPassedByTheServersClock(t *testing.T) {
 	t.Parallel()
@@ -135,8 +135,8 @@ func TestASunsetIsPassedByTheServersClock(t *testing.T) {
 			continue
 		}
 		e.clock.Add(45 * time.Minute) // the server's clock at the sunset; the mailbox's five minutes before it
-		if _, err := b.Receive(ctx); codeOf(err) != protocol.CodeVersionRetired {
-			t.Errorf("%s: a call at the sunset by the server's clock: %v, want version_retired", c.name, err)
+		if _, err := b.Receive(ctx); codeOf(err) != protocol.CodeClientVersionUnsupported {
+			t.Errorf("%s: a call at the sunset by the server's clock: %v, want client_version_unsupported", c.name, err)
 		}
 	}
 }
@@ -246,8 +246,8 @@ func TestARetiredVersionReadsNothing(t *testing.T) {
 	body := `{"identity":"` + strings.Repeat("A", 400) + `"}`
 
 	got, limits, passes, rb := at("10.9.0.1", "PUT", b.path("/acl"), bad, "1.1.0", body)
-	if got.status != http.StatusGone || got.problem().Code != protocol.CodeVersionRetired {
-		t.Errorf("a retired version with a pass that does not verify: %d %s, want 410 version_retired", got.status, got.body)
+	if got.status != http.StatusGone || got.problem().Code != protocol.CodeClientVersionUnsupported {
+		t.Errorf("a retired version with a pass that does not verify: %d %s, want 410 client_version_unsupported", got.status, got.body)
 	}
 	if len(passes) != 0 || rb.early {
 		t.Errorf("a retired version: passes looked at %v, body read before it was counted %v", passes, rb.early)
@@ -274,7 +274,7 @@ func TestARetiredVersionReadsNothing(t *testing.T) {
 	l2.RequestBurst, l2.RequestRefill = 1, time.Hour
 	e2, _ := versionsEnv(t, l2)
 	c2 := e2.caller()
-	e2.want(c2("10.9.1.1", "GET", "/v1/"+"d_"+strings.Repeat("ab", 32), nil, ""), http.StatusGone, protocol.CodeVersionRetired)
+	e2.want(c2("10.9.1.1", "GET", "/v1/"+"d_"+strings.Repeat("ab", 32), nil, ""), http.StatusGone, protocol.CodeClientVersionUnsupported)
 	e2.limited(c2("10.9.1.1", "GET", "/v1/"+"d_"+strings.Repeat("ab", 32), nil, ""), protocol.QuotaRequests)
 }
 
@@ -342,7 +342,7 @@ func TestTheDocumentIsThePolicy(t *testing.T) {
 	bare := newEnv(t, l)
 	got := bare.do("GET", protocol.DocumentPath, nil, "")
 	server, _ := json.Marshal(implementation)
-	if want := fmt.Sprintf(`{"deprecations":[],"sunsets":[],"capabilities":[],"max_certificate_lifetime":%d,"server":%s}`, 50*24*3600+1, server); got.status != http.StatusOK || strings.TrimSpace(string(got.body)) != want {
+	if want := fmt.Sprintf(`{"deprecations":[],"sunsets":[],"capabilities":[],"max_certificate_lifetime_seconds":%d,"server":%s}`, 50*24*3600+1, server); got.status != http.StatusOK || strings.TrimSpace(string(got.body)) != want {
 		t.Errorf("no policy: %d %s, want %s", got.status, got.body, want)
 	}
 	if got.header.Get(protocol.DeprecationHeader) != "" || got.header.Get(protocol.SunsetHeader) != "" {

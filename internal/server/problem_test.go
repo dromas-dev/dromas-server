@@ -31,8 +31,12 @@ func TestAnErrorsValuesAreMembers(t *testing.T) {
 	}
 	limitIs := func(what string, p protocol.Problem, code protocol.Code, want int) {
 		t.Helper()
-		if p.Code != code || p.Limit == nil || *p.Limit != uint64(want) || !strings.Contains(p.Detail, strconv.Itoa(want)) {
-			t.Errorf("%s: %+v, want %s with limit %d, which its detail names", what, p, code, want)
+		n := p.Limit // content_too_large's cap; a rate_limited's number a day is its quota_value
+		if code == protocol.CodeRateLimited {
+			n = p.QuotaValue
+		}
+		if p.Code != code || n == nil || *n != uint64(want) || !strings.Contains(p.Detail, strconv.Itoa(want)) {
+			t.Errorf("%s: %+v, want %s with %d, which its detail names", what, p, code, want)
 		}
 	}
 	quotaIs := func(what string, p protocol.Problem, q protocol.Quota) {
@@ -43,7 +47,7 @@ func TestAnErrorsValuesAreMembers(t *testing.T) {
 	}
 
 	_, err := a.Send(ctx, b.Address(), strings.Repeat("x", l.MaxSize+1))
-	limitIs("a send over the cap", problem(err), protocol.CodeTooLarge, l.MaxSize)
+	limitIs("a send over the cap", problem(err), protocol.CodeContentTooLarge, l.MaxSize)
 
 	send(t, a, b, "1")
 	_, err = a.Send(ctx, b.Address(), "2")
@@ -55,7 +59,7 @@ func TestAnErrorsValuesAreMembers(t *testing.T) {
 	reg := r.registration(1)
 	got := e.do("PUT", r.path(""), map[string]any{"identity": reg.Identity, "prekey": reg.Prekey, "prekey_signature": reg.PrekeySignature, "surplus": 1}, r.pass(1))
 	var p protocol.Problem
-	if err := protocol.Unmarshal(got.body, &p); err != nil || p.Code != protocol.CodeBadRequest || p.Member != "surplus" || !strings.Contains(p.Detail, "surplus") {
+	if err := protocol.Unmarshal(got.body, &p); err != nil || p.Code != protocol.CodeInvalidRequest || p.Member != "surplus" || !strings.Contains(p.Detail, "surplus") {
 		t.Errorf("a registration with a member it does not take: %s, %v", got.body, err)
 	}
 }

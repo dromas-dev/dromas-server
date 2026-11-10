@@ -73,7 +73,7 @@ func TestEveryRefusalNamesItsLimit(t *testing.T) {
 	e.want(e.do("POST", b.path("/messages"), nil, ""), http.StatusUnauthorized, "")
 	e.limited(e.do("POST", b.path("/messages"), nil, ""), protocol.QuotaSendsBeforePass)
 
-	e.want(e.do("GET", "/v1/"+"d_"+strings.Repeat("c", 64), nil, ""), http.StatusNotFound, protocol.CodeNoSuchMailbox)
+	e.want(e.do("GET", "/v1/"+"d_"+strings.Repeat("c", 64), nil, ""), http.StatusNotFound, protocol.CodeMailboxNotFound)
 	e.limited(e.do("GET", "/v1/"+"d_"+strings.Repeat("e", 64), nil, ""), protocol.QuotaMisses)
 
 	// The registration came from this address, so its count is spent. With
@@ -115,8 +115,8 @@ func TestARefusalGivesTheLongestWait(t *testing.T) {
 		t.Fatalf("a send past its sends waits %d s, want the sends' day", w)
 	}
 	var p protocol.Problem
-	if err := json.Unmarshal(got.body, &p); err != nil || p.Limit == nil || *p.Limit != 1 {
-		t.Fatalf("the sends' refusal carries no limit: %s", got.body)
+	if err := json.Unmarshal(got.body, &p); err != nil || p.QuotaValue == nil || *p.QuotaValue != 1 {
+		t.Fatalf("the sends' refusal carries no quota_value: %s", got.body)
 	}
 
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
@@ -216,8 +216,8 @@ func TestTheFloodBudget(t *testing.T) {
 		status       int
 	}{
 		{"GET", b.path(""), http.StatusOK},
-		{"GET", b.path("/revocations"), http.StatusNotFound},
-		{"PUT", b.path("/revocations"), http.StatusBadRequest},
+		{"GET", b.path("/revocation"), http.StatusNotFound},
+		{"PUT", b.path("/revocation"), http.StatusBadRequest},
 		{"PUT", b.path(""), http.StatusBadRequest},
 		{"PUT", b.path("/prekey"), http.StatusBadRequest},
 		{"GET", protocol.LinkPath + b.id.Address().String(), http.StatusOK},
@@ -285,7 +285,7 @@ func TestWhatNoRouteAnswersIsCounted(t *testing.T) {
 		call         func(ip, method, path string, body any, pass string) reply
 	}{
 		{"POST", protocol.LinkPath + b.id.Address().String(), http.StatusMethodNotAllowed, call},
-		{"DELETE", b.path("/revocations"), http.StatusMethodNotAllowed, call},
+		{"DELETE", b.path("/revocation"), http.StatusMethodNotAllowed, call},
 		{"GET", "/v1", http.StatusTemporaryRedirect, direct},
 		{"GET", b.path("/messages/../acl"), http.StatusTemporaryRedirect, direct},
 		{"HEAD", b.path(""), http.StatusOK, call}, // the read of a mailbox with no pass, which spends it as a route
@@ -355,12 +355,12 @@ func TestLimitsTop(t *testing.T) {
 		e.want(e.do("POST", "/v1/"+b.Address().String()+"/messages", e.sealTo(b), e.pass(a)), http.StatusCreated, "")
 	}
 	e.want(e.do("POST", "/v1/"+c.Address().String()+"/messages", e.sealTo(c), e.pass(a)), http.StatusCreated, "")
-	top, ok := e.server.Top(string(protocol.CodeMailboxBusy), 1)
+	top, ok := e.server.Top(string(protocol.CodeMailboxRateLimited), 1)
 	if !ok || len(top) != 1 || top[0].Key != b.Address().String() || top[0].FullIn != 180 {
-		t.Fatalf("the top of mailbox_busy: %+v %v, want b, full in 180 s", top, ok)
+		t.Fatalf("the top of mailbox_rate_limited: %+v %v, want b, full in 180 s", top, ok)
 	}
-	if top, _ := e.server.Top(string(protocol.CodeMailboxBusy), 5); len(top) != 2 || top[1].Key != c.Address().String() {
-		t.Fatalf("the top two of mailbox_busy: %+v", top)
+	if top, _ := e.server.Top(string(protocol.CodeMailboxRateLimited), 5); len(top) != 2 || top[1].Key != c.Address().String() {
+		t.Fatalf("the top two of mailbox_rate_limited: %+v", top)
 	}
 	for _, q := range protocol.Quotas() {
 		if _, ok := e.server.Top(string(q), 1); !ok {

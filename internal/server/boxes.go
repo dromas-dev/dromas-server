@@ -73,7 +73,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 		return fail(protocol.CodeUnsupportedKeyType, "make a mailbox whose identity is an ssh-ed25519 key, as dromas init does unless told otherwise",
 			"this server registers identities of these key types: %s", keyTypesValue(s.identityTypes))
 	case err != nil:
-		return failErr(protocol.CodeBadKey, "make a new identity: dromas init in a new mailbox", err)
+		return failErr(protocol.CodeInvalidKey, "make a new identity: dromas init in a new mailbox", err)
 	}
 	// A mailbox registered, or an address its identity revoked, is answered from
 	// what is kept of the address, whatever the statement and however many
@@ -220,7 +220,7 @@ func (s *Server) registered(w http.ResponseWriter, r *http.Request, id *protocol
 	case cur.State == Revoked:
 		return revokedWith(cur)
 	case !bytes.Equal(cur.Identity, req.Identity) || !bytes.Equal(cur.Statement, req.Prekey) || !bytes.Equal(cur.Signature, req.PrekeySignature):
-		return fail(protocol.CodeConflict, "registered: to replace its prekey, dromas prekey renew", "this address is registered with another prekey")
+		return fail(protocol.CodeMailboxAlreadyExists, "registered: to replace its prekey, dromas prekey renew", "this address is registered with another prekey")
 	}
 	if listed, err := cur.listed(cur.Rank); err != nil {
 		return err
@@ -263,7 +263,7 @@ func (s *Server) take(b *Mailbox, id *protocol.Identity, statement, sig []byte, 
 	keyHash := sha256.Sum256([]byte(p.Key))
 	retired := slices.DeleteFunc(b.Retired, func(x Retired) bool { return !now.Before(x.NotAfter) })
 	if keyHash == sha256.Sum256([]byte(b.Prekey.Key)) || slices.ContainsFunc(retired, func(x Retired) bool { return x.KeyHash == keyHash }) {
-		return fail(protocol.CodePrekeyNotNew, "every prekey must be a NEW key: dromas prekey renew makes one", "this key was already published")
+		return fail(protocol.CodePrekeyAlreadyUsed, "every prekey must be a NEW key: dromas prekey renew makes one", "this key was already published")
 	}
 	if now.Before(b.Prekey.NotAfter) {
 		retired = append(retired, Retired{Type: b.Prekey.Type(), NotAfter: b.Prekey.NotAfter, KeyHash: sha256.Sum256([]byte(b.Prekey.Key))})
@@ -308,23 +308,23 @@ func (s *Server) checkPrekey(id *protocol.Identity, statement, sig []byte, curre
 	p, signer, err := protocol.VerifyPrekey(id, statement, sig, now)
 	switch {
 	case errors.Is(err, protocol.ErrCertificateNotBegun):
-		return nil, nil, failErr(protocol.CodePrekeyTime, early, err)
+		return nil, nil, failErr(protocol.CodeInvalidValidityPeriod, early, err)
 	case errors.Is(err, protocol.ErrCertificateTime):
-		return nil, nil, failErr(protocol.CodePrekeyTime, "sign a new prekey statement: dromas prekey renew", err)
+		return nil, nil, failErr(protocol.CodeInvalidValidityPeriod, "sign a new prekey statement: dromas prekey renew", err)
 	case err != nil:
-		return nil, nil, failErr(protocol.CodeBadKey, "sign a new prekey statement: dromas prekey renew", err)
+		return nil, nil, failErr(protocol.CodeInvalidKey, "sign a new prekey statement: dromas prekey renew", err)
 	}
 	if c := signer.Certificate(); c != nil && signerHash(id, signer) != current {
 		if limit := s.limits().maxCertificate(); uint64(max(c.Lifetime(), 0)/time.Second) > limit {
-			return nil, nil, fail(protocol.CodeCertificateTooLong, "certify a new working key for no longer than this server's maximum, max_certificate_lifetime in GET /v1/: dromas prekey renew",
+			return nil, nil, fail(protocol.CodeCertificateLifetimeTooLong, "certify a new working key for no longer than this server's maximum, max_certificate_lifetime_seconds in GET /v1/: dromas prekey renew",
 				"the certificate runs longer than this server takes one for, %d seconds", maxLifetimeValue(limit))
 		}
 	}
 	if err := p.CheckLifetime(now); err != nil {
 		if p.Expired(now) {
-			return nil, nil, failErr(protocol.CodePrekeyTime, "sign a new prekey statement: dromas prekey renew", err)
+			return nil, nil, failErr(protocol.CodeInvalidValidityPeriod, "sign a new prekey statement: dromas prekey renew", err)
 		}
-		return nil, nil, failErr(protocol.CodePrekeyTime, tooLong, err)
+		return nil, nil, failErr(protocol.CodeInvalidValidityPeriod, tooLong, err)
 	}
 	return p, signer, nil
 }
@@ -412,7 +412,7 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 		if err := s.failed(r); err != nil {
 			return err
 		}
-		return failErr(protocol.CodeBadKey, "sign a new prekey statement: dromas prekey renew", err)
+		return failErr(protocol.CodeInvalidKey, "sign a new prekey statement: dromas prekey renew", err)
 	}
 	if listed, err := b.listed(o.Rank); err != nil {
 		return err
@@ -421,12 +421,12 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 	}
 	if o.Rank < b.Rank || (o.Rank == b.Rank && o.Signer != b.Signer) {
 		if b.Rank == 0 {
-			return fail(protocol.CodeCertificateNotCurrent, "sign the prekey with the mailbox's identity, or under a certificate: dromas prekey renew", "the statement must be signed by the mailbox's identity or under a certificate")
+			return fail(protocol.CodeCertificateSuperseded, "sign the prekey with the mailbox's identity, or under a certificate: dromas prekey renew", "the statement must be signed by the mailbox's identity or under a certificate")
 		}
-		return fail(protocol.CodeCertificateNotCurrent, "certify a new working key at a higher serial: dromas prekey renew", "the certificate's serial must be above %d, or the certificate be the mailbox's current one", certificateSerialValue(b.Rank))
+		return fail(protocol.CodeCertificateSuperseded, "certify a new working key at a higher serial: dromas prekey renew", "the certificate's serial must be above %d, or the certificate be the mailbox's current one", certificateSerialValue(b.Rank))
 	}
 	if o.Rank == b.Rank && o.Serial <= b.Prekey.Serial {
-		return fail(protocol.CodeConflict, "a newer prekey is already published: dromas prekey renew takes the next serial", "under the mailbox's current signer the serial must be above %d", prekeySerialValue(b.Prekey.Serial))
+		return fail(protocol.CodeSerialTooLow, "a newer prekey is already published: dromas prekey renew takes the next serial", "under the mailbox's current signer the serial must be above %d", prekeySerialValue(b.Prekey.Serial))
 	}
 	m, err := s.miss(r)
 	if err != nil {
@@ -435,7 +435,7 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 	defer func() { m.release(s.now()) }() // settled below, but for a panic
 	p, signer, err := s.checkPrekey(id, req.Prekey, req.PrekeySignature, b.Signer)
 	if err == nil && (signer.Rank() != o.Rank || signerHash(id, signer) != o.Signer || p.Serial != o.Serial) {
-		err = fail(protocol.CodeBadKey, "sign a new prekey statement: dromas prekey renew", "the statement does not read the same verified as unverified")
+		err = fail(protocol.CodeInvalidKey, "sign a new prekey statement: dromas prekey renew", "the statement does not read the same verified as unverified")
 	}
 	if err != nil {
 		m.keep()
@@ -498,7 +498,7 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 	if err := s.store.UpdateMailbox(detached(r.Context()), b); err != nil {
 		stored = mayHaveApplied(err)
 		if errors.Is(err, ErrStale) {
-			return fail(protocol.CodeMailboxChanged, "retry: dromas prekey renew", "the mailbox changed during the request")
+			return fail(protocol.CodeConcurrentModification, "retry: dromas prekey renew", "the mailbox changed during the request")
 		}
 		return err
 	}
@@ -542,9 +542,9 @@ func (s *Server) getMailbox(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// getRevocations is GET /v1/<address>/revocations (PROTOCOL.md §11.15): the
+// getRevocations is GET /v1/<address>/revocation (PROTOCOL.md §11.15): the
 // record this server holds of the address, with a mailbox here or none, or 404
-// not_revoked. A reader asks it of each sender in a drain (PROTOCOL.md §12.3,
+// revocation_not_found. A reader asks it of each sender in a drain (PROTOCOL.md §12.3,
 // check 7), and a mailbox asks it of its own address where this server holds no
 // mailbox for it. It takes no pass, as the PUT beside it takes none.
 func (s *Server) getRevocations(w http.ResponseWriter, r *http.Request) error {
@@ -557,7 +557,7 @@ func (s *Server) getRevocations(w http.ResponseWriter, r *http.Request) error {
 	case err != nil:
 		return err
 	case !b.holdsRevocations():
-		return fail(protocol.CodeNotRevoked, "nothing to do: this server holds no revocation of that address. That is its word, and the mailbox's owner may hold a record of one", "no revocation of this address is held here")
+		return fail(protocol.CodeRevocationNotFound, "nothing to do: this server holds no revocation of that address. That is its word, and the mailbox's owner may hold a record of one", "no revocation of this address is held here")
 	}
 	if err := precondition(r, targetState{exists: true, hint: hintConditions}); err != nil {
 		return err
@@ -573,7 +573,7 @@ const (
 	hintRevokedCerts = "a revocation of certificates is signed by the identity key itself, and sent with the identity document: dromas cert revoke-earlier makes and publishes one"
 )
 
-// revoke is PUT /v1/<address>/revocations: the identity document with what
+// revoke is PUT /v1/<address>/revocation: the identity document with what
 // the identity itself has signed about the address. No pass: a working key
 // can be stolen without the identity and must not be able to end the address
 // or to revoke a certificate, and an owner who lost the mailbox holds no working
@@ -672,12 +672,12 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) error {
 				writeJSON(w, http.StatusOK, struct{}{})
 				return nil
 			default: // refused from what is held, before the preconditions, so as without them (PROTOCOL.md §11.2, RFC 9110 §13.2.1)
-				return fail(protocol.CodeConflict, "GET the same path for the one held: it covers every certificate yours does", "a revocation of this address's certificates through serial %d is held, and nothing revokes fewer", throughValue(held.Through))
+				return fail(protocol.CodeSerialTooLow, "GET the same path for the one held: it covers every certificate yours does", "a revocation of this address's certificates through serial %d is held, and nothing revokes fewer", throughValue(held.Through))
 			}
 		}
 	}
 	// What is held of the address is known here, before the counts and the
-	// signatures: the revocations GET …/revocations would answer, or none.
+	// signatures: the revocations GET …/revocation would answer, or none.
 	// The write holds what they held of it (expected).
 	if err := precondition(r, targetState{exists: b.holdsRevocations(), hint: hintConditions}); err != nil {
 		return err
@@ -698,7 +698,7 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) error {
 	if req.Revocation != nil {
 		if _, err := protocol.VerifyRevocation(h, req.Identity, req.Revocation); err != nil {
 			m.keep()
-			return fail(protocol.CodeBadRevocation, hintRevocation, "this is not a revocation of this address")
+			return fail(protocol.CodeInvalidRevocation, hintRevocation, "this is not a revocation of this address")
 		}
 	}
 	var certs *protocol.RevokedCertificates
@@ -706,7 +706,7 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) error {
 		if certs, err = protocol.VerifyRevokedCertificates(h, req.Identity, req.RevokedCertificates, req.RevokedCertificatesSignature); err != nil {
 			if req.Revocation == nil {
 				m.keep()
-				return fail(protocol.CodeBadRevocation, hintRevokedCerts, "this is not a revocation of this address's certificates")
+				return fail(protocol.CodeInvalidRevocation, hintRevokedCerts, "this is not a revocation of this address's certificates")
 			}
 			certs = nil // beside a revocation of the address that verifies, it counts for nothing
 		}
@@ -736,7 +736,7 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) error {
 				raise.release(s.now())
 			}
 			if errors.Is(err, ErrStale) {
-				return fail(protocol.CodeMailboxChanged, "retry", "the mailbox changed during the request")
+				return fail(protocol.CodeConcurrentModification, "retry", "the mailbox changed during the request")
 			}
 			return err
 		}

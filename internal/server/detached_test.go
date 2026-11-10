@@ -169,9 +169,9 @@ func TestAMessageSentAroundARevocationDoesNotOutliveIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.want(e.do("PUT", owner.path("/revocations"), protocol.Revocations{Identity: owner.id.Document(), Revocation: sig}, ""), http.StatusCreated, "")
+	e.want(e.do("PUT", owner.path("/revocation"), protocol.Revocations{Identity: owner.id.Document(), Revocation: sig}, ""), http.StatusCreated, "")
 	close(release)
-	e.want(<-sent, http.StatusGone, protocol.CodeRevoked)
+	e.want(<-sent, http.StatusGone, protocol.CodeMailboxRevoked)
 	if n, _ := e.store.Count(ctx0, owner.id.Address()); n != 0 {
 		t.Errorf("a send that wrote after the revocation left %d messages", n)
 	}
@@ -268,7 +268,7 @@ func TestACountIsKeptWhenItsWriteMayHaveBeenApplied(t *testing.T) {
 			s.err = errs[i]
 			s.mu.Unlock()
 			if errors.Is(errs[i], ErrStale) { // a send whose checks the store says changed
-				e.want(e.sendTo(to, 1, from, 1), http.StatusConflict, protocol.CodeMailboxChanged)
+				e.want(e.sendTo(to, 1, from, 1), http.StatusConflict, protocol.CodeConcurrentModification)
 			} else {
 				e.want(e.sendTo(to, 1, from, 1), http.StatusServiceUnavailable, protocol.CodeUnavailable)
 			}

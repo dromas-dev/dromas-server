@@ -22,7 +22,7 @@ import (
 // policyText is a version policy file naming latest as its latest version,
 // with a floor of floor.
 func policyText(floor, latest string) string {
-	return `{"min_version":"` + floor + `","latest_version":"` + latest + `","deprecations":[{"below":"1.4","at":"2027-01-01T00:00:00Z"}]}`
+	return `{"min_version":"` + floor + `","latest_version":"` + latest + `","deprecations":[{"below":"1.4","effective_at":"2027-01-01T00:00:00Z"}]}`
 }
 
 // reloading is a server whose version policy is read from a file in a
@@ -234,13 +234,13 @@ func TestARequestMeetsTheVersionPolicyInForce(t *testing.T) {
 	}
 	e := newEnv(t, relaxed(), func(c *Config) { c.Policy = d })
 	nobody := "/v1/" + "d_" + strings.Repeat("ab", 32)
-	e.want(e.doWith("GET", nobody, nil, "", protocol.VersionHeader, "1.5.0"), http.StatusNotFound, protocol.CodeNoSuchMailbox)
+	e.want(e.doWith("GET", nobody, nil, "", protocol.VersionHeader, "1.5.0"), http.StatusNotFound, protocol.CodeMailboxNotFound)
 	if err := os.WriteFile(path, []byte(policyText("1.6", "1.6.0")), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	e.server.VersionPolicy(path, read).reload(false)
 	got := e.doWith("GET", nobody, nil, "", protocol.VersionHeader, "1.5.0")
-	e.want(got, http.StatusGone, protocol.CodeVersionRetired)
+	e.want(got, http.StatusGone, protocol.CodeClientVersionUnsupported)
 	if got.problem().MinVersion != "1.6" {
 		t.Errorf("min_version %q, want 1.6", got.problem().MinVersion)
 	}
@@ -285,12 +285,12 @@ func TestTheLargestPolicyFits(t *testing.T) {
 
 // A version policy file names none of the server's own members: its
 // capabilities, the code's, and the longest certificate it takes, its
-// setting (max_certificate_lifetime). The document it is served in carries
+// setting (max_certificate_lifetime_seconds). The document it is served in carries
 // the setting's (PROTOCOL.md §11.18).
 func TestAPolicyNamesNoMemberOfTheServersOwn(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	for _, member := range []string{`"capabilities":[]`, `"max_certificate_lifetime":3891600`} {
+	for _, member := range []string{`"capabilities":[]`, `"max_certificate_lifetime_seconds":3891600`} {
 		b := []byte(`{"min_version":"1.2",` + member + `}`)
 		if _, err := ParseVersionPolicy(b, l); err == nil {
 			t.Errorf("a policy naming %s is taken", member)
@@ -298,6 +298,6 @@ func TestAPolicyNamesNoMemberOfTheServersOwn(t *testing.T) {
 	}
 	d, err := ParseVersionPolicy([]byte(`{"min_version":"1.2"}`), l)
 	if err != nil || d.MaxCertificateLifetime != uint64(l.MaxCertificateLifetime/time.Second) {
-		t.Fatalf("the document of a policy: max_certificate_lifetime %d, %v; want %d", d.MaxCertificateLifetime, err, l.MaxCertificateLifetime/time.Second)
+		t.Fatalf("the document of a policy: max_certificate_lifetime_seconds %d, %v; want %d", d.MaxCertificateLifetime, err, l.MaxCertificateLifetime/time.Second)
 	}
 }

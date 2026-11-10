@@ -349,7 +349,7 @@ func TestPassRefusedAfterRekey(t *testing.T) {
 	if pass() == old {
 		t.Fatal("a new prekey did not bring a new pass")
 	}
-	e.want(e.do(http.MethodGet, messages, nil, old), http.StatusUnauthorized, protocol.CodeCertificateNotCurrent)
+	e.want(e.do(http.MethodGet, messages, nil, old), http.StatusUnauthorized, protocol.CodeCertificateSuperseded)
 	e.want(e.do(http.MethodGet, messages, nil, pass()), http.StatusOK, "")
 	// The client signing a new pass when one is refused is tested in
 	// dromas-client.

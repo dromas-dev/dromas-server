@@ -57,7 +57,7 @@ func TestARetryAfterARenewalGetsItsReceipt(t *testing.T) {
 	other := *sent
 	other.ciphertext = append([]byte{}, sent.ciphertext...)
 	other.ciphertext[len(other.ciphertext)-1] ^= 1 // another ciphertext, to the same retired prekey
-	e.want(e.do(http.MethodPost, "/v1/"+b.Address().String()+"/messages", other, e.pass(a)), http.StatusConflict, protocol.CodeStalePrekey)
+	e.want(e.do(http.MethodPost, "/v1/"+b.Address().String()+"/messages", other, e.pass(a)), http.StatusConflict, protocol.CodePrekeySuperseded)
 }
 
 // A sender's calls bound what its sends cost before they are checked, the
@@ -89,7 +89,7 @@ func TestASendersCallsBoundTheDedupeRead(t *testing.T) {
 }
 
 // A mailbox takes new messages at a rate of its own, from every sender together
-// (Limits.ReceiveBurst): past it a send is mailbox_busy and waits in its
+// (Limits.ReceiveBurst): past it a send is mailbox_rate_limited and waits in its
 // sender's outbox. A retry spends none of it, and an account lifts it to
 // ReceiveCeiling, never past it.
 func TestTheReceiveBudget(t *testing.T) {
@@ -106,7 +106,7 @@ func TestTheReceiveBudget(t *testing.T) {
 	send(t, s2, b, "two")
 	_, err := s3.Send(ctx, b.Address(), "three")
 	var ae *client.APIError
-	if codeOf(err) != protocol.CodeMailboxBusy || !errorsAs(err, &ae) || ae.RetryAfter <= 0 || ae.Status != http.StatusTooManyRequests {
+	if codeOf(err) != protocol.CodeMailboxRateLimited || !errorsAs(err, &ae) || ae.RetryAfter <= 0 || ae.Status != http.StatusTooManyRequests {
 		t.Fatalf("a third new message in the burst: %v", err)
 	}
 	e.want(e.do(http.MethodPost, "/v1/"+b.Address().String()+"/messages", *sent, e.pass(s1)), http.StatusOK, "") // a retry: nothing new
@@ -129,11 +129,11 @@ func TestTheReceiveBudget(t *testing.T) {
 		}
 	}
 	_, err = s3.Send(ctx, echo.Address(), "past its burst")
-	if codeOf(err) != protocol.CodeMailboxBusy || !errorsAs(err, &ae) || ae.RetryAfter != time.Second {
-		t.Fatalf("a third new message to the unmetered mailbox at once: %v, want mailbox_busy after a second", err)
+	if codeOf(err) != protocol.CodeMailboxRateLimited || !errorsAs(err, &ae) || ae.RetryAfter != time.Second {
+		t.Fatalf("a third new message to the unmetered mailbox at once: %v, want mailbox_rate_limited after a second", err)
 	}
-	if top, ok := e.server.Top(string(protocol.CodeMailboxBusy), 10); !ok || !slices.ContainsFunc(top, func(d Indebted) bool { return d.Key == echo.Address().String() }) {
-		t.Errorf("the operator's top of mailbox_busy, %v, does not list the unmetered mailbox", top)
+	if top, ok := e.server.Top(string(protocol.CodeMailboxRateLimited), 10); !ok || !slices.ContainsFunc(top, func(d Indebted) bool { return d.Key == echo.Address().String() }) {
+		t.Errorf("the operator's top of mailbox_rate_limited, %v, does not list the unmetered mailbox", top)
 	}
 	e.clock.Add(ReceiveCeiling)
 	if rs, err := s3.Flush(ctx); err != nil || len(rs) != 1 {
@@ -238,15 +238,15 @@ func TestUnknownIDsSpendTheMailboxsCalls(t *testing.T) {
 		t.Fatalf("delivered %d", len(res.Delivered))
 	}
 	unknown := "/v1/" + b.Address().String() + "/messages/" + strings.Repeat("ab", 32)
-	e2.want(e2.do(http.MethodDelete, unknown, nil, pass), http.StatusNotFound, protocol.CodeNoSuchMessage)
-	e2.want(e2.do(http.MethodGet, unknown, nil, pass), http.StatusNotFound, protocol.CodeNoSuchMessage)
+	e2.want(e2.do(http.MethodDelete, unknown, nil, pass), http.StatusNotFound, protocol.CodeMessageNotFound)
+	e2.want(e2.do(http.MethodGet, unknown, nil, pass), http.StatusNotFound, protocol.CodeMessageNotFound)
 	e2.want(e2.do(http.MethodDelete, unknown, nil, pass), http.StatusTooManyRequests, protocol.CodeRateLimited)
 }
 
 // A prekey statement that could not be taken even if it verified is refused
 // from its order, read before any signature is checked (PROTOCOL.md §11.9): a
 // serial not above the current one under the current certificate is 409 and
-// a certificate the floor covers is bad_key, though the signature is not the
+// a certificate the floor covers is invalid_key, though the signature is not the
 // statement's. Nothing is counted against the caller for either.
 func TestAStatementOutOfOrderIsRefusedBeforeItsSignature(t *testing.T) {
 	t.Parallel()
@@ -258,8 +258,8 @@ func TestAStatementOutOfOrderIsRefusedBeforeItsSignature(t *testing.T) {
 	key, _ := age.GenerateHybridIdentity()
 	stale := &protocol.Prekey{Address: r.id.Address(), Rank: n, Serial: n, Key: key.Recipient().String(), NotAfter: e.clock.Now().Add(time.Hour)}
 	misSigned := protocol.PrekeyRequest{Prekey: stale.Statement(), PrekeySignature: r.sig[n]} // the current statement's signature, over other bytes
-	e.want(e.do("PUT", r.path("/prekey"), misSigned, r.pass(n)), http.StatusConflict, protocol.CodeConflict)
-	e.want(e.do("PUT", r.path("/revocations"), r.certs(n), ""), http.StatusOK, "")
+	e.want(e.do("PUT", r.path("/prekey"), misSigned, r.pass(n)), http.StatusConflict, protocol.CodeSerialTooLow)
+	e.want(e.do("PUT", r.path("/revocation"), r.certs(n), ""), http.StatusOK, "")
 	stale.Serial = n + 1
 	misSigned.Prekey = stale.Statement()
 	got := e.do("PUT", r.path("/prekey"), misSigned, r.pass(n))
@@ -268,7 +268,7 @@ func TestAStatementOutOfOrderIsRefusedBeforeItsSignature(t *testing.T) {
 		t.Fatalf("a statement under a revoked certificate: %s", got.body)
 	}
 	var nobody protocol.Address
-	e.want(e.do(http.MethodGet, "/v1/"+nobody.String(), nil, ""), http.StatusNotFound, protocol.CodeNoSuchMailbox) // the address's one miss is still there
+	e.want(e.do(http.MethodGet, "/v1/"+nobody.String(), nil, ""), http.StatusNotFound, protocol.CodeMailboxNotFound) // the address's one miss is still there
 }
 
 // Registration never changes a mailbox, so a registered mailbox is answered from its
@@ -293,10 +293,10 @@ func TestARegisteredMailboxIsAnsweredWhateverItsAddressSpentOfRegistrations(t *t
 			unsigned.PrekeySignature = []byte("not a signature")
 			retry := e.do("PUT", r.path(""), r.registration(1), r.pass(1))
 			another := e.do("PUT", r.path(""), r.registration(2), r.pass(2))
-			if retry.status != http.StatusOK || another.status != http.StatusConflict || another.code() != protocol.CodeConflict {
-				t.Fatalf("retry %d %s, another statement %d %s: want 200, and 409 conflict", retry.status, retry.code(), another.status, another.code())
+			if retry.status != http.StatusOK || another.status != http.StatusConflict || another.code() != protocol.CodeMailboxAlreadyExists {
+				t.Fatalf("retry %d %s, another statement %d %s: want 200, and 409 mailbox_already_exists", retry.status, retry.code(), another.status, another.code())
 			}
-			e.want(e.do("PUT", r.path(""), unsigned, ""), http.StatusConflict, protocol.CodeConflict)
+			e.want(e.do("PUT", r.path(""), unsigned, ""), http.StatusConflict, protocol.CodeMailboxAlreadyExists)
 		})
 	}
 }
@@ -345,15 +345,15 @@ func TestARegistrationsReadIsCountedAsWhatItFinds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.want(call("192.0.2.70", "PUT", gone.path("/revocations"), protocol.Revocations{Identity: gone.id.Document(), Revocation: rev}, ""), http.StatusCreated, "")
+	e.want(call("192.0.2.70", "PUT", gone.path("/revocation"), protocol.Revocations{Identity: gone.id.Document(), Revocation: rev}, ""), http.StatusCreated, "")
 	mailbox.prekey(2, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	// answered is the mailbox's identical retry, another statement, and a
 	// registration of the revoked address, each answered from what is kept.
 	answered := func() {
 		t.Helper()
 		e.want(register(mailbox), http.StatusOK, "")
-		e.want(call(ip, "PUT", mailbox.path(""), mailbox.registration(2), mailbox.pass(2)), http.StatusConflict, protocol.CodeConflict)
-		e.want(register(gone), http.StatusGone, protocol.CodeRevoked)
+		e.want(call(ip, "PUT", mailbox.path(""), mailbox.registration(2), mailbox.pass(2)), http.StatusConflict, protocol.CodeMailboxAlreadyExists)
+		e.want(register(gone), http.StatusGone, protocol.CodeMailboxRevoked)
 	}
 
 	// One registration left: what finds a mailbox or a revocation gives it back,
@@ -452,15 +452,15 @@ func TestAFloorNoHigherIsAnsweredWithoutACheck(t *testing.T) {
 	l.MissesPerMinute = 1
 	e := newEnv(t, l)
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
-	e.want(e.do("PUT", r.path("/revocations"), r.certs(7), ""), http.StatusOK, "")
+	e.want(e.do("PUT", r.path("/revocation"), r.certs(7), ""), http.StatusOK, "")
 	same, lower := r.certs(7), r.certs(5)
 	same.RevokedCertificatesSignature, lower.RevokedCertificatesSignature = []byte("junk"), []byte("junk")
-	e.want(e.do("PUT", r.path("/revocations"), same, ""), http.StatusOK, "")
-	e.want(e.do("PUT", r.path("/revocations"), lower, ""), http.StatusConflict, protocol.CodeConflict)
+	e.want(e.do("PUT", r.path("/revocation"), same, ""), http.StatusOK, "")
+	e.want(e.do("PUT", r.path("/revocation"), lower, ""), http.StatusConflict, protocol.CodeSerialTooLow)
 	higher := r.certs(9)
 	higher.RevokedCertificatesSignature = []byte("junk")
-	e.want(e.do("PUT", r.path("/revocations"), higher, ""), http.StatusBadRequest, protocol.CodeBadRevocation) // checked, and the address's one miss spent
-	e.want(e.do("PUT", r.path("/revocations"), higher, ""), http.StatusTooManyRequests, protocol.CodeRateLimited)
+	e.want(e.do("PUT", r.path("/revocation"), higher, ""), http.StatusBadRequest, protocol.CodeInvalidRevocation) // checked, and the address's one miss spent
+	e.want(e.do("PUT", r.path("/revocation"), higher, ""), http.StatusTooManyRequests, protocol.CodeRateLimited)
 }
 
 // The identity's acts are counted per mailbox, each kind on its own, so neither
@@ -482,8 +482,8 @@ func TestTheIdentitysActsAreCountedApart(t *testing.T) {
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(5), r.pass(5)), http.StatusOK, "") // the mailbox's first certificate, the day's one
 	r.prekey(6, until, nil)
 	e.limited(e.do("PUT", r.path("/prekey"), r.upload(6), r.pass(6)), protocol.QuotaCertificates)
-	e.want(e.do("PUT", r.path("/revocations"), r.certs(5), ""), http.StatusOK, "") // the day's one raise, which no certificate spent
-	e.limited(e.do("PUT", r.path("/revocations"), r.certs(7), ""), protocol.QuotaCertificateRevocations)
+	e.want(e.do("PUT", r.path("/revocation"), r.certs(5), ""), http.StatusOK, "") // the day's one raise, which no certificate spent
+	e.limited(e.do("PUT", r.path("/revocation"), r.certs(7), ""), protocol.QuotaCertificateRevocations)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(6), r.pass(6)), http.StatusOK, "") // replaces certificate 5, which is revoked
 	r.prekey(8, until, nil)
 	e.limited(e.do("PUT", r.path("/prekey"), r.upload(8), r.pass(8)), protocol.QuotaCertificates) // 6 is not revoked
@@ -491,7 +491,7 @@ func TestTheIdentitysActsAreCountedApart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.want(e.do("PUT", r.path("/revocations"), protocol.Revocations{Identity: r.id.Document(), Revocation: rev}, ""), http.StatusCreated, "")
+	e.want(e.do("PUT", r.path("/revocation"), protocol.Revocations{Identity: r.id.Document(), Revocation: rev}, ""), http.StatusCreated, "")
 }
 
 // A taker who holds a mailbox's working key can spend the mailbox's calls with its
@@ -542,7 +542,7 @@ func TestATakerCannotHoldTheRemedyBack(t *testing.T) {
 	}
 	r.prekey(2000, until, nil)
 	e.limited(e.do("PUT", r.path("/prekey"), r.upload(2000), r.pass(2000)), protocol.QuotaCertificates) // the day's one is spent
-	e.want(e.do("PUT", r.path("/revocations"), r.certs(1000), ""), http.StatusOK, "")
+	e.want(e.do("PUT", r.path("/revocation"), r.certs(1000), ""), http.StatusOK, "")
 	e.want(e.do("GET", r.path("/acl"), nil, taken), http.StatusUnauthorized, protocol.CodeCertificateRevoked)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(2000), r.pass(2000)), http.StatusOK, "")
 	e.limited(e.do("GET", r.path("/acl"), nil, r.pass(2000)), protocol.QuotaCalls)
@@ -564,7 +564,7 @@ func TestFailedPassesAreCountedPerCaller(t *testing.T) {
 	e.want(e.do(http.MethodGet, list, nil, good), http.StatusOK, "")
 	wrongServer := e.passFor(worker(t, b), b.Address(), "elsewhere.example")
 	for range 2 {
-		e.want(e.do(http.MethodGet, list, nil, wrongServer), http.StatusUnauthorized, protocol.CodeUnauthorized)
+		e.want(e.do(http.MethodGet, list, nil, wrongServer), http.StatusUnauthorized, protocol.CodeInvalidPass)
 	}
 	e.want(e.do(http.MethodGet, list, nil, wrongServer), http.StatusTooManyRequests, protocol.CodeRateLimited)
 	e.want(e.do(http.MethodGet, list, nil, good), http.StatusOK, "")
@@ -622,7 +622,7 @@ func TestAnIdenticalRetrysPassIsCounted(t *testing.T) {
 			r := e.raw().register(protocol.MaxPrekeyLifetime)
 			reg, forged := forgedFromPublic(t, e, r.id.Address())
 			for range 2 {
-				e.want(e.do("PUT", r.path(""), reg, forged), http.StatusUnauthorized, protocol.CodeUnauthorized)
+				e.want(e.do("PUT", r.path(""), reg, forged), http.StatusUnauthorized, protocol.CodeInvalidPass)
 			}
 			e.limited(e.do("PUT", r.path(""), reg, forged), protocol.QuotaMisses)
 			e.limited(e.do("GET", r.path("/acl"), nil, forged), protocol.QuotaMisses)
@@ -996,7 +996,7 @@ func TestAPanicSettlesItsReservations(t *testing.T) {
 		t.Errorf("after a panic in a fetch: %d drain reservations held", n)
 	}
 
-	call(http.MethodPut, owner.path("/revocations"), owner.certs(5), "")
+	call(http.MethodPut, owner.path("/revocation"), owner.certs(5), "")
 	if n := held(s.raises); n != 0 {
 		t.Errorf("after a panic in a raise's write: %d reservations held", n)
 	}
@@ -1049,12 +1049,12 @@ func TestTheDrainBudget(t *testing.T) {
 		return e2.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages/"+id, nil, pass)
 	}
 	unknown := strings.Repeat("cd", 32)
-	e2.want(fetch(unknown), http.StatusNotFound, protocol.CodeNoSuchMessage) // given back: not a new message
+	e2.want(fetch(unknown), http.StatusNotFound, protocol.CodeMessageNotFound) // given back: not a new message
 	e2.want(fetch(ids[0].ID), http.StatusOK, "")
 	e2.want(fetch(ids[0].ID), http.StatusOK, "") // a repeat: given back, and its own allowance spent
 	e2.want(fetch(ids[1].ID), http.StatusOK, "")
 	r := fetch(ids[2].ID)
-	e2.want(r, http.StatusTooManyRequests, protocol.CodeFetchPaced)
+	e2.want(r, http.StatusTooManyRequests, protocol.CodeFetchRateLimited)
 	if r.header.Get("Retry-After") == "" || !strings.Contains(string(r.body), "waits on the server") {
 		t.Fatalf("the third first fetch: %s", r.body)
 	}
@@ -1092,7 +1092,7 @@ func TestABucketLargerThanItsNumberADay(t *testing.T) {
 	var ae *client.APIError
 	every := 24 * time.Hour / time.Duration(l.SendsPerDay)
 	if !errorsAs(err, &ae) || ae.Problem.Code != protocol.CodeRateLimited || ae.Problem.QuotaID != protocol.QuotaSends ||
-		ae.Problem.Limit == nil || *ae.Problem.Limit != uint64(l.SendsPerDay) || ae.RetryAfter <= every-time.Minute || ae.RetryAfter > every {
+		ae.Problem.QuotaValue == nil || *ae.Problem.QuotaValue != uint64(l.SendsPerDay) || ae.RetryAfter <= every-time.Minute || ae.RetryAfter > every {
 		t.Fatalf("a send past a bucket of %d: %v, want rate_limited sends naming %d a day, due in %v", l.SendsBurst, err, l.SendsPerDay, every)
 	}
 	e.clock.Add(every)
@@ -1117,7 +1117,7 @@ func TestASpentMailboxReadsNothingForAMissOrAHead(t *testing.T) {
 	pass := e2.pass(b)
 	messages := "/v1/" + b.Address().String() + "/messages/"
 	unknown := messages + strings.Repeat("ab", 32)
-	e2.want(e2.do(http.MethodDelete, unknown, nil, pass), http.StatusNotFound, protocol.CodeNoSuchMessage) // the mailbox's one call
+	e2.want(e2.do(http.MethodDelete, unknown, nil, pass), http.StatusNotFound, protocol.CodeMessageNotFound) // the mailbox's one call
 	before := cs.calls.Load()
 	e2.want(e2.do(http.MethodGet, unknown, nil, pass), http.StatusTooManyRequests, protocol.CodeRateLimited)
 	e2.want(e2.do(http.MethodDelete, unknown, nil, pass), http.StatusTooManyRequests, protocol.CodeRateLimited)
