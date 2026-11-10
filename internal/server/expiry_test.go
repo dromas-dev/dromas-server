@@ -101,6 +101,7 @@ func TestAForgottenMailboxRegistersAnew(t *testing.T) {
 	if err := e.store.DeleteMailbox(ctx, r.id.Address()); err != nil {
 		t.Fatal(err)
 	}
+	e.clock.Add(time.Second) // as the sweep does, which takes a record days after it was made
 	e.want(e.do("GET", r.path(""), nil, ""), 404, protocol.CodeMailboxNotFound)
 	r.prekey(3, now.Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(3), r.pass(3)), 404, protocol.CodeMailboxNotFound)
@@ -151,6 +152,43 @@ func TestALateImageOfADeletedRecordBringsNothingBack(t *testing.T) {
 	e.want(e.do("GET", r.path(""), nil, ""), 404, protocol.CodeMailboxNotFound)
 	r.prekey(3, now.Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", r.path(""), r.registration(3), r.pass(3)), 201, "")
+}
+
+// A late image of a record, applied once its address has registered anew
+// after the sweep took it, leaves the record made again: that record is the
+// later by its created (version), and its new signer's pass is taken. On
+// PostgreSQL the feed can bring the image there, behind the sweep's delete.
+func TestALateImageOfTheRecordBeforeLeavesTheRecordMadeAgain(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e := newEnv(t, relaxed())
+	m, ok := e.store.(*Memory)
+	if !ok {
+		t.Skipf("the store is %T, not memory", e.store)
+	}
+	now := e.clock.Now()
+	r := e.raw().register(protocol.MaxPrekeyLifetime)
+	a := r.id.Address()
+	e.want(e.do("PUT", r.path("/acl"), aclOf([]string{"*"}, nil), r.pass(1)), 200, "")
+	late, known := m.Known(a) // the identity's, at rev 2
+	if !known || !late.open() {
+		t.Fatalf("the record is not held: %v", late)
+	}
+	e.want(e.do("PUT", r.path("/revocation"), r.certs(1), ""), 200, "")
+	r.prekey(2, now.Add(protocol.MaxPrekeyLifetime), nil)
+	e.want(e.do("PUT", r.path("/prekey"), r.upload(2), r.pass(2)), 200, "")
+	if err := m.DeleteMailbox(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	e.clock.Add(time.Second) // as the sweep does, which takes a record days after it was made
+	e.want(e.do("GET", r.path(""), nil, ""), 404, protocol.CodeMailboxNotFound)
+	r.prekey(3, now.Add(protocol.MaxPrekeyLifetime), nil)
+	e.want(e.do("PUT", r.path(""), r.registration(3), r.pass(3)), 201, "")
+	if _, err := m.Mailbox(ctx, a); err != nil { // the record made again in the cache
+		t.Fatal(err)
+	}
+	m.apply(Change{Kind: RecordChange, Addr: a, Mailbox: late})
+	e.want(e.do("GET", r.path("/acl"), nil, r.pass(3)), 200, "")
 }
 
 // A mailbox's record carries its expiry, in ms, and nothing its identity
