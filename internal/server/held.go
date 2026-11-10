@@ -15,7 +15,7 @@ import (
 // holds its statement to it: a read or write whose standing changed since
 // its check reads and changes nothing, and is refused as ErrStale. Memory
 // takes that as its copy of the address being behind and forgets it
-// (Memory.write), and the caller checks again or answers mailbox_changed.
+// (Memory.write), and the caller checks again or answers concurrent_modification.
 // Under READ COMMITTED every statement sees each commit answered before it
 // began (PostgreSQL's docs, Transaction Isolation, read 2026-11-08), so a
 // call that starts after another's answer is held to it.

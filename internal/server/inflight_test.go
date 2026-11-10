@@ -188,7 +188,7 @@ func TestPUTsDuringARevocationsDeleteStartNoOther(t *testing.T) {
 	time.Sleep(300 * time.Millisecond) // for the PUTs to reach a delete of their own, if they would
 	close(hs.release)
 	for range k {
-		if got := <-codes; got != "410 revoked" {
+		if got := <-codes; got != "410 mailbox_revoked" {
 			t.Errorf("a PUT during the delete: %s", got)
 		}
 	}
@@ -444,7 +444,7 @@ func (s *armedDedupe) Header(ctx context.Context, mailbox protocol.Address, id [
 // Posts of the same bytes from one sender naming other statements are posts
 // of their own: the single flight's key holds the query, the statement's hash
 // (send). A post naming a stale statement, which leads, is refused
-// stale_prekey; one naming the current statement, which comes while it is in
+// prekey_superseded; one naming the current statement, which comes while it is in
 // flight, is stored, never handed the stale one's refusal
 // (dromas-dev/dromas-server#92).
 func TestAStaleStatementIsAPostOfItsOwn(t *testing.T) {
@@ -463,8 +463,8 @@ func TestAStaleStatementIsAPostOfItsOwn(t *testing.T) {
 		t.Fatalf("the stale post was answered before its dedupe: %s", a)
 	}
 	got := cur()
-	if first := <-led; first.code != protocol.CodeStalePrekey || got.status != http.StatusCreated {
-		t.Errorf("the same bytes naming a stale and the current serials at once: %s and %s; want 409 stale_prekey and 201", first, got)
+	if first := <-led; first.code != protocol.CodePrekeySuperseded || got.status != http.StatusCreated {
+		t.Errorf("the same bytes naming a stale and the current serials at once: %s and %s; want 409 prekey_superseded and 201", first, got)
 	}
 }
 
@@ -570,7 +570,7 @@ func TestAPanicInEachSingleFlightEndsOnlyItsCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	run("purges", &p.del, func() rawAnswer {
-		return plainCall(http.MethodPut, srv.URL+mailbox.path("/revocations"), rec, "application/json", "")
+		return plainCall(http.MethodPut, srv.URL+mailbox.path("/revocation"), rec, "application/json", "")
 	})
 	if n, _ := p.Store.Count(context.Background(), mailbox.id.Address()); n != 0 {
 		t.Errorf("after the purge's panic and the next PUT: %d messages left", n)
@@ -621,7 +621,7 @@ func TestASenderChangedBetweenItsPassAndItsRecordIsRefused(t *testing.T) {
 				return s.Store.Revoke(ctx, from.id.Address(), &Revocations{Identity: from.id.Document(), Certs: rc.RevokedCertificates, CertsSig: rc.RevokedCertificatesSignature, Through: 2}, ExpectAnything)
 			}
 		}},
-		{"forgotten", http.StatusForbidden, protocol.CodeUnknownSender, func(s *changedBetween, from *raw) func(context.Context) error {
+		{"forgotten", http.StatusForbidden, protocol.CodeSenderNotRegistered, func(s *changedBetween, from *raw) func(context.Context) error {
 			return func(ctx context.Context) error { return s.Store.DeleteMailbox(ctx, from.id.Address()) }
 		}},
 	} {

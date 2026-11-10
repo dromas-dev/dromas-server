@@ -63,7 +63,7 @@ func limits(cmd string, args []string) error {
 		}
 		return adminCall(*socket, http.MethodPost, "/limits/clear?ip="+url.QueryEscape(*ip), os.Stdout)
 	case "top":
-		limit := fs.String("limit", "", "the limit, by the name a refusal gives it: a rate_limited's quota_id, or the code of its own (mailbox_busy, fetch_paced)")
+		limit := fs.String("limit", "", "the limit, by the name a refusal gives it: a rate_limited's quota_id, or the code of its own (mailbox_rate_limited, fetch_rate_limited)")
 		count := fs.Int("count", 20, "how many keys, deepest in debt first")
 		if err := fs.Parse(args); err != nil {
 			return err

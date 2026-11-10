@@ -23,7 +23,7 @@ import (
 // the 410 a read of the mailbox answers, so that nobody has to take its word
 // that a mailbox is revoked.
 
-func revocationPath(a protocol.Address) string { return "/v1/" + a.String() + "/revocations" }
+func revocationPath(a protocol.Address) string { return "/v1/" + a.String() + "/revocation" }
 
 func mailboxPath(a protocol.Address) string { return "/v1/" + a.String() }
 
@@ -59,7 +59,7 @@ func TestRevocation(t *testing.T) {
 	if got := held(t, unrevoked); got != nil {
 		t.Fatalf("a mailbox nobody revoked is read with a revocation: %s", unrevoked.body)
 	}
-	e.want(e.do("GET", mailboxPath(protocol.Address{1}), nil, ""), 404, protocol.CodeNoSuchMailbox)
+	e.want(e.do("GET", mailboxPath(protocol.Address{1}), nil, ""), 404, protocol.CodeMailboxNotFound)
 
 	// What is not a revocation of A, each of it well signed by someone.
 	docA, docB := a.Identity().Document(), b.Identity().Document()
@@ -77,22 +77,22 @@ func TestRevocation(t *testing.T) {
 		body any
 		code protocol.Code
 	}{
-		"a working key of A, under A's certificate": {protocol.Revocations{Identity: docA, Revocation: sign(a, a.Address(), protocol.RevokeNamespace(a.Address()))}, protocol.CodeBadRevocation},
-		"B's revocation, with A's document":         {protocol.Revocations{Identity: docA, Revocation: ofB.Revocation}, protocol.CodeBadRevocation},
-		"a working key of A, as a prekey statement": {protocol.Revocations{Identity: docA, Revocation: sign(a, a.Address(), protocol.PrekeyNamespace(a.Address()))}, protocol.CodeBadRevocation},
-		"not a signature":                           {protocol.Revocations{Identity: docA, Revocation: []byte("revoke it")}, protocol.CodeBadRevocation},
-		"A's own, over the bound":                   {protocol.Revocations{Identity: docA, Revocation: append(append([]byte{}, rec.Revocation...), bytes.Repeat([]byte{'.'}, protocol.MaxSignature+1-len(rec.Revocation))...)}, protocol.CodeBadRevocation},
+		"a working key of A, under A's certificate": {protocol.Revocations{Identity: docA, Revocation: sign(a, a.Address(), protocol.RevokeNamespace(a.Address()))}, protocol.CodeInvalidRevocation},
+		"B's revocation, with A's document":         {protocol.Revocations{Identity: docA, Revocation: ofB.Revocation}, protocol.CodeInvalidRevocation},
+		"a working key of A, as a prekey statement": {protocol.Revocations{Identity: docA, Revocation: sign(a, a.Address(), protocol.PrekeyNamespace(a.Address()))}, protocol.CodeInvalidRevocation},
+		"not a signature":                           {protocol.Revocations{Identity: docA, Revocation: []byte("revoke it")}, protocol.CodeInvalidRevocation},
+		"A's own, over the bound":                   {protocol.Revocations{Identity: docA, Revocation: append(append([]byte{}, rec.Revocation...), bytes.Repeat([]byte{'.'}, protocol.MaxSignature+1-len(rec.Revocation))...)}, protocol.CodeInvalidRevocation},
 		"B's document":                              {protocol.Revocations{Identity: docB, Revocation: rec.Revocation}, protocol.CodeIdentityMismatch},
 		"B's whole record":                          {ofB, protocol.CodeIdentityMismatch},
-		"no signature":                              {[]byte(`{"identity":"` + string(mustJSONBytes(t, docA)) + `"}`), protocol.CodeBadRequest},
-		"no document":                               {[]byte(`{"revocation_signature":"eA=="}`), protocol.CodeBadRequest},
-		"a member the body does not have":           {[]byte(`{"identity":"eA==","revocation_signature":"eA==","reason":"lost"}`), protocol.CodeBadRequest},
-		"not JSON":                                  {[]byte(`revoke`), protocol.CodeBadRequest},
-		"a name in another case":                    {bytes.Replace(recJSON, []byte(`"revocation_signature"`), []byte(`"Revocation_Signature"`), 1), protocol.CodeBadRequest},
-		"a name twice":                              {bytes.Replace(recJSON, []byte(`{`), []byte(`{"revocation_signature":"eA==",`), 1), protocol.CodeBadRequest},
-		"a second value after it":                   {append(append([]byte{}, recJSON...), "{}"...), protocol.CodeBadRequest},
-		"base64 with its unused bits set":           {unusedBitsSet(t, recJSON), protocol.CodeBadRequest},
-		"a record of another type":                  {bytes.Replace(recJSON, []byte(`"type":"revocation_record"`), []byte(`"type":"revocation"`), 1), protocol.CodeBadRequest},
+		"no signature":                              {[]byte(`{"identity":"` + string(mustJSONBytes(t, docA)) + `"}`), protocol.CodeInvalidRequest},
+		"no document":                               {[]byte(`{"revocation_signature":"eA=="}`), protocol.CodeInvalidRequest},
+		"a member the body does not have":           {[]byte(`{"identity":"eA==","revocation_signature":"eA==","reason":"lost"}`), protocol.CodeInvalidRequest},
+		"not JSON":                                  {[]byte(`revoke`), protocol.CodeInvalidRequest},
+		"a name in another case":                    {bytes.Replace(recJSON, []byte(`"revocation_signature"`), []byte(`"Revocation_Signature"`), 1), protocol.CodeInvalidRequest},
+		"a name twice":                              {bytes.Replace(recJSON, []byte(`{`), []byte(`{"revocation_signature":"eA==",`), 1), protocol.CodeInvalidRequest},
+		"a second value after it":                   {append(append([]byte{}, recJSON...), "{}"...), protocol.CodeInvalidRequest},
+		"base64 with its unused bits set":           {unusedBitsSet(t, recJSON), protocol.CodeInvalidRequest},
+		"a record of another type":                  {bytes.Replace(recJSON, []byte(`"type":"revocation_record"`), []byte(`"type":"revocation"`), 1), protocol.CodeInvalidRequest},
 	} {
 		if r := e.do("PUT", path, bad.body, ""); r.status != 400 || r.code() != bad.code {
 			t.Errorf("%s: %d %s, want 400 %s: %s", name, r.status, r.code(), bad.code, r.body)
@@ -102,11 +102,11 @@ func TestRevocation(t *testing.T) {
 	// not have is.
 	other := e.do("PUT", path, bytes.Replace(recJSON, []byte(`"type":"revocation_record"`), []byte(`"type":""`), 1), "")
 	var p protocol.Problem
-	if err := json.Unmarshal(other.body, &p); err != nil || other.status != 400 || p.Code != protocol.CodeBadRequest || p.Member != "type" {
+	if err := json.Unmarshal(other.body, &p); err != nil || other.status != 400 || p.Code != protocol.CodeInvalidRequest || p.Member != "type" {
 		t.Errorf("a record whose type is empty: %d %s", other.status, other.body)
 	}
 	// A pass does not revoke, nor does it help: the signature is the authority.
-	e.want(e.do("PUT", path, protocol.Revocations{Identity: docA, Revocation: sign(a, a.Address(), protocol.RevokeNamespace(a.Address()))}, passA), 400, protocol.CodeBadRevocation)
+	e.want(e.do("PUT", path, protocol.Revocations{Identity: docA, Revocation: sign(a, a.Address(), protocol.RevokeNamespace(a.Address()))}, passA), 400, protocol.CodeInvalidRevocation)
 	e.want(e.do("PUT", revocationPath(protocol.Address{1}), rec, ""), 400, protocol.CodeIdentityMismatch)
 	// After all of that the mailbox is as it was.
 	unrevoked = e.do("GET", read, nil, "")
@@ -139,8 +139,8 @@ func TestRevocation(t *testing.T) {
 	// Everyone is told, and anyone who reads the mailbox is shown why: its 410
 	// carries the record.
 	shown := e.do("GET", read, nil, "")
-	e.want(shown, 410, protocol.CodeRevoked)
-	e.want(e.do("GET", "/v1/"+a.Address().String()+"/messages", nil, passA), 410, protocol.CodeRevoked)
+	e.want(shown, 410, protocol.CodeMailboxRevoked)
+	e.want(e.do("GET", "/v1/"+a.Address().String()+"/messages", nil, passA), 410, protocol.CodeMailboxRevoked)
 	got := held(t, shown)
 	if got == nil {
 		t.Fatalf("a revoked mailbox is read with no record: %s", shown.body)
@@ -165,7 +165,7 @@ func TestRevocation(t *testing.T) {
 	}
 	// The message A sent before is refused by its reader, who is shown the same proof.
 	res := receive(t, b)
-	if len(res.Delivered) != 0 || len(res.Refused) != 1 || res.Refused[0].Code != client.RefusedRevoked {
+	if len(res.Delivered) != 0 || len(res.Refused) != 1 || res.Refused[0].Code != client.RefusedSenderRevoked {
 		t.Fatalf("messages from a mailbox revoked since: %+v", res)
 	}
 
@@ -175,9 +175,9 @@ func TestRevocation(t *testing.T) {
 	if _, err := a.Rekey(ctx); !errors.As(err, &gone) || !gone.Own {
 		t.Fatalf("a revoked mailbox's renewal: %v", err)
 	}
-	e.want(e.do("PUT", path, rec, ""), 410, protocol.CodeRevoked)
-	e.want(e.do("PUT", path, protocol.Revocations{Identity: docA, Revocation: []byte("revoke it")}, ""), 410, protocol.CodeRevoked)
-	e.want(e.do("GET", read, nil, ""), 410, protocol.CodeRevoked)
+	e.want(e.do("PUT", path, rec, ""), 410, protocol.CodeMailboxRevoked)
+	e.want(e.do("PUT", path, protocol.Revocations{Identity: docA, Revocation: []byte("revoke it")}, ""), 410, protocol.CodeMailboxRevoked)
+	e.want(e.do("GET", read, nil, ""), 410, protocol.CodeMailboxRevoked)
 }
 
 // A server keeps a revocation for an address it has no mailbox for (PROTOCOL.md
@@ -196,16 +196,16 @@ func TestARevocationIsKeptWithNoMailbox(t *testing.T) {
 	// and a registration under one of them refused.
 	r := e.raw()
 	floor := r.certs(5)
-	e.want(e.do("PUT", r.path("/revocations"), floor, ""), 200, "")
-	e.want(e.do("GET", r.path(""), nil, ""), 404, protocol.CodeNoSuchMailbox)
-	got := e.do("GET", r.path("/revocations"), nil, "")
+	e.want(e.do("PUT", r.path("/revocation"), floor, ""), 200, "")
+	e.want(e.do("GET", r.path(""), nil, ""), 404, protocol.CodeMailboxNotFound)
+	got := e.do("GET", r.path("/revocation"), nil, "")
 	e.want(got, 200, "")
 	var served protocol.Revocations
 	if err := json.Unmarshal(got.body, &served); err != nil || !bytes.Equal(served.RevokedCertificates, floor.RevokedCertificates) || served.Revocation != nil {
 		t.Fatalf("the revocation of certificates of an address with no mailbox: %s", got.body)
 	}
-	e.want(e.do("PUT", r.path("/revocations"), floor, ""), 200, "")                         // the same one again changes nothing
-	e.want(e.do("PUT", r.path("/revocations"), r.certs(4), ""), 409, protocol.CodeConflict) // nor does one that revokes fewer
+	e.want(e.do("PUT", r.path("/revocation"), floor, ""), 200, "")                             // the same one again changes nothing
+	e.want(e.do("PUT", r.path("/revocation"), r.certs(4), ""), 409, protocol.CodeSerialTooLow) // nor does one that revokes fewer
 	r.prekey(5, now.Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", r.path(""), r.registration(5), r.pass(5)), 401, protocol.CodeCertificateRevoked)
 	r.prekey(6, now.Add(protocol.MaxPrekeyLifetime), nil)
@@ -222,9 +222,9 @@ func TestARevocationIsKeptWithNoMailbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	forgotten := d.certs(1)
-	e.want(e.do("PUT", d.path("/revocations"), forgotten, ""), 200, "")
-	e.want(e.do("GET", d.path(""), nil, ""), 404, protocol.CodeNoSuchMailbox)
-	got = e.do("GET", d.path("/revocations"), nil, "")
+	e.want(e.do("PUT", d.path("/revocation"), forgotten, ""), 200, "")
+	e.want(e.do("GET", d.path(""), nil, ""), 404, protocol.CodeMailboxNotFound)
+	got = e.do("GET", d.path("/revocation"), nil, "")
 	e.want(got, 200, "")
 	served = protocol.Revocations{}
 	if err := json.Unmarshal(got.body, &served); err != nil || !bytes.Equal(served.RevokedCertificates, forgotten.RevokedCertificates) {
@@ -238,14 +238,14 @@ func TestARevocationIsKeptWithNoMailbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.want(e.do("PUT", q.path("/revocations"), protocol.Revocations{Identity: q.id.Document(), Revocation: rev}, ""), 201, "")
+	e.want(e.do("PUT", q.path("/revocation"), protocol.Revocations{Identity: q.id.Document(), Revocation: rev}, ""), 201, "")
 	shown := e.do("GET", q.path(""), nil, "")
-	e.want(shown, 410, protocol.CodeRevoked)
+	e.want(shown, 410, protocol.CodeMailboxRevoked)
 	if b := held(t, shown); b == nil || !bytes.Equal(b.Revocation, rev) {
 		t.Fatalf("an address revoked with no mailbox is read without its record: %s", shown.body)
 	}
 	q.prekey(1, now.Add(protocol.MaxPrekeyLifetime), nil)
-	e.want(e.do("PUT", q.path(""), q.registration(1), q.pass(1)), 410, protocol.CodeRevoked)
+	e.want(e.do("PUT", q.path(""), q.registration(1), q.pass(1)), 410, protocol.CodeMailboxRevoked)
 }
 
 // Keeping a revocation for an address a server holds nothing of is keeping
@@ -259,17 +259,17 @@ func TestARevocationWithNoMailboxIsCountedAsARegistration(t *testing.T) {
 	e := newEnv(t, l)
 	boxed := e.raw().register(protocol.MaxPrekeyLifetime) // the address's one registration this hour
 	e.clock.Add(time.Hour)
-	e.want(e.do("PUT", boxed.path("/revocations"), boxed.certs(1), ""), 200, "") // a mailbox's: counted against nothing
+	e.want(e.do("PUT", boxed.path("/revocation"), boxed.certs(1), ""), 200, "") // a mailbox's: counted against nothing
 	none := e.raw()
-	e.want(e.do("PUT", none.path("/revocations"), none.certs(1), ""), 200, "")
-	e.want(e.do("PUT", none.path("/revocations"), none.certs(2), ""), 200, "") // a raise of what is held
+	e.want(e.do("PUT", none.path("/revocation"), none.certs(1), ""), 200, "")
+	e.want(e.do("PUT", none.path("/revocation"), none.certs(2), ""), 200, "") // a raise of what is held
 	other := e.raw()
-	e.want(e.do("PUT", other.path("/revocations"), other.certs(1), ""), 429, protocol.CodeRateLimited)
+	e.want(e.do("PUT", other.path("/revocation"), other.certs(1), ""), 429, protocol.CodeRateLimited)
 	other.prekey(2, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", other.path(""), other.registration(2), other.pass(2)), 429, protocol.CodeRateLimited)
 }
 
-// A revoked mailbox is read as its record: 410 revoked, carrying all this server
+// A revoked mailbox is read as its record: 410 mailbox_revoked, carrying all this server
 // holds that the identity signed about the address, which is the revocation,
 // and the revocation of its certificates beside it when one was put. Each
 // part is the bytes that were put, and verifies, so a client takes "revoked"
@@ -279,7 +279,7 @@ func TestARevokedMailboxIsReadAsItsRecord(t *testing.T) {
 	e := newEnv(t, relaxed())
 	alone, withCerts := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
 	certs := withCerts.certs(1)
-	e.want(e.do("PUT", withCerts.path("/revocations"), certs, ""), 200, "")
+	e.want(e.do("PUT", withCerts.path("/revocation"), certs, ""), 200, "")
 	for name, c := range map[string]struct {
 		mailbox *raw
 		put     protocol.Revocations
@@ -292,9 +292,9 @@ func TestARevokedMailboxIsReadAsItsRecord(t *testing.T) {
 		if c.put.Revocation, err = protocol.SignRevocation(c.mailbox.signer, c.mailbox.id.Address()); err != nil {
 			t.Fatal(err)
 		}
-		e.want(e.do("PUT", c.mailbox.path("/revocations"), c.put, ""), 201, "")
+		e.want(e.do("PUT", c.mailbox.path("/revocation"), c.put, ""), 201, "")
 		shown := e.do("GET", c.mailbox.path(""), nil, "")
-		e.want(shown, 410, protocol.CodeRevoked)
+		e.want(shown, 410, protocol.CodeMailboxRevoked)
 		got := held(t, shown)
 		if got == nil || !bytes.Equal(got.Identity, c.mailbox.id.Document()) || !bytes.Equal(got.Revocation, c.put.Revocation) ||
 			!bytes.Equal(got.RevokedCertificates, c.put.RevokedCertificates) || !bytes.Equal(got.RevokedCertificatesSignature, c.put.RevokedCertificatesSignature) {
@@ -316,26 +316,26 @@ func TestARevokedMailboxIsReadAsItsRecord(t *testing.T) {
 }
 
 // The server keeps and serves a revocation of any address (PROTOCOL.md §11.15):
-// it answers GET …/revocations with no pass, with the record it holds of the address, in
-// the same bytes the read of the mailbox carries, and 404 not_revoked when it
+// it answers GET …/revocation with no pass, with the record it holds of the address, in
+// the same bytes the read of the mailbox carries, and 404 revocation_not_found when it
 // holds none, for an address with no mailbox as for one with a mailbox and nothing
 // revoked.
 func TestTheRevocationsOfAnyAddressAreServed(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	none, certsOnly, ended := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
-	e.want(e.do("GET", revocationPath(protocol.Address{7}), nil, ""), 404, protocol.CodeNotRevoked)
-	e.want(e.do("GET", none.path("/revocations"), nil, ""), 404, protocol.CodeNotRevoked)
+	e.want(e.do("GET", revocationPath(protocol.Address{7}), nil, ""), 404, protocol.CodeRevocationNotFound)
+	e.want(e.do("GET", none.path("/revocation"), nil, ""), 404, protocol.CodeRevocationNotFound)
 
 	certs := certsOnly.certs(1)
-	e.want(e.do("PUT", certsOnly.path("/revocations"), certs, ""), 200, "")
+	e.want(e.do("PUT", certsOnly.path("/revocation"), certs, ""), 200, "")
 	put := ended.certs(1)
-	e.want(e.do("PUT", ended.path("/revocations"), put, ""), 200, "")
+	e.want(e.do("PUT", ended.path("/revocation"), put, ""), 200, "")
 	var err error
 	if put.Revocation, err = protocol.SignRevocation(ended.signer, ended.id.Address()); err != nil {
 		t.Fatal(err)
 	}
-	e.want(e.do("PUT", ended.path("/revocations"), put, ""), 201, "")
+	e.want(e.do("PUT", ended.path("/revocation"), put, ""), 201, "")
 
 	for name, c := range map[string]struct {
 		mailbox *raw
@@ -345,7 +345,7 @@ func TestTheRevocationsOfAnyAddressAreServed(t *testing.T) {
 		"certificates revoked":                  {certsOnly, certs, 4},
 		"revoked with its certificates revoked": {ended, put, 5},
 	} {
-		got := e.do("GET", c.mailbox.path("/revocations"), nil, "")
+		got := e.do("GET", c.mailbox.path("/revocation"), nil, "")
 		e.want(got, 200, "")
 		var rec protocol.Revocations
 		if err := protocol.Unmarshal(got.body, &rec); err != nil {
@@ -377,8 +377,8 @@ func TestJunkRevocationsAreLimited(t *testing.T) {
 	a := e.mailbox()
 	junk := protocol.Revocations{Identity: a.Identity().Document(), Revocation: []byte("revoke it")}
 	path := revocationPath(a.Address())
-	e.want(e.do("PUT", path, junk, ""), 400, protocol.CodeBadRevocation)
-	e.want(e.do("PUT", path, junk, ""), 400, protocol.CodeBadRevocation)
+	e.want(e.do("PUT", path, junk, ""), 400, protocol.CodeInvalidRevocation)
+	e.want(e.do("PUT", path, junk, ""), 400, protocol.CodeInvalidRevocation)
 	limited := e.do("PUT", path, junk, "")
 	e.want(limited, 429, protocol.CodeRateLimited)
 	if limited.header.Get("Retry-After") == "" {
@@ -407,7 +407,7 @@ func TestNoAnswerOfTheAPIIsStored(t *testing.T) {
 	check(e.do("GET", mailboxPath(protocol.Address{1}), nil, ""), "a 404")
 	check(e.do("GET", base+"/messages", nil, e.pass(a)), "a list")
 	check(e.do("GET", base+"/messages", nil, ""), "a 401")
-	e.want(e.do("PUT", base+"/revocations", record(t, a), ""), 201, "")
+	e.want(e.do("PUT", base+"/revocation", record(t, a), ""), 201, "")
 	check(e.do("GET", base, nil, ""), "a 410 with its revocation")
 	if got := e.do("GET", protocol.LinkPath+a.Address().String(), nil, "").header.Get("Cache-Control"); got == "no-store" || got == "" {
 		t.Errorf("the link page: Cache-Control %q", got)
@@ -439,7 +439,7 @@ func TestARevocationOutlivesTheProcess(t *testing.T) {
 	defer srv.Close()
 	e2 := &env{t: t, clock: e.clock, srv: srv}
 	shown := e2.do("GET", mailboxPath(a.Address()), nil, "")
-	e2.want(shown, 410, protocol.CodeRevoked)
+	e2.want(shown, 410, protocol.CodeMailboxRevoked)
 	got := held(t, shown)
 	if got == nil {
 		t.Fatalf("a later process reads a revoked mailbox with no record: %s", shown.body)
@@ -447,7 +447,7 @@ func TestARevocationOutlivesTheProcess(t *testing.T) {
 	if _, err := protocol.VerifyRevocation(a.Address(), got.Identity, got.Revocation); err != nil || string(got.Revocation) != string(rec.Revocation) {
 		t.Fatalf("what a later process shows for a revoked mailbox: %v", err)
 	}
-	e2.want(e2.do("PUT", revocationPath(a.Address()), rec, ""), 410, protocol.CodeRevoked) // and answers what is sent for it from that record
+	e2.want(e2.do("PUT", revocationPath(a.Address()), rec, ""), 410, protocol.CodeMailboxRevoked) // and answers what is sent for it from that record
 }
 
 // watchedStore is a Store whose calls a test watches: each DeleteMessages,
@@ -520,8 +520,8 @@ func TestASecondRevocationReadsNoMessages(t *testing.T) {
 		code   protocol.Code
 	}{
 		{"the revocation, which ends the mailbox and deletes its messages", signed, 201, ""},
-		{"the same revocation again", signed, 410, protocol.CodeRevoked},
-		{"the same signature in other bytes", &rewrapped, 410, protocol.CodeRevoked},
+		{"the same revocation again", signed, 410, protocol.CodeMailboxRevoked},
+		{"the same signature in other bytes", &rewrapped, 410, protocol.CodeMailboxRevoked},
 	} {
 		e.want(e.do("PUT", revocationPath(owner.Address()), put.rec, ""), put.status, put.code)
 		if n := w.deleted.Load(); n != 1 {
@@ -556,7 +556,7 @@ func TestARevocationRetriedAfterAFailedDeleteDeletes(t *testing.T) {
 		t.Fatalf("after a revocation whose delete failed the mailbox holds %d messages (%v), want the 1 it had", n, err)
 	}
 	counted, deleted := w.counted.Load(), w.deleted.Load()
-	e.want(e.do("PUT", path, rec, ""), 410, protocol.CodeRevoked)
+	e.want(e.do("PUT", path, rec, ""), 410, protocol.CodeMailboxRevoked)
 	if n, err := e.store.Count(ctx, a.Address()); err != nil || n != 0 {
 		// What each read saw, so that a failure names the step that differed
 		// (dromas-dev/dromas-server#254).
@@ -564,7 +564,7 @@ func TestARevocationRetriedAfterAFailedDeleteDeletes(t *testing.T) {
 			n, err, w.held.Load(), w.lastCount.Load(), w.counted.Load()-counted, w.deleted.Load()-deleted, messageRows(e, a.Address()))
 	}
 	// With the mailbox empty, one more reads nothing.
-	e.want(e.do("PUT", path, rec, ""), 410, protocol.CodeRevoked)
+	e.want(e.do("PUT", path, rec, ""), 410, protocol.CodeMailboxRevoked)
 	if n := w.deleted.Load(); n != 2 {
 		t.Errorf("a revocation, its retry and one more read the messages table %d times, want 2", n)
 	}
@@ -648,7 +648,7 @@ func TestAResentRevocationLoadsNothing(t *testing.T) {
 	}
 	w.forgetful.Store(true)
 	w.counted.Store(0)
-	e.want(e.do("PUT", path, rec, ""), 410, protocol.CodeRevoked)
+	e.want(e.do("PUT", path, rec, ""), 410, protocol.CodeMailboxRevoked)
 	w.forgetful.Store(false)
 	if counts, n := w.counted.Load(), w.deleted.Load(); counts != 0 || n != 1 {
 		t.Errorf("a revocation sent again where memory holds nothing counted the messages %d times and deleted them %d times, want neither", counts, n-1)
@@ -656,7 +656,7 @@ func TestAResentRevocationLoadsNothing(t *testing.T) {
 	if n, record := left(); n != 1 || !record {
 		t.Fatalf("where memory holds nothing, a revocation sent again left %d messages and a record %v, want the 1 and the record", n, record)
 	}
-	e.want(e.do("PUT", path, rec, ""), 410, protocol.CodeRevoked)
+	e.want(e.do("PUT", path, rec, ""), 410, protocol.CodeMailboxRevoked)
 	if n, record := left(); n != 0 || record {
 		t.Errorf("where memory holds the address, a revocation sent again left %d messages and a record %v, want neither", n, record)
 	}
@@ -672,7 +672,7 @@ func TestARevocationComesWithTheCertificatesHeld(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
-	path := r.path("/revocations")
+	path := r.path("/revocation")
 	both := r.certs(7)
 	e.want(e.do("PUT", path, both, ""), 200, "")
 	var err error
@@ -685,13 +685,13 @@ func TestARevocationComesWithTheCertificatesHeld(t *testing.T) {
 	if stored, err := e.store.Mailbox(ctx, r.id.Address()); err != nil || stored.State != Revoked || !bytes.Equal(stored.Revocation, both.Revocation) {
 		t.Fatalf("a revocation that came with the certificates' already held was not taken: %+v, %v", stored, err)
 	}
-	e.want(e.do("PUT", path, junk, ""), 410, protocol.CodeRevoked)
+	e.want(e.do("PUT", path, junk, ""), 410, protocol.CodeMailboxRevoked)
 }
 
 // A revocation of the address is read first (PROTOCOL.md §11.15). One that
 // verifies is kept and answered 201 whatever is beside it, and a revocation of
 // certificates beside it is kept only if that verifies and runs higher. One
-// that does not verify is 400 bad_revocation, and nothing in the body is kept.
+// that does not verify is 400 invalid_revocation, and nothing in the body is kept.
 func TestARevocationOfTheAddressIsReadBeforeWhatIsBesideIt(t *testing.T) {
 	t.Parallel()
 	bad := []byte("not a signature")
@@ -740,7 +740,7 @@ func TestARevocationOfTheAddressIsReadBeforeWhatIsBesideIt(t *testing.T) {
 			ctx := context.Background()
 			e := newEnv(t, relaxed())
 			r := e.raw().register(protocol.MaxPrekeyLifetime)
-			path := r.path("/revocations")
+			path := r.path("/revocation")
 			if c.heldThrough > 0 {
 				e.want(e.do("PUT", path, r.certs(c.heldThrough), ""), 200, "")
 			}
@@ -751,7 +751,7 @@ func TestARevocationOfTheAddressIsReadBeforeWhatIsBesideIt(t *testing.T) {
 			got := e.do("PUT", path, c.body(r, rev), "")
 			want := protocol.Code("")
 			if c.status == 400 {
-				want = protocol.CodeBadRevocation
+				want = protocol.CodeInvalidRevocation
 			}
 			e.want(got, c.status, want)
 			stored, err := e.store.Mailbox(ctx, r.id.Address())
@@ -785,10 +785,10 @@ func TestARevocationOfTheAddressIsReadBeforeWhatIsBesideIt(t *testing.T) {
 	}
 	half := r.certs(5)
 	half.Revocation, half.RevokedCertificatesSignature = rev, nil
-	e.want(e.do("PUT", r.path("/revocations"), half, ""), 400, protocol.CodeBadRequest)
+	e.want(e.do("PUT", r.path("/revocation"), half, ""), 400, protocol.CodeInvalidRequest)
 	half = r.certs(5)
 	half.Revocation, half.RevokedCertificates = rev, nil
-	e.want(e.do("PUT", r.path("/revocations"), half, ""), 400, protocol.CodeBadRequest)
+	e.want(e.do("PUT", r.path("/revocation"), half, ""), 400, protocol.CodeInvalidRequest)
 }
 
 // messageRows is the number of message rows of mailbox a in e's PostgreSQL
@@ -819,7 +819,7 @@ func TestARevokedAddressIsAnswered410ForAnyBody(t *testing.T) {
 		"another identity's body": record(t, other),
 	} {
 		r := e.do("PUT", path, body, "")
-		e.want(r, 410, protocol.CodeRevoked)
+		e.want(r, 410, protocol.CodeMailboxRevoked)
 		if !strings.Contains(string(r.body), `"record"`) {
 			t.Errorf("%s: the 410 carries no record: %s", name, r.body)
 		}

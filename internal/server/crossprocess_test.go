@@ -125,8 +125,8 @@ func TestAProcessBehindTakesNothingARenewalElsewhereEnded(t *testing.T) {
 		call  func(t *testing.T, x *twoProcesses, from, to *raw, id [32]byte, old string, polled <-chan reply)
 	}{
 		{"a send sealed to the replaced statement", false, func(t *testing.T, x *twoProcesses, from, to *raw, _ [32]byte, _ string, _ <-chan reply) {
-			x.a.want(x.onB("POST", to.path("/messages"), to.sealed(2, sealFor(t, to, 2)), from.pass(1)), http.StatusConflict, protocol.CodeMailboxChanged)
-			x.a.want(x.onB("POST", to.path("/messages"), to.sealed(2, sealFor(t, to, 2)), from.pass(1)), http.StatusConflict, protocol.CodeStalePrekey)
+			x.a.want(x.onB("POST", to.path("/messages"), to.sealed(2, sealFor(t, to, 2)), from.pass(1)), http.StatusConflict, protocol.CodeConcurrentModification)
+			x.a.want(x.onB("POST", to.path("/messages"), to.sealed(2, sealFor(t, to, 2)), from.pass(1)), http.StatusConflict, protocol.CodePrekeySuperseded)
 		}},
 		{"a fetch", false, func(t *testing.T, x *twoProcesses, _, to *raw, id [32]byte, old string, _ <-chan reply) {
 			x.a.wantNotCurrent(x.onB("GET", to.path("/messages/"+hexID(id)), nil, old), 3)
@@ -150,7 +150,7 @@ func TestAProcessBehindTakesNothingARenewalElsewhereEnded(t *testing.T) {
 		}},
 		{"an ACL", false, func(t *testing.T, x *twoProcesses, _, to *raw, _ [32]byte, old string, _ <-chan reply) {
 			acl := aclOf([]string{"*"}, nil)
-			x.a.want(x.onB("PUT", to.path("/acl"), acl, old), http.StatusConflict, protocol.CodeMailboxChanged)
+			x.a.want(x.onB("PUT", to.path("/acl"), acl, old), http.StatusConflict, protocol.CodeConcurrentModification)
 			x.a.wantNotCurrent(x.onB("PUT", to.path("/acl"), acl, old), 3)
 		}},
 		{"a long poll of an empty mailbox, held from before", true, func(t *testing.T, x *twoProcesses, _, _ *raw, _ [32]byte, _ string, polled <-chan reply) {
@@ -215,7 +215,7 @@ func TestAProcessBehindStoresNothingAnACLElsewhereDenies(t *testing.T) {
 	fed(t, x.follower)
 	x.hold(true)
 	a.want(a.do("PUT", to.path("/acl"), aclOf([]string{"*"}, []string{from.id.Address().String()}), to.pass(1)), http.StatusOK, "")
-	a.want(x.onB("POST", to.path("/messages"), to.sealed(1, sealFor(t, to, 1)), from.pass(1)), http.StatusConflict, protocol.CodeMailboxChanged)
+	a.want(x.onB("POST", to.path("/messages"), to.sealed(1, sealFor(t, to, 1)), from.pass(1)), http.StatusConflict, protocol.CodeConcurrentModification)
 	if n := messagesOf(x, to.id.Address()); n != 1 {
 		t.Errorf("after a send on B the ACL denies: %d messages held; want 1", n)
 	}
@@ -239,7 +239,7 @@ func TestAProcessBehindStoresNothingForAnAddressRevokedElsewhere(t *testing.T) {
 	}
 	x.hold(true)
 	a.want(a.do("PUT", revocationPath(to.id.Address()), protocol.Revocations{Identity: to.id.Document(), Revocation: sig}, ""), http.StatusCreated, "")
-	a.want(x.onB("POST", to.path("/messages"), to.sealed(1, sealFor(t, to, 1)), from.pass(1)), http.StatusGone, protocol.CodeRevoked)
+	a.want(x.onB("POST", to.path("/messages"), to.sealed(1, sealFor(t, to, 1)), from.pass(1)), http.StatusGone, protocol.CodeMailboxRevoked)
 	if n := messagesOf(x, to.id.Address()); n != 0 {
 		t.Errorf("after a send on B to the revoked address: %d messages held; want none", n)
 	}
@@ -289,7 +289,7 @@ func TestAProcessBehindAnswersAMailboxRevokedElsewhereAsRevoked(t *testing.T) {
 					t.Errorf("HEAD of the revoked mailbox's message: %d; want 410", got)
 				}
 			} else {
-				x.a.want(x.onB(c.method, path, nil, to.pass(1)), http.StatusGone, protocol.CodeRevoked)
+				x.a.want(x.onB(c.method, path, nil, to.pass(1)), http.StatusGone, protocol.CodeMailboxRevoked)
 			}
 			x.hold(false)
 		})
@@ -315,7 +315,7 @@ func TestAProcessBehindAnswersNoDuplicateOfASenderEndedElsewhere(t *testing.T) {
 	from.prekey(3, a.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	a.want(a.do("PUT", from.path("/prekey"), from.upload(3), from.pass(3)), http.StatusOK, "")
 	a.wantNotCurrent(a.do("POST", to.path("/messages"), again, from.pass(2)), 3)
-	a.want(x.onB("POST", to.path("/messages"), again, from.pass(2)), http.StatusConflict, protocol.CodeMailboxChanged)
+	a.want(x.onB("POST", to.path("/messages"), again, from.pass(2)), http.StatusConflict, protocol.CodeConcurrentModification)
 	a.wantNotCurrent(x.onB("POST", to.path("/messages"), again, from.pass(2)), 3)
 	a.want(x.onB("POST", to.path("/messages"), again, from.pass(3)), http.StatusOK, "") // the sender's current pass: its receipt
 	sig, err := protocol.Sign(from.signer, protocol.RevocationStatement(from.id.Address()), protocol.RevokeNamespace(from.id.Address()))
@@ -376,7 +376,7 @@ func TestAProcessBehindTakesNoRenewalUnderACertificateRevokedElsewhere(t *testin
 	a.want(a.do("PUT", revocationPath(box), to.certs(2), ""), http.StatusOK, "")
 	to.prekeyUnder(to.work[2], 3, a.clock.Now().Add(protocol.MaxPrekeyLifetime), nil) // whoever holds certificate 2's key
 	a.want(a.do("PUT", to.path("/prekey"), to.upload(3), to.pass(3)), http.StatusUnauthorized, protocol.CodeCertificateRevoked)
-	a.want(x.onB("PUT", to.path("/prekey"), to.upload(3), to.pass(3)), http.StatusConflict, protocol.CodeMailboxChanged)
+	a.want(x.onB("PUT", to.path("/prekey"), to.upload(3), to.pass(3)), http.StatusConflict, protocol.CodeConcurrentModification)
 	a.want(x.onB("PUT", to.path("/prekey"), to.upload(3), to.pass(3)), http.StatusUnauthorized, protocol.CodeCertificateRevoked)
 	var stmt []byte
 	if err := x.writer.pool().QueryRow(context.Background(), `SELECT statement FROM mailboxes WHERE addr = $1`, box[:]).Scan(&stmt); err != nil {
@@ -404,7 +404,7 @@ func TestAProcessBehindStoresNothingByASenderEndedElsewhere(t *testing.T) {
 	x.hold(true)
 	from.prekey(3, a.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	a.want(a.do("PUT", from.path("/prekey"), from.upload(3), from.pass(3)), http.StatusOK, "")
-	a.want(x.onB("POST", to.path("/messages"), to.sealed(1, sealFor(t, to, 1)), from.pass(2)), http.StatusConflict, protocol.CodeMailboxChanged)
+	a.want(x.onB("POST", to.path("/messages"), to.sealed(1, sealFor(t, to, 1)), from.pass(2)), http.StatusConflict, protocol.CodeConcurrentModification)
 	a.wantNotCurrent(x.onB("POST", to.path("/messages"), to.sealed(1, sealFor(t, to, 1)), from.pass(2)), 3)
 	sig, err := protocol.Sign(from.signer, protocol.RevocationStatement(from.id.Address()), protocol.RevokeNamespace(from.id.Address()))
 	if err != nil {
@@ -428,14 +428,14 @@ func TestAProcessBehindRegistersNoAddressRevokedElsewhere(t *testing.T) {
 	a := x.a
 	r := a.raw()
 	r.prekey(1, a.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
-	a.want(x.onB("GET", r.path(""), nil, ""), http.StatusNotFound, protocol.CodeNoSuchMailbox)
+	a.want(x.onB("GET", r.path(""), nil, ""), http.StatusNotFound, protocol.CodeMailboxNotFound)
 	x.hold(true)
 	sig, err := protocol.Sign(r.signer, protocol.RevocationStatement(r.id.Address()), protocol.RevokeNamespace(r.id.Address()))
 	if err != nil {
 		t.Fatal(err)
 	}
 	a.want(a.do("PUT", revocationPath(r.id.Address()), protocol.Revocations{Identity: r.id.Document(), Revocation: sig}, ""), http.StatusCreated, "")
-	a.want(x.onB("PUT", r.path(""), r.registration(1), r.pass(1)), http.StatusGone, protocol.CodeRevoked)
+	a.want(x.onB("PUT", r.path(""), r.registration(1), r.pass(1)), http.StatusGone, protocol.CodeMailboxRevoked)
 	box := r.id.Address()
 	if n := x.count(`SELECT count(*)::int FROM mailboxes WHERE addr = $1`, box[:]); n != 0 {
 		t.Errorf("the revoked address has %d records; want none", n)
@@ -489,7 +489,7 @@ func TestTheSweepTakesWhatARevokedAddressLeft(t *testing.T) {
 // before at the rev the new one is at. A write on B is held to the record by
 // its version, its created beside its rev, and changes nothing of the new
 // one, a send sealed to the record before among them, which stores nothing
-// (409 mailbox_changed); and B's own revocation of certificates, which
+// (409 concurrent_modification); and B's own revocation of certificates, which
 // raises the new record's rev, leaves B no copy of the record before
 // (dromas-dev/dromas-server#266).
 func TestAProcessBehindWritesNothingToARecordMadeAgainAtItsAddress(t *testing.T) {
@@ -500,13 +500,13 @@ func TestAProcessBehindWritesNothingToARecordMadeAgainAtItsAddress(t *testing.T)
 	}{
 		{"a renewal", func(t *testing.T, x *twoProcesses, to, _ *raw) {
 			to.prekey(3, x.a.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
-			x.a.want(x.onB("PUT", to.path("/prekey"), to.upload(3), to.pass(3)), http.StatusConflict, protocol.CodeMailboxChanged)
+			x.a.want(x.onB("PUT", to.path("/prekey"), to.upload(3), to.pass(3)), http.StatusConflict, protocol.CodeConcurrentModification)
 		}},
 		{"an ACL", func(t *testing.T, x *twoProcesses, to, _ *raw) {
-			x.a.want(x.onB("PUT", to.path("/acl"), aclOf([]string{"*"}, nil), to.pass(2)), http.StatusConflict, protocol.CodeMailboxChanged)
+			x.a.want(x.onB("PUT", to.path("/acl"), aclOf([]string{"*"}, nil), to.pass(2)), http.StatusConflict, protocol.CodeConcurrentModification)
 		}},
 		{"a send sealed to the record before", func(t *testing.T, x *twoProcesses, to, from *raw) {
-			x.a.want(x.onB("POST", to.path("/messages"), to.sealed(1, sealFor(t, to, 1)), from.pass(1)), http.StatusConflict, protocol.CodeMailboxChanged)
+			x.a.want(x.onB("POST", to.path("/messages"), to.sealed(1, sealFor(t, to, 1)), from.pass(1)), http.StatusConflict, protocol.CodeConcurrentModification)
 		}},
 		{"a revocation of certificates, after which B reads the record made again", func(t *testing.T, x *twoProcesses, to, _ *raw) {
 			x.a.want(x.onB("PUT", revocationPath(to.id.Address()), to.certs(1), ""), http.StatusOK, "")
@@ -591,6 +591,6 @@ func TestAProcessBehindKeepsNoRecordItsRevocationFoundGone(t *testing.T) {
 	if st, ok := x.follower.Held(box); ok {
 		t.Errorf("after its own revocation found no record, B holds the mailbox's standing: %+v", st)
 	}
-	a.want(x.onB("GET", to.path(""), nil, ""), http.StatusNotFound, protocol.CodeNoSuchMailbox)
+	a.want(x.onB("GET", to.path(""), nil, ""), http.StatusNotFound, protocol.CodeMailboxNotFound)
 	x.hold(false)
 }

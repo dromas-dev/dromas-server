@@ -36,9 +36,9 @@ func (s *beforePut) PutMessage(ctx context.Context, mailbox protocol.Address, h 
 	return s.Store.PutMessage(ctx, mailbox, h, body)
 }
 
-// Every 410 revoked this server answers carries the record it holds of the
+// Every 410 mailbox_revoked this server answers carries the record it holds of the
 // address, its identity's revocation of it beside its revocation of
-// certificates, as the read of a mailbox does and as GET …/revocations serves it
+// certificates, as the read of a mailbox does and as GET …/revocation serves it
 // (PROTOCOL.md §11.3; dromas-dev/dromas-client#353), so a client checks
 // it with no second call: a send held between its check of the recipient
 // and its write while the address is revoked, the read, a registration, a
@@ -61,7 +61,7 @@ func TestEvery410CarriesTheRecord(t *testing.T) {
 	// r revokes certificate 1, and renews under certificate
 	// 2, so its record carries a revocation of certificates beside the
 	// revocation of the address.
-	e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), http.StatusOK, "")
+	e.want(e.do("PUT", r.path("/revocation"), r.certs(1), ""), http.StatusOK, "")
 	r.prekey(2, until, nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(2), r.pass(2)), http.StatusOK, "")
 	writing, release := make(chan struct{}), make(chan struct{})
@@ -69,11 +69,11 @@ func TestEvery410CarriesTheRecord(t *testing.T) {
 	sent := make(chan reply, 1)
 	go func() { sent <- e.sendTo(r, 2, from, 1) }()
 	<-writing
-	e.want(e.do("PUT", r.path("/revocations"), revocation(r), ""), http.StatusCreated, "")
+	e.want(e.do("PUT", r.path("/revocation"), revocation(r), ""), http.StatusCreated, "")
 	close(release)
 	across := <-sent
 	q := e.raw() // never registered
-	e.want(e.do("PUT", q.path("/revocations"), revocation(q), ""), http.StatusCreated, "")
+	e.want(e.do("PUT", q.path("/revocation"), revocation(q), ""), http.StatusCreated, "")
 	q.prekey(1, until, nil)
 
 	id := strings.Repeat("0", 64)
@@ -86,7 +86,7 @@ func TestEvery410CarriesTheRecord(t *testing.T) {
 		{"a mailbox revoked", r, 2, []reply{across}},
 		{"an address revoked with no mailbox", q, 1, nil},
 	} {
-		served := e.do("GET", c.mailbox.path("/revocations"), nil, "")
+		served := e.do("GET", c.mailbox.path("/revocation"), nil, "")
 		e.want(served, http.StatusOK, "")
 		var want protocol.Revocations
 		if err := protocol.Unmarshal(served.body, &want); err != nil || len(want.Revocation) == 0 || c.mailbox == r && len(want.RevokedCertificates) == 0 {
@@ -99,7 +99,7 @@ func TestEvery410CarriesTheRecord(t *testing.T) {
 			"the read":             e.do("GET", c.mailbox.path(""), nil, ""),
 			"a registration":       e.do("PUT", c.mailbox.path(""), c.mailbox.registration(next), c.mailbox.pass(next)),
 			"a prekey upload":      e.do("PUT", c.mailbox.path("/prekey"), c.mailbox.upload(next), c.mailbox.pass(next)),
-			"the revocation again": e.do("PUT", c.mailbox.path("/revocations"), want, ""),
+			"the revocation again": e.do("PUT", c.mailbox.path("/revocation"), want, ""),
 			"a send":               e.sendTo(c.mailbox, c.under, from, 1),
 			"a poll":               e.do("GET", c.mailbox.path("/messages"), nil, pass),
 			"a fetch":              e.do("GET", c.mailbox.path("/messages/"+id), nil, pass),

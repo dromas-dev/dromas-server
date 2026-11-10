@@ -65,7 +65,7 @@ func (s *Server) owned(h http.Handler) http.Handler {
 		return h
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.shard.owns(r.PathValue("addr")) {
+		if !s.shard.owns(r.PathValue("address")) {
 			s.metrics.misrouted()
 			p := fail(protocol.CodeUnavailable, "retry later", "this process does not answer for that mailbox")
 			p.retryAfter = retryLater

@@ -244,7 +244,7 @@ func TestTwoProcesses(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	start := time.Now()
 	id = idOf(t, send(t, a, b, "woke a long poll elsewhere"))
-	if r := <-woke; r.status != http.StatusOK || !strings.Contains(string(r.body), `"count":1`) {
+	if r := <-woke; r.status != http.StatusOK || !strings.Contains(string(r.body), `"total_count":1`) {
 		t.Fatalf("the long poll on the other process: %d %s", r.status, r.body)
 	}
 	t.Logf("a send on the first process woke a long poll on the second in %s", time.Since(start))
@@ -257,7 +257,7 @@ func TestTwoProcesses(t *testing.T) {
 	send(t, a, b, "seen elsewhere")
 	took = waitFor("the send reaching the other process", func() bool { return count(other) == 1 })
 	t.Logf("a send on the first process reached the second in %s", took)
-	if r := e2.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages", nil, tok()); r.status != http.StatusOK || !strings.Contains(string(r.body), `"count":1`) {
+	if r := e2.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages", nil, tok()); r.status != http.StatusOK || !strings.Contains(string(r.body), `"total_count":1`) {
 		t.Fatalf("list on the other process: %d %s", r.status, r.body)
 	}
 
@@ -279,7 +279,7 @@ func TestTwoProcesses(t *testing.T) {
 		st, ok := other.Held(b.Address())
 		return ok && st.Signer == rec.Signer
 	})
-	if r := e2.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages", nil, old); r.code() != protocol.CodeCertificateNotCurrent {
+	if r := e2.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages", nil, old); r.code() != protocol.CodeCertificateSuperseded {
 		t.Fatalf("the old pass on the other process: %d %s", r.status, r.body)
 	}
 	if r := e2.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages", nil, tok()); r.status != http.StatusOK {
@@ -359,7 +359,7 @@ func TestAResentRevocationLoadsNothingElsewhere(t *testing.T) {
 	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: fresh, Limits: relaxed(), Now: e.clock.Now, Ready: fresh.Ready}).Handler()))
 	t.Cleanup(srv.Close)
 	e2 := &env{t: t, clock: e.clock, store: fresh, srv: srv}
-	e2.want(e2.do("PUT", revocationPath(a.Address()), rec, ""), 410, protocol.CodeRevoked)
+	e2.want(e2.do("PUT", revocationPath(a.Address()), rec, ""), 410, protocol.CodeMailboxRevoked)
 	if n := fresh.loads.Load(); n != 0 {
 		t.Errorf("a revocation sent again loaded %d addresses", n)
 	}
@@ -383,12 +383,12 @@ func TestPollsReadOncePerProcess(t *testing.T) {
 	}
 	before := s.loads.Load()
 	for range 3 {
-		if r := poll(); r.status != http.StatusOK || !strings.Contains(string(r.body), `"count":0`) {
+		if r := poll(); r.status != http.StatusOK || !strings.Contains(string(r.body), `"total_count":0`) {
 			t.Fatalf("%d %s", r.status, r.body)
 		}
 	}
 	send(t, a, b, "counted from memory")
-	if r := poll(); !strings.Contains(string(r.body), `"count":1`) {
+	if r := poll(); !strings.Contains(string(r.body), `"total_count":1`) {
 		t.Fatalf("after a send: %s", r.body)
 	}
 	if n := s.loads.Load() - before; n != 0 {
@@ -471,7 +471,7 @@ func TestPollStaysInMemory(t *testing.T) {
 	if r := poll(c, e2.pass(c)); r.status != http.StatusOK {
 		t.Fatalf("rekeyed mailbox: %d %s", r.status, r.body)
 	}
-	if r := poll(c, old); r.code() != protocol.CodeCertificateNotCurrent {
+	if r := poll(c, old); r.code() != protocol.CodeCertificateSuperseded {
 		t.Fatalf("the pass from before the renewal: %d %s", r.status, r.body)
 	}
 	before := cs.calls.Load()
@@ -482,7 +482,7 @@ func TestPollStaysInMemory(t *testing.T) {
 	if cs.calls.Load() != before {
 		t.Fatal("the test's own calls were counted")
 	}
-	if r := poll(b, e2.pass(b)); r.code() != protocol.CodeRevoked {
+	if r := poll(b, e2.pass(b)); r.code() != protocol.CodeMailboxRevoked {
 		t.Fatalf("revoked mailbox: %d %s", r.status, r.body)
 	}
 	if n := cs.calls.Load(); n != 0 {
@@ -507,10 +507,10 @@ func TestExpiredHeadersAreNotListed(t *testing.T) {
 		t.Fatalf("%d %s", r.status, r.body)
 	}
 	e.clock.Add(protocol.TTL / 2)
-	if r := e.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages/"+live.ID, nil, e.pass(b)); r.code() != protocol.CodeNoSuchMessage {
+	if r := e.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages/"+live.ID, nil, e.pass(b)); r.code() != protocol.CodeMessageNotFound {
 		t.Fatalf("fetch after expiry: %d %s", r.status, r.body)
 	}
-	if r := e.do(http.MethodDelete, "/v1/"+b.Address().String()+"/messages/"+live.ID, nil, e.pass(b)); r.code() != protocol.CodeNoSuchMessage {
+	if r := e.do(http.MethodDelete, "/v1/"+b.Address().String()+"/messages/"+live.ID, nil, e.pass(b)); r.code() != protocol.CodeMessageNotFound {
 		t.Fatalf("ack after expiry: %d %s", r.status, r.body)
 	}
 }
@@ -851,14 +851,14 @@ func TestTheMailboxsStateAnswersBeforeItsPass(t *testing.T) {
 		return e.do(http.MethodGet, "/v1/"+a.String()+"/messages", nil, pass)
 	}
 	b, c, d := e.mailbox(), e.mailbox(), e.mailbox()
-	if r := poll(b.Address(), "dromas-pass not-a-pass"); r.code() != protocol.CodeUnauthorized {
+	if r := poll(b.Address(), "dromas-pass not-a-pass"); r.code() != protocol.CodeInvalidPass {
 		t.Fatalf("not a pass: %d %s", r.status, r.body)
 	}
-	if r := poll(b.Address(), e.pass(c)); r.code() != protocol.CodeUnauthorized {
+	if r := poll(b.Address(), e.pass(c)); r.code() != protocol.CodeInvalidPass {
 		t.Fatalf("another mailbox's pass: %d %s", r.status, r.body)
 	}
 	var nobody protocol.Address
-	if r := poll(nobody, e.pass(c)); r.code() != protocol.CodeNoSuchMailbox {
+	if r := poll(nobody, e.pass(c)); r.code() != protocol.CodeMailboxNotFound {
 		t.Fatalf("unknown mailbox: %d %s", r.status, r.body)
 	}
 	pass := e.pass(c)
@@ -866,7 +866,7 @@ func TestTheMailboxsStateAnswersBeforeItsPass(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, p := range []string{"", pass} {
-		if r := poll(c.Address(), p); r.code() != protocol.CodeNoSuchMailbox {
+		if r := poll(c.Address(), p); r.code() != protocol.CodeMailboxNotFound {
 			t.Fatalf("a mailbox the server forgot: %d %s", r.status, r.body)
 		}
 	}
@@ -876,7 +876,7 @@ func TestTheMailboxsStateAnswersBeforeItsPass(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, p := range []string{"", pass} {
-		if r := poll(d.Address(), p); r.code() != protocol.CodeRevoked {
+		if r := poll(d.Address(), p); r.code() != protocol.CodeMailboxRevoked {
 			t.Fatalf("revoked mailbox: %d %s", r.status, r.body)
 		}
 	}
@@ -960,7 +960,7 @@ func newMemEnv(t *testing.T, l Limits) (*env, *Memory, *memBackend) {
 // both changes not yet delivered to memory, which is behind as a second
 // process is: a send checked against the copy of the record before is held
 // to it by its version, its created beside its rev, stores nothing, and is
-// answered 409 mailbox_changed. On PostgreSQL,
+// answered 409 concurrent_modification. On PostgreSQL,
 // TestAProcessBehindWritesNothingToARecordMadeAgainAtItsAddress holds it.
 func TestASendReadFromTheRecordBeforeStoresNothingInTheRecordMadeAgain(t *testing.T) {
 	t.Parallel()
@@ -985,7 +985,7 @@ func TestASendReadFromTheRecordBeforeStoresNothingInTheRecordMadeAgain(t *testin
 	if b, ok := m.Known(box); !ok || !b.Created.Equal(old.Created) || b.Rev != 1 {
 		t.Fatalf("control: memory holds no copy of the record before at rev 1: %v", b)
 	}
-	e.want(e.sendTo(to, 1, from, 1), http.StatusConflict, protocol.CodeMailboxChanged)
+	e.want(e.sendTo(to, 1, from, 1), http.StatusConflict, protocol.CodeConcurrentModification)
 	mb.mu.Lock()
 	n := len(mb.messages[box])
 	mb.mu.Unlock()
@@ -1142,7 +1142,7 @@ func TestAWriteToARecordMadeBetweenMillisecondsIsTaken(t *testing.T) {
 	var to *raw
 	rememberedMiss(t, e.store.(*Memory), func() protocol.Address { // remembered missing, so the registration's own write is memory's copy
 		to = e.raw()
-		e.want(e.do("GET", to.path(""), nil, ""), http.StatusNotFound, protocol.CodeNoSuchMailbox)
+		e.want(e.do("GET", to.path(""), nil, ""), http.StatusNotFound, protocol.CodeMailboxNotFound)
 		return to.id.Address()
 	})
 	to.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)

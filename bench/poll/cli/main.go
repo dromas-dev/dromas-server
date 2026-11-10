@@ -30,7 +30,7 @@ func main() {
 	want := "[]"
 	if len(os.Args) == 4 {
 		url, tok = os.Args[2], os.Args[3]
-		want = `{"count":0,"messages":[],"next_cursor":null}` + "\n"
+		want = `{"total_count":0,"messages":[],"next_cursor":null}` + "\n"
 	}
 	tr := &http.Transport{MaxIdleConnsPerHost: 4}
 	c := &http.Client{Transport: tr}

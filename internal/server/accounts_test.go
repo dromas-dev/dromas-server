@@ -136,7 +136,7 @@ func TestAccounts(t *testing.T) {
 			t.Fatalf("third send: %v", err)
 		}
 		// The key's one use is spent.
-		if _, err := c.Adopt(ctx, key); codeOf(err) != protocol.CodeAdoptKeyRefused {
+		if _, err := c.Adopt(ctx, key); codeOf(err) != protocol.CodeInvalidAdoptKey {
 			t.Fatalf("a spent key: %v", err)
 		}
 		// Leaving gives a back the server's limits; sends in the account
@@ -186,7 +186,7 @@ func TestAccounts(t *testing.T) {
 			"not a key":               "dra1_x",
 			"a key's hash, not a key": adoptPrefix + base64.RawURLEncoding.EncodeToString(append([]byte(acc.ID), func() []byte { h := sha256.Sum256([]byte(key)); return h[:] }()...)),
 		} {
-			if _, err := a.Adopt(ctx, k); codeOf(err) != protocol.CodeAdoptKeyRefused {
+			if _, err := a.Adopt(ctx, k); codeOf(err) != protocol.CodeInvalidAdoptKey {
 				t.Errorf("%s: %v", name, err)
 			}
 		}
@@ -205,11 +205,11 @@ func TestAccounts(t *testing.T) {
 				t.Fatalf("%s, naming the mailbox's own account: %q, %v", name, got, err)
 			}
 		}
-		if _, err := a.Adopt(ctx, moved); codeOf(err) != protocol.CodeAdoptKeyRefused {
+		if _, err := a.Adopt(ctx, moved); codeOf(err) != protocol.CodeInvalidAdoptKey {
 			t.Fatalf("a key naming another account, from a mailbox in this one: %v", err)
 		}
 		adopt(t, b, key)
-		if _, err := e.mailbox().Adopt(ctx, key); codeOf(err) != protocol.CodeAdoptKeyRefused {
+		if _, err := e.mailbox().Adopt(ctx, key); codeOf(err) != protocol.CodeInvalidAdoptKey {
 			t.Fatalf("a third mailbox on a two-use key: %v", err)
 		}
 		// The key is spent, and a mailbox already in its account is still
@@ -242,29 +242,29 @@ func TestAccounts(t *testing.T) {
 		e := newEnv(t, l)
 		r := e.raw().register(protocol.PrekeyLifetime)
 		pass := r.pass(1)
-		e.want(e.do(http.MethodPut, r.path("/account"), protocol.AdoptRequest{Key: "x"}, ""), 401, protocol.CodeUnauthorized)
-		e.want(e.do(http.MethodPut, r.path("/account"), []byte(`{"key":1}`), pass), 400, protocol.CodeBadRequest)
+		e.want(e.do(http.MethodPut, r.path("/account"), protocol.AdoptRequest{Key: "x"}, ""), 401, protocol.CodeInvalidPass)
+		e.want(e.do(http.MethodPut, r.path("/account"), []byte(`{"key":1}`), pass), 400, protocol.CodeInvalidRequest)
 		// No key, a null one (PROTOCOL.md §3.3) or an empty one is a member
 		// missing from the request, not a key refused.
 		for _, body := range []string{`{}`, `{"key":null}`, `{"key":""}`} {
 			got := e.do(http.MethodPut, r.path("/account"), []byte(body), pass)
-			e.want(got, 400, protocol.CodeBadRequest)
+			e.want(got, 400, protocol.CodeInvalidRequest)
 			if got.problem().Member != "key" {
 				t.Errorf("%s: the refusal names %q, want the member key: %s", body, got.problem().Member, got.body)
 			}
 		}
-		e.want(e.do(http.MethodDelete, r.path("/account"), nil, ""), 401, protocol.CodeUnauthorized)
+		e.want(e.do(http.MethodDelete, r.path("/account"), nil, ""), 401, protocol.CodeInvalidPass)
 		e.want(e.do(http.MethodDelete, r.path("/account"), nil, pass), 204, "")
 		// Over the sender's own cap, a send is refused before its body is
 		// read: here, before the server finds it is no age file.
-		e.want(e.do(http.MethodPost, r.path("/messages"), r.sealed(1, make([]byte, 16384)), pass), 413, protocol.CodeTooLarge)
+		e.want(e.do(http.MethodPost, r.path("/messages"), r.sealed(1, make([]byte, 16384)), pass), 413, protocol.CodeContentTooLarge)
 	})
 }
 
 // A mailbox revoked while it is in an account leaves it: an account lists no
 // mailboxes, a mailbox's membership is its record's, and the revocation deletes the
 // record (purge; dromas-dev/dromas-client#434 item 1). Then the account
-// routes answer 410 revoked, with the mailbox's pass or none.
+// routes answer 410 mailbox_revoked, with the mailbox's pass or none.
 func TestARevokedMailboxLeavesItsAccount(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
@@ -281,11 +281,11 @@ func TestARevokedMailboxLeavesItsAccount(t *testing.T) {
 	}
 	account := mailboxPath(a.Address()) + "/account"
 	for what, p := range map[string]string{"with its pass": pass, "with no pass": ""} {
-		if got := e.do(http.MethodPut, account, protocol.AdoptRequest{Key: key}, p); got.status != http.StatusGone || got.code() != protocol.CodeRevoked {
-			t.Errorf("PUT …/account of a revoked mailbox, %s: %d %s, want 410 revoked", what, got.status, got.code())
+		if got := e.do(http.MethodPut, account, protocol.AdoptRequest{Key: key}, p); got.status != http.StatusGone || got.code() != protocol.CodeMailboxRevoked {
+			t.Errorf("PUT …/account of a revoked mailbox, %s: %d %s, want 410 mailbox_revoked", what, got.status, got.code())
 		}
-		if got := e.do(http.MethodDelete, account, nil, p); got.status != http.StatusGone || got.code() != protocol.CodeRevoked {
-			t.Errorf("DELETE …/account of a revoked mailbox, %s: %d %s, want 410 revoked", what, got.status, got.code())
+		if got := e.do(http.MethodDelete, account, nil, p); got.status != http.StatusGone || got.code() != protocol.CodeMailboxRevoked {
+			t.Errorf("DELETE …/account of a revoked mailbox, %s: %d %s, want 410 mailbox_revoked", what, got.status, got.code())
 		}
 	}
 }
@@ -356,7 +356,7 @@ func TestARefusedKeyWritesNothing(t *testing.T) {
 	expiring := e.adoptKey(t, acc.ID, 1, time.Minute)
 	e.clock.Add(2 * time.Minute)
 	for name, k := range map[string]string{"spent": key, "never stored": unstored, "expired": expiring} {
-		if _, err := b.Adopt(ctx, k); codeOf(err) != protocol.CodeAdoptKeyRefused {
+		if _, err := b.Adopt(ctx, k); codeOf(err) != protocol.CodeInvalidAdoptKey {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
@@ -375,10 +375,10 @@ func TestAdoptRaceIsAConflict(t *testing.T) {
 	stale := New(Config{Store: staleStore{e.store}, Limits: l, Now: e.clock.Now}).Handler()
 	e.setMiddle(func(w http.ResponseWriter, r *http.Request, _ http.Handler) { stale.ServeHTTP(w, r) })
 	b := e.mailbox()
-	if _, err := b.Adopt(context.Background(), key); codeOf(err) != protocol.CodeMailboxChanged {
+	if _, err := b.Adopt(context.Background(), key); codeOf(err) != protocol.CodeConcurrentModification {
 		t.Fatalf("adopt: %v", err)
 	}
-	if err := a.Leave(context.Background()); codeOf(err) != protocol.CodeMailboxChanged {
+	if err := a.Leave(context.Background()); codeOf(err) != protocol.CodeConcurrentModification {
 		t.Fatalf("leave: %v", err)
 	}
 }
@@ -516,7 +516,7 @@ func TestLargeReadsTakeTurns(t *testing.T) {
 	if _, err := post(e.pass(lifted), 30000, 300*time.Millisecond); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("a large send did not wait its turn: %v", err)
 	}
-	if code, err := post(e.pass(lifted), 500, 5*time.Second); err != nil || code != http.StatusBadRequest { // read, then bad_request
+	if code, err := post(e.pass(lifted), 500, 5*time.Second); err != nil || code != http.StatusBadRequest { // read, then invalid_request
 		t.Fatalf("a small send waited: %d %v", code, err)
 	}
 	if code, err := post(e.pass(lifted), 100000, 5*time.Second); err != nil || code != http.StatusRequestEntityTooLarge {
@@ -562,7 +562,7 @@ func TestAStalledBodyGivesTheLargeReadBack(t *testing.T) {
 	defer conn.Close()
 	query := sealedTo(e.statement(to.Address()), nil).Encode()
 	_, _ = io.WriteString(conn, "POST /v1/"+to.Address().String()+"/messages?"+query+" HTTP/1.1\r\nHost: "+addr+"\r\nAuthorization: "+e.pass(lifted)+
-		"\r\nContent-Type: application/octet-stream\r\nContent-Length: 60000\r\n\r\n"+strings.Repeat("a", 30000)) // past the free size, then nothing
+		"\r\nContent-Type: application/vnd.age\r\nContent-Length: 60000\r\n\r\n"+strings.Repeat("a", 30000)) // past the free size, then nothing
 	for wait := time.Now().Add(5 * time.Second); testutil.ToFloat64(m.largeRead.WithLabelValues("taken")) != 1; time.Sleep(time.Millisecond) {
 		if time.Now().After(wait) {
 			t.Fatal("the stalled send never took the large read")
@@ -588,7 +588,7 @@ func TestAStalledBodyGivesTheLargeReadBack(t *testing.T) {
 		t.Fatalf("a large send after a stalled one: %v", err)
 	}
 	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest { // read, then bad_request
+	if resp.StatusCode != http.StatusBadRequest { // read, then invalid_request
 		t.Fatalf("a large send after a stalled one: %d, want 400", resp.StatusCode)
 	}
 	cut, taken, waited := testutil.ToFloat64(m.cut), testutil.ToFloat64(m.largeRead.WithLabelValues("taken")), testutil.ToFloat64(m.largeRead.WithLabelValues("timed_out"))

@@ -116,7 +116,7 @@ func (b *Mailbox) writable() error {
 func (b *Mailbox) hasRecord() bool { return b != nil && b.Rev > 0 }
 
 // holdsRevocations reports whether what is held of an address carries a
-// revocation of it or of its certificates: what GET …/revocations answers,
+// revocation of it or of its certificates: what GET …/revocation answers,
 // and the target a PUT there changes (precondition).
 func (b *Mailbox) holdsRevocations() bool {
 	return b != nil && (len(b.Revocation) > 0 || len(b.RevokedCerts) > 0)
@@ -136,7 +136,7 @@ func (b *Mailbox) listed(rank uint64) (bool, error) {
 // Expect is what a conditional write asks of its target as it writes: what a
 // request's If-Match or If-None-Match held of the target at its read
 // (expected; PROTOCOL.md §11.2), so that a change between the two refuses the
-// write, ErrStale, and the request is answered 409 mailbox_changed. It is the
+// write, ErrStale, and the request is answered 409 concurrent_modification. It is the
 // write's own condition, beside any other it has, and asks nothing of a
 // request that carried neither.
 type Expect int
@@ -184,7 +184,7 @@ func (r *Revocations) merge(o *Revocations) {
 
 // record is the revocation record of what b holds of its identity's
 // revocations, as a client reads one (PROTOCOL.md §10.3): served by
-// GET …/revocations, and carried by a 410 revoked (revokedWith).
+// GET …/revocation, and carried by a 410 mailbox_revoked (revokedWith).
 func (b *Mailbox) record() *protocol.Revocations {
 	return &protocol.Revocations{Identity: b.Identity, Revocation: b.Revocation, RevokedCertificates: b.RevokedCerts, RevokedCertificatesSignature: b.RevokedCertsSig}
 }

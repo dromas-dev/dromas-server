@@ -27,7 +27,7 @@ func main() {
 		}
 		var H [32]byte
 		if n, err := hex.Decode(H[:], []byte(parts[2])); err != nil || n != 32 {
-			http.Error(w, "bad_address", 400)
+			http.Error(w, "invalid_address", 400)
 			return
 		}
 		auth := r.Header.Get("Authorization")

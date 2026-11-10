@@ -54,7 +54,7 @@ func TestAFirstPageIsNotModifiedWhileUnchanged(t *testing.T) {
 		}
 		return resp, body
 	}
-	const emptyPage = `{"count":0,"messages":[],"next_cursor":null}` + "\n"
+	const emptyPage = `{"total_count":0,"messages":[],"next_cursor":null}` + "\n"
 	sum := sha256.Sum256([]byte(emptyPage))
 	emptyTag := `"` + hex.EncodeToString(sum[:16]) + `"`
 	resp, body := poll("", "")
@@ -239,8 +239,8 @@ func TestAnIDThatSharesAPrefixIsNotHeld(t *testing.T) {
 	path := "/v1/" + b.Address().String() + "/messages/" + hex.EncodeToString(forged)
 	before := cs.calls.Load()
 	for range 5 {
-		e2.want(e2.do(http.MethodDelete, path, nil, pass), http.StatusNotFound, protocol.CodeNoSuchMessage)
-		e2.want(e2.do(http.MethodGet, path, nil, pass), http.StatusNotFound, protocol.CodeNoSuchMessage)
+		e2.want(e2.do(http.MethodDelete, path, nil, pass), http.StatusNotFound, protocol.CodeMessageNotFound)
+		e2.want(e2.do(http.MethodGet, path, nil, pass), http.StatusNotFound, protocol.CodeMessageNotFound)
 	}
 	if n := cs.calls.Load(); n != before+10 {
 		t.Fatalf("%d storage calls for 10 calls of an id that only shares a held message's prefix; want 10, a read of the pass each", n-before)

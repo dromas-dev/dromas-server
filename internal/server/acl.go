@@ -27,7 +27,7 @@ const hintACL = "dromas peer allow and dromas peer block write this mailbox's AC
 // aclTooLarge is the answer to an ACL over acl_entries, by its entries or by
 // the body bound drawn from them.
 func (s *Server) aclTooLarge() *problem {
-	return fail(protocol.CodeTooLarge, "list fewer addresses: "+hintACL, "an ACL here holds at most %d entries, its two lists together", limitValue(s.limits().ACLEntries))
+	return fail(protocol.CodeContentTooLarge, "list fewer addresses: "+hintACL, "an ACL here holds at most %d entries, its two lists together", limitValue(s.limits().ACLEntries))
 }
 
 // putACL is PUT /v1/<address>/acl (with the pass): the mailbox's sender ACL,
@@ -68,7 +68,7 @@ func (s *Server) putACL(w http.ResponseWriter, r *http.Request) error {
 		// The bound is drawn from the entries, so a body over it is answered
 		// for them: an ACL's limit is in entries (PROTOCOL.md §11.3).
 		var p *problem
-		if errors.As(err, &p) && p.code == protocol.CodeTooLarge {
+		if errors.As(err, &p) && p.code == protocol.CodeContentTooLarge {
 			return s.aclTooLarge()
 		}
 		return err
@@ -78,7 +78,7 @@ func (s *Server) putACL(w http.ResponseWriter, r *http.Request) error {
 	case errors.Is(err, protocol.ErrACLTooLarge):
 		return s.aclTooLarge()
 	case err != nil:
-		return failErr(protocol.CodeBadRequest, hintACL, err)
+		return failErr(protocol.CodeInvalidRequest, hintACL, err)
 	}
 	body, err := jsonBytes(acl.Document())
 	if err != nil {
@@ -88,7 +88,7 @@ func (s *Server) putACL(w http.ResponseWriter, r *http.Request) error {
 	ctx := detached(passed)
 	if err := s.store.UpdateMailbox(ctx, b); err != nil {
 		if errors.Is(err, ErrStale) {
-			return fail(protocol.CodeMailboxChanged, "retry", "the mailbox changed during the request")
+			return fail(protocol.CodeConcurrentModification, "retry", "the mailbox changed during the request")
 		}
 		return err
 	}

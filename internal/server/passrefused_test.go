@@ -2,7 +2,7 @@ package server
 
 // How a pass is refused (PROTOCOL.md §8; dromas-dev/dromas-server#93).
 //
-// Every certificate_not_current to a pass names, in certificate_serial, the
+// Every certificate_superseded to a pass names, in certificate_serial, the
 // certificate the call takes a pass under, at each caller of checkPass and
 // checkPassBounded: register for a new mailbox, registered for a mailbox held in
 // memory or read, prekey's identical retry and its upload, owner and sender.
@@ -16,7 +16,7 @@ package server
 // under that one or the identity's.
 //
 // A pass under a certificate, at a mailbox whose identity signs its current
-// statement, is certificate_not_current with no certificate_serial
+// statement, is certificate_superseded with no certificate_serial
 // (PROTOCOL.md §5, §8).
 
 import (
@@ -73,7 +73,7 @@ func otherPasses(r *raw, n uint64) map[string]string {
 // forgeRecord writes into r's record the hash of a certificate for r's
 // address, of the record's serial, in every rule, that another key signed,
 // and returns a pass under it: the first two steps of passCheck take it, and
-// the identity's check refuses it (the second certificate_not_current).
+// the identity's check refuses it (the second certificate_superseded).
 func forgeRecord(e *env, r *raw) string {
 	e.t.Helper()
 	ctx := context.Background()
@@ -135,7 +135,7 @@ func TestARegistrationOfANewMailboxNamesItsStatementsCertificate(t *testing.T) {
 	// An address whose identity revoked certificates before it registered
 	// anything (a record, no mailbox): the same line, with what is kept.
 	m := e.raw()
-	if got := e.do("PUT", m.path("/revocations"), m.certs(2), ""); got.status >= 300 {
+	if got := e.do("PUT", m.path("/revocation"), m.certs(2), ""); got.status >= 300 {
 		t.Fatalf("the revocation of certificates of an address with no mailbox: %d %s", got.status, got.body)
 	}
 	m.prekey(5, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
@@ -260,7 +260,7 @@ func TestASendNamesTheSendersCurrentCertificate(t *testing.T) {
 // signature is checked: with no pass, one under the revoked current
 // certificate, one under an older one (revoked too), one under a later one
 // never on record, and one that is no pass. The identity's pass is taken. A send can only know whose pass it is by reading
-// it, so a send with no pass, or one that is no pass, is unauthorized
+// it, so a send with no pass, or one that is no pass, is invalid_pass
 // (PROTOCOL.md §8). The way back is an upload under a later
 // certificate, whose pass is read under that one (PROTOCOL.md §8, §11.9).
 func TestARevokedCurrentCertificateIsAnsweredBeforeThePass(t *testing.T) {
@@ -270,7 +270,7 @@ func TestARevokedCurrentCertificateIsAnsweredBeforeThePass(t *testing.T) {
 	later := e.passFor(r.certify(5), r.id.Address(), e.name())
 	seen := r.pass(3)
 	e.want(e.do("GET", r.path("/messages"), nil, seen), 200, "")
-	e.want(e.do("PUT", r.path("/revocations"), r.certs(3), ""), 200, "")
+	e.want(e.do("PUT", r.path("/revocation"), r.certs(3), ""), 200, "")
 	passes := map[string]string{
 		"no pass":                              "",
 		"not a pass":                           "Bearer " + strings.Repeat("a", 50),
@@ -313,7 +313,7 @@ func TestARevokedCurrentCertificateIsAnsweredBeforeThePass(t *testing.T) {
 	for name, pass := range passes {
 		want := protocol.CodeCertificateRevoked
 		if name == "no pass" || name == "not a pass" {
-			want = protocol.CodeUnauthorized
+			want = protocol.CodeInvalidPass
 		}
 		if got := e.do("POST", o.path("/messages"), o.sealed(1, []byte("x")), pass); got.status != 401 || got.code() != want {
 			t.Errorf("a send %s: %d %s, want %s", name, got.status, got.body, want)
@@ -330,7 +330,7 @@ func TestARevokedCurrentCertificateIsAnsweredBeforeThePass(t *testing.T) {
 	}
 	// The way back: a statement under a new certificate, with a pass under
 	// it. Its pass is read: one under the revoked current certificate is
-	// certificate_not_current, naming the statement's.
+	// certificate_superseded, naming the statement's.
 	r.prekey(6, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	e.notCurrentNaming(e.do("PUT", r.path("/prekey"), r.upload(6), seen), 6)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(6), r.pass(6)), 200, "")
@@ -348,7 +348,7 @@ func TestARevokedCertificateAnswersEveryOtherPassForNoMiss(t *testing.T) {
 	l.MissesPerMinute = 1
 	e := newEnv(t, l)
 	r := at3(e)
-	e.want(e.do("PUT", r.path("/revocations"), r.certs(3), ""), http.StatusOK, "")
+	e.want(e.do("PUT", r.path("/revocation"), r.certs(3), ""), http.StatusOK, "")
 	a, now := r.id.Address(), e.clock.Now()
 	at := func(signer ssh.Signer, when time.Time) string {
 		t.Helper()
@@ -388,7 +388,7 @@ func TestARegistrationUnderARevokedCertificateIsAnsweredBeforeThePass(t *testing
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	m := e.raw()
-	e.want(e.do("PUT", m.path("/revocations"), m.certs(4), ""), 200, "")
+	e.want(e.do("PUT", m.path("/revocation"), m.certs(4), ""), 200, "")
 	m.prekey(3, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	for name, pass := range map[string]string{
 		"no pass":                          "",
@@ -401,7 +401,7 @@ func TestARegistrationUnderARevokedCertificateIsAnsweredBeforeThePass(t *testing
 		}
 	}
 	m.prekey(5, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
-	e.want(e.do("PUT", m.path(""), m.registration(5), ""), 401, protocol.CodeUnauthorized)
+	e.want(e.do("PUT", m.path(""), m.registration(5), ""), 401, protocol.CodeInvalidPass)
 	e.want(e.do("PUT", m.path(""), m.registration(5), m.pass(5)), 201, "")
 }
 
@@ -409,7 +409,7 @@ func TestARegistrationUnderARevokedCertificateIsAnsweredBeforeThePass(t *testing
 // other (PROTOCOL.md §5, §8): at a mailbox under a certificate, the
 // identity's pass is taken, at every call that takes the mailbox's pass; at a
 // mailbox whose identity signs its statement, a pass under a certificate is
-// certificate_not_current, naming no certificate, since the mailbox has
+// certificate_superseded, naming no certificate, since the mailbox has
 // none. Control: each mailbox's own pass is taken at the same calls.
 func TestAPassOfEitherForm(t *testing.T) {
 	t.Parallel()

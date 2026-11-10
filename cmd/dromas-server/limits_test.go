@@ -64,10 +64,10 @@ func TestTheAdminSocket(t *testing.T) {
 		t.Fatal("limits clear with no --ip")
 	}
 	out.Reset()
-	if err := adminCall(path, http.MethodGet, "/limits/top?limit=mailbox_busy&n=5", &out); err != nil || strings.TrimSpace(out.String()) != `{"limit":"mailbox_busy","keys":[]}` {
+	if err := adminCall(path, http.MethodGet, "/limits/top?limit=mailbox_rate_limited&n=5", &out); err != nil || strings.TrimSpace(out.String()) != `{"limit":"mailbox_rate_limited","keys":[]}` {
 		t.Fatalf("limits top: %v %q", err, out.String())
 	}
-	if err := adminCall(path, http.MethodGet, "/limits/top?limit=nonsense", &out); err == nil || !strings.Contains(err.Error(), "400") || !strings.Contains(err.Error(), "mailbox_busy") {
+	if err := adminCall(path, http.MethodGet, "/limits/top?limit=nonsense", &out); err == nil || !strings.Contains(err.Error(), "400") || !strings.Contains(err.Error(), "mailbox_rate_limited") {
 		t.Fatalf("limits top of no limit: %v", err)
 	}
 	if err := limits("top", []string{"--socket", path}); err == nil {

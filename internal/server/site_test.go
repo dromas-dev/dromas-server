@@ -178,10 +178,10 @@ func TestEveryOtherRequestIsTheSites(t *testing.T) {
 		status         int
 		code           protocol.Code
 	}{
-		{"GET", "/v1/" + "d_" + strings.Repeat("a", 64), http.StatusNotFound, protocol.CodeNoSuchMailbox},
+		{"GET", "/v1/" + "d_" + strings.Repeat("a", 64), http.StatusNotFound, protocol.CodeMailboxNotFound},
 		{"GET", "/v1", http.StatusTemporaryRedirect, ""},
 		{"PUT", "/to", http.StatusTemporaryRedirect, ""},
-		{"GET", "/v1/nope", http.StatusBadRequest, protocol.CodeBadAddress},
+		{"GET", "/v1/nope", http.StatusBadRequest, protocol.CodeInvalidAddress},
 		{"POST", "/v1/", http.StatusMethodNotAllowed, ""}, // the server's document is GET
 		{"GET", protocol.LinkPath + addr, http.StatusOK, ""},
 		{"POST", protocol.LinkPath + addr, http.StatusMethodNotAllowed, ""},

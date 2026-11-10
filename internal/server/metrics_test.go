@@ -51,23 +51,23 @@ func TestMetricsCountWhatTheServerDoes(t *testing.T) {
 		e.want(e.do("GET", to+"/messages/"+id, nil, e.pass(b)), http.StatusOK, "")
 	}
 	e.caller()("192.0.2.1", "GET", to+"/nothing/here", nil, "")
-	e.want(e.do("GET", to+"/messages", nil, "dromas-pass nonsense"), http.StatusUnauthorized, protocol.CodeUnauthorized)
+	e.want(e.do("GET", to+"/messages", nil, "dromas-pass nonsense"), http.StatusUnauthorized, protocol.CodeInvalidPass)
 
 	for _, c := range []struct {
 		what string
 		got  prometheus.Collector
 		want float64
 	}{
-		{"sends stored", m.requests.WithLabelValues("POST /v1/{addr}/messages", "201", ""), 1},
-		{"a poll refused", m.requests.WithLabelValues("GET /v1/{addr}/messages", "429", "rate_limited"), 1},
+		{"sends stored", m.requests.WithLabelValues("POST /v1/{address}/messages", "201", ""), 1},
+		{"a poll refused", m.requests.WithLabelValues("GET /v1/{address}/messages", "429", "rate_limited"), 1},
 		{"a route no route matches", m.requests.WithLabelValues("unmatched", "404", ""), 1},
 		{"polls allowed", m.limits.WithLabelValues("polls", "mailbox", "allowed"), 1},
 		{"polls denied", m.limits.WithLabelValues("polls", "mailbox", "denied"), 1},
-		{"new messages taken", m.limits.WithLabelValues("mailbox_busy", "mailbox", "allowed"), 1},
+		{"new messages taken", m.limits.WithLabelValues("mailbox_rate_limited", "mailbox", "allowed"), 1},
 		{"polls", m.lists.WithLabelValues("poll"), 1},
 		{"first fetches", m.fetches.WithLabelValues("first"), 1},
 		{"repeat fetches", m.fetches.WithLabelValues("repeat"), 1},
-		{"a value that is no pass", m.passes.WithLabelValues("refused", string(protocol.CodeUnauthorized)), 1},
+		{"a value that is no pass", m.passes.WithLabelValues("refused", string(protocol.CodeInvalidPass)), 1},
 	} {
 		if got := testutil.ToFloat64(c.got); got != c.want {
 			t.Errorf("%s: %v, want %v", c.what, got, c.want)

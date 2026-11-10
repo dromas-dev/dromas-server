@@ -48,10 +48,10 @@ func codeOf(err error) protocol.Code {
 	return ""
 }
 
-// tooLarge reports whether err is a too_large refusal whose limit is limit.
+// tooLarge reports whether err is a content_too_large refusal whose limit is limit.
 func tooLarge(err error, limit uint64) bool {
 	e, ok := errors.AsType[*client.APIError](err)
-	return ok && e.Problem.Code == protocol.CodeTooLarge && e.Problem.Limit != nil && *e.Problem.Limit == limit
+	return ok && e.Problem.Code == protocol.CodeContentTooLarge && e.Problem.Limit != nil && *e.Problem.Limit == limit
 }
 
 // clockGap is how far the mailbox's clock read from the date on the server's
@@ -186,12 +186,12 @@ func (e *env) want(r reply, status int, code protocol.Code) {
 // names no certificate.
 func (e *env) wantNotCurrent(r reply, n uint64) {
 	e.t.Helper()
-	e.want(r, http.StatusUnauthorized, protocol.CodeCertificateNotCurrent)
+	e.want(r, http.StatusUnauthorized, protocol.CodeCertificateSuperseded)
 	switch p := r.problem(); {
 	case n == 0 && p.CertificateSerial != nil:
-		e.t.Fatalf("certificate_not_current names certificate %d of a mailbox its identity signs for: %s", *p.CertificateSerial, r.body)
+		e.t.Fatalf("certificate_superseded names certificate %d of a mailbox its identity signs for: %s", *p.CertificateSerial, r.body)
 	case n != 0 && (p.CertificateSerial == nil || *p.CertificateSerial != n):
-		e.t.Fatalf("certificate_not_current names certificate %v, want %d: %s", p.CertificateSerial, n, r.body)
+		e.t.Fatalf("certificate_superseded names certificate %v, want %d: %s", p.CertificateSerial, n, r.body)
 	}
 }
 
@@ -452,12 +452,12 @@ func (r *raw) registerCertified(d time.Duration) uint64 {
 // and ssh-keygen -Y sign write, and so at most its identity's key type's
 // bound (protocol.SignatureBound); it is kept and served byte for byte as it
 // was sent (§13). A byte after its END line, or one more than the bound, is
-// bad_key at a registration and at a renewal. A pass is at most
+// invalid_key at a registration and at a renewal. A pass is at most
 // protocol.MaxPassAuthorization. A certificate with an extension or a
 // critical option makes a signature over the bound, which is refused for
-// that before the certificate is read: a statement under one is bad_key, and
+// that before the certificate is read: a statement under one is invalid_key, and
 // a pass under one, never the mailbox's current certificate,
-// certificate_not_current.
+// certificate_superseded.
 func TestASignatureIsBounded(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
@@ -486,12 +486,12 @@ func TestASignatureIsBounded(t *testing.T) {
 		pass := over.pass(1)
 		over.sig[1] = more(over.sig[1])
 		t.Logf("a registration, %s", name)
-		e.want(e.do("PUT", over.path(""), over.registration(1), pass), 400, protocol.CodeBadKey)
+		e.want(e.do("PUT", over.path(""), over.registration(1), pass), 400, protocol.CodeInvalidKey)
 		// A renewal is held to it too.
 		r.prekey(3, now.Add(protocol.PrekeyLifetime), nil)
 		r.sig[3] = more(r.sig[3])
 		t.Logf("a renewal, %s", name)
-		e.want(e.do("PUT", r.path("/prekey"), r.upload(3), r.pass(3)), 400, protocol.CodeBadKey)
+		e.want(e.do("PUT", r.path("/prekey"), r.upload(3), r.pass(3)), 400, protocol.CodeInvalidKey)
 	}
 
 	for name, with := range map[string]func(*ssh.Certificate){
@@ -515,15 +515,15 @@ func TestASignatureIsBounded(t *testing.T) {
 			t.Fatalf("a certificate with %s: a statement under it is %d bytes, within the bound %d: the test does not reach the case", name, n, bound)
 		}
 		t.Logf("a certificate with %s", name)
-		e.want(e.do("PUT", r.path("/prekey"), r.upload(4), r.pass(4)), 400, protocol.CodeBadKey)
+		e.want(e.do("PUT", r.path("/prekey"), r.upload(4), r.pass(4)), 400, protocol.CodeInvalidKey)
 		e.wantNotCurrent(e.do("GET", r.path("/messages"), nil, r.pass(4)), 2)
 	}
 
-	e.want(e.do("GET", r.path("/messages"), nil, strings.Repeat("x", protocol.MaxPassAuthorization+1)), 401, protocol.CodeUnauthorized)
+	e.want(e.do("GET", r.path("/messages"), nil, strings.Repeat("x", protocol.MaxPassAuthorization+1)), 401, protocol.CodeInvalidPass)
 }
 
 // A prekey that is no prekey's type, an X25519 recipient or one of a type
-// nobody defines, is bad_key at a registration and at a renewal (PROTOCOL.md
+// nobody defines, is invalid_key at a registration and at a renewal (PROTOCOL.md
 // §6, §11.7 step 6).
 func TestAPrekeyOfAnotherTypeIsBadKey(t *testing.T) {
 	t.Parallel()
@@ -542,10 +542,10 @@ func TestAPrekeyOfAnotherTypeIsBadKey(t *testing.T) {
 		}
 		fresh := e.raw()
 		other(fresh, 1)
-		e.want(e.do("PUT", fresh.path(""), fresh.registration(1), fresh.pass(1)), 400, protocol.CodeBadKey)
+		e.want(e.do("PUT", fresh.path(""), fresh.registration(1), fresh.pass(1)), 400, protocol.CodeInvalidKey)
 		r := e.raw().register(protocol.PrekeyLifetime)
 		other(r, 2)
-		e.want(e.do("PUT", r.path("/prekey"), r.upload(2), r.pass(2)), 400, protocol.CodeBadKey)
+		e.want(e.do("PUT", r.path("/prekey"), r.upload(2), r.pass(2)), 400, protocol.CodeInvalidKey)
 	}
 }
 
@@ -557,12 +557,12 @@ func TestRegistration(t *testing.T) {
 	r.prekey(1, now.Add(protocol.MaxPrekeyLifetime), nil)
 	reg, pass := r.registration(1), r.pass(1)
 
-	e.want(e.do("PUT", "/v1/nope", reg, pass), 400, protocol.CodeBadAddress)
-	e.want(e.do("PUT", r.path(""), []byte(`{"identity":"","prekey":"","prekey_signature":"","extra":1}`), pass), 400, protocol.CodeBadRequest)
-	e.want(e.do("PUT", r.path(""), []byte(`{"identity":"","prekey":""}`), pass), 400, protocol.CodeBadRequest)
-	e.want(e.do("PUT", r.path(""), []byte(`{"identity":"","prekey":"","prekey_signature":null}`), pass), 400, protocol.CodeBadRequest)
-	e.want(e.do("PUT", r.path(""), []byte(`{"identity":"not base64!","prekey":"","prekey_signature":""}`), pass), 400, protocol.CodeBadRequest)
-	e.want(e.do("PUT", r.path(""), []byte(`not json`), pass), 400, protocol.CodeBadRequest)
+	e.want(e.do("PUT", "/v1/nope", reg, pass), 400, protocol.CodeInvalidAddress)
+	e.want(e.do("PUT", r.path(""), []byte(`{"identity":"","prekey":"","prekey_signature":"","extra":1}`), pass), 400, protocol.CodeInvalidRequest)
+	e.want(e.do("PUT", r.path(""), []byte(`{"identity":"","prekey":""}`), pass), 400, protocol.CodeInvalidRequest)
+	e.want(e.do("PUT", r.path(""), []byte(`{"identity":"","prekey":"","prekey_signature":null}`), pass), 400, protocol.CodeInvalidRequest)
+	e.want(e.do("PUT", r.path(""), []byte(`{"identity":"not base64!","prekey":"","prekey_signature":""}`), pass), 400, protocol.CodeInvalidRequest)
+	e.want(e.do("PUT", r.path(""), []byte(`not json`), pass), 400, protocol.CodeInvalidRequest)
 	// A body is read as every reader reads JSON (PROTOCOL.md §3.3): names
 	// exactly, none twice, one value, and each byte field in its one
 	// encoding.
@@ -576,8 +576,8 @@ func TestRegistration(t *testing.T) {
 		"a byte-order mark":      append([]byte("\xef\xbb\xbf"), rj...),
 		"NaN beside it":          bytes.Replace(rj, []byte(`{`), []byte(`{"x":NaN,`), 1),
 	} {
-		if got := e.do("PUT", r.path(""), body, pass); got.status != 400 || got.code() != protocol.CodeBadRequest {
-			t.Errorf("%s: %d %s, want 400 %s", name, got.status, got.code(), protocol.CodeBadRequest)
+		if got := e.do("PUT", r.path(""), body, pass); got.status != 400 || got.code() != protocol.CodeInvalidRequest {
+			t.Errorf("%s: %d %s, want 400 %s", name, got.status, got.code(), protocol.CodeInvalidRequest)
 		}
 	}
 	for name, body := range map[string][]byte{
@@ -585,8 +585,8 @@ func TestRegistration(t *testing.T) {
 		"base64 wrapped":         bytes.Replace(rj, []byte(`","prekey"`), []byte(`\n","prekey"`), 1),
 		"its unused bits set":    unusedBitsSet(t, rj),
 	} {
-		if got := e.do("PUT", r.path(""), body, pass); got.status != 400 || got.code() != protocol.CodeBadRequest || got.problem().Member == "" {
-			t.Errorf("%s: %d %s naming %q, want 400 %s naming the member", name, got.status, got.code(), got.problem().Member, protocol.CodeBadRequest)
+		if got := e.do("PUT", r.path(""), body, pass); got.status != 400 || got.code() != protocol.CodeInvalidRequest || got.problem().Member == "" {
+			t.Errorf("%s: %d %s naming %q, want 400 %s naming the member", name, got.status, got.code(), got.problem().Member, protocol.CodeInvalidRequest)
 		}
 	}
 
@@ -601,14 +601,14 @@ func TestRegistration(t *testing.T) {
 	// A small-order key: the grammar holds, the key check fails.
 	small := clientFile(t, "testdata/vectors/identity/small-order-1.doc")
 	h = protocol.AddressOf(small)
-	e.want(e.do("PUT", "/v1/"+h.String(), protocol.RegisterRequest{Identity: small, Prekey: reg.Prekey, PrekeySignature: reg.PrekeySignature}, pass), 400, protocol.CodeBadKey)
+	e.want(e.do("PUT", "/v1/"+h.String(), protocol.RegisterRequest{Identity: small, Prekey: reg.Prekey, PrekeySignature: reg.PrekeySignature}, pass), 400, protocol.CodeInvalidKey)
 
 	// A prekey statement signed by another identity; one under a
 	// certificate of the identity's own key, the identity's signature
 	// wrapped in a certificate (PROTOCOL.md §5); one a working key signed
 	// with no certificate; one valid for too long; one expired.
 	other.prekey(1, now.Add(protocol.MaxPrekeyLifetime), nil)
-	e.want(e.do("PUT", r.path(""), protocol.RegisterRequest{Identity: reg.Identity, Prekey: reg.Prekey, PrekeySignature: other.sig[1]}, pass), 400, protocol.CodeBadKey)
+	e.want(e.do("PUT", r.path(""), protocol.RegisterRequest{Identity: reg.Identity, Prekey: reg.Prekey, PrekeySignature: other.sig[1]}, pass), 400, protocol.CodeInvalidKey)
 	unix := uint64(now.Unix()) //nolint:gosec // a test clock
 	ofItself := &ssh.Certificate{Key: r.signer.PublicKey(), Serial: 7, CertType: ssh.UserCert, KeyId: protocol.CertificateKeyID,
 		ValidPrincipals: []string{r.id.Address().String()}, ValidAfter: unix - 3600, ValidBefore: unix + 86400}
@@ -620,25 +620,25 @@ func TestRegistration(t *testing.T) {
 		t.Fatal(err)
 	}
 	byWrapped, _ := protocol.Sign(wrapped, reg.Prekey, protocol.PrekeyNamespace(r.id.Address()))
-	e.want(e.do("PUT", r.path(""), protocol.RegisterRequest{Identity: reg.Identity, Prekey: reg.Prekey, PrekeySignature: byWrapped}, pass), 400, protocol.CodeBadKey)
+	e.want(e.do("PUT", r.path(""), protocol.RegisterRequest{Identity: reg.Identity, Prekey: reg.Prekey, PrekeySignature: byWrapped}, pass), 400, protocol.CodeInvalidKey)
 	_, bare, _ := ed25519.GenerateKey(rand.Reader)
 	bareSigner, _ := ssh.NewSignerFromKey(bare)
 	byBare, _ := protocol.Sign(bareSigner, reg.Prekey, protocol.PrekeyNamespace(r.id.Address()))
-	e.want(e.do("PUT", r.path(""), protocol.RegisterRequest{Identity: reg.Identity, Prekey: reg.Prekey, PrekeySignature: byBare}, pass), 400, protocol.CodeBadKey)
+	e.want(e.do("PUT", r.path(""), protocol.RegisterRequest{Identity: reg.Identity, Prekey: reg.Prekey, PrekeySignature: byBare}, pass), 400, protocol.CodeInvalidKey)
 	long := e.raw()
 	long.prekey(1, now.Add(protocol.MaxPrekeyLifetime+time.Second), nil)
-	e.want(e.do("PUT", long.path(""), long.registration(1), long.pass(1)), 400, protocol.CodePrekeyTime)
+	e.want(e.do("PUT", long.path(""), long.registration(1), long.pass(1)), 400, protocol.CodeInvalidValidityPeriod)
 	expired := e.raw()
 	expired.prekey(1, now, nil)
-	e.want(e.do("PUT", expired.path(""), expired.registration(1), expired.pass(1)), 400, protocol.CodePrekeyTime)
+	e.want(e.do("PUT", expired.path(""), expired.registration(1), expired.pass(1)), 400, protocol.CodeInvalidValidityPeriod)
 
 	// The pass: there must be one, this mailbox's, for this server, not run out,
 	// and under the certificate the statement is signed under. A statement
 	// that leaked registers nothing for whoever found it.
-	e.want(e.do("PUT", r.path(""), reg, ""), 401, protocol.CodeUnauthorized)
-	e.want(e.do("PUT", r.path(""), reg, "Bearer drt1_abc"), 401, protocol.CodeUnauthorized)
-	e.want(e.do("PUT", r.path(""), reg, other.pass(1)), 401, protocol.CodeUnauthorized)
-	e.want(e.do("PUT", r.path(""), reg, e.passFor(r.by[1], r.id.Address(), "another.example")), 401, protocol.CodeUnauthorized)
+	e.want(e.do("PUT", r.path(""), reg, ""), 401, protocol.CodeInvalidPass)
+	e.want(e.do("PUT", r.path(""), reg, "Bearer drt1_abc"), 401, protocol.CodeInvalidPass)
+	e.want(e.do("PUT", r.path(""), reg, other.pass(1)), 401, protocol.CodeInvalidPass)
+	e.want(e.do("PUT", r.path(""), reg, e.passFor(r.by[1], r.id.Address(), "another.example")), 401, protocol.CodeInvalidPass)
 	e.wantNotCurrent(e.do("PUT", r.path(""), reg, e.passFor(r.certify(2), r.id.Address(), e.name())), 0)
 	e.clock.Add(-protocol.PassLifetime)
 	ranOut := r.pass(1)
@@ -653,7 +653,7 @@ func TestRegistration(t *testing.T) {
 	}
 
 	// Registered: 201, then an identical retry is 200, and anything else is
-	// a conflict. Neither answer carries anything.
+	// 409 mailbox_already_exists. Neither answer carries anything.
 	first := e.do("PUT", r.path(""), reg, pass)
 	e.want(first, 201, "")
 	again := e.do("PUT", r.path(""), reg, pass)
@@ -663,11 +663,11 @@ func TestRegistration(t *testing.T) {
 			t.Fatalf("a registration answered %s", rep.body)
 		}
 	}
-	e.want(e.do("PUT", r.path(""), reg, ""), 401, protocol.CodeUnauthorized) // a retry needs its pass too
+	e.want(e.do("PUT", r.path(""), reg, ""), 401, protocol.CodeInvalidPass) // a retry needs its pass too
 	r2 := e.raw()
 	r2.signer, r2.id = r.signer, r.id
 	r2.prekey(1, now.Add(protocol.MaxPrekeyLifetime), nil)
-	e.want(e.do("PUT", r.path(""), r2.registration(1), r2.pass(1)), 409, protocol.CodeConflict)
+	e.want(e.do("PUT", r.path(""), r2.registration(1), r2.pass(1)), 409, protocol.CodeMailboxAlreadyExists)
 
 	// In use at once: it takes messages, and its owner's calls are served.
 	a := e.mailbox()
@@ -676,7 +676,7 @@ func TestRegistration(t *testing.T) {
 	}
 	list := e.do("GET", r.path("/messages"), nil, pass)
 	e.want(list, 200, "")
-	if !bytes.Contains(list.body, []byte(`"count":1`)) {
+	if !bytes.Contains(list.body, []byte(`"total_count":1`)) {
 		t.Fatalf("the new mailbox's list: %s", list.body)
 	}
 
@@ -713,35 +713,35 @@ func TestARegistrationOfARegisteredMailboxIsAnsweredFromItsRecordFirst(t *testin
 			c := e.raw()
 			c.prekey(5, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 			c.certify(1)
-			e.want(e.do("PUT", c.path(""), c.registration(5), e.passFor(c.work[1], c.id.Address(), e.name())), 401, protocol.CodeCertificateNotCurrent)
+			e.want(e.do("PUT", c.path(""), c.registration(5), e.passFor(c.work[1], c.id.Address(), e.name())), 401, protocol.CodeCertificateSuperseded)
 			bad := c.registration(5)
 			bad.PrekeySignature = c.sig[1]
-			e.want(e.do("PUT", c.path(""), bad, c.pass(5)), 400, protocol.CodeBadKey)
+			e.want(e.do("PUT", c.path(""), bad, c.pass(5)), 400, protocol.CodeInvalidKey)
 
 			r := at3(e)
 			r.prekey(5, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 			for what, pass := range map[string]string{"no pass": "", "a pass under certificate 2": r.pass(2), "a pass under its certificate": r.pass(5)} {
-				if got := e.do("PUT", r.path(""), r.registration(5), pass); got.status != 409 || got.code() != protocol.CodeConflict {
-					t.Errorf("another statement, %s: %d %s, want 409 conflict", what, got.status, got.body)
+				if got := e.do("PUT", r.path(""), r.registration(5), pass); got.status != 409 || got.code() != protocol.CodeMailboxAlreadyExists {
+					t.Errorf("another statement, %s: %d %s, want 409 mailbox_already_exists", what, got.status, got.body)
 				}
 			}
 			bad = r.registration(5)
 			bad.PrekeySignature = r.sig[3]
 			r.prekey(6, e.clock.Now(), nil) // expired as it is made
 			for what, req := range map[string]protocol.RegisterRequest{"whose signature does not verify": bad, "that has expired": r.registration(6)} {
-				if got := e.do("PUT", r.path(""), req, r.pass(5)); got.status != 409 || got.code() != protocol.CodeConflict {
-					t.Errorf("a statement %s: %d %s, want 409 conflict", what, got.status, got.body)
+				if got := e.do("PUT", r.path(""), req, r.pass(5)); got.status != 409 || got.code() != protocol.CodeMailboxAlreadyExists {
+					t.Errorf("a statement %s: %d %s, want 409 mailbox_already_exists", what, got.status, got.body)
 				}
 			}
 
-			e.want(e.do("PUT", r.path("/revocations"), r.certs(3), ""), 200, "")
+			e.want(e.do("PUT", r.path("/revocation"), r.certs(3), ""), 200, "")
 			e.want(e.do("PUT", r.path(""), r.registration(3), ""), 401, protocol.CodeCertificateRevoked)
 			rev, err := protocol.SignRevocation(r.signer, r.id.Address())
 			if err != nil {
 				t.Fatal(err)
 			}
-			e.want(e.do("PUT", r.path("/revocations"), protocol.Revocations{Identity: r.id.Document(), Revocation: rev}, ""), 201, "")
-			e.want(e.do("PUT", r.path(""), bad, r.pass(5)), 410, protocol.CodeRevoked)
+			e.want(e.do("PUT", r.path("/revocation"), protocol.Revocations{Identity: r.id.Document(), Revocation: rev}, ""), 201, "")
+			e.want(e.do("PUT", r.path(""), bad, r.pass(5)), 410, protocol.CodeMailboxRevoked)
 		})
 	}
 }
@@ -792,10 +792,10 @@ func TestARegistrationReadsItsAddressOnce(t *testing.T) {
 	once("a new mailbox", r, r.registration(1), r.pass(1), 201, "")
 	once("a registered mailbox, its statement again", r, r.registration(1), r.pass(1), 200, "")
 	r.prekey(2, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
-	once("a registered mailbox, another statement", r, r.registration(2), r.pass(2), 409, protocol.CodeConflict)
+	once("a registered mailbox, another statement", r, r.registration(2), r.pass(2), 409, protocol.CodeMailboxAlreadyExists)
 
 	m := e.raw()
-	e.want(e.do("PUT", m.path("/revocations"), m.certs(2), ""), 200, "")
+	e.want(e.do("PUT", m.path("/revocation"), m.certs(2), ""), 200, "")
 	m.prekey(5, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	once("an address whose identity revoked certificates", m, m.registration(5), m.pass(5), 201, "")
 }
@@ -814,7 +814,7 @@ func TestARegistrationReadsItsAddressOnceWithItsRegistrationsSpent(t *testing.T)
 	once("a new mailbox, the address's one registration", r, r.registration(1), r.pass(1), 201, "")
 	once("a registered mailbox, its statement again", r, r.registration(1), r.pass(1), 200, "")
 	r.prekey(2, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
-	once("a registered mailbox, another statement", r, r.registration(2), r.pass(2), 409, protocol.CodeConflict)
+	once("a registered mailbox, another statement", r, r.registration(2), r.pass(2), 409, protocol.CodeMailboxAlreadyExists)
 	n := e.raw()
 	n.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	once("a new address", n, n.registration(1), n.pass(1), 429, protocol.CodeRateLimited)
@@ -826,8 +826,8 @@ func TestOwnerCalls(t *testing.T) {
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	pass := r.pass(1)
 
-	e.want(e.do("GET", r.path("/messages"), nil, ""), 401, protocol.CodeUnauthorized)
-	e.want(e.do("GET", r.path("/messages"), nil, "Bearer "+strings.Repeat("a", 50)), 401, protocol.CodeUnauthorized)
+	e.want(e.do("GET", r.path("/messages"), nil, ""), 401, protocol.CodeInvalidPass)
+	e.want(e.do("GET", r.path("/messages"), nil, "Bearer "+strings.Repeat("a", 50)), 401, protocol.CodeInvalidPass)
 	// One character of the signature changed, in a pass not yet shown and in
 	// one the server has already taken.
 	flip := func(p string) string {
@@ -838,27 +838,27 @@ func TestOwnerCalls(t *testing.T) {
 		}
 		return p[:i] + c + p[i+1:]
 	}
-	e.want(e.do("GET", r.path("/messages"), nil, flip(pass)), 401, protocol.CodeUnauthorized)
+	e.want(e.do("GET", r.path("/messages"), nil, flip(pass)), 401, protocol.CodeInvalidPass)
 	e.want(e.do("GET", r.path("/messages"), nil, pass), 200, "")
-	e.want(e.do("GET", r.path("/messages"), nil, flip(pass)), 401, protocol.CodeUnauthorized)
+	e.want(e.do("GET", r.path("/messages"), nil, flip(pass)), 401, protocol.CodeInvalidPass)
 	// Another mailbox's pass is not this mailbox's, and neither is this mailbox's pass
 	// made for another server.
 	o := e.raw().register(time.Hour)
-	e.want(e.do("GET", r.path("/messages"), nil, o.pass(1)), 401, protocol.CodeUnauthorized)
-	e.want(e.do("GET", r.path("/messages"), nil, e.passFor(r.by[1], r.id.Address(), "another.example")), 401, protocol.CodeUnauthorized)
+	e.want(e.do("GET", r.path("/messages"), nil, o.pass(1)), 401, protocol.CodeInvalidPass)
+	e.want(e.do("GET", r.path("/messages"), nil, e.passFor(r.by[1], r.id.Address(), "another.example")), 401, protocol.CodeInvalidPass)
 	// A working key the identity certified, which the server never saw a
 	// prekey under, is not the mailbox's current one.
-	e.want(e.do("GET", r.path("/messages"), nil, e.passFor(r.certify(2), r.id.Address(), e.name())), 401, protocol.CodeCertificateNotCurrent)
+	e.want(e.do("GET", r.path("/messages"), nil, e.passFor(r.certify(2), r.id.Address(), e.name())), 401, protocol.CodeCertificateSuperseded)
 
 	empty := e.do("GET", r.path("/messages"), nil, pass)
 	e.want(empty, 200, "")
-	if string(bytes.TrimSpace(empty.body)) != `{"count":0,"messages":[],"next_cursor":null}` || empty.header.Get("Retry-After") != "60" {
+	if string(bytes.TrimSpace(empty.body)) != `{"total_count":0,"messages":[],"next_cursor":null}` || empty.header.Get("Retry-After") != "60" {
 		t.Fatalf("empty list %s", empty.body)
 	}
-	e.want(e.do("GET", r.path("/messages?cursor=zzz"), nil, pass), 400, protocol.CodeBadRequest)
-	e.want(e.do("GET", r.path("/messages?limit=5"), nil, pass), 400, protocol.CodeBadRequest)
-	e.want(e.do("GET", r.path("/messages/"+strings.Repeat("a", 64)), nil, pass), 404, protocol.CodeNoSuchMessage)
-	e.want(e.do("DELETE", r.path("/messages/"+strings.Repeat("a", 64)), nil, pass), 404, protocol.CodeNoSuchMessage)
+	e.want(e.do("GET", r.path("/messages?cursor=zzz"), nil, pass), 400, protocol.CodeInvalidRequest)
+	e.want(e.do("GET", r.path("/messages?limit=5"), nil, pass), 400, protocol.CodeInvalidRequest)
+	e.want(e.do("GET", r.path("/messages/"+strings.Repeat("a", 64)), nil, pass), 404, protocol.CodeMessageNotFound)
+	e.want(e.do("DELETE", r.path("/messages/"+strings.Repeat("a", 64)), nil, pass), 404, protocol.CodeMessageNotFound)
 	req, _ := http.NewRequest(http.MethodPost, e.srv.URL+r.path("/token"), nil)
 	req.Header.Set("Authorization", pass)
 	if resp, err := http.DefaultClient.Do(req); err != nil || (resp.StatusCode != 404 && resp.StatusCode != 405) {
@@ -896,7 +896,7 @@ func TestAnAddressInAPathIsInItsOneForm(t *testing.T) {
 	own := r.id.Address().String()
 	bare := "/v1/" + own[2:]
 	for _, path := range []string{bare, "/v1/e_" + own[2:], "/v1/D_" + own[2:], "/v1/" + own[:10] + "+" + own[11:], "/v1/" + own + "="} {
-		e.want(e.do("GET", path, nil, ""), 400, protocol.CodeBadAddress)
+		e.want(e.do("GET", path, nil, ""), 400, protocol.CodeInvalidAddress)
 	}
 	for _, c := range []struct{ method, path, pass string }{
 		{"GET", bare + "/messages", pass},
@@ -905,17 +905,17 @@ func TestAnAddressInAPathIsInItsOneForm(t *testing.T) {
 		{"GET", bare + "/acl", pass},
 		{"DELETE", bare + "/account", pass},
 	} {
-		e.want(e.do(c.method, c.path, nil, c.pass), 400, protocol.CodeBadAddress)
+		e.want(e.do(c.method, c.path, nil, c.pass), 400, protocol.CodeInvalidAddress)
 	}
-	e.want(e.do("PUT", bare+"/prekey", r.upload(1), pass), 400, protocol.CodeBadAddress)
+	e.want(e.do("PUT", bare+"/prekey", r.upload(1), pass), 400, protocol.CodeInvalidAddress)
 	i := 2 + strings.IndexAny(own[2:], "abcdefghijklmnopqrstuvwxyz") // one letter in the other case
-	e.want(e.do("GET", "/v1/"+own[:i]+strings.ToUpper(own[i:i+1])+own[i+1:], nil, ""), 404, protocol.CodeNoSuchMailbox)
+	e.want(e.do("GET", "/v1/"+own[:i]+strings.ToUpper(own[i:i+1])+own[i+1:], nil, ""), 404, protocol.CodeMailboxNotFound)
 	e.want(e.do("GET", r.path(""), nil, ""), 200, "")
 	e.want(e.do("GET", r.path("/messages"), nil, pass), 200, "")
 }
 
 // A query parameter a call does not take, and one given twice, is refused
-// as a member a body should not hold is: 400 bad_request, naming it in
+// as a member a body should not hold is: 400 invalid_request, naming it in
 // member (PROTOCOL.md §11.2). A cursor not of a cursor's form is named too.
 // The send's own parameters are TestSendPipeline's.
 func TestAQueryHoldsOnlyTheCallsParameters(t *testing.T) {
@@ -946,12 +946,12 @@ func TestAQueryHoldsOnlyTheCallsParameters(t *testing.T) {
 		got := e.do(c.method, c.path, c.body, c.pass)
 		var p protocol.Problem
 		_ = json.Unmarshal(got.body, &p)
-		if got.status != 400 || p.Code != protocol.CodeBadRequest || p.Member != c.member || !strings.Contains(p.Detail, c.member) {
-			t.Errorf("%s %s: %d %s, member %q; want 400 %s naming %s", c.method, c.path, got.status, p.Code, p.Member, protocol.CodeBadRequest, c.member)
+		if got.status != 400 || p.Code != protocol.CodeInvalidRequest || p.Member != c.member || !strings.Contains(p.Detail, c.member) {
+			t.Errorf("%s %s: %d %s, member %q; want 400 %s naming %s", c.method, c.path, got.status, p.Code, p.Member, protocol.CodeInvalidRequest, c.member)
 		}
 	}
 	// A query that does not parse names nothing.
-	e.want(e.do("GET", r.path("/messages?%zz"), nil, pass), 400, protocol.CodeBadRequest)
+	e.want(e.do("GET", r.path("/messages?%zz"), nil, pass), 400, protocol.CodeInvalidRequest)
 	e.want(e.do("GET", r.path("/messages"), nil, pass), 200, "")
 }
 
@@ -965,8 +965,8 @@ func TestACursorIsReadBeforeThePass(t *testing.T) {
 	for _, q := range []string{"?cursor=", "?cursor=a%2Fb", "?cursor=zzz"} {
 		for _, pass := range []string{"", r.pass(1)} {
 			got := e.do("GET", r.path("/messages"+q), nil, pass)
-			if got.status != 400 || got.code() != protocol.CodeBadRequest || got.problem().Member != "cursor" {
-				t.Errorf("%s, pass %v: %d %s, member %q; want 400 bad_request naming cursor", q, pass != "", got.status, got.code(), got.problem().Member)
+			if got.status != 400 || got.code() != protocol.CodeInvalidRequest || got.problem().Member != "cursor" {
+				t.Errorf("%s, pass %v: %d %s, member %q; want 400 invalid_request naming cursor", q, pass != "", got.status, got.code(), got.problem().Member)
 			}
 		}
 	}
@@ -999,13 +999,13 @@ func TestTwoAuthorizationLinesAreNoPass(t *testing.T) {
 	e.want(e.do("GET", messages, nil, pass), 200, "") // taken, and remembered
 	for _, lines := range [][]string{{pass, pass}, {pass, "x"}, {"x", pass}, {pass, ""}} {
 		got := twice("GET", messages, nil, lines...)
-		e.want(got, 401, protocol.CodeUnauthorized)
+		e.want(got, 401, protocol.CodeInvalidPass)
 		if got.header.Get("WWW-Authenticate") != protocol.PassScheme {
 			t.Errorf("WWW-Authenticate %q", got.header.Get("WWW-Authenticate"))
 		}
 	}
 	seal := e.sealTo(b)
-	e.want(twice("POST", messages+"?"+seal.Encode(), seal.ciphertext, e.pass(a), e.pass(a)), 401, protocol.CodeUnauthorized)
+	e.want(twice("POST", messages+"?"+seal.Encode(), seal.ciphertext, e.pass(a), e.pass(a)), 401, protocol.CodeInvalidPass)
 	e.want(twice("GET", "/v1/"+b.Address().String(), nil, e.pass(a), e.pass(a)), 200, "")
 	e.want(e.do("POST", messages, seal, e.pass(a)), 201, "")
 	e.want(e.do("GET", messages, nil, pass), 200, "")
@@ -1028,19 +1028,19 @@ func TestAPassIsForOneServer(t *testing.T) {
 
 	// Called by a name that is not its own, the server takes no pass: not
 	// one made for that name, and not one made for its own.
-	e.want(e.doAs("another.example", "PUT", r.path(""), r.registration(1), theirs), 401, protocol.CodeUnauthorized)
-	e.want(e.doAs("another.example", "PUT", r.path(""), r.registration(1), ours), 401, protocol.CodeUnauthorized)
-	e.want(e.do("PUT", r.path(""), r.registration(1), e.passFor(r.by[1], r.id.Address(), e.name())), 401, protocol.CodeUnauthorized)
+	e.want(e.doAs("another.example", "PUT", r.path(""), r.registration(1), theirs), 401, protocol.CodeInvalidPass)
+	e.want(e.doAs("another.example", "PUT", r.path(""), r.registration(1), ours), 401, protocol.CodeInvalidPass)
+	e.want(e.do("PUT", r.path(""), r.registration(1), e.passFor(r.by[1], r.id.Address(), e.name())), 401, protocol.CodeInvalidPass)
 	// Called by its own name: the pass made for that name, and no other.
-	e.want(e.doAs("mail.example", "PUT", r.path(""), r.registration(1), theirs), 401, protocol.CodeUnauthorized)
+	e.want(e.doAs("mail.example", "PUT", r.path(""), r.registration(1), theirs), 401, protocol.CodeInvalidPass)
 	e.want(e.doAs("mail.example", "PUT", r.path(""), r.registration(1), ours), 201, "")
 	e.want(e.doAs("MAIL.example", "GET", r.path("/messages"), nil, ours), 200, "")
 	e.want(e.doAs("mail.example:8443", "GET", r.path("/messages"), nil, e.passFor(r.by[1], r.id.Address(), "mail.example:8443")), 200, "")
-	e.want(e.doAs("mail.example", "GET", r.path("/messages"), nil, theirs), 401, protocol.CodeUnauthorized)
+	e.want(e.doAs("mail.example", "GET", r.path("/messages"), nil, theirs), 401, protocol.CodeInvalidPass)
 	// A pass the server has taken is taken again only as that pass: the
 	// same mailbox's pass for another server stays refused.
 	e.want(e.doAs("mail.example", "GET", r.path("/messages"), nil, ours), 200, "")
-	e.want(e.doAs("another.example", "GET", r.path("/messages"), nil, theirs), 401, protocol.CodeUnauthorized)
+	e.want(e.doAs("another.example", "GET", r.path("/messages"), nil, theirs), 401, protocol.CodeInvalidPass)
 }
 
 // The server writes the Host a request names as a server name, as a client
@@ -1073,7 +1073,7 @@ func TestTheServerReadsItsHostAsAServerName(t *testing.T) {
 		}
 		return fmt.Sprintf(`%s address="%s", not_after="%s", signature="%s"`, protocol.PassScheme, r.id.Address(), notAfter.UTC().Format(protocol.TimeLayout), base64.StdEncoding.EncodeToString(sig))
 	}
-	e.want(e.doAs("mail.example:443", "PUT", r.path(""), r.registration(1), carrying("mail.example:443")), 401, protocol.CodeUnauthorized)
+	e.want(e.doAs("mail.example:443", "PUT", r.path(""), r.registration(1), carrying("mail.example:443")), 401, protocol.CodeInvalidPass)
 	e.want(e.doAs("mail.example:443", "PUT", r.path(""), r.registration(1), pass("mail.example")), 201, "")
 	for host, name := range map[string]string{
 		"mail.example:80":    "mail.example",
@@ -1083,8 +1083,8 @@ func TestTheServerReadsItsHostAsAServerName(t *testing.T) {
 		e.want(e.doAs(host, "GET", r.path("/messages"), nil, pass(name)), 200, "")
 	}
 	// A port that is no default stays, and must be the pass's.
-	e.want(e.doAs("mail.example:8443", "GET", r.path("/messages"), nil, pass("mail.example")), 401, protocol.CodeUnauthorized)
-	e.want(e.doAs("mail.example:80", "GET", r.path("/messages"), nil, carrying("mail.example:80")), 401, protocol.CodeUnauthorized)
+	e.want(e.doAs("mail.example:8443", "GET", r.path("/messages"), nil, pass("mail.example")), 401, protocol.CodeInvalidPass)
+	e.want(e.doAs("mail.example:80", "GET", r.path("/messages"), nil, carrying("mail.example:80")), 401, protocol.CodeInvalidPass)
 }
 
 // A statement names its signer's rank, and any other makes it invalid
@@ -1136,7 +1136,7 @@ func TestAStatementNamesItsSignersRank(t *testing.T) {
 		{"a certificate, naming a higher rank", 1001, first},
 		{"a certificate, naming a lower rank", 999, first},
 	} {
-		if got := register(statement(c.rank, 1), c.by); got.status != http.StatusBadRequest || got.problem().Code != protocol.CodeBadKey {
+		if got := register(statement(c.rank, 1), c.by); got.status != http.StatusBadRequest || got.problem().Code != protocol.CodeInvalidKey {
 			t.Errorf("%s: %d %s", c.what, got.status, got.body)
 		}
 	}
@@ -1146,7 +1146,7 @@ func TestAStatementNamesItsSignersRank(t *testing.T) {
 		st, sig := signed(p, by)
 		return e.do("PUT", r.path("/prekey"), protocol.PrekeyRequest{Prekey: st, PrekeySignature: sig}, e.passFor(r.signer, addr, e.name()))
 	}
-	e.want(upload(old, later), http.StatusBadRequest, protocol.CodeBadKey)
+	e.want(upload(old, later), http.StatusBadRequest, protocol.CodeInvalidKey)
 	e.want(upload(statement(2000, 1), later), http.StatusOK, "")
 }
 
@@ -1163,18 +1163,18 @@ func TestPrekeyRenewal(t *testing.T) {
 
 	unknown := e.raw()
 	unknown.prekey(2, now.Add(time.Hour), nil)
-	e.want(e.do("PUT", unknown.path("/prekey"), unknown.upload(2), unknown.pass(2)), 404, protocol.CodeNoSuchMailbox)
+	e.want(e.do("PUT", unknown.path("/prekey"), unknown.upload(2), unknown.pass(2)), 404, protocol.CodeMailboxNotFound)
 
 	// The identity signs the mailbox's statements to begin with.
 	e.want(put(1, 1), 200, "") // an identical retry of the current statement
 	r.prekey(2, now.Add(time.Hour), r.keys[1])
-	e.want(put(2, 2), 400, protocol.CodePrekeyNotNew) // the same key again
+	e.want(put(2, 2), 400, protocol.CodePrekeyAlreadyUsed) // the same key again
 	r.prekey(2, now.Add(time.Hour), nil)
-	e.want(e.do("PUT", r.path("/prekey"), r.upload(2), ""), 401, protocol.CodeUnauthorized)
-	e.want(e.do("PUT", r.path("/prekey"), r.upload(2), unknown.pass(2)), 401, protocol.CodeUnauthorized)
+	e.want(e.do("PUT", r.path("/prekey"), r.upload(2), ""), 401, protocol.CodeInvalidPass)
+	e.want(e.do("PUT", r.path("/prekey"), r.upload(2), unknown.pass(2)), 401, protocol.CodeInvalidPass)
 	e.want(put(2, 2), 200, "")
 	r.prekey(1, now.Add(2*time.Hour), nil)
-	e.want(put(1, 1), 409, protocol.CodeConflict) // under the same signer the serial must rise
+	e.want(put(1, 1), 409, protocol.CodeSerialTooLow) // under the same signer the serial must rise
 	// While the identity signs the current statement, a pass under a
 	// certificate is not current, and the refusal names no certificate.
 	e.wantNotCurrent(poll(e.passFor(r.certify(9), r.id.Address(), e.name())), 0)
@@ -1203,27 +1203,27 @@ func TestPrekeyRenewal(t *testing.T) {
 	e.wantNotCurrent(poll(old), 3)
 	e.want(poll(r.pass(2)), 200, "")
 	r.prekeyUnder(r.work[2], 9, now.Add(time.Hour), nil)
-	e.want(put(9, 9), 401, protocol.CodeCertificateNotCurrent)
+	e.want(put(9, 9), 401, protocol.CodeCertificateSuperseded)
 	// Another certificate of the current serial is not the current one.
 	current := r.work[3]
 	r.prekeyUnder(r.certify(3), 3, now.Add(time.Hour), nil)
-	e.want(put(3, 3), 401, protocol.CodeCertificateNotCurrent)
+	e.want(put(3, 3), 401, protocol.CodeCertificateSuperseded)
 	// A higher serial under the current certificate is taken.
 	r.work[3] = current
 	r.prekeyUnder(current, 3, now.Add(time.Hour), nil)
 	e.want(put(3, 3), 200, "")
 	e.want(poll(r.pass(3)), 200, "")
 	r.prekeyUnder(current, 4, now.Add(time.Hour), r.keys[2])
-	e.want(put(4, 4), 400, protocol.CodePrekeyNotNew) // a live retired key
+	e.want(put(4, 4), 400, protocol.CodePrekeyAlreadyUsed) // a live retired key
 	// Under the mailbox's current certificate the serial must rise.
 	r.prekeyUnder(current, 3, now.Add(2*time.Hour), nil)
-	e.want(put(3, 3), 409, protocol.CodeConflict)
+	e.want(put(3, 3), 409, protocol.CodeSerialTooLow)
 
 	// A certificate that has ended signs nothing, exact at the server's
 	// clock: no statement and no pass.
 	e.clock.Add(DefaultLimits().MaxCertificateLifetime)
 	r.prekeyUnder(current, 5, e.clock.Now().Add(time.Hour), nil)
-	e.want(e.do("PUT", r.path("/prekey"), r.upload(5), ""), 400, protocol.CodePrekeyTime)
+	e.want(e.do("PUT", r.path("/prekey"), r.upload(5), ""), 400, protocol.CodeInvalidValidityPeriod)
 	e.want(poll(e.passFor(current, r.id.Address(), e.name())), 401, protocol.CodePassExpired)
 	// The mailbox comes back with a prekey under a new one.
 	r.prekeyUnder(r.certify(5), 5, e.clock.Now().Add(time.Hour), nil)
@@ -1238,11 +1238,11 @@ func TestPrekeyRenewal(t *testing.T) {
 	r.prekeyUnder(r.certify(6), 1, e.clock.Now().Add(time.Hour), nil)
 	e.want(put(1, 1), 200, "")
 	e.want(poll(r.pass(1)), 200, "")
-	e.want(poll(r.pass(5)), 401, protocol.CodeCertificateNotCurrent)
+	e.want(poll(r.pass(5)), 401, protocol.CodeCertificateSuperseded)
 	r.prekeyUnder(r.work[6], 1, e.clock.Now().Add(2*time.Hour), nil)
-	e.want(put(1, 1), 409, protocol.CodeConflict)
+	e.want(put(1, 1), 409, protocol.CodeSerialTooLow)
 	r.prekeyUnder(r.work[5], 9, e.clock.Now().Add(time.Hour), nil)
-	e.want(put(9, 9), 401, protocol.CodeCertificateNotCurrent)
+	e.want(put(9, 9), 401, protocol.CodeCertificateSuperseded)
 	r.prekeyUnder(r.work[6], 2, e.clock.Now().Add(time.Hour), nil)
 	e.want(put(2, 2), 200, "")
 }
@@ -1274,25 +1274,25 @@ func TestSendPipeline(t *testing.T) {
 
 	// The pass comes first: with none, nothing of the request is judged,
 	// its query and its address included.
-	e.want(e.do("POST", to+"/messages", ok, ""), 401, protocol.CodeUnauthorized)
-	e.want(e.do("POST", to+"/messages?statement=0", ok.ciphertext, ""), 401, protocol.CodeUnauthorized)
-	e.want(e.do("POST", "/v1/nope/messages", ok, ""), 401, protocol.CodeUnauthorized)
+	e.want(e.do("POST", to+"/messages", ok, ""), 401, protocol.CodeInvalidPass)
+	e.want(e.do("POST", to+"/messages?prekey_sha256=0", ok.ciphertext, ""), 401, protocol.CodeInvalidPass)
+	e.want(e.do("POST", "/v1/nope/messages", ok, ""), 401, protocol.CodeInvalidPass)
 
 	// Then the address, then the query: the statement's hash, once, 64
 	// lowercase hex digits, and nothing else. What is wrong is named in
 	// member. The sender is the mailbox the pass names, so the query names
 	// none.
-	e.want(e.do("POST", "/v1/nope/messages?x=1", ok.ciphertext, pass), 400, protocol.CodeBadAddress)
-	e.want(e.do("POST", "/v1/"+strings.ToUpper(b.Address().String())+"/messages", ok, pass), 400, protocol.CodeBadAddress)
+	e.want(e.do("POST", "/v1/nope/messages?x=1", ok.ciphertext, pass), 400, protocol.CodeInvalidAddress)
+	e.want(e.do("POST", "/v1/"+strings.ToUpper(b.Address().String())+"/messages", ok, pass), 400, protocol.CodeInvalidAddress)
 	serials := ok.Encode()
 	hash := ok.Statement
 	for query, member := range map[string]string{
 		"":                                        protocol.StatementParam,
-		"statement=":                              protocol.StatementParam,
-		"statement=" + strings.ToUpper(hash):      protocol.StatementParam,
-		"statement=" + hash[:63]:                  protocol.StatementParam,
-		"statement=" + hash + "0":                 protocol.StatementParam,
-		"statement=" + hash[:63] + "g":            protocol.StatementParam,
+		"prekey_sha256=":                          protocol.StatementParam,
+		"prekey_sha256=" + strings.ToUpper(hash):  protocol.StatementParam,
+		"prekey_sha256=" + hash[:63]:              protocol.StatementParam,
+		"prekey_sha256=" + hash + "0":             protocol.StatementParam,
+		"prekey_sha256=" + hash[:63] + "g":        protocol.StatementParam,
 		"prekey_serial=1&certificate_serial=1":    "certificate_serial",
 		serials + "&prekey_serial=1":              "prekey_serial",
 		serials + "&" + serials:                   protocol.StatementParam,
@@ -1302,24 +1302,24 @@ func TestSendPipeline(t *testing.T) {
 		got := e.do("POST", to+"/messages?"+query, ok.ciphertext, pass)
 		var p protocol.Problem
 		_ = json.Unmarshal(got.body, &p)
-		if got.status != 400 || p.Code != protocol.CodeBadRequest || p.Member != member || !strings.Contains(p.Detail, member) {
-			t.Errorf("?%s: %d %s, member %q; want 400 %s naming %s", query, got.status, p.Code, p.Member, protocol.CodeBadRequest, member)
+		if got.status != 400 || p.Code != protocol.CodeInvalidRequest || p.Member != member || !strings.Contains(p.Detail, member) {
+			t.Errorf("?%s: %d %s, member %q; want 400 %s naming %s", query, got.status, p.Code, p.Member, protocol.CodeInvalidRequest, member)
 		}
 	}
-	e.want(e.do("POST", to+"/messages?statement="+strings.Repeat("0", 64), ok.ciphertext, pass), 409, protocol.CodeStalePrekey)
+	e.want(e.do("POST", to+"/messages?prekey_sha256="+strings.Repeat("0", 64), ok.ciphertext, pass), 409, protocol.CodePrekeySuperseded)
 
 	// The body is the ciphertext's bytes, whatever its Content-Type says. A
 	// body that is no age file, a JSON object of a send's fields among them, is
 	// refused as no age file.
 	j, _ := json.Marshal(map[string]any{"statement": ok.Statement, "ciphertext": ok.ciphertext})
 	for name, body := range map[string][]byte{"no body": nil, "a JSON object": j, "text": []byte("not an age file")} {
-		if got := e.do("POST", to+"/messages?"+serials, body, pass); got.status != 400 || got.code() != protocol.CodeBadRequest {
-			t.Errorf("%s: %d %s, want 400 %s", name, got.status, got.code(), protocol.CodeBadRequest)
+		if got := e.do("POST", to+"/messages?"+serials, body, pass); got.status != 400 || got.code() != protocol.CodeInvalidRequest {
+			t.Errorf("%s: %d %s, want 400 %s", name, got.status, got.code(), protocol.CodeInvalidRequest)
 		}
 	}
-	e.want(e.do("POST", to+"/messages", seal(classic.Recipient()), pass), 400, protocol.CodeWrongRecipientType)
+	e.want(e.do("POST", to+"/messages", seal(classic.Recipient()), pass), 400, protocol.CodeInvalidRecipients)
 	two, _ := age.GenerateHybridIdentity()
-	e.want(e.do("POST", to+"/messages", seal(pqRecipient, two.Recipient()), pass), 400, protocol.CodeWrongRecipientType)
+	e.want(e.do("POST", to+"/messages", seal(pqRecipient, two.Recipient()), pass), 400, protocol.CodeInvalidRecipients)
 	// The statement's hash is the current one's: of its bytes as served,
 	// never of its signature, and of no other statement.
 	cur := mustMailbox(t, e, b.Address())
@@ -1331,9 +1331,9 @@ func TestSendPipeline(t *testing.T) {
 		stale := ok
 		stale.Statement = protocol.StatementHash(named)
 		got := e.do("POST", to+"/messages", stale, pass)
-		e.want(got, 409, protocol.CodeStalePrekey)
+		e.want(got, 409, protocol.CodePrekeySuperseded)
 		if p := got.problem(); p.PrekeySerial != nil || p.CertificateSerial != nil {
-			t.Errorf("%s: stale_prekey carries members: %s", name, got.body)
+			t.Errorf("%s: prekey_superseded carries members: %s", name, got.body)
 		}
 	}
 
@@ -1341,25 +1341,25 @@ func TestSendPipeline(t *testing.T) {
 	big.MaxSize = 100
 	small := newEnv(t, big)
 	sa, sb := small.mailbox(), small.mailbox()
-	if _, err := sa.Send(ctx, sb.Address(), strings.Repeat("x", 200)); codeOf(err) != protocol.CodeTooLarge {
+	if _, err := sa.Send(ctx, sb.Address(), strings.Repeat("x", 200)); codeOf(err) != protocol.CodeContentTooLarge {
 		t.Fatalf("send over the cap: %v", err)
 	}
 	// The body is read to the sender's cap, the ciphertext's bytes, and no
-	// further: past it is too_large with the cap in limit, whether a
+	// further: past it is content_too_large with the cap in limit, whether a
 	// Content-Length says so before the body is read or the body runs past
 	// it as it arrives. The address and the query are judged first.
 	sto, spass := "/v1/"+sb.Address().String()+"/messages", small.pass(sa)
 	tooLarge := func(r reply) {
 		t.Helper()
 		var p protocol.Problem
-		if err := json.Unmarshal(r.body, &p); err != nil || r.status != 413 || p.Code != protocol.CodeTooLarge || p.Limit == nil || *p.Limit != 100 {
+		if err := json.Unmarshal(r.body, &p); err != nil || r.status != 413 || p.Code != protocol.CodeContentTooLarge || p.Limit == nil || *p.Limit != 100 {
 			t.Fatalf("over the cap: %d %s", r.status, r.body)
 		}
 	}
-	small.want(small.do("POST", sto+"?x=1", make([]byte, 101), spass), 400, protocol.CodeBadRequest)
-	small.want(small.do("POST", "/v1/nope/messages?"+serials, make([]byte, 101), spass), 400, protocol.CodeBadAddress)
+	small.want(small.do("POST", sto+"?x=1", make([]byte, 101), spass), 400, protocol.CodeInvalidRequest)
+	small.want(small.do("POST", "/v1/nope/messages?"+serials, make([]byte, 101), spass), 400, protocol.CodeInvalidAddress)
 	tooLarge(small.do("POST", sto+"?"+serials, make([]byte, 101), spass))
-	small.want(small.do("POST", sto+"?"+serials, make([]byte, 100), spass), 400, protocol.CodeBadRequest)
+	small.want(small.do("POST", sto+"?"+serials, make([]byte, 100), spass), 400, protocol.CodeInvalidRequest)
 	// A body of no known length goes chunked, with no Content-Length.
 	chunked, _ := http.NewRequest(http.MethodPost, small.srv.URL+sto+"?"+serials, io.MultiReader(bytes.NewReader(make([]byte, 101))))
 	chunked.Header.Set("Authorization", spass)
@@ -1374,13 +1374,13 @@ func TestSendPipeline(t *testing.T) {
 	// A pass that names no mailbox here, and a recipient that is none.
 	unregistered := e.raw()
 	unregistered.prekey(1, e.clock.Now().Add(time.Hour), nil)
-	e.want(e.do("POST", to+"/messages", ok, unregistered.pass(1)), 403, protocol.CodeUnknownSender)
-	e.want(e.do("POST", "/v1/"+unregistered.id.Address().String()+"/messages", ok, pass), 404, protocol.CodeNoSuchMailbox)
+	e.want(e.do("POST", to+"/messages", ok, unregistered.pass(1)), 403, protocol.CodeSenderNotRegistered)
+	e.want(e.do("POST", "/v1/"+unregistered.id.Address().String()+"/messages", ok, pass), 404, protocol.CodeMailboxNotFound)
 	// A pass that is not the mailbox's it names: under a certificate the server
 	// never saw, and with its signature changed.
 	other := e.raw()
 	other.signer, other.id = signer(t, a), a.Identity()
-	e.want(e.do("POST", to+"/messages", ok, e.passFor(other.certify(7), a.Address(), e.name())), 401, protocol.CodeCertificateNotCurrent)
+	e.want(e.do("POST", to+"/messages", ok, e.passFor(other.certify(7), a.Address(), e.name())), 401, protocol.CodeCertificateSuperseded)
 	e.clock.Add(-protocol.PassLifetime)
 	ranOut := e.pass(a)
 	e.clock.Add(protocol.PassLifetime)
@@ -1391,7 +1391,7 @@ func TestSendPipeline(t *testing.T) {
 	if err := e.store.DeleteMailbox(t.Context(), c.id.Address()); err != nil { // as the TTL deletes it
 		t.Fatal(err)
 	}
-	e.want(e.do("POST", to+"/messages", ok, c.pass(1)), 403, protocol.CodeUnknownSender)
+	e.want(e.do("POST", to+"/messages", ok, c.pass(1)), 403, protocol.CodeSenderNotRegistered)
 
 	first := e.do("POST", to+"/messages", ok, pass)
 	e.want(first, 201, "")
@@ -1441,9 +1441,9 @@ func TestSendPipeline(t *testing.T) {
 		}
 	}
 	e.want(e.do("POST", to+"/messages", seal(pqRecipient), pass), 403, protocol.CodeSenderRevoked)
-	e.want(e.do("POST", "/v1/"+f.Address().String()+"/messages", seal(pqRecipient), e.pass(d)), 410, protocol.CodeRevoked)
-	e.want(e.do("GET", "/v1/"+a.Address().String(), nil, ""), 410, protocol.CodeRevoked)
-	e.want(e.do("GET", "/v1/"+a.Address().String()+"/messages", nil, pass), 410, protocol.CodeRevoked)
+	e.want(e.do("POST", "/v1/"+f.Address().String()+"/messages", seal(pqRecipient), e.pass(d)), 410, protocol.CodeMailboxRevoked)
+	e.want(e.do("GET", "/v1/"+a.Address().String(), nil, ""), 410, protocol.CodeMailboxRevoked)
+	e.want(e.do("GET", "/v1/"+a.Address().String()+"/messages", nil, pass), 410, protocol.CodeMailboxRevoked)
 
 	// An expired recipient prekey.
 	e.clock.Add(protocol.MaxPrekeyLifetime)
@@ -1519,7 +1519,7 @@ func (o otherRecipient) WrapWithLabels(k []byte) ([]*age.Stanza, []string, error
 	return postQuantum{o}.WrapWithLabels(k)
 }
 
-// A send whose stanzas a mailbox does not take is refused wrong_recipient_type
+// A send whose stanzas a mailbox does not take is refused invalid_recipients
 // with the hint of its case, in PROTOCOL.md §11.10 step 7's order: a stanza
 // of another type first, an X25519 one among them, whatever else the file
 // holds; then no native stanza; then more than one.
@@ -1559,8 +1559,8 @@ func TestEachWrongRecipientTypeIsToldItsOwnCase(t *testing.T) {
 		_, _ = io.WriteString(w, "x")
 		_ = w.Close()
 		got := e.do("POST", "/v1/"+b.Address().String()+"/messages", sealedTo(e.statement(b.Address()), ct.Bytes()), e.pass(a))
-		if p := got.problem(); got.status != 400 || p.Code != protocol.CodeWrongRecipientType || p.Hint != c.hint {
-			t.Errorf("%s: %d %s, hint %q; want 400 %s, hint %q", c.name, got.status, p.Code, p.Hint, protocol.CodeWrongRecipientType, c.hint)
+		if p := got.problem(); got.status != 400 || p.Code != protocol.CodeInvalidRecipients || p.Hint != c.hint {
+			t.Errorf("%s: %d %s, hint %q; want 400 %s, hint %q", c.name, got.status, p.Code, p.Hint, protocol.CodeInvalidRecipients, c.hint)
 		}
 	}
 }
@@ -1690,9 +1690,9 @@ func TestSendNamesTheCurrentPrekey(t *testing.T) {
 	}
 	to := "/v1/" + b.Address().String()
 	stale := e.do("POST", to+"/messages", sealOld("named the retired statement"), e.pass(a))
-	e.want(stale, 409, protocol.CodeStalePrekey)
+	e.want(stale, 409, protocol.CodePrekeySuperseded)
 	if p := stale.problem(); p.PrekeySerial != nil || p.CertificateSerial != nil {
-		t.Errorf("stale_prekey carries members: %s", stale.body)
+		t.Errorf("prekey_superseded carries members: %s", stale.body)
 	}
 	send(t, a, b, "after the renewal") // to the new key
 	if res := receive(t, b); len(res.Delivered) != 1 {
@@ -1725,7 +1725,7 @@ func TestRenewalLimits(t *testing.T) {
 	}
 	_, err := b.Rekey(ctx)
 	var ae *client.APIError
-	if !limitedBy(err, protocol.QuotaRenewals) || !errors.As(err, &ae) || ae.RetryAfter != 8*time.Hour || ae.Problem.Limit == nil || *ae.Problem.Limit != 3 {
+	if !limitedBy(err, protocol.QuotaRenewals) || !errors.As(err, &ae) || ae.RetryAfter != 8*time.Hour || ae.Problem.QuotaValue == nil || *ae.Problem.QuotaValue != 3 {
 		t.Fatalf("a fourth renewal at once, of three a day: %v", err)
 	}
 	cur, _ := e.store.Mailbox(ctx, b.Address())

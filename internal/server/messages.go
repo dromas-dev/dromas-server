@@ -248,7 +248,7 @@ func listWait(r *http.Request, hasCursor bool) (time.Duration, error) {
 	}
 	n, err := protocol.Wait(v[0])
 	if err != nil || hasCursor {
-		return 0, fail(protocol.CodeBadRequest, "send the wait as whole seconds, on a list without a cursor", "the query parameter %s is not delay-seconds on a first page", memberValue(waitParam))
+		return 0, fail(protocol.CodeInvalidRequest, "send the wait as whole seconds, on a list without a cursor", "the query parameter %s is not delay-seconds on a first page", memberValue(waitParam))
 	}
 	if n >= uint64(waitReadBound/time.Second) {
 		return waitReadBound, nil
@@ -450,7 +450,7 @@ func formatCursor(h Header) string {
 func parseCursor(s string) (*Cursor, error) {
 	b, err := base64.RawURLEncoding.Strict().DecodeString(s)
 	if err != nil || len(b) != 8+32 {
-		return nil, fail(protocol.CodeBadRequest, "pass next_cursor exactly as received", "the query parameter %s is not a cursor this server handed out", memberValue(cursorParam))
+		return nil, fail(protocol.CodeInvalidRequest, "pass next_cursor exactly as received", "the query parameter %s is not a cursor this server handed out", memberValue(cursorParam))
 	}
 	c := &Cursor{ReceivedAt: time.UnixMilli(int64(binary.BigEndian.Uint64(b))).UTC()} //nolint:gosec // decoded from our own cursor
 	copy(c.ID[:], b[8:])
@@ -459,7 +459,7 @@ func parseCursor(s string) (*Cursor, error) {
 
 // gone is the answer for a message the mailbox does not hold.
 func gone() *problem {
-	return fail(protocol.CodeNoSuchMessage, "treat it as gone", "no message has this id: acked or expired")
+	return fail(protocol.CodeMessageNotFound, "treat it as gone", "no message has this id: acked or expired")
 }
 
 // held answers gone for an id the mailbox does not hold, as memory shows it:
@@ -496,7 +496,7 @@ func (s *Server) notHeld(ctx context.Context, r *http.Request, a protocol.Addres
 
 // heldRead makes read, a store call held to the pass ctx carries, and where
 // it meets ErrStale, checks the pass again (recheck) and makes it once more
-// under the pass taken then: stale twice is mailbox_changed. Any other
+// under the pass taken then: stale twice is concurrent_modification. Any other
 // error is read's.
 func (s *Server) heldRead(ctx context.Context, r *http.Request, read func(context.Context) error) error {
 	err := read(ctx)
@@ -575,7 +575,7 @@ func (s *Server) fetch(w http.ResponseWriter, r *http.Request) error {
 		var ok bool
 		var wait time.Duration
 		if drain, ok, wait = s.drained.reserve(r.Context(), mailbox.String(), s.now); !ok {
-			return spent(protocol.CodeFetchPaced, wait, "this mailbox has taken out as many new messages as it may for now: the rest waits on the server")
+			return spent(protocol.CodeFetchRateLimited, wait, "this mailbox has taken out as many new messages as it may for now: the rest waits on the server")
 		}
 	}
 	defer func() { drain.release(s.now()) }() // settled below, but for a panic
@@ -633,7 +633,7 @@ func (s *Server) fetch(w http.ResponseWriter, r *http.Request) error {
 		status = http.StatusPartialContent
 	}
 	w.WriteHeader(status)
-	_, _ = w.Write(body) //nolint:gosec // an age file, as application/octet-stream, to the mailbox that holds it: no page renders it
+	_, _ = w.Write(body) //nolint:gosec // an age file, as application/vnd.age, to the mailbox that holds it: no page renders it
 	return nil
 }
 
@@ -690,5 +690,5 @@ func (s *Server) recheck(r *http.Request, params ...string) (context.Context, er
 // changedDuring is the answer to a call whose store call met ErrStale twice:
 // the mailbox changed while it was handled (PROTOCOL.md §11.2).
 func changedDuring() *problem {
-	return fail(protocol.CodeMailboxChanged, "retry", "the mailbox changed during the request")
+	return fail(protocol.CodeConcurrentModification, "retry", "the mailbox changed during the request")
 }

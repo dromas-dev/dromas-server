@@ -628,7 +628,7 @@ func TestAPacedBodysDeadlineEndsWithTheBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := do("PUT", r.path("/revocations"), string(j)); got != http.StatusCreated {
+	if got := do("PUT", r.path("/revocation"), string(j)); got != http.StatusCreated {
 		t.Errorf("a revocation whose delete takes past the body's deadline: %d, want 201", got)
 	}
 	for range 2 {

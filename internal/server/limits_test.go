@@ -177,8 +177,8 @@ func TestAnUnknownIDReadsOnlyItsPass(t *testing.T) {
 		return e2.do(method, "/v1/"+b.Address().String()+"/messages/"+id, nil, tok)
 	}
 	unknown := strings.Repeat("ab", 32)
-	e2.want(msg(http.MethodGet, unknown), http.StatusNotFound, protocol.CodeNoSuchMessage)
-	e2.want(msg(http.MethodDelete, unknown), http.StatusNotFound, protocol.CodeNoSuchMessage)
+	e2.want(msg(http.MethodGet, unknown), http.StatusNotFound, protocol.CodeMessageNotFound)
+	e2.want(msg(http.MethodDelete, unknown), http.StatusNotFound, protocol.CodeMessageNotFound)
 	if n := cs.calls.Load(); n != 2 {
 		t.Fatalf("%d storage calls for a fetch and an ack of an id the mailbox does not hold; want 2, a read of the pass each", n)
 	}
@@ -188,8 +188,8 @@ func TestAnUnknownIDReadsOnlyItsPass(t *testing.T) {
 	if n := cs.calls.Load(); n != 4 {
 		t.Fatalf("%d storage calls for a fetch and an ack", n-2)
 	}
-	e2.want(msg(http.MethodGet, id), http.StatusNotFound, protocol.CodeNoSuchMessage)
-	e2.want(msg(http.MethodDelete, id), http.StatusNotFound, protocol.CodeNoSuchMessage)
+	e2.want(msg(http.MethodGet, id), http.StatusNotFound, protocol.CodeMessageNotFound)
+	e2.want(msg(http.MethodDelete, id), http.StatusNotFound, protocol.CodeMessageNotFound)
 	if n := cs.calls.Load(); n != 6 {
 		t.Fatalf("%d storage calls for a fetch and an ack of an acked id; want 2, a read of the pass each", n-4)
 	}
@@ -220,8 +220,8 @@ func TestMissesPerIP(t *testing.T) {
 	if r := e2.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages", nil, pass); r.status != http.StatusOK { // a pass this process now remembers
 		t.Fatalf("the owner's poll: %d %s", r.status, r.body)
 	}
-	e2.want(read(nobody(1)), http.StatusNotFound, protocol.CodeNoSuchMailbox)
-	e2.want(e2.do(http.MethodGet, "/v1/"+nobody(2).String()+"/messages", nil, e2.pass(b)), http.StatusNotFound, protocol.CodeNoSuchMailbox) // a call with a pass, naming no mailbox
+	e2.want(read(nobody(1)), http.StatusNotFound, protocol.CodeMailboxNotFound)
+	e2.want(e2.do(http.MethodGet, "/v1/"+nobody(2).String()+"/messages", nil, e2.pass(b)), http.StatusNotFound, protocol.CodeMailboxNotFound) // a call with a pass, naming no mailbox
 	before := cs.calls.Load()
 	r := read(nobody(3))
 	e2.want(r, http.StatusTooManyRequests, protocol.CodeRateLimited)
@@ -256,7 +256,7 @@ func TestMissesPerIP(t *testing.T) {
 	e2.want(e2.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages", nil, e2.pass(b)), http.StatusTooManyRequests, protocol.CodeRateLimited)
 	e.clock.Add(-time.Second)
 	e.clock.Add(30 * time.Second) // one back
-	e2.want(read(nobody(4)), http.StatusNotFound, protocol.CodeNoSuchMailbox)
+	e2.want(read(nobody(4)), http.StatusNotFound, protocol.CodeMailboxNotFound)
 	e2.want(read(nobody(5)), http.StatusTooManyRequests, protocol.CodeRateLimited)
 }
 
@@ -270,7 +270,7 @@ func TestANewMailboxIsUsedWhateverItsAddressMissed(t *testing.T) {
 	e := newEnv(t, l)
 	var nobody protocol.Address
 	nobody[0] = 2
-	e.want(e.do(http.MethodGet, "/v1/"+nobody.String(), nil, ""), http.StatusNotFound, protocol.CodeNoSuchMailbox)
+	e.want(e.do(http.MethodGet, "/v1/"+nobody.String(), nil, ""), http.StatusNotFound, protocol.CodeMailboxNotFound)
 	nobody[1] = 1
 	e.want(e.do(http.MethodGet, "/v1/"+nobody.String(), nil, ""), http.StatusTooManyRequests, protocol.CodeRateLimited)
 	b := e.mailbox()
@@ -296,12 +296,12 @@ func TestARememberedMissIsFree(t *testing.T) {
 	rememberedMiss(t, s, func() protocol.Address {
 		e2, cs = counted(t, e, l) // a server of its own each try, with limits of its own
 		nobody = e.raw().id.Address()
-		e2.want(read(nobody), http.StatusNotFound, protocol.CodeNoSuchMailbox) // the read, and its caller's one miss
+		e2.want(read(nobody), http.StatusNotFound, protocol.CodeMailboxNotFound) // the read, and its caller's one miss
 		return nobody
 	})
 	before := cs.calls.Load()
 	for range 5 {
-		e2.want(read(nobody), http.StatusNotFound, protocol.CodeNoSuchMailbox)
+		e2.want(read(nobody), http.StatusNotFound, protocol.CodeMailboxNotFound)
 	}
 	if n := cs.calls.Load(); n != before {
 		t.Fatalf("%d storage calls for a mailbox remembered as missing", n-before)
@@ -330,11 +330,11 @@ func TestAFetchedMessageIsFetchedAgainFromAnAllowance(t *testing.T) {
 	e2.want(msg(http.MethodGet, id1), http.StatusOK, "") // the other
 	before := cs.calls.Load()
 	r := msg(http.MethodGet, id1)
-	e2.want(r, http.StatusTooManyRequests, protocol.CodeFetchPaced)
+	e2.want(r, http.StatusTooManyRequests, protocol.CodeFetchRateLimited)
 	if !strings.Contains(string(r.body), "fetched before") || r.header.Get("Retry-After") != "60" {
 		t.Fatalf("a fetch past the allowance: Retry-After %q, %s", r.header.Get("Retry-After"), r.body)
 	}
-	e2.want(msg(http.MethodGet, id2), http.StatusTooManyRequests, protocol.CodeFetchPaced) // the allowance is the mailbox's
+	e2.want(msg(http.MethodGet, id2), http.StatusTooManyRequests, protocol.CodeFetchRateLimited) // the allowance is the mailbox's
 	if n := cs.calls.Load(); n != before {
 		t.Fatalf("%d storage calls for fetches past the allowance", n-before)
 	}
@@ -345,12 +345,12 @@ func TestAFetchedMessageIsFetchedAgainFromAnAllowance(t *testing.T) {
 	}
 	id3 := send(t, a, b, "three").ID
 	e2.want(msg(http.MethodGet, id3), http.StatusOK, "") // a first fetch is never limited
-	e2.want(msg(http.MethodGet, id3), http.StatusTooManyRequests, protocol.CodeFetchPaced)
+	e2.want(msg(http.MethodGet, id3), http.StatusTooManyRequests, protocol.CodeFetchRateLimited)
 	e.clock.Add(time.Minute) // one back
 	e2.want(msg(http.MethodGet, id1), http.StatusOK, "")
-	e2.want(msg(http.MethodGet, id1), http.StatusTooManyRequests, protocol.CodeFetchPaced)
+	e2.want(msg(http.MethodGet, id1), http.StatusTooManyRequests, protocol.CodeFetchRateLimited)
 	e2.want(msg(http.MethodDelete, id1), http.StatusNoContent, "") // an ack is never limited
-	e2.want(msg(http.MethodGet, id1), http.StatusNotFound, protocol.CodeNoSuchMessage)
+	e2.want(msg(http.MethodGet, id1), http.StatusNotFound, protocol.CodeMessageNotFound)
 }
 
 // The count of fetches lives in the message's mark and stops at 255.

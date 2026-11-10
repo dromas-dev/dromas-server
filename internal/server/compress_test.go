@@ -159,7 +159,7 @@ func TestNoOtherAnswerIsGzipped(t *testing.T) {
 		{"/messages", pass, http.StatusOK},
 		{"/messages/" + r.ID, pass, http.StatusOK},
 		{"/acl", pass, http.StatusOK},
-		{"/revocations", "", http.StatusNotFound},
+		{"/revocation", "", http.StatusNotFound},
 		{"/messages", "", http.StatusUnauthorized},
 	} {
 		resp, got := rawCall(t, http.MethodGet, base+c.path, "Accept-Encoding", "gzip", "Authorization", c.pass)

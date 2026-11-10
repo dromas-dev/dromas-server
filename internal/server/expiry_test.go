@@ -95,15 +95,15 @@ func TestAForgottenMailboxRegistersAnew(t *testing.T) {
 	now := e.clock.Now()
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	e.want(e.do("PUT", r.path("/acl"), aclOf([]string{"*"}, nil), r.pass(1)), 200, "")
-	e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), 200, "")
+	e.want(e.do("PUT", r.path("/revocation"), r.certs(1), ""), 200, "")
 	r.prekey(2, now.Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(2), r.pass(2)), 200, "")
 	if err := e.store.DeleteMailbox(ctx, r.id.Address()); err != nil {
 		t.Fatal(err)
 	}
-	e.want(e.do("GET", r.path(""), nil, ""), 404, protocol.CodeNoSuchMailbox)
+	e.want(e.do("GET", r.path(""), nil, ""), 404, protocol.CodeMailboxNotFound)
 	r.prekey(3, now.Add(protocol.MaxPrekeyLifetime), nil)
-	e.want(e.do("PUT", r.path("/prekey"), r.upload(3), r.pass(3)), 404, protocol.CodeNoSuchMailbox)
+	e.want(e.do("PUT", r.path("/prekey"), r.upload(3), r.pass(3)), 404, protocol.CodeMailboxNotFound)
 	r.prekey(1, now.Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", r.path(""), r.registration(1), r.pass(1)), 401, protocol.CodeCertificateRevoked) // still held to what its identity revoked
 	e.want(e.do("PUT", r.path(""), r.registration(3), r.pass(3)), 201, "")
@@ -130,7 +130,7 @@ func TestALateImageOfADeletedRecordBringsNothingBack(t *testing.T) {
 	now := e.clock.Now()
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	a := r.id.Address()
-	e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), 200, "")
+	e.want(e.do("PUT", r.path("/revocation"), r.certs(1), ""), 200, "")
 	r.prekey(2, now.Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(2), r.pass(2)), 200, "")
 	late, known := m.Known(a)
@@ -140,7 +140,7 @@ func TestALateImageOfADeletedRecordBringsNothingBack(t *testing.T) {
 	if err := m.DeleteMailbox(ctx, a); err != nil {
 		t.Fatal(err)
 	}
-	e.want(e.do("GET", r.path(""), nil, ""), 404, protocol.CodeNoSuchMailbox) // the view read since: revocations alone
+	e.want(e.do("GET", r.path(""), nil, ""), 404, protocol.CodeMailboxNotFound) // the view read since: revocations alone
 	m.apply(Change{Kind: RecordChange, Addr: a, Mailbox: late})
 	if b, known := m.Known(a); known && b.open() {
 		t.Errorf("the late image brings back the deleted record, serial %d", b.Prekey.Serial)
@@ -148,7 +148,7 @@ func TestALateImageOfADeletedRecordBringsNothingBack(t *testing.T) {
 	if st, ok := m.Held(a); ok && st.State == Active {
 		t.Errorf("the late image brings back the deleted record's standing: %+v", st)
 	}
-	e.want(e.do("GET", r.path(""), nil, ""), 404, protocol.CodeNoSuchMailbox)
+	e.want(e.do("GET", r.path(""), nil, ""), 404, protocol.CodeMailboxNotFound)
 	r.prekey(3, now.Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", r.path(""), r.registration(3), r.pass(3)), 201, "")
 }
@@ -163,7 +163,7 @@ func TestTheRecordAndTheRevocationsAreTwoRows(t *testing.T) {
 	e, s := sharedEnv(t)
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	a := r.id.Address()
-	e.want(e.do("PUT", r.path("/revocations"), r.certs(1), ""), 200, "")
+	e.want(e.do("PUT", r.path("/revocation"), r.certs(1), ""), 200, "")
 	revsOf := func() row {
 		t.Helper()
 		rows, err := rowsOf(s.pool().Query(ctx, `SELECT * FROM revocations WHERE addr = $1`, a[:]))
@@ -195,7 +195,7 @@ func TestTheRecordAndTheRevocationsAreTwoRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.want(e.do("PUT", r.path("/revocations"), protocol.Revocations{Identity: r.id.Document(), Revocation: rev}, ""), 201, "")
+	e.want(e.do("PUT", r.path("/revocation"), protocol.Revocations{Identity: r.id.Document(), Revocation: rev}, ""), 201, "")
 	if s.storedRecord(t, a) != nil {
 		t.Error("the revocation of the address left the mailbox's record")
 	}
@@ -239,7 +239,7 @@ func TestASecondProcessLearnsWhatIsRevoked(t *testing.T) {
 		}
 	}
 	e2.want(poll(certs)(), 200, "") // the second process holds it
-	e.want(e.do("PUT", certs.path("/revocations"), certs.certs(1), ""), 200, "")
+	e.want(e.do("PUT", certs.path("/revocation"), certs.certs(1), ""), 200, "")
 	within("the mailbox's certificate revoked", poll(certs), 401, protocol.CodeCertificateRevoked)
 	e2.want(e2.do("GET", certs.path("/messages"), nil, e2.passFor(certs.signer, certs.id.Address(), e2.name())), 200, "")
 
@@ -249,8 +249,8 @@ func TestASecondProcessLearnsWhatIsRevoked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.want(e.do("PUT", revoked.path("/revocations"), protocol.Revocations{Identity: revoked.id.Document(), Revocation: rev}, ""), 201, "")
-	within("the address revoked", poll(revoked), 410, protocol.CodeRevoked)
+	e.want(e.do("PUT", revoked.path("/revocation"), protocol.Revocations{Identity: revoked.id.Document(), Revocation: rev}, ""), 201, "")
+	within("the address revoked", poll(revoked), 410, protocol.CodeMailboxRevoked)
 }
 
 // readsCounted is a backend that counts the reads of an address and of a
@@ -275,7 +275,7 @@ func (b *readsCounted) ReadLive(ctx context.Context, mailbox protocol.Address) (
 // has lost the record, as --mailbox-cache's LRU does under load, and its feed
 // brings the image of the revocations row before the purge's deletion of
 // the record, two statements one after the other.
-// In the window its poll is 410 revoked from memory, with no read, and
+// In the window its poll is 410 mailbox_revoked from memory, with no read, and
 // carries no record (revokedAt), and the read of the mailbox is 410 with the
 // record. Once the deletion comes, the poll reads the address and carries
 // the record too. Two memories over one in-memory backend, the second's
@@ -332,7 +332,7 @@ func TestASecondProcessInARevocationsWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.want(e.do("PUT", r.path("/revocations"), protocol.Revocations{Identity: r.id.Document(), Revocation: sig}, ""), http.StatusCreated, "")
+	e.want(e.do("PUT", r.path("/revocation"), protocol.Revocations{Identity: r.id.Document(), Revocation: sig}, ""), http.StatusCreated, "")
 	deletion := deliver(func(c Change) bool { return c.Kind == RecordChange && c.Gone })
 	if len(deletion) != 1 {
 		t.Fatalf("the revocation's purge deleted the record %d times", len(deletion))
@@ -346,7 +346,7 @@ func TestASecondProcessInARevocationsWindow(t *testing.T) {
 
 	before := counted.reads.Load()
 	got := poll()
-	e2.want(got, http.StatusGone, protocol.CodeRevoked)
+	e2.want(got, http.StatusGone, protocol.CodeMailboxRevoked)
 	if n := counted.reads.Load() - before; n != 0 {
 		t.Errorf("the poll in the window read the store %d times", n)
 	}
@@ -354,14 +354,14 @@ func TestASecondProcessInARevocationsWindow(t *testing.T) {
 		t.Error("the poll in the window carries a record, which memory does not hold")
 	}
 	read := e2.do("GET", r.path(""), nil, "")
-	e2.want(read, http.StatusGone, protocol.CodeRevoked)
+	e2.want(read, http.StatusGone, protocol.CodeMailboxRevoked)
 	if rec := held(t, read); rec == nil || !bytes.Equal(rec.Revocation, sig) || !bytes.Equal(rec.Identity, r.id.Document()) {
 		t.Errorf("the read in the window carries %s, want the revocation", read.body)
 	}
 
 	second.apply(deletion[0])
 	got = poll()
-	e2.want(got, http.StatusGone, protocol.CodeRevoked)
+	e2.want(got, http.StatusGone, protocol.CodeMailboxRevoked)
 	if rec := held(t, got); rec == nil || !bytes.Equal(rec.Revocation, sig) {
 		t.Errorf("the poll after the window carries %s, want the revocation", got.body)
 	}

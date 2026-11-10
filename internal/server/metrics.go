@@ -102,7 +102,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		// deprecated APIs the same way, apiserver_requested_deprecated_apis
 		// (from memory), labelled by what its own code defines.
 		versions: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "version_requests_total",
-			Help: "Requests under /v1/, by what the version policy says of the version each names (PROTOCOL.md §11.17): retired (answered 410 version_retired, but on GET /v1/), sunset (a sunset covers it, not yet passed), deprecated (a deprecation covers it, no sunset does), or current."}, []string{"state"}),
+			Help: "Requests under /v1/, by what the version policy says of the version each names (PROTOCOL.md §11.17): retired (answered 410 client_version_unsupported, but on GET /v1/), sunset (a sunset covers it, not yet passed), deprecated (a deprecation covers it, no sunset does), or current."}, []string{"state"}),
 		reloads: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "runtime_config_reloads_total",
 			Help: "Reloads of each file of the runtime-config directory, by file (version-policy, limits) and result: ok (read, checked and in force) or failed (not read, too large or refused: what was in force stays)."}, []string{"file", "result"}),
 	}

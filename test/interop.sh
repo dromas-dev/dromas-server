@@ -121,7 +121,7 @@ recipe(){ local home=$1; shift; DR_HOME=$home bash -c ". '$SCRIPT'; $*"; }   # a
 # send each other, so every mailbox the Go client runs lands every sender's messages in inbox/, by its config file.
 gocli(){ local home=$1; shift; mkdir -p -m 700 "$home" && { [ -e "$home.toml" ] || printf 'base-dir = "%s"\nmail-dir = "%s/mail"\n[policy]\nunknown = "inbox"\n' "$home" "$home" > "$home.toml"; } && DROMAS_CONFIG=$home.toml "$work/dromas" "$@"; }
 holds(){ DROMAS_SERVER_URL=http://127.0.0.1:9 gocli "$1" revocation ask "$2" 2> /dev/null | jq -e '.type == "revoked"' > /dev/null; }   # <go mailbox> <address>: it keeps a revocation of the address, with no server to ask (a mailbox keeps its records in its state file)
-through(){ gocli "$1" revocation ask "$2" 2> /dev/null | jq -r 'select(.type == "certificates_revoked") | .through'; }   # <go mailbox> <address> → the serial its revocation of certificates runs through, as the mailbox holds it once it has asked
+through(){ gocli "$1" revocation ask "$2" 2> /dev/null | jq -r 'select(.type == "certificates_revoked") | .revocation_serial'; }   # <go mailbox> <address> → the serial its revocation of certificates runs through, as the mailbox holds it once it has asked
 passof(){ local a t; a=$(cat "$1/address") && t=$(date -u -d "@$(( $(date +%s) + 600 ))" +%Y-%m-%dT%H:%M:%SZ) \
   && printf 'dromas-pass-v1\n%s\n%s\n%s\n' "$a" "${2:-${DR_SERVER_URL#http://}}" "$t" | ssh-keygen -q -Y sign -n "dromas-pass-v1:$a" -f "$1/identity" > "$work/pass.sig" \
   && printf 'dromas-pass address="%s", not_after="%s", signature="%s"' "$a" "$t" "$(base64 < "$work/pass.sig" | tr -d '\n')"; }   # <go mailbox> → a pass its identity signs, which a server always takes, as PROTOCOL.md §8 makes one with ssh-keygen
@@ -165,12 +165,12 @@ out=$(gocli "$G" recv 2>&1) && grep -q 'from the recipe' <<< "$out" && ok "Go re
 # --- 2. the recipe's error path on a real problem+json ---
 nobody=d_$(printf 'a%.0s' $(seq 64))      # an address nobody registered
 err=$(recipe "$R" "dr_send $nobody '$work/body'" 2>&1); rc=$?
-[ $rc -ne 0 ] && grep -qxF '{"type":"error","status":404,"code":"no_such_mailbox","detail":"ERROR 404 no_such_mailbox"}' <<< "$err" && ! grep -q 'no mailbox has this address' <<< "$err" && ok "recipe prints a real problem's status and code, and none of the server's words (PROTOCOL.md §11.3)" || bad "recipe error path: rc=$rc $err"
+[ $rc -ne 0 ] && grep -qxF '{"type":"error","status":404,"code":"mailbox_not_found","detail":"ERROR 404 mailbox_not_found"}' <<< "$err" && ! grep -q 'no mailbox has this address' <<< "$err" && ok "recipe prints a real problem's status and code, and none of the server's words (PROTOCOL.md §11.3)" || bad "recipe error path: rc=$rc $err"
 
 # --- 3. the Go client's optional fields, and each client's sent/ record ---
 gocli "$G" alias add sh "$RL" > /dev/null || bad "Go alias add"
 M1=11111111-2222-4333-8444-555555555555
-id=$(printf 'threaded, from Go\n' | gocli "$G" send --subject 'a subject' --reply-to $M1 sh | jq -r 'select(.type == "sent") | .id') && dr_hex "$id" || bad "Go send with flags, to an alias: $id"
+id=$(printf 'threaded, from Go\n' | gocli "$G" send --subject 'a subject' --in-reply-to $M1 sh | jq -r 'select(.type == "sent") | .id') && dr_hex "$id" || bad "Go send with flags, to an alias: $id"
 out=$(recipe "$R" dr_recv 2> "$work/err") && jq -e --arg m $M1 '.envelope.subject == "a subject" and .envelope.in_reply_to == $m and .envelope.body == "threaded, from Go\n"' <<< "$out" > /dev/null \
   && ok "Go → recipe: subject and in_reply_to arrive" || bad "Go → recipe with flags: $out $(cat "$work/err")"
 mid=$(jq -r .envelope.msg_id <<< "$out")
@@ -221,7 +221,7 @@ for c in "-540 9 minutes slow" "2940 49 minutes fast"; do
 done
 out=$(recipe "$work/clock-late" "$(clock -660); dr_init" 2>&1); [ $? -ne 0 ] && grep -q "ERROR 401 pass_expired" <<< "$out" && grep -q "the server dates its answer 20" <<< "$out" && grep -q "this machine's clock reads" <<< "$out" \
   && ok "a recipe mailbox 11 minutes slow is refused at its pass: the server's answer is dated by its clock, and the recipe says that beside what its own reads" || bad "clock 11 minutes slow: $out"
-out=$(recipe "$work/clock-early" "$(clock 3660); dr_init" 2>&1); [ $? -ne 0 ] && grep -q "ERROR 400 prekey_time" <<< "$out" && grep -q "the server dates its answer 20" <<< "$out" \
+out=$(recipe "$work/clock-early" "$(clock 3660); dr_init" 2>&1); [ $? -ne 0 ] && grep -q "ERROR 400 invalid_validity_period" <<< "$out" && grep -q "the server dates its answer 20" <<< "$out" \
   && L=$(recipe "$work/clock-early" "dr_init" 2> "$work/err" | linkof) && dr_isaddr "${L##*/}" \
   && ok "a recipe mailbox first made 61 minutes fast is refused, the answer dated by the server's clock; with the clock right, the same mailbox registers" || bad "clock 61 minutes fast: $out $(cat "$work/err")"
 
@@ -236,10 +236,10 @@ V1L=$(recipe "$V1" "dr_init" | linkof) && V1A=${V1L##*/} && V2L=$(gocli "$V2" in
 # by the proof the server shows.
 printf 'sent before the revocation\n' > "$work/body7"; recipe "$V1" "dr_send $V2L '$work/body7'" 2> "$work/err" || bad "revocation: the recipe's send: $(cat "$work/err")"
 printf 'waiting in the mailbox that is revoked\n' | gocli "$V2" send "$V1L" > /dev/null 2> "$work/err" || bad "revocation: the Go send: $(cat "$work/err")"
-record_of "$V1" > "$work/v1.json" && [ "$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'Content-Type: application/json' --data-binary "@$work/v1.json" "$DR_SERVER_URL/v1/$V1A/revocations")" = 201 ] && [ "$(look "$V1A")" = 410 ] \
-  && curl -s "$DR_SERVER_URL/v1/$V1A" | jq -e '.code == "revoked" and (.record | keys == ["identity","revocation_signature","type"] and .type == "revocation_record")' > /dev/null \
+record_of "$V1" > "$work/v1.json" && [ "$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'Content-Type: application/json' --data-binary "@$work/v1.json" "$DR_SERVER_URL/v1/$V1A/revocation")" = 201 ] && [ "$(look "$V1A")" = 410 ] \
+  && curl -s "$DR_SERVER_URL/v1/$V1A" | jq -e '.code == "mailbox_revoked" and (.record | keys == ["identity","revocation_signature","type"] and .type == "revocation_record")' > /dev/null \
   && ok "a recipe mailbox's record, made with ssh-keygen and put with curl: 410 from then on, and the server shows the record in it to anyone" || bad "the recipe mailbox's revocation: $(cat "$work/v1.json")"
-out=$(gocli "$V2" recv 2>&1); [ $? -eq 0 ] && grep -q '"code":"revoked"' <<< "$out" && ! grep -q '"body"' <<< "$out" && holds "$V2" "$V1A" \
+out=$(gocli "$V2" recv 2>&1); [ $? -eq 0 ] && grep -q '"code":"sender_revoked"' <<< "$out" && ! grep -q '"body"' <<< "$out" && holds "$V2" "$V1A" \
   && ok "the Go client refuses messages from the revoked recipe mailbox, and keeps the revocation it checked" || bad "Go recv from a revoked mailbox: $out"
 out=$(printf 'x\n' | gocli "$V2" send "$V1L" 2>&1); [ $? -ne 0 ] && grep -q "REVOKED: $V1A" <<< "$out" && ! ls "$V2"/outbox/"$V1A".*.P > /dev/null 2>&1 \
   && ok "the Go client sends nothing to it: REVOKED, and nothing waits in its outbox" || bad "Go send to a revoked mailbox: $out"
@@ -251,25 +251,25 @@ out=$(gocli "$V3" revocation publish "$V4A" 2>&1); [ $? -ne 0 ] && [ "$(look "$V
 out=$(gocli "$V3" revocation publish "$V3A" 2>&1) && [ "$out" = "$(revoked_line $V3A)" ] && [ "$(look "$V3A")" = 410 ] \
   && jq -e '.revoked == true' <<< "$(gocli "$V3" status 2> /dev/null)" > /dev/null \
   && ok "the Go client revokes its mailbox, and its status says so" || bad "Go revoke: $out"
-out=$(recipe "$V4" "dr_recv" 2>&1); [ $? -eq 0 ] && grep -q '"code":"revoked"' <<< "$out" && ! grep -q '"body"' <<< "$out" && [ -s "$V4/peers/$V3A/revoke.sig" ] \
+out=$(recipe "$V4" "dr_recv" 2>&1); [ $? -eq 0 ] && grep -q '"code":"sender_revoked"' <<< "$out" && ! grep -q '"body"' <<< "$out" && [ -s "$V4/peers/$V3A/revoke.sig" ] \
   && ok "the recipe refuses messages from the mailbox the Go client revoked, and keeps the revocation it checked" || bad "recipe recv from a revoked mailbox: $out"
 out=$(recipe "$V4" "dr_send $V3L '$work/body7'" 2>&1); [ $? -ne 0 ] && grep -q "REVOKED" <<< "$out" && ok "the recipe sends nothing to it: REVOKED" || bad "recipe send to a revoked mailbox: $out"
 # A record made in advance revokes with no mailbox and no key, by either client or by curl; what is not one is refused.
 gocli "$V5" revocation make > "$work/v5.json" 2> /dev/null && [ "$(look "$V5A")" = 200 ] && ok "a record is made, and nothing is published" || bad "Go revocation"
 jq -c --arg s "$(printf 'revoke it' | base64)" '.revocation_signature = $s' "$work/v5.json" > "$work/v5-junk.json"
-[ "$(curl -s -X PUT -H 'Content-Type: application/json' --data-binary "@$work/v5-junk.json" "$DR_SERVER_URL/v1/$V5A/revocations" | jq -r .code)" = bad_revocation ] \
-  && [ "$(curl -s -X PUT -H 'Content-Type: application/json' --data-binary "@$work/v5.json" "$DR_SERVER_URL/v1/$V4A/revocations" | jq -r .code)" = identity_mismatch ] \
+[ "$(curl -s -X PUT -H 'Content-Type: application/json' --data-binary "@$work/v5-junk.json" "$DR_SERVER_URL/v1/$V5A/revocation" | jq -r .code)" = invalid_revocation ] \
+  && [ "$(curl -s -X PUT -H 'Content-Type: application/json' --data-binary "@$work/v5.json" "$DR_SERVER_URL/v1/$V4A/revocation" | jq -r .code)" = identity_mismatch ] \
   && [ "$(look "$V5A")" = 200 ] \
-  && ok "the server refuses what is not a revocation of that address: 400 bad_revocation, 400 identity_mismatch" || bad "junk revocations"
+  && ok "the server refuses what is not a revocation of that address: 400 invalid_revocation, 400 identity_mismatch" || bad "junk revocations"
 out=$(cd "$work" && "$work/dromas" revocation publish --record "$work/v5.json" "$V5A" 2>&1) && [ "$out" = "$(revoked_line $V5A)" ] && [ "$(look "$V5A")" = 410 ] \
-  && [ "$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'Content-Type: application/json' --data-binary "@$work/v5.json" "$DR_SERVER_URL/v1/$V5A/revocations")" = 410 ] \
+  && [ "$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'Content-Type: application/json' --data-binary "@$work/v5.json" "$DR_SERVER_URL/v1/$V5A/revocation")" = 410 ] \
   && ok "the Go client's record revokes from the Go client with no mailbox, and the same record again is 410: nothing changes" || bad "revoke with a record: $out"
 
 # --- 7. the two forms of signer (PROTOCOL.md §5): a Go mailbox under certificates, its certificates revoked, and a revocation that covers no identity ---
 W1="$work/w1"; W2="$work/w2"; W3="$work/w3"
 W1L=$(gocli "$W1" init --offline | linkof) && W1A=${W1L##*/} && W2L=$(recipe "$W2" "dr_init" | linkof) && W2A=${W2L##*/} && W3L=$(gocli "$W3" init | linkof) && W3A=${W3L##*/} || bad "the two forms: the mailboxes"
 kept(){ jq -r .revoked_certificates "$1" | base64 -d; }   # <the record a mailbox keeps a revocation of certificates as> → the statement in it
-put(){ curl -s -o "$work/put.json" -w '%{http_code}' -X PUT -H 'Content-Type: application/json' --data-binary "@$1" "$DR_SERVER_URL/v1/$2/revocations"; }   # <record> <address> → the status; the body is left in put.json
+put(){ curl -s -o "$work/put.json" -w '%{http_code}' -X PUT -H 'Content-Type: application/json' --data-binary "@$1" "$DR_SERVER_URL/v1/$2/revocation"; }   # <record> <address> → the status; the body is left in put.json
 curl -sf "$DR_SERVER_URL/v1/$W1A" | jq -e '(has("revoked_certificates") or has("revoked_certificates_signature") | not) and has("prekey")' > /dev/null \
   && ok "init --offline registers under a certificate at once, with no revocation of certificates published" || bad "init --offline: $(curl -s "$DR_SERVER_URL/v1/$W1A")"
 printf 'under the first certificate\n' > "$work/body8"
@@ -295,12 +295,12 @@ printf 'signed by the identity before the revocation\n' > "$work/body8c"
 recipe "$W2" "dr_send $W3L '$work/body8c'" 2> "$work/err" || bad "the two forms: the recipe's send before the revocation: $(cat "$work/err")"
 ssh-keygen -q -t ed25519 -N '' -C '' -f "$work/stranger" < /dev/null
 mkcerts bystranger 2 "$work/stranger" && mkcerts one 2 "$W2/identity" && mkcerts lower 1 "$W2/identity" || bad "the two forms: ssh-keygen did not sign a revocation"
-[ "$(put "$work/bystranger.json" "$W2A")" = 400 ] && [ "$(jq -r .code "$work/put.json")" = bad_revocation ] && [ "$(put "$work/one.json" "$W3A")" = 400 ] && [ "$(jq -r .code "$work/put.json")" = identity_mismatch ] \
+[ "$(put "$work/bystranger.json" "$W2A")" = 400 ] && [ "$(jq -r .code "$work/put.json")" = invalid_revocation ] && [ "$(put "$work/one.json" "$W3A")" = 400 ] && [ "$(jq -r .code "$work/put.json")" = identity_mismatch ] \
   && curl -sf "$DR_SERVER_URL/v1/$W2A" | jq -e '(has("revoked_certificates") or has("revoked_certificates_signature")) | not' > /dev/null \
-  && ok "the server refuses a revocation of certificates another key signed, and one sent for another address: 400 bad_revocation, 400 identity_mismatch" || bad "junk revocations: $(cat "$work/put.json")"
-[ "$(put "$work/one.json" "$W2A")" = 200 ] && [ "$(put "$work/one.json" "$W2A")" = 200 ] && [ "$(put "$work/lower.json" "$W2A")" = 409 ] && [ "$(jq -r .code "$work/put.json")" = conflict ] \
+  && ok "the server refuses a revocation of certificates another key signed, and one sent for another address: 400 invalid_revocation, 400 identity_mismatch" || bad "junk revocations: $(cat "$work/put.json")"
+[ "$(put "$work/one.json" "$W2A")" = 200 ] && [ "$(put "$work/one.json" "$W2A")" = 200 ] && [ "$(put "$work/lower.json" "$W2A")" = 409 ] && [ "$(jq -r .code "$work/put.json")" = serial_too_low ] \
   && curl -sf "$DR_SERVER_URL/v1/$W2A" | jq -r .revoked_certificates | base64 -d | cmp -s - "$work/one.certs" \
-  && ok "a revocation of certificates signed with ssh-keygen alone is taken with no pass: 200, the same again 200, one through a lower serial 409 conflict" || bad "the recipe mailbox's revocation of certificates: $(cat "$work/put.json")"
+  && ok "a revocation of certificates signed with ssh-keygen alone is taken with no pass: 200, the same again 200, one through a lower serial 409 serial_too_low" || bad "the recipe mailbox's revocation of certificates: $(cat "$work/put.json")"
 # It covers certificates only (PROTOCOL.md §10.2): the identity, which signs for the recipe mailbox, goes on.
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: $(passof "$W2")" "$DR_SERVER_URL/v1/$W2A/messages")" = 200 ] \
   && ok "the server takes the recipe mailbox's identity's pass with a revocation of its certificates held" || bad "the identity's pass after a revocation of certificates"
@@ -308,30 +308,30 @@ out=$(gocli "$W3" recv 2>&1); [ $? -eq 0 ] && grep -q 'signed by the identity be
   && ok "the Go client takes the message the recipe mailbox's identity signed, and keeps the revocation of its certificates" || bad "Go recv after the recipe mailbox's revocation: $out"
 gocli "$W3" send "$W2L" < "$work/body8" > /dev/null 2> "$work/err" && out=$(recipe "$W2" "dr_recv" 2>&1) && grep -q 'under the first certificate' <<< "$out" \
   && ok "a sender is shown the revocation, and still seals to the recipe mailbox's statement, which its identity signed; the recipe mailbox drains" || bad "a send to a mailbox whose certificates are revoked: $(cat "$work/err") $out"
-out=$(gocli "$W3" revocation ask "$W2L" 2> /dev/null) && [ "$out" = "{\"type\":\"certificates_revoked\",\"address\":\"$W2A\",\"through\":2}" ] && out=$(gocli "$W1" revocation ask "$W3L" 2> "$work/err") && [ "$(jq -r '"\(.type) \(.address)"' <<< "$out")" = "not_revoked $W3A" ] && jq -e '.detail | contains("the server'"'"'s word")' <<< "$out" > /dev/null \
+out=$(gocli "$W3" revocation ask "$W2L" 2> /dev/null) && [ "$out" = "{\"type\":\"certificates_revoked\",\"address\":\"$W2A\",\"revocation_serial\":2}" ] && out=$(gocli "$W1" revocation ask "$W3L" 2> "$work/err") && [ "$(jq -r '"\(.type) \(.address)"' <<< "$out")" = "not_revoked $W3A" ] && jq -e '.detail | contains("the server'"'"'s word")' <<< "$out" > /dev/null \
   && ok "asked at any time, the server shows a mailbox's revocation of its certificates, or that it holds nothing, which the client says as the server's word" || bad "revoked --ask: $out $(cat "$work/err")"
 
 # --- 8. a revocation of an address with no mailbox here (PROTOCOL.md §11.15): every server keeps and serves one, for any address ---
-at(){ curl -s -o /dev/null -w '%{http_code}' "$DR_SERVER_URL/v1/$1/revocations"; }   # <address> → the status of the read of its revocations here
+at(){ curl -s -o /dev/null -w '%{http_code}' "$DR_SERVER_URL/v1/$1/revocation"; }   # <address> → the status of the read of its revocations here
 X1="$work/x1"; X3="$work/x3"; X6="$work/x6"
 X1L=$(gocli "$X1" init | linkof) && X1A=${X1L##*/} && X6L=$(gocli "$X6" init --offline | linkof) && X6A=${X6L##*/} || bad "the mailboxes of section 8"
 mkdir -p -m 700 "$X3" && ssh-keygen -q -t ed25519 -N '' -C '' -f "$X3/identity" && gocli "$X3" revocation make > "$work/x3.json" 2> "$work/err" && X3A=$(jq -r .identity "$work/x3.json" | base64 -d | openssl dgst -sha384 -binary | openssl base64 -A | tr '+/' '-_' | sed 's/^/d_/') && X3L="$DR_SERVER_URL/to/$X3A" \
   || bad "a record of an address never registered: $(cat "$work/err")"
-[ "$(at "$X1A")" = 404 ] && [ "$(curl -s "$DR_SERVER_URL/v1/$X1A/revocations" | jq -r .code)" = not_revoked ] && [ "$(at "$X3A")" = 404 ] \
-  && ok "the server answers 404 not_revoked for an address it holds no revocation of, with a mailbox there or none" || bad "the read of revocations, before anything"
-[ "$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'Content-Type: application/json' --data-binary "@$work/x3.json" "$DR_SERVER_URL/v1/$X3A/revocations")" = 201 ] \
-  && [ "$(look "$X3A")" = 410 ] && cmp -s <(curl -s "$DR_SERVER_URL/v1/$X3A" | jq -S .record) <(jq -S . "$work/x3.json") && cmp -s <(curl -s "$DR_SERVER_URL/v1/$X3A/revocations" | jq -S .) <(jq -S . "$work/x3.json") \
+[ "$(at "$X1A")" = 404 ] && [ "$(curl -s "$DR_SERVER_URL/v1/$X1A/revocation" | jq -r .code)" = revocation_not_found ] && [ "$(at "$X3A")" = 404 ] \
+  && ok "the server answers 404 revocation_not_found for an address it holds no revocation of, with a mailbox there or none" || bad "the read of revocations, before anything"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'Content-Type: application/json' --data-binary "@$work/x3.json" "$DR_SERVER_URL/v1/$X3A/revocation")" = 201 ] \
+  && [ "$(look "$X3A")" = 410 ] && cmp -s <(curl -s "$DR_SERVER_URL/v1/$X3A" | jq -S .record) <(jq -S . "$work/x3.json") && cmp -s <(curl -s "$DR_SERVER_URL/v1/$X3A/revocation" | jq -S .) <(jq -S . "$work/x3.json") \
   && ok "a server with no mailbox at an address keeps a revocation of it, and serves the record, in the read of the address (410) and in the read of its revocations" || bad "a revocation of an address with no mailbox"
 out=$(gocli "$X3" init 2>&1); [ $? -ne 0 ] && grep -qi 'revoked' <<< "$out" && [ "$(look "$X3A")" = 410 ] \
   && ok "and refuses that address's registration: it is revoked here, mailbox or none" || bad "a registration of an address revoked with no mailbox: $out"
 printf 'to an address its owner ended\n' > "$work/body9"
 out=$(gocli "$X6" send "$X3L" < "$work/body9" 2>&1); [ $? -ne 0 ] && grep -q "REVOKED: $X3A is revoked" <<< "$out" && holds "$X6" "$X3A" && ls "$X6"/outbox/failed/"$X3A".*.P > /dev/null 2>&1 \
   && ok "a Go mailbox is shown that revocation by the read before its post: it is checked and kept, and nothing is posted" || bad "a send to the revoked address: $out"
-out=$(gocli "$X6" cert revoke-earlier 2>&1) && [ "$(curl -s "$DR_SERVER_URL/v1/$X6A/revocations" | jq -r 'keys | join(",")')" = "identity,revoked_certificates,revoked_certificates_signature,type" ] \
-  && cmp -s <(curl -s "$DR_SERVER_URL/v1/$X6A/revocations" | jq -r .revoked_certificates) <(curl -s "$DR_SERVER_URL/v1/$X6A" | jq -r .revoked_certificates) \
+out=$(gocli "$X6" cert revoke-earlier 2>&1) && [ "$(curl -s "$DR_SERVER_URL/v1/$X6A/revocation" | jq -r 'keys | join(",")')" = "identity,revoked_certificates,revoked_certificates_signature,type" ] \
+  && cmp -s <(curl -s "$DR_SERVER_URL/v1/$X6A/revocation" | jq -r .revoked_certificates) <(curl -s "$DR_SERVER_URL/v1/$X6A" | jq -r .revoked_certificates) \
   && ok "cert revoke-earlier publishes the revocation of certificates, which both reads serve alike" || bad "a revocation of certificates: $out"
 out=$(gocli "$X6" revocation publish "$X6A" 2>&1) && [ "$out" = "$(revoked_line $X6A)" ] && out=$(gocli "$X6" revocation publish "$X6A" 2>&1) && [ "$out" = "$(revoked_line $X6A)" ] \
-  && curl -s "$DR_SERVER_URL/v1/$X6A/revocations" | jq -e '.revocation_signature and .revoked_certificates' > /dev/null \
+  && curl -s "$DR_SERVER_URL/v1/$X6A/revocation" | jq -e '.revocation_signature and .revoked_certificates' > /dev/null \
   && ok "the same publish again is answered 410 by a server that holds the address revoked, which the client takes once the record it serves verifies" || bad "revoke again: $out"
 
 # --- 9. the sender ACL: a Go mailbox that blocks a recipe mailbox, and a recipe send that the server then refuses ---
