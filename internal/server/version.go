@@ -43,13 +43,22 @@ func policyOf(d protocol.ServerDocument, l Limits) protocol.ServerDocument {
 // the source revision it was built from, as Go records them in the binary
 // (runtime/debug.ReadBuildInfo). A build of a release tag records the tag
 // and its commit; a build Go records no version of is "(devel)", as Go
-// writes one, and one that records no revision names none.
-var implementation = implementationOf(debug.ReadBuildInfo())
+// writes one, and one that records no revision names commit, or none.
+var implementation = func() *protocol.Implementation {
+	bi, ok := debug.ReadBuildInfo()
+	return implementationOf(bi, ok, commit)
+}()
+
+// commit is the revision a release build names by the linker
+// (.goreleaser.yaml's ldflags, GoReleaser's main.commit at this package's
+// path): a release is built from the module proxy, which carries no VCS
+// information, so Go records no vcs.revision in it.
+var commit string
 
 // implementationOf is the implementation bi records, ok false where the
-// binary carries no build info.
-func implementationOf(bi *debug.BuildInfo, ok bool) *protocol.Implementation {
-	im := &protocol.Implementation{Name: "dromas-server", Version: "(devel)"}
+// binary carries no build info; commit is its revision where bi records none.
+func implementationOf(bi *debug.BuildInfo, ok bool, commit string) *protocol.Implementation {
+	im := &protocol.Implementation{Name: "dromas-server", Version: "(devel)", Revision: commit}
 	if !ok {
 		return im
 	}

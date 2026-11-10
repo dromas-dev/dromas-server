@@ -36,11 +36,12 @@ defaults:
 
 jobs:
   test:
-    # Two OpenSSH releases for test/interop.sh's script: 9.6p1 and 10.2p1.
+    # Two OpenSSH releases for test/interop.sh's script, 9.6p1 and 10.2p1, and
+    # arm64, the other architecture a release is built for.
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-26.04]
+        os: [ubuntu-24.04, ubuntu-26.04, ubuntu-26.04-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
