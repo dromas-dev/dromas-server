@@ -416,16 +416,19 @@ func TestTheDocumentNamesTheImplementation(t *testing.T) {
 	}
 	release := &debug.BuildInfo{Main: debug.Module{Version: "v0.5.1"}, Settings: []debug.BuildSetting{{Key: "vcs", Value: "git"}, {Key: "vcs.revision", Value: "c4258bc37344474025fe2c2d6420476eb617450a"}}}
 	for _, c := range []struct {
-		bi   *debug.BuildInfo
-		ok   bool
-		want protocol.Implementation
+		bi     *debug.BuildInfo
+		ok     bool
+		want   protocol.Implementation
+		commit string
 	}{
-		{release, true, protocol.Implementation{Name: "dromas-server", Version: "v0.5.1", Revision: "c4258bc37344474025fe2c2d6420476eb617450a"}},
-		{&debug.BuildInfo{Main: debug.Module{Version: "(devel)"}}, true, protocol.Implementation{Name: "dromas-server", Version: "(devel)"}},
-		{&debug.BuildInfo{}, true, protocol.Implementation{Name: "dromas-server", Version: "(devel)"}},
-		{nil, false, protocol.Implementation{Name: "dromas-server", Version: "(devel)"}},
+		{release, true, protocol.Implementation{Name: "dromas-server", Version: "v0.5.1", Revision: "c4258bc37344474025fe2c2d6420476eb617450a"}, ""},
+		{&debug.BuildInfo{Main: debug.Module{Version: "(devel)"}}, true, protocol.Implementation{Name: "dromas-server", Version: "(devel)"}, ""},
+		{&debug.BuildInfo{}, true, protocol.Implementation{Name: "dromas-server", Version: "(devel)"}, ""},
+		{nil, false, protocol.Implementation{Name: "dromas-server", Version: "(devel)"}, ""},
+		// A release, built from the module proxy: the version, and the commit its linker flag names.
+		{&debug.BuildInfo{Main: debug.Module{Version: "v0.6.1"}}, true, protocol.Implementation{Name: "dromas-server", Version: "v0.6.1", Revision: "c4258bc37344474025fe2c2d6420476eb617450a"}, "c4258bc37344474025fe2c2d6420476eb617450a"},
 	} {
-		if got := implementationOf(c.bi, c.ok); *got != c.want {
+		if got := implementationOf(c.bi, c.ok, c.commit); *got != c.want {
 			t.Errorf("from %+v: %+v, want %+v", c.bi, *got, c.want)
 		}
 	}
