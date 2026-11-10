@@ -4,10 +4,10 @@ go 1.27.0
 
 require (
 	filippo.io/age v1.3.2
-	github.com/aws/aws-sdk-go-v2 v1.47.6
-	github.com/aws/aws-sdk-go-v2/config v1.33.14
-	github.com/aws/aws-sdk-go-v2/credentials v1.20.14
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.7
+	github.com/aws/aws-sdk-go-v2 v1.47.8
+	github.com/aws/aws-sdk-go-v2/config v1.33.16
+	github.com/aws/aws-sdk-go-v2/credentials v1.20.16
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.9
 	github.com/aws/smithy-go v1.28.8
 	github.com/dchest/siphash v1.2.3
 	github.com/dromas-dev/dromas-client v0.6.0
@@ -17,25 +17,25 @@ require (
 	github.com/prometheus/client_golang v1.25.0
 	github.com/spf13/pflag v1.1.0
 	golang.org/x/crypto v0.58.0
-	golang.org/x/sync v0.24.0
+	golang.org/x/sync v0.25.0
 )
 
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
 	filippo.io/hpke v0.4.0 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.26 // indirect
-	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.20.6 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.9 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.8.9 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/v4a v1.5.9 // indirect
+	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.20.8 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.11 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.8.11 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/v4a v1.5.11 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.24 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.11.10 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.14.9 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.20.9 // indirect
-	github.com/aws/aws-sdk-go-v2/service/signin v1.12.2 // indirect
-	github.com/aws/aws-sdk-go-v2/service/sso v1.39.2 // indirect
-	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.44.2 // indirect
-	github.com/aws/aws-sdk-go-v2/service/sts v1.51.7 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.11.12 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.14.11 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.20.11 // indirect
+	github.com/aws/aws-sdk-go-v2/service/signin v1.12.4 // indirect
+	github.com/aws/aws-sdk-go-v2/service/sso v1.39.4 // indirect
+	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.44.4 // indirect
+	github.com/aws/aws-sdk-go-v2/service/sts v1.51.9 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/basgys/goxml2json v1.1.1-0.20231018121955-e66ee54ceaad // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -63,7 +63,7 @@ require (
 	go.etcd.io/bbolt v1.5.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
