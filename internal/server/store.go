@@ -613,6 +613,10 @@ type Store interface {
 	// Mailbox returns what is held of an address (view): its mailbox's record and
 	// its identity's revocations, or ErrNotFound if neither.
 	Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error)
+	// Reread is Mailbox's read, made whatever memory holds of the address,
+	// for a call that has shown memory to be behind: what it reads brings the
+	// record cache's copy forward, and never back (recCache.fill).
+	Reread(ctx context.Context, a protocol.Address) (*Mailbox, error)
 	// Known returns what memory holds of an address, with no read: what Mailbox
 	// returns, or nil for an address it holds as missing. ok is false when
 	// only a read can tell, which is what Mailbox then does.

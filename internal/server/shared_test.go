@@ -476,6 +476,11 @@ func (c *countingStore) Mailbox(ctx context.Context, a protocol.Address) (*Mailb
 	return c.s.Mailbox(ctx, a)
 }
 
+func (c *countingStore) Reread(ctx context.Context, a protocol.Address) (*Mailbox, error) {
+	c.count()
+	return c.s.Reread(ctx, a)
+}
+
 func (c *countingStore) CreateMailbox(ctx context.Context, b *Mailbox) error {
 	c.count()
 	return c.s.CreateMailbox(ctx, b)

@@ -483,7 +483,10 @@ func (s *Server) sender(r *http.Request) (passBy, error) {
 		return passBy{}, s.notAPass(r)
 	}
 	a := p.Address
-	st, _, ok, err := s.standingOf(r, a)
+	st, b, ok, err := s.standingOf(r, a)
+	if err == nil && ok && b != nil && st.State == Active && !carries(p, st) {
+		st, ok, err = s.reread(r, a, p)
+	}
 	switch {
 	case err != nil:
 		return passBy{addr: a}, err
@@ -497,4 +500,45 @@ func (s *Server) sender(r *http.Request) (passBy, error) {
 		return passBy{addr: a}, err
 	}
 	return by, nil
+}
+
+// carries reports whether pass p carries the signing key of st's signer or
+// of its identity, the only two keys it can be taken under (checkPass). It
+// hashes the key the pass names, and checks no signature.
+func carries(p *protocol.Pass, st Standing) bool {
+	return p.CarriesKey(st.Signer) || p.CarriesKey(sha256.Sum256([]byte(st.Key)))
+}
+
+// reread reads sender a's record again, whatever memory holds, for a pass
+// that carries neither key of the record memory holds, which this process
+// has not loaded (standingOf). Under routing by address, a sender's renewal
+// reaches the other processes by the feed, and its first send under the new
+// certificate can come first (ARCHITECTURE.md § The in-process plan, rule 4).
+// Anyone can bring such a pass, so the read is counted under
+// Limits.MissesPerMinute (s.miss): kept unless what it reads carries the
+// pass's key, and given back where the store fails, as a lookup's is (lead).
+// It returns what the read found, which the pass is then judged against.
+func (s *Server) reread(r *http.Request, a protocol.Address, p *protocol.Pass) (Standing, bool, error) {
+	m, err := s.miss(r)
+	if err != nil {
+		return Standing{}, false, err
+	}
+	ctx, cancel := bounded(r.Context())
+	defer cancel()
+	b, err := s.store.Reread(ctx, a)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		m.keep()
+		return Standing{}, false, nil
+	case err != nil:
+		m.release(s.now())
+		return Standing{}, false, err
+	}
+	st, ok, err := b.standing()
+	if err == nil && ok && st.State == Active && carries(p, st) {
+		m.release(s.now())
+	} else {
+		m.keep()
+	}
+	return st, ok, err
 }
