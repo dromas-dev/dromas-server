@@ -350,7 +350,7 @@ other="127.0.0.2:$port"
 if [ "$shards" -eq 2 ]; then
   metric(){ curl -s "http://127.0.0.1:$((port + 2 + $1))/metrics" | awk -v m="$2" -v l="$3" 'index($0, m) == 1 && index($0, l) {s += $NF; n++} END {if (n) print s + 0}'; }   # <shard> <series> <label text> → the sum of its samples (a route's label holds a space)
   for i in 1 2; do
-    mis=$(metric "$i" dromas_server_misrouted_total ""); sent=$(metric "$i" 'dromas_server_requests_total{' 'route="POST /v1/{addr}/messages",status="201"')
+    mis=$(metric "$i" dromas_server_misrouted_total ""); sent=$(metric "$i" 'dromas_server_requests_total{' 'route="POST /v1/{address}/messages",status="201"')
     [ "$mis" = 0 ] && [ "${sent:-0}" -gt 0 ] && ok "shard $i/2: no call misrouted, and $sent sends stored" || bad "shard $i/2: misrouted ${mis:-none}, sends stored ${sent:-none}"
   done
 fi
