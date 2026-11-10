@@ -89,7 +89,7 @@ func serve(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	dev := fs.Bool("dev", false, "keep everything in memory, with no database")
 	listen := fs.String("listen", "127.0.0.1:8080", "comma-separated TCP addresses to listen on, each served alike: a reverse proxy in front spreads its connections across several, and each is one more range of its ephemeral ports")
-	bucket := fs.String("bucket", "", "the S3 bucket that keeps messages' bodies, a directory bucket or a general purpose one, with a lifecycle rule that deletes what is older than the message TTL")
+	bucket := fs.String("bucket", "", "the S3 bucket that keeps messages' bodies, a directory bucket or an unversioned general purpose one, with a lifecycle rule that deletes what is older than the message TTL")
 	bodiesDir := fs.String("bodies-dir", "", "the directory that keeps messages' bodies, in place of --bucket: shared by several processes only on one host or a shared filesystem")
 	sweepEvery := fs.Duration("sweep-interval", 10*time.Minute, "how often the rows past their expiry are deleted, one process at a time, and bodies under --bodies-dir past the message TTL collected (0: never)")
 	sweepGrace := fs.Duration("sweep-grace", time.Hour, "how long past its expiry, by the database's clock, a row is kept before the sweep deletes it")

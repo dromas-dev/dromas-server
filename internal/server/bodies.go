@@ -95,8 +95,8 @@ func (c cancelOnClose) Close() error {
 	return c.ReadCloser.Close()
 }
 
-// s3Bodies keeps bodies in an S3 bucket, a directory bucket or a general
-// purpose one, each call bounded (bound). Orphans go by the bucket's
+// s3Bodies keeps bodies in an S3 bucket, a directory bucket or an unversioned
+// general purpose one, each call bounded (bound). Orphans go by the bucket's
 // lifecycle rule.
 type s3Bodies struct {
 	s3     *s3.Client

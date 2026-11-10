@@ -22,7 +22,7 @@ type Limits struct {
 	MaxWait        time.Duration // the longest a list is held, whatever its wait asks (PROTOCOL.md §11.11) [tunable]
 	MaxLongPolls   int           // long polls this process holds at once, one a mailbox; past it a long poll of a mailbox that holds none is answered 503 (0: none held) [tunable]
 	AccountMaxSize int           // the most an account lifts MaxSize to, so what a send reads first; up to MaxSize, nothing
-	RenewalsPerDay int           // prekey renewals per mailbox, a number a day as SendsPerDay (decided: 5), so no mailbox can fill the mailboxes table's writes (each one WAL and a feed change on every process)
+	RenewalsPerDay int           // prekey renewals per mailbox, a number a day as SendsPerDay (decided: 5), so no mailbox's renewals can fill the mailboxes table's writes (each one WAL and a feed change on every process)
 	RenewalsBurst  int           // per mailbox: the renewals it may make at once, the bucket RenewalsPerDay refills (decided: 5, as its number a day)
 	RetiredKept    int           // retired prekeys a mailbox record keeps for the new-key rule, newest first (decided: 10), so a record stays small
 
