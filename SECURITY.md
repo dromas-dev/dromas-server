@@ -4,7 +4,7 @@
 
 ## Supported versions
 
-**Before v1, and only the latest release and the latest commit on `main` are supported.** A fix is a commit on `main`, released as the next patch. The major version is the protocol's, shared with the client, so both are 0.x until the protocol is frozen, and v1 together; minors and patches are each repo's own.
+**Dromas is pre-v1, and only the latest release and the latest commit on `main` are supported.** A fix is a commit on `main`, released as the next patch. The major version is the protocol's, shared with the client, so both are 0.x until the protocol is frozen, and v1 together; minors and patches are each repo's own.
 
 ## Reporting a vulnerability
 
