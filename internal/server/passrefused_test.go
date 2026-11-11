@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -468,10 +469,10 @@ func TestASendUnderARenewalMemoryHasNotSeenIsTaken(t *testing.T) {
 	r.prekey(2, now.Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(2), r.pass(2)), 200, "")
 	// Memory behind the renewal: the record before it, and no load of the
-	// sender, as on a process the sender's calls do not reach.
-	m.idx.forget(a)
-	m.cache.evict(a)
-	m.cache.fill(before, m.cache.begin(a))
+	// sender, as on a process the sender's calls do not reach. The feed's
+	// echo of the renewal is applied first, so it moves nothing after.
+	settle(t, e)
+	behind(m, a, before)
 	if b, _ := m.Known(a); b == nil || b.Rank != 0 {
 		t.Fatalf("memory is not behind the renewal: %v", b)
 	}
@@ -505,13 +506,152 @@ func TestASendersSecondReadIsCountedAsAMiss(t *testing.T) {
 	r.underCertificates = true
 	r.prekey(2, now.Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(2), r.pass(2)), 200, "")
-	m.idx.forget(a)
-	m.cache.evict(a)
-	m.cache.fill(before, m.cache.begin(a))
+	settle(t, e)
+	behind(m, a, before)
 	send := "/v1/" + to.Address().String() + "/messages"
 	e.want(e.do("POST", send, e.sealTo(to), r.pass(2)), 201, "")
 	r.prekey(3, now.Add(protocol.MaxPrekeyLifetime), nil) // certificate 3, never on record
 	e.want(e.do("POST", send, e.sealTo(to), r.pass(3)), 401, protocol.CodeCertificateSuperseded)
 	var nobody protocol.Address
 	e.limited(e.do("GET", "/v1/"+nobody.String(), nil, ""), protocol.QuotaMisses)
+}
+
+// A send whose sender's re-read is kept out of memory, by a write to the
+// record cache's shard of addresses during the read, is judged by what the
+// read found, never by memory's older copy: here memory shows the sender's
+// certificate 2 revoked, and the read its renewal under certificate 3.
+func TestASendIsJudgedByItsSendersReadEvenWhereMemoryKeepsItOut(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, relaxed())
+	m, ok := e.store.(*Memory)
+	if !ok {
+		t.Skipf("the store is %T, not memory", e.store)
+	}
+	now := e.clock.Now()
+	to := e.mailbox()
+	r := e.raw()
+	r.registerCertified(protocol.MaxPrekeyLifetime) // certificate 2
+	a := r.id.Address()
+	e.want(e.do("PUT", r.path("/revocation"), r.certs(2), ""), 200, "")
+	settle(t, e)
+	revoked, _ := m.Known(a)
+	if l, err := revoked.listed(revoked.Rank); err != nil || !l {
+		t.Fatalf("memory does not show certificate 2 revoked: %v %v", l, err)
+	}
+	r.prekey(3, now.Add(protocol.MaxPrekeyLifetime), nil)
+	e.want(e.do("PUT", r.path("/prekey"), r.upload(3), r.pass(3)), 200, "")
+	settle(t, e)
+	send := "/v1/" + to.Address().String() + "/messages"
+	for _, keptOut := range []bool{false, true} {
+		behind(m, a, revoked)
+		h := readHook(m, a, func(context.Context) error {
+			if keptOut {
+				m.cache.write(sameShard(a), evicted[*Mailbox])
+			}
+			return nil
+		})
+		got := e.do("POST", send, e.sealTo(to), r.pass(3))
+		h.off()
+		if got.status != 201 {
+			t.Errorf("the read kept out of memory: %v; the send under certificate 3: %d %s", keptOut, got.status, got.code())
+		}
+	}
+}
+
+// A caller that ends its send during the re-read of its sender keeps the
+// read's miss, as a lookup's caller does (lead): the read runs apart from the
+// request. Here the backend fails a read whose context has ended, as
+// PostgreSQL's does.
+func TestASendEndedDuringItsSendersReadKeepsItsMiss(t *testing.T) {
+	t.Parallel()
+	l := relaxed()
+	l.MissesPerMinute = 1
+	e := newEnv(t, l)
+	m, ok := e.store.(*Memory)
+	if !ok {
+		t.Skipf("the store is %T, not memory", e.store)
+	}
+	to := e.mailbox()
+	r := e.raw().register(protocol.MaxPrekeyLifetime)
+	a := r.id.Address()
+	r.underCertificates = true
+	r.prekey(5, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil) // certificate 5, never on record
+	settle(t, e)
+	m.idx.forget(a)
+	var end atomic.Pointer[context.CancelFunc]
+	e.setMiddle(func(w http.ResponseWriter, req *http.Request, next http.Handler) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		end.Store(&cancel)
+		next.ServeHTTP(w, req.WithContext(ctx))
+	})
+	// The record cache holds the sender, so the one read of its record is
+	// the re-read.
+	var reads atomic.Int32
+	h := readHook(m, a, func(ctx context.Context) error {
+		reads.Add(1)
+		(*end.Load())() // the caller hangs up
+		return ctx.Err()
+	})
+	e.do("POST", "/v1/"+to.Address().String()+"/messages", e.sealTo(to), r.pass(5))
+	h.off()
+	e.setMiddle(nil)
+	if n := reads.Load(); n != 1 {
+		t.Fatalf("the send read its sender's record %d times, not once", n)
+	}
+	var nobody protocol.Address
+	e.limited(e.do("GET", "/v1/"+nobody.String(), nil, ""), protocol.QuotaMisses)
+}
+
+// settle applies the feed's echoes of what the test wrote: on PostgreSQL it
+// waits for the feed (fed), and in memory it delivers them now, not at the
+// next write (memBackend.deliver).
+func settle(t *testing.T, e *env) {
+	t.Helper()
+	fed(t, e.store)
+	if mb, ok := e.store.(*Memory).backend.(*memBackend); ok {
+		mb.deliver()
+	}
+}
+
+// behind puts memory's copy of address a at b, with a not loaded, as on a
+// process the feed has not brought a's later writes to.
+func behind(m *Memory, a protocol.Address, b *Mailbox) {
+	m.idx.forget(a)
+	m.cache.evict(a)
+	m.cache.fill(b, m.cache.begin(a))
+}
+
+// sameShard is an address in a's shard of the record cache, other than a.
+func sameShard(a protocol.Address) protocol.Address {
+	o := a
+	o[1] ^= 0xff
+	return o
+}
+
+// hookedReads runs hook before each read of address a's record, and fails
+// the read with what hook returns.
+type hookedReads struct {
+	Backend
+	m    *Memory
+	a    protocol.Address
+	hook func(ctx context.Context) error
+}
+
+// readHook puts hook before m's reads of address a's record, until off.
+func readHook(m *Memory, a protocol.Address, hook func(ctx context.Context) error) *hookedReads {
+	h := &hookedReads{Backend: m.backend, m: m, a: a, hook: hook}
+	m.backend = h
+	return h
+}
+
+func (h *hookedReads) off() { h.m.backend = h.Backend }
+
+func (h *hookedReads) ReadAddress(ctx context.Context, a protocol.Address) (*Mailbox, *Revocations, error) {
+	if a == h.a {
+		if err := h.hook(ctx); err != nil {
+			return nil, nil, err
+		}
+	}
+	return h.Backend.ReadAddress(ctx, a)
 }

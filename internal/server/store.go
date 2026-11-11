@@ -614,8 +614,9 @@ type Store interface {
 	// its identity's revocations, or ErrNotFound if neither.
 	Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error)
 	// Reread is Mailbox's read, made whatever memory holds of the address,
-	// for a call that has shown memory to be behind: what it reads brings the
-	// record cache's copy forward, and never back (recCache.fill).
+	// for a call that has shown memory to be behind: it fills the record
+	// cache as Mailbox does, so memory's copy moves forward and never back
+	// (recCache.fill), and a write during the read keeps the fill out.
 	Reread(ctx context.Context, a protocol.Address) (*Mailbox, error)
 	// Known returns what memory holds of an address, with no read: what Mailbox
 	// returns, or nil for an address it holds as missing. ok is false when

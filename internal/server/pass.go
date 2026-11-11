@@ -475,31 +475,33 @@ func (s *Server) owner(r *http.Request, params ...string) (protocol.Address, con
 // sender authenticates a send: the sender is the mailbox the call's pass names
 // (PROTOCOL.md §11.10, step 1).
 // It returns the pass it took too, which the send's write is held to
-// (sendHeld).
-func (s *Server) sender(r *http.Request) (passBy, error) {
+// (sendHeld), and the sender's record where it read that record again
+// (reread), which the send then holds the sender to.
+func (s *Server) sender(r *http.Request) (passBy, *Mailbox, error) {
 	auth, one := authorization(r)
 	p, err := protocol.ParsePass(auth)
 	if !one || err != nil {
-		return passBy{}, s.notAPass(r)
+		return passBy{}, nil, s.notAPass(r)
 	}
 	a := p.Address
 	st, b, ok, err := s.standingOf(r, a)
+	var again *Mailbox
 	if err == nil && ok && b != nil && st.State == Active && !carries(p, st) {
-		st, ok, err = s.reread(r, a, p)
+		again, st, ok, err = s.reread(r, a, p)
 	}
 	switch {
 	case err != nil:
-		return passBy{addr: a}, err
+		return passBy{addr: a}, nil, err
 	case st.State == Revoked:
-		return passBy{addr: a}, fail(protocol.CodeSenderRevoked, "your mailbox is revoked: make a new one, dromas init", "the sending mailbox is revoked")
+		return passBy{addr: a}, nil, fail(protocol.CodeSenderRevoked, "your mailbox is revoked: make a new one, dromas init", "the sending mailbox is revoked")
 	case !ok, st.State != Active:
-		return passBy{addr: a}, fail(protocol.CodeSenderNotRegistered, "register your own mailbox first: dromas init", "the mailbox the pass names is not registered")
+		return passBy{addr: a}, nil, fail(protocol.CodeSenderNotRegistered, "register your own mailbox first: dromas init", "the mailbox the pass names is not registered")
 	}
 	by, err := s.checkPassBy(r, a, st.Key, st.Signer, st.Rank, st.Listed, p)
 	if err != nil {
-		return passBy{addr: a}, err
+		return passBy{addr: a}, nil, err
 	}
-	return by, nil
+	return by, again, nil
 }
 
 // carries reports whether pass p carries the signing key of st's signer or
@@ -516,23 +518,26 @@ func carries(p *protocol.Pass, st Standing) bool {
 // certificate can come first (ARCHITECTURE.md § The in-process plan, rule 4).
 // Anyone can bring such a pass, so the read is counted under
 // Limits.MissesPerMinute (s.miss): kept unless what it reads carries the
-// pass's key, and given back where the store fails, as a lookup's is (lead).
-// It returns what the read found, which the pass is then judged against.
-func (s *Server) reread(r *http.Request, a protocol.Address, p *protocol.Pass) (Standing, bool, error) {
+// pass's key, and given back where the store fails. As a lookup's read
+// (lead), it runs apart from its caller's request, so a caller that hangs up
+// keeps the miss.
+// It returns the record it read and its standing, which the pass is then
+// judged against.
+func (s *Server) reread(r *http.Request, a protocol.Address, p *protocol.Pass) (*Mailbox, Standing, bool, error) {
 	m, err := s.miss(r)
 	if err != nil {
-		return Standing{}, false, err
+		return nil, Standing{}, false, err
 	}
-	ctx, cancel := bounded(r.Context())
+	ctx, cancel := bounded(context.WithoutCancel(r.Context()))
 	defer cancel()
 	b, err := s.store.Reread(ctx, a)
 	switch {
 	case errors.Is(err, ErrNotFound):
 		m.keep()
-		return Standing{}, false, nil
+		return nil, Standing{}, false, nil
 	case err != nil:
 		m.release(s.now())
-		return Standing{}, false, err
+		return nil, Standing{}, false, err
 	}
 	st, ok, err := b.standing()
 	if err == nil && ok && st.State == Active && carries(p, st) {
@@ -540,5 +545,5 @@ func (s *Server) reread(r *http.Request, a protocol.Address, p *protocol.Pass) (
 	} else {
 		m.keep()
 	}
-	return st, ok, err
+	return b, st, ok, err
 }

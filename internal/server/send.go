@@ -27,7 +27,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 	if p := s.sendIPs.take(ctx, s.clientIP(r), s.now, ""); p != nil {
 		return p
 	}
-	by, err := s.sender(r)
+	by, again, err := s.sender(r)
 	if err != nil {
 		return err
 	}
@@ -44,10 +44,13 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 	// an address: it is not a read lookup would count or refuse.
 	// It is held to what the pass's check held the mailbox to (sender), since
 	// the mailbox can be revoked, or its certificate revoked, between the two
-	// reads.
-	sender, err := s.mailbox(ctx, from)
-	if err != nil {
-		return err
+	// reads. Where sender read the record again, that read is the record:
+	// memory can keep an older copy (Store.Reread).
+	sender := again
+	if sender == nil {
+		if sender, err = s.mailbox(ctx, from); err != nil {
+			return err
+		}
 	}
 	switch {
 	case sender != nil && sender.State == Revoked:

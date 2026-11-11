@@ -235,6 +235,8 @@ func TestAWriteDuringAReadKeepsItsFillOut(t *testing.T) {
 	}{
 		{"a read of the address", "ReadAddress", func() error { _, err := s.Mailbox(ctx, a); return err },
 			func() { s.applyImage(newer) }, func() bool { _, ok := s.cache.get(a); return ok }},
+		{"a read again of the address", "ReadAddress", func() error { _, err := s.Reread(ctx, a); return err },
+			func() { s.applyImage(newer) }, func() bool { _, ok := s.cache.get(a); return ok }},
 		{"the mailbox's load", "ReadAddress", func() error { s.idx.forget(a); _, err := s.Count(ctx, a); return err },
 			func() { s.applyImage(newer) }, func() bool { _, ok := s.cache.get(a); return ok }},
 		{"an account's read", "Account", func() error { _, err := s.Account(ctx, acc.ID); return err },
