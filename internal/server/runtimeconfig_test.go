@@ -99,17 +99,17 @@ func (r *reloading) run(t *testing.T, f func(t *testing.T, hup chan os.Signal)) 
 // has passed, the policy is the one read at start.
 func TestTheVersionPolicyIsReloadedOnASignal(t *testing.T) {
 	t.Parallel()
-	r := newReloading(t, policyText("1.2", "1.5.0"))
+	r := newReloading(t, policyText("1.2", "1.5"))
 	r.run(t, func(t *testing.T, hup chan os.Signal) {
-		r.write(t, policyText("1.2", "1.6.0"))
+		r.write(t, policyText("1.2", "1.6"))
 		time.Sleep(ReloadEvery - time.Second)
 		synctest.Wait()
-		if r.latest() != "1.5.0" {
+		if r.latest() != "1.5" {
 			t.Fatalf("before the signal: %s", r.latest())
 		}
 		hup <- syscall.SIGHUP
 		synctest.Wait()
-		if ok, failed := r.reloads(t); r.latest() != "1.6.0" || ok != 1 || failed != 0 {
+		if ok, failed := r.reloads(t); r.latest() != "1.6" || ok != 1 || failed != 0 {
 			t.Errorf("after the signal: latest %s, %v ok, %v failed", r.latest(), ok, failed)
 		}
 		hup <- syscall.SIGHUP // the same bytes
@@ -131,7 +131,7 @@ func TestTheVersionPolicyIsReloadedOnASignal(t *testing.T) {
 // no test sleeps a real minute.
 func TestTheVersionPolicyIsReadAgainEachMinute(t *testing.T) {
 	t.Parallel()
-	r := newReloading(t, policyText("1.2", "1.5.0"))
+	r := newReloading(t, policyText("1.2", "1.5"))
 	info, err := os.Stat(r.path)
 	if err != nil {
 		t.Fatal(err)
@@ -142,24 +142,24 @@ func TestTheVersionPolicyIsReadAgainEachMinute(t *testing.T) {
 		if ok, failed := r.reloads(t); ok != 0 || failed != 0 {
 			t.Fatalf("a minute on, the file unchanged: %v ok, %v failed, want no reload", ok, failed)
 		}
-		r.rename(t, policyText("1.2", "1.6.0"))
+		r.rename(t, policyText("1.2", "1.6"))
 		time.Sleep(ReloadEvery - time.Second)
 		synctest.Wait()
-		if r.latest() != "1.5.0" {
+		if r.latest() != "1.5" {
 			t.Fatalf("before the minute: %s", r.latest())
 		}
 		time.Sleep(time.Second)
 		synctest.Wait()
-		if ok, _ := r.reloads(t); r.latest() != "1.6.0" || ok != 1 {
+		if ok, _ := r.reloads(t); r.latest() != "1.6" || ok != 1 {
 			t.Fatalf("a minute after a rename: latest %s, %v ok", r.latest(), ok)
 		}
-		r.write(t, policyText("1.2", "1.7.0")) // the same size
+		r.write(t, policyText("1.2", "1.7")) // the same size
 		if err := os.Chtimes(r.path, info.ModTime(), info.ModTime()); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(ReloadEvery)
 		synctest.Wait()
-		if ok, _ := r.reloads(t); r.latest() != "1.7.0" || ok != 2 {
+		if ok, _ := r.reloads(t); r.latest() != "1.7" || ok != 2 {
 			t.Errorf("a minute after a rewrite of the same size, its time set back: latest %s, %v ok", r.latest(), ok)
 		}
 	})
@@ -173,12 +173,12 @@ func TestTheVersionPolicyIsReadAgainEachMinute(t *testing.T) {
 // force at the next minute.
 func TestAFailedReloadKeepsTheVersionPolicy(t *testing.T) {
 	t.Parallel()
-	r := newReloading(t, policyText("1.2", "1.5.0"))
+	r := newReloading(t, policyText("1.2", "1.5"))
 	r.run(t, func(t *testing.T, hup chan os.Signal) {
 		r.write(t, `{"min_version":"zz-marker"}`)
 		hup <- syscall.SIGHUP
 		synctest.Wait()
-		if ok, failed := r.reloads(t); r.latest() != "1.5.0" || ok != 0 || failed != 1 {
+		if ok, failed := r.reloads(t); r.latest() != "1.5" || ok != 0 || failed != 1 {
 			t.Fatalf("a bad file on a signal: latest %s, %v ok, %v failed", r.latest(), ok, failed)
 		}
 		time.Sleep(ReloadEvery)
@@ -186,10 +186,10 @@ func TestAFailedReloadKeepsTheVersionPolicy(t *testing.T) {
 		if _, failed := r.reloads(t); failed != 1 {
 			t.Errorf("the same bad bytes a minute on: %v failed, want no reload", failed)
 		}
-		r.write(t, policyText("1.2", "1.6.0")+strings.Repeat(" ", MaxVersionPolicy))
+		r.write(t, policyText("1.2", "1.6")+strings.Repeat(" ", MaxVersionPolicy))
 		time.Sleep(ReloadEvery)
 		synctest.Wait()
-		if _, failed := r.reloads(t); r.latest() != "1.5.0" || failed != 2 {
+		if _, failed := r.reloads(t); r.latest() != "1.5" || failed != 2 {
 			t.Errorf("a file past the bound: latest %s, %v failed", r.latest(), failed)
 		}
 		if err := os.Remove(r.path); err != nil {
@@ -197,13 +197,13 @@ func TestAFailedReloadKeepsTheVersionPolicy(t *testing.T) {
 		}
 		time.Sleep(2 * ReloadEvery)
 		synctest.Wait()
-		if _, failed := r.reloads(t); r.latest() != "1.5.0" || failed != 4 {
+		if _, failed := r.reloads(t); r.latest() != "1.5" || failed != 4 {
 			t.Errorf("a file gone two minutes: latest %s, %v failed", r.latest(), failed)
 		}
-		r.rename(t, policyText("1.2", "1.6.0"))
+		r.rename(t, policyText("1.2", "1.6"))
 		time.Sleep(ReloadEvery)
 		synctest.Wait()
-		if ok, _ := r.reloads(t); r.latest() != "1.6.0" || ok != 1 {
+		if ok, _ := r.reloads(t); r.latest() != "1.6" || ok != 1 {
 			t.Errorf("a good file after: latest %s, %v ok", r.latest(), ok)
 		}
 	})
@@ -225,7 +225,7 @@ func TestARequestMeetsTheVersionPolicyInForce(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "version-policy.json")
-	if err := os.WriteFile(path, []byte(policyText("1.2", "1.5.0")), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(policyText("1.2", "1.5")), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	d, read, err := ReadVersionPolicy(path, relaxed())
@@ -235,7 +235,7 @@ func TestARequestMeetsTheVersionPolicyInForce(t *testing.T) {
 	e := newEnv(t, relaxed(), func(c *Config) { c.Policy = d })
 	nobody := "/v1/" + "d_" + strings.Repeat("ab", 32)
 	e.want(e.doWith("GET", nobody, nil, "", protocol.VersionHeader, "1.5.0"), http.StatusNotFound, protocol.CodeMailboxNotFound)
-	if err := os.WriteFile(path, []byte(policyText("1.6", "1.6.0")), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(policyText("1.6", "1.6")), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	e.server.VersionPolicy(path, read).reload(false)
@@ -245,7 +245,7 @@ func TestARequestMeetsTheVersionPolicyInForce(t *testing.T) {
 		t.Errorf("min_version %q, want 1.6", got.problem().MinVersion)
 	}
 	var doc protocol.ServerDocument
-	if err := protocol.Unmarshal(e.do("GET", protocol.DocumentPath, nil, "").body, &doc); err != nil || doc.MinVersion != "1.6" || doc.LatestVersion != "1.6.0" {
+	if err := protocol.Unmarshal(e.do("GET", protocol.DocumentPath, nil, "").body, &doc); err != nil || doc.MinVersion != "1.6" || doc.LatestVersion != "1.6" {
 		t.Errorf("the document: %+v, %v", doc, err)
 	}
 }
@@ -256,7 +256,7 @@ func TestARequestMeetsTheVersionPolicyInForce(t *testing.T) {
 func TestTheLargestPolicyFits(t *testing.T) {
 	t.Parallel()
 	n := "18446744073709551615"
-	v := n + "." + n + "." + n
+	v := n + "." + n
 	d := versionPolicy{MinVersion: v, LatestVersion: v}
 	for range protocol.MaxDeprecations {
 		d.Deprecations = append(d.Deprecations, protocol.Scheduled{Version: v, At: "2027-01-01T00:00:00Z"})

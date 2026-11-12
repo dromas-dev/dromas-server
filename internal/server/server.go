@@ -553,9 +553,16 @@ func apiHeaders(h http.Header) {
 // time is nearly always a clock that is off.
 func (s *Server) dated(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Date", s.now().UTC().Format(http.TimeFormat))
+		s.date(w)
 		h.ServeHTTP(w, r)
 	})
+}
+
+// date sets the answer's Date to the server's clock now: at the request's
+// arrival (dated), and again when a held list wakes, so an answer made after a
+// hold says what the clock read when its checks were made.
+func (s *Server) date(w http.ResponseWriter) {
+	w.Header().Set("Date", s.now().UTC().Format(http.TimeFormat))
 }
 
 // whenReady answers 503 while the store cannot show that its memory is

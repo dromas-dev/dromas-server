@@ -212,6 +212,7 @@ again:
 				return r.Context().Err()
 			}
 			t.Stop()
+			s.date(w) // what is answered now is checked now
 			// The pass is checked again at each wake, a lookup in memory, so
 			// a hold answers nothing a fresh call with its pass would not be
 			// answered: a renewal, a revocation or the pass's end since it

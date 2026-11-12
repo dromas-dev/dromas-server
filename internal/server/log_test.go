@@ -199,9 +199,9 @@ func TestTheAccessLogWritesWhatTheRoutersMatched(t *testing.T) {
 }
 
 // AWSLogger writes the AWS SDK's own lines through the redaction
-// (dromas-dev/dromas-server#72). That serve and account load their
-// configuration with it is held in cmd/dromas-server, where they run
-// (TestServeAndAccountWriteTheSDKsLinesRedacted, #81).
+// (dromas-dev/dromas-server#72). That serve loads its
+// configuration with it is held in cmd/dromas-server, where it runs
+// (TestServeWritesTheSDKsLinesRedacted, #81).
 func TestTheAWSSDKsLinesAreRedacted(t *testing.T) {
 	t.Parallel()
 	var logged bytes.Buffer

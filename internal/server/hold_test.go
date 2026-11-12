@@ -67,6 +67,24 @@ func TestALongPollIsAnsweredWhenAMessageArrives(t *testing.T) {
 	}
 }
 
+// A long poll's answer is dated when it is made, by the clock its checks at
+// the wake read, not when the request arrived (PROTOCOL.md §11.2).
+func TestALongPollsAnswerIsDatedWhenItIsMade(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, relaxed())
+	from, to, tag := emptyTag(e)
+	arrived := e.clock.Now().UTC().Format(http.TimeFormat)
+	c := longPoll(e, to, tag, "wait=60")
+	time.Sleep(300 * time.Millisecond)
+	e.clock.Add(3 * time.Minute)
+	e.want(e.do("POST", to.path("/messages"), to.sealed(1, ciphertextTo(t, to)), from.pass(1)), http.StatusCreated, "")
+	got := <-c
+	e.want(got.r, http.StatusOK, "")
+	if d := got.r.header.Get("Date"); d != e.clock.Now().UTC().Format(http.TimeFormat) || d == arrived {
+		t.Fatalf("the long poll's answer is dated %q: the request arrived at %q, and it was answered at %q", d, arrived, e.clock.Now().UTC().Format(http.TimeFormat))
+	}
+}
+
 // With nothing new, a long poll is answered 304 once max_wait passes,
 // whatever longer wait it asked; it is one poll.
 func TestALongPollWithNothingNewIs304AtMaxWait(t *testing.T) {
