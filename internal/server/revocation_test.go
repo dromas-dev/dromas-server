@@ -86,7 +86,6 @@ func TestRevocation(t *testing.T) {
 		"B's whole record":                          {ofB, protocol.CodeIdentityMismatch},
 		"no signature":                              {[]byte(`{"identity":"` + string(mustJSONBytes(t, docA)) + `"}`), protocol.CodeInvalidRequest},
 		"no document":                               {[]byte(`{"revocation_signature":"eA=="}`), protocol.CodeInvalidRequest},
-		"a member the body does not have":           {[]byte(`{"identity":"eA==","revocation_signature":"eA==","reason":"lost"}`), protocol.CodeInvalidRequest},
 		"not JSON":                                  {[]byte(`revoke`), protocol.CodeInvalidRequest},
 		"a name in another case":                    {bytes.Replace(recJSON, []byte(`"revocation_signature"`), []byte(`"Revocation_Signature"`), 1), protocol.CodeInvalidRequest},
 		"a name twice":                              {bytes.Replace(recJSON, []byte(`{`), []byte(`{"revocation_signature":"eA==",`), 1), protocol.CodeInvalidRequest},
@@ -246,6 +245,63 @@ func TestARevocationIsKeptWithNoMailbox(t *testing.T) {
 	}
 	q.prekey(1, now.Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", q.path(""), q.registration(1), q.pass(1)), 410, protocol.CodeMailboxRevoked)
+}
+
+// A revocation record is read as a client reads one (PROTOCOL.md §3.3,
+// §11.15): a member this server does not know is ignored and not kept, and
+// each part it knows is still verified or refused.
+func TestARevocationRecordWithAMemberThisServerDoesNotKnowIsKept(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, relaxed())
+	with := func(rec protocol.Revocations, name, value string) json.RawMessage {
+		t.Helper()
+		var members map[string]json.RawMessage
+		j, err := json.Marshal(rec)
+		if err == nil {
+			err = json.Unmarshal(j, &members)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		members[name] = json.RawMessage(value)
+		if j, err = json.Marshal(members); err != nil {
+			t.Fatal(err)
+		}
+		return j
+	}
+
+	// A revocation of certificates: kept, and served without the member.
+	r := e.raw()
+	floor := r.certs(3)
+	e.want(e.do("PUT", r.path("/revocation"), with(floor, "later_statement", `"x"`), ""), 200, "")
+	got := e.do("GET", r.path("/revocation"), nil, "")
+	e.want(got, 200, "")
+	var members map[string]json.RawMessage
+	var served protocol.Revocations
+	if err := json.Unmarshal(got.body, &members); err != nil || members["later_statement"] != nil {
+		t.Fatalf("the record is served with what it ignored: %s", got.body)
+	}
+	if err := json.Unmarshal(got.body, &served); err != nil || !bytes.Equal(served.RevokedCertificates, floor.RevokedCertificates) {
+		t.Fatalf("the revocation of certificates beside an unknown member is not kept: %s", got.body)
+	}
+
+	// A revocation of the address: kept.
+	q := e.raw()
+	rev, err := protocol.SignRevocation(q.signer, q.id.Address())
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.want(e.do("PUT", q.path("/revocation"), with(protocol.Revocations{Identity: q.id.Document(), Revocation: rev}, "later_statement", `{"a":1}`), ""), 201, "")
+	e.want(e.do("GET", q.path(""), nil, ""), 410, protocol.CodeMailboxRevoked)
+
+	// What is known is still refused: a signature that does not verify, and
+	// a type that is not a record's.
+	x := e.raw()
+	bad := x.certs(2)
+	bad.RevokedCertificatesSignature = append(protocol.Bytes(nil), floor.RevokedCertificatesSignature...)
+	e.want(e.do("PUT", x.path("/revocation"), with(bad, "later_statement", `"x"`), ""), 400, protocol.CodeInvalidRevocation)
+	e.want(e.do("PUT", x.path("/revocation"), with(x.certs(2), "type", `"dromas-something-else"`), ""), 400, protocol.CodeInvalidRequest)
+	e.want(e.do("GET", x.path("/revocation"), nil, ""), 404, protocol.CodeRevocationNotFound)
 }
 
 // Keeping a revocation for an address a server holds nothing of is keeping

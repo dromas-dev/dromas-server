@@ -634,7 +634,7 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) error {
 		return revokedWith(b)
 	}
 	var req protocol.Revocations
-	if err := decodeJSON(data, &req); err != nil {
+	if err := decodeRecord(data, &req); err != nil {
 		return err
 	}
 	if err := required("identity", req.Identity); err != nil {

@@ -920,7 +920,21 @@ func bodyTimedOut() *problem {
 // matched exactly, nested at most protocol.MaxDepth deep, and no member v
 // does not name.
 func decodeJSON(data []byte, v any) error {
-	switch err := protocol.UnmarshalRequest(data, v); {
+	return decoded(protocol.UnmarshalRequest(data, v))
+}
+
+// decodeRecord is decodeJSON for a revocation record, the one body whose
+// unknown members are ignored, as a client ignores them (protocol.Unmarshal,
+// PROTOCOL.md §3.3, §11.15): a record made in advance may carry a statement
+// this server does not know, and refusing it would refuse the revocation
+// beside it. Each part that is known is still verified or refused, and nothing
+// that is ignored is kept.
+func decodeRecord(data []byte, v any) error {
+	return decoded(protocol.Unmarshal(data, v))
+}
+
+func decoded(err error) error {
+	switch {
 	case err == nil:
 		return nil
 	case errors.Is(err, protocol.ErrNotBase64):
