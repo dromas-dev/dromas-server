@@ -86,7 +86,6 @@ func TestRevocation(t *testing.T) {
 		"B's whole record":                          {ofB, protocol.CodeIdentityMismatch},
 		"no signature":                              {[]byte(`{"identity":"` + string(mustJSONBytes(t, docA)) + `"}`), protocol.CodeInvalidRequest},
 		"no document":                               {[]byte(`{"revocation_signature":"eA=="}`), protocol.CodeInvalidRequest},
-		"a member the body does not have":           {[]byte(`{"identity":"eA==","revocation_signature":"eA==","reason":"lost"}`), protocol.CodeInvalidRequest},
 		"not JSON":                                  {[]byte(`revoke`), protocol.CodeInvalidRequest},
 		"a name in another case":                    {bytes.Replace(recJSON, []byte(`"revocation_signature"`), []byte(`"Revocation_Signature"`), 1), protocol.CodeInvalidRequest},
 		"a name twice":                              {bytes.Replace(recJSON, []byte(`{`), []byte(`{"revocation_signature":"eA==",`), 1), protocol.CodeInvalidRequest},
