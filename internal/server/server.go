@@ -531,18 +531,25 @@ func notStored(h http.Handler) http.Handler {
 	})
 }
 
-// apiHeaders are what a browser is told of an API answer, which is never a
-// page: render nothing it names and frame it nowhere (a CSP of
+// apiHeaderFields are what a browser is told of an API answer, which is never
+// a page: render nothing it names and frame it nowhere (a CSP of
 // default-src 'none', frame-ancestors 'none'), never sniff its type, send
 // no Referer from it, and let no other origin load or open it
 // (Cross-Origin-Resource-Policy, -Opener-Policy). A client of the API reads
-// none of them.
+// none of them. A 304 carries none of them (notModified.write).
+var apiHeaderFields = [...][2]string{
+	{"Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'"},
+	{"X-Content-Type-Options", "nosniff"},
+	{"Referrer-Policy", "no-referrer"},
+	{"Cross-Origin-Resource-Policy", "same-origin"},
+	{"Cross-Origin-Opener-Policy", "same-origin"},
+}
+
+// apiHeaders sets apiHeaderFields.
 func apiHeaders(h http.Header) {
-	h.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
-	h.Set("X-Content-Type-Options", "nosniff")
-	h.Set("Referrer-Policy", "no-referrer")
-	h.Set("Cross-Origin-Resource-Policy", "same-origin")
-	h.Set("Cross-Origin-Opener-Policy", "same-origin")
+	for _, f := range apiHeaderFields {
+		h.Set(f[0], f[1])
+	}
 }
 
 // dated dates every answer by the server's own clock, the one its checks

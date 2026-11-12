@@ -10,17 +10,18 @@ import (
 	"github.com/dromas-dev/dromas-client/protocol"
 )
 
-// Every answer under /v1/, a refusal and a 304 among them, carries the
-// headers that tell a browser it is no page (apiHeaders).
+// Every answer under /v1/ but a 304, a refusal among them, carries the
+// headers that tell a browser it is no page (apiHeaders); a 304, a list's or
+// a mailbox's read's, carries none of them.
 func TestEveryAPIAnswerTellsABrowserItIsNoPage(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	to := e.raw().register(protocol.MaxPrekeyLifetime)
 	list := e.do("GET", to.path("/messages"), nil, to.pass(1))
+	read := e.do("GET", to.path(""), nil, "")
 	answers := map[string]reply{
-		"a mailbox's read":    e.do("GET", to.path(""), nil, ""),
+		"a mailbox's read":    read,
 		"a list":              list,
-		"a list's 304":        e.doWith("GET", to.path("/messages"), nil, to.pass(1), "If-None-Match", list.header.Get("ETag")),
 		"a list with no pass": e.do("GET", to.path("/messages"), nil, ""),
 		"not an address":      e.do("GET", "/v1/nope", nil, ""),
 	}
@@ -36,6 +37,21 @@ func TestEveryAPIAnswerTellsABrowserItIsNoPage(t *testing.T) {
 			if got := r.header.Get(h); got != v {
 				t.Errorf("%s (%d): %s is %q, want %q", name, r.status, h, got, v)
 			}
+		}
+	}
+	notModified := map[string]reply{
+		"a list's 304":           e.doWith("GET", to.path("/messages"), nil, to.pass(1), "If-None-Match", list.header.Get("ETag")),
+		"a mailbox's read's 304": e.doWith("GET", to.path(""), nil, "", "If-None-Match", "*"),
+	}
+	for name, r := range notModified {
+		e.want(r, http.StatusNotModified, "")
+		for _, f := range apiHeaderFields {
+			if got := r.header.Values(f[0]); len(got) > 0 {
+				t.Errorf("%s: carries %s %q", name, f[0], got)
+			}
+		}
+		if r.header.Get("Cache-Control") != "no-store" || r.header.Get("Date") == "" {
+			t.Errorf("%s: lacks what RFC 9110 §15.4.5 has a 304 carry: %v", name, r.header)
 		}
 	}
 }
