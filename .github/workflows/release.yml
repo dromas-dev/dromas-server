@@ -53,10 +53,12 @@ jobs:
         # Checkout can leave the tag a lightweight ref to its commit
         # (actions/checkout#290), so it is fetched again as pushed. A tag that
         # is lightweight, unsigned, or signed by a key the file does not name
-        # for git fails here.
+        # for git fails here, and so does a signed tag object whose own name
+        # is not the ref's: verify-tag checks the signature, not the name.
         run: |
           git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
           git -c gpg.ssh.allowedSignersFile=.github/allowed_signers verify-tag "$TAG"
+          test "$(git -c gpg.ssh.allowedSignersFile=.github/allowed_signers verify-tag --format='%(tag)' "$TAG" 2>/dev/null)" = "$TAG" || { echo "the tag object is named $(git cat-file tag "$TAG" | sed -n 's/^tag //p'), not $TAG" >&2; exit 1; }
 
   ci:
     needs: tag
