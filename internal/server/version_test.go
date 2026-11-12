@@ -19,7 +19,7 @@ import (
 )
 
 // versionsEnv is a server whose version policy, at its clock's start N, is:
-// a floor of 1.2; 1.5.1 the latest version; every version below 1.4
+// a floor of 1.2; 1.5 the latest version; every version below 1.4
 // deprecated from N less a day, 1.3.x from N less two days and 1.4.x from N
 // less a day; 1.3.x sunset at N plus an hour and every version below 1.4 at
 // N plus two hours. So 1.3.x carries the earlier of each pair, 1.2.x the
@@ -32,7 +32,7 @@ func versionsEnv(t *testing.T, l Limits, with ...func(*Config)) (*env, time.Time
 		start = c.Now()
 		c.Policy = protocol.ServerDocument{
 			MinVersion:    "1.2",
-			LatestVersion: "1.5.1",
+			LatestVersion: "1.5",
 			Deprecations: []protocol.Scheduled{
 				{Below: "1.4", At: formatTime(start.Add(-24 * time.Hour))},
 				{Version: "1.3", At: formatTime(start.Add(-48 * time.Hour))},
@@ -325,7 +325,7 @@ func TestTheDocumentIsThePolicy(t *testing.T) {
 		want := e.server.policy.Load()
 		wj, _ := json.Marshal(want)
 		dj, _ := json.Marshal(d)
-		if string(wj) != string(dj) || d.MinVersion != "1.2" || d.LatestVersion != "1.5.1" || len(d.Deprecations) != 3 || len(d.Sunsets) != 2 || len(d.Capabilities) != 0 {
+		if string(wj) != string(dj) || d.MinVersion != "1.2" || d.LatestVersion != "1.5" || len(d.Deprecations) != 3 || len(d.Sunsets) != 2 || len(d.Capabilities) != 0 {
 			t.Errorf("version %q: the document %s, want %s", v, dj, wj)
 		}
 		h := e.head(protocol.DocumentPath, "", protocol.VersionHeader, v)

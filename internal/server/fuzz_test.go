@@ -433,7 +433,7 @@ func FuzzParseLimits(f *testing.F) {
 func FuzzParseVersionPolicy(f *testing.F) {
 	l := DefaultLimits()
 	for _, s := range []string{
-		policyText("1.2", "1.5"), `{}`, `{"min_version":"1.2"}`, `{"latest_version":"18446744073709551615.0.1"}`,
+		policyText("1.2", "1.5"), `{}`, `{"min_version":"1.2"}`, `{"latest_version":"18446744073709551615.0"}`,
 		`{"deprecations":[{"below":"1.4","effective_at":"2027-01-01T00:00:00Z"}],"sunsets":[{"below":"1.1","effective_at":"2026-12-01T00:00:00Z"}]}`,
 		`{"sunsets":[{"below":"1.1","effective_at":"2026-12-01T00:00:00.5Z"}]}`, `{"deprecations":[{"below":"1.4"}]}`,
 		`{"min_version":"1.2","capabilities":[]}`, `{"max_certificate_lifetime_seconds":3891600}`, `{"min_version":"01.2"}`,

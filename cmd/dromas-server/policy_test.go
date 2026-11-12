@@ -61,7 +61,7 @@ func TestServeRefusesAVersionPolicyThatBreaksItsForm(t *testing.T) {
 	if err := refused(t, "--version-policy", filepath.Join(dir, "missing.json")); err == nil || !strings.HasPrefix(err.Error(), "--version-policy: ") {
 		t.Errorf("a missing file: %v", err)
 	}
-	good := file("good.json", `{"min_version":"1.2","latest_version":"1.5.1","deprecations":[{"below":"1.4","effective_at":"`+at+`"}],"sunsets":[{"below":"1.4","effective_at":"`+later+`"}]}`)
+	good := file("good.json", `{"min_version":"1.2","latest_version":"1.5","deprecations":[{"below":"1.4","effective_at":"`+at+`"}],"sunsets":[{"below":"1.4","effective_at":"`+later+`"}]}`)
 	if err := refused(t, "--version-policy", good, "--listen", "not an address"); err == nil || strings.HasPrefix(err.Error(), "--version-policy") {
 		t.Errorf("control, a file of its form: %v, want the refusal of --listen", err)
 	}

@@ -293,7 +293,7 @@ func TestAReloadedLimitsFileIsInForce(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		e := newEnv(t, l, func(c *Config) { c.Policy = protocol.ServerDocument{LatestVersion: "1.5.0"} })
+		e := newEnv(t, l, func(c *Config) { c.Policy = protocol.ServerDocument{LatestVersion: "1.5"} })
 		call := e.caller()
 		register := func() reply {
 			t.Helper()
@@ -315,7 +315,7 @@ func TestAReloadedLimitsFileIsInForce(t *testing.T) {
 		}
 		e.want(register(), http.StatusCreated, "")
 		var doc protocol.ServerDocument
-		if err := protocol.Unmarshal(e.do("GET", protocol.DocumentPath, nil, "").body, &doc); err != nil || doc.MaxCertificateLifetime != uint64(500*time.Hour/time.Second) || doc.LatestVersion != "1.5.0" {
+		if err := protocol.Unmarshal(e.do("GET", protocol.DocumentPath, nil, "").body, &doc); err != nil || doc.MaxCertificateLifetime != uint64(500*time.Hour/time.Second) || doc.LatestVersion != "1.5" {
 			t.Fatalf("the document after the reload: %+v, %v", doc, err)
 		}
 	}
