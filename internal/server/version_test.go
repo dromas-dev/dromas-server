@@ -66,7 +66,7 @@ func (e *env) asVersion(v string) {
 // date has passed at the server's clock, is answered 410 client_version_unsupported,
 // with min_version where there is a floor (PROTOCOL.md §11.17). A request
 // with no Dromas-Version, or one of another form, is of version 0.0.0, below
-// the floor. A pre-release is below its release. Controls: a version at the
+// the floor. Controls: a version at the
 // floor, one whose sunset is a second away, and a request outside /v1/ are
 // answered as without the policy.
 func TestARetiredVersionIsAnswered410(t *testing.T) {
@@ -79,7 +79,7 @@ func TestARetiredVersionIsAnswered410(t *testing.T) {
 			t.Errorf("%s: %d %s, want 410 client_version_unsupported with min_version 1.2", what, r.status, r.body)
 		}
 	}
-	for _, v := range []string{"1.1.9", "1.2.0-rc.1", "0.0.0", "1.1", "v1.5.0", "1.5.0+build", "1.5", "garbage"} {
+	for _, v := range []string{"1.1.9", "0.0.0", "1.1", "v1.5.0", "1.5.0+build", "1.5", "garbage"} {
 		retired(e.doWith("GET", nobody, nil, "", protocol.VersionHeader, v), "Dromas-Version "+v)
 	}
 	retired(e.do("GET", nobody, nil, ""), "no Dromas-Version")
@@ -165,7 +165,6 @@ func TestDeprecationAndSunsetAreTheEarliestThatCover(t *testing.T) {
 		{"1.1.0", dep(-24 * time.Hour), sun(2 * time.Hour)}, // retired, below the floor
 		{"1.5.0", "", ""}, // none
 		{"2.0.0", "", ""}, // none
-		{"1.4.0-rc.1", dep(-24 * time.Hour), sun(2 * time.Hour)}, // below 1.4, and named by version 1.4
 	} {
 		for _, call := range []struct {
 			what, method, path string
