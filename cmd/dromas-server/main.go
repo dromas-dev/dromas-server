@@ -71,6 +71,8 @@ func main() {
 		err = account(os.Args[2], os.Args[3:])
 	case len(os.Args) >= 3 && os.Args[1] == "limits":
 		err = limits(os.Args[2], os.Args[3:])
+	case len(os.Args) >= 2 && os.Args[1] == "healthcheck":
+		err = healthcheck(os.Args[2:])
 	default:
 		fmt.Fprintln(os.Stderr, "usage: dromas-server serve ((--bucket B | --data-dir DIR) --names NAMES | --dev) [--listen addr] [--limits FILE] [options]")
 		fmt.Fprintln(os.Stderr, "       dromas-server migrate")
@@ -78,6 +80,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "       dromas-server limits default")
 		fmt.Fprintln(os.Stderr, "       dromas-server limits clear --socket PATH --ip ADDR")
 		fmt.Fprintln(os.Stderr, "       dromas-server limits top --socket PATH --limit NAME [--count N]")
+		fmt.Fprintln(os.Stderr, "       dromas-server healthcheck [--url URL]")
 		os.Exit(2)
 	}
 	if err != nil {
