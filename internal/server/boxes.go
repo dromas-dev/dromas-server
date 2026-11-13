@@ -517,7 +517,9 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 // It takes no pass: it is public, and the gate counts it by the address it
 // comes from, whatever Authorization it carries, which nothing here reads
 // (PROTOCOL.md §11.8, §11.5; dromas-dev/dromas-client#352). It is the one
-// answer of the API that is gzipped, to a request that takes it.
+// answer of the API that is gzipped, to a request that takes it, and carries
+// a weak ETag, lookupTag: a lookup whose If-None-Match names it is 304, which
+// the gate has counted as any lookup (dromas-dev/dromas-client#894).
 func (s *Server) getMailbox(w http.ResponseWriter, r *http.Request) error {
 	h, err := pathAddr(r)
 	if err != nil {
@@ -532,15 +534,27 @@ func (s *Server) getMailbox(w http.ResponseWriter, r *http.Request) error {
 	case !b.open():
 		return noSuchMailbox
 	}
-	if err := precondition(r, targetState{exists: true, hint: hintConditions, also: []string{"Vary", "Accept-Encoding"}}); err != nil {
-		return err
-	}
-	writeJSONCompressed(w, r, protocol.MailboxResponse{
+	body, err := jsonBytes(protocol.MailboxResponse{
 		Identity: b.Identity, Prekey: b.Statement, PrekeySignature: b.Signature, SenderKeyTypes: b.SenderKeyTypes,
 		RevokedCertificates: b.RevokedCerts, RevokedCertificatesSignature: b.RevokedCertsSig,
 	})
+	if err != nil {
+		return err
+	}
+	tag := lookupTag(body)
+	if err := precondition(r, targetState{exists: true, tag: tag, hint: hintConditions, also: []string{"Vary", "Accept-Encoding"}}); err != nil {
+		return err
+	}
+	w.Header().Set("ETag", tag)
+	writeJSONCompressed(w, r, body)
 	return nil
 }
+
+// lookupTag is a lookup's ETag: weak, since one tag names the answer gzipped
+// and not (RFC 9110 §8.8.1), and otherwise entityTag of the JSON before any
+// coding, so it changes whenever the answer's content does, needs nothing
+// stored, and every process makes the same one (PROTOCOL.md §11.8).
+func lookupTag(body []byte) string { return "W/" + entityTag(body) }
 
 // getRevocations is GET /v1/<address>/revocation (PROTOCOL.md §11.15): the
 // record this server holds of the address, with a mailbox here or none, or 404
