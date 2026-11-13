@@ -49,15 +49,25 @@ type sharedBuckets struct {
 	down  atomic.Bool
 }
 
-// OpenValkey is the client of the Valkey at url (valkey://host:port), made
-// whether or not the store answers yet: a call to it that fails is counted
-// by the process alone (Config.Valkey), and the client dials again on its
-// next call. A client-side cache is off, since every read must be the
-// store's; retries are off, since a failed call falls back at once.
-func OpenValkey(url string) (valkey.Client, error) {
+// OpenValkey is the client of the Valkey at url (valkey://[user@]host:port),
+// with password, when set, as its password: given apart from the URL, so a
+// secret need not sit in a command line or a file that names the store, and
+// refused where the URL carries one too. It is made whether or not the store
+// answers yet: a call to it that fails is counted by the process alone
+// (Config.Valkey), and the client dials again on its next call. A store that
+// answers and refuses the password is an operator's misconfiguration, and
+// refuses the start. A client-side cache is off, since every read must be
+// the store's; retries are off, since a failed call falls back at once.
+func OpenValkey(url, password string) (valkey.Client, error) {
 	opt, err := valkey.ParseURL(url)
 	if err != nil {
 		return nil, err
+	}
+	if password != "" {
+		if opt.Password != "" {
+			return nil, errors.New("a password in the URL and another given apart: give one")
+		}
+		opt.Password = password
 	}
 	opt.ForceSingleClient = true
 	opt.DisableCache = true
@@ -67,7 +77,11 @@ func OpenValkey(url string) (valkey.Client, error) {
 	if c == nil {
 		return nil, fmt.Errorf("no client: %w", err)
 	}
-	return c, nil // err, a first dial that failed, is the first call's to report
+	if _, refused := valkey.IsValkeyErr(err); refused {
+		c.Close()
+		return nil, fmt.Errorf("the store refused this client: %w", err)
+	}
+	return c, nil // any other err, a first dial that failed, is the first call's to report
 }
 
 func newSharedBuckets(c valkey.Client, name string, l *log.Logger, m *Metrics) *sharedBuckets {

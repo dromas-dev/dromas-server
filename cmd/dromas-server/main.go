@@ -102,7 +102,7 @@ func serve(args []string) error {
 	mailboxCache := fs.Int("mailbox-cache", server.DefaultMailboxCache, "mailbox records held in memory, for sends and reads of a mailbox")
 	dbConns := fs.Int("db-max-conns", 0, "the most connections to the database this process's pool holds for its calls; the feed's three are beside them (0: pgxpool's default, the greater of 4 and the number of CPUs)")
 	shard := fs.String("shard", "", "I/N: this process answers only for the mailboxes of shard I of N, N a power of two up to 64 and I from 1 to N, when the reverse proxy in front sends each mailbox's calls to one process by its address: shard I is the addresses whose first character after d_ has a base64url value v with v*N/64 == I-1; any other mailbox's call is answered 503 (empty: every mailbox)")
-	valkeyURL := fs.String("valkey", "", "optional, for a deployment of several processes (--shard), and of no use to one: the URL of a Valkey every process reaches (valkey://host:port), with its persistence off, which keeps each sender's sends a day so that a sender has one budget across the processes; a call to it that fails or is slow is counted by this process alone, as with none, until it answers again (empty: each process counts its own)")
+	valkeyURL := fs.String("valkey", "", "optional, for a deployment of several processes (--shard), and of no use to one: the URL of a Valkey every process reaches (valkey://host:port), with its persistence off, its password, if any, in the environment alone, as DROMAS_SERVER_VALKEY_PASSWORD or the file DROMAS_SERVER_VALKEY_PASSWORD_FILE names, which keeps each sender's sends a day so that a sender has one budget across the processes; a call to it that fails or is slow is counted by this process alone, as with none, until it answers again (empty: each process counts its own)")
 	proxies := fs.String("trusted-proxy", "", "comma-separated CIDRs of the reverse proxy in front, if any, whose X-Forwarded-For names the client: its last address, the one the proxy wrote")
 	l := server.DefaultLimits()
 	fs.IntVar(&l.HeadBytes, "max-header-bytes", l.HeadBytes, "the most of a request's head, its request line and headers, the server reads: what the longest call needs, its pass at the longest a pass can be, and no more; net/http answers a longer one 431 (0: net/http's default)")
@@ -113,7 +113,16 @@ func serve(args []string) error {
 	siteBackend := fs.String("site-backend", "", "the URL of a deployment's own web server, http or https and a host alone, which every request outside /v1/ and /to/ is passed to, as a reverse proxy passes it (empty: none; those paths are 404)")
 	limitsPath := fs.String("limits", "", "a file of the runtime-config directory (bind-mounted read-only as a directory, conventionally /config/), e.g. /config/limits.json: the limits, a JSON object of the members dromas-server limits default prints, each optional, over the defaults it prints. Read at start, or serve does not start; read again on SIGHUP and once a minute, and put in force when it differs and holds its form (empty: the defaults)")
 	versionPolicy := fs.String("version-policy", "", "a file of the runtime-config directory (bind-mounted read-only as a directory, conventionally /config/), e.g. /config/version-policy.json: the version policy, a JSON object of GET /v1/'s form with no capabilities and no max_certificate_lifetime_seconds, which are the server's own. Read at start, or serve does not start; read again on SIGHUP and once a minute, and put in force when it differs and holds its form (empty: no policy)")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: dromas-server serve [flags]")
+		fmt.Fprintln(os.Stderr, "Each flag is also "+envPrefix+"_ and its name, upper case, - written _ (--valkey: "+envName("valkey")+"); a flag given wins over its variable.")
+		fmt.Fprintln(os.Stderr, "--valkey's password is "+envPrefix+"_VALKEY_PASSWORD, or the file "+envPrefix+"_VALKEY_PASSWORD_FILE names: never a flag.")
+		fs.PrintDefaults()
+	}
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := fromEnv(fs); err != nil {
 		return err
 	}
 	base := l // the defaults, with the startup-only flags
@@ -239,7 +248,11 @@ func serve(args []string) error {
 	}
 
 	if *valkeyURL != "" {
-		c, err := server.OpenValkey(*valkeyURL)
+		password, err := secret(envPrefix + "_VALKEY_PASSWORD")
+		if err != nil {
+			return err
+		}
+		c, err := server.OpenValkey(*valkeyURL, password)
 		if err != nil {
 			return fmt.Errorf("--valkey: %w", err)
 		}

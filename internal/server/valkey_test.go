@@ -1,11 +1,13 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,7 +25,7 @@ func testValkey(t *testing.T) valkey.Client {
 	if url == "" {
 		t.Skip("needs Valkey: DROMAS_TEST_VALKEY")
 	}
-	c, err := OpenValkey(url)
+	c, err := OpenValkey(url, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,6 +34,36 @@ func testValkey(t *testing.T) valkey.Client {
 		t.Fatalf("DROMAS_TEST_VALKEY: %v", err)
 	}
 	return c
+}
+
+// A Valkey user's password is taken apart from the URL, which names the
+// user; a wrong one refuses the client at once, since the store answered;
+// and a password in the URL and another apart is refused.
+func TestValkeysPasswordIsGivenApartFromItsURL(t *testing.T) {
+	t.Parallel()
+	c := testValkey(t)
+	user, password := "test-"+randomKey(t), randomKey(t)
+	if err := c.Do(t.Context(), c.B().Arbitrary("ACL", "SETUSER", user, "on", ">"+password, "~*", "+@all").Build()).Error(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Do(context.Background(), c.B().Arbitrary("ACL", "DELUSER", user).Build()).Error() })
+	base := os.Getenv("DROMAS_TEST_VALKEY")
+	at := strings.Replace(base, "://", "://"+user+"@", 1)
+
+	good, err := OpenValkey(at, password)
+	if err != nil {
+		t.Fatalf("the user's password: %v", err)
+	}
+	defer good.Close()
+	if err := good.Do(t.Context(), good.B().Ping().Build()).Error(); err != nil {
+		t.Fatalf("a call with the user's password: %v", err)
+	}
+	if _, err := OpenValkey(at, password+"x"); err == nil {
+		t.Fatal("a wrong password was taken")
+	}
+	if _, err := OpenValkey(strings.Replace(base, "://", "://"+user+":"+password+"@", 1), password); err == nil {
+		t.Fatal("a password in the URL and another apart were taken")
+	}
 }
 
 // randomKey is a key no other test uses, so tests share one store.
@@ -158,7 +190,7 @@ func TestASlowOrDownSharedStoreIsCountedByTheProcess(t *testing.T) {
 	for _, c := range []struct{ what, addr string }{{"slow", ln.Addr().String()}, {"down", down}} {
 		t.Run(c.what, func(t *testing.T) {
 			t.Parallel()
-			v, err := OpenValkey("valkey://" + c.addr)
+			v, err := OpenValkey("valkey://"+c.addr, "")
 			if err != nil {
 				t.Fatal(err)
 			}
