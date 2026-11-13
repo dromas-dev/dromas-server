@@ -23,7 +23,7 @@
 | Bodies | — | An S3 bucket, a directory bucket or an unversioned general purpose one (`--bucket`), or the data directory's `bodies/`, one host's (`--data-dir`) |
 | Edge | — | A load balancer passing TCP, then a reverse proxy that terminates TLS (for dromas.dev, an NLB and nginx on each host) and calls `dromas-server` over plain HTTP on one or more `--listen` addresses; `dromas-server` takes the client's address from the proxy's `X-Forwarded-For` (§ Behind a reverse proxy) |
 | The site | — | A deployment's site is not in this repo: with `--site-backend`, `dromas-server` passes every request outside `/v1/` and `/to/` to the deployment's own web server, as a reverse proxy does (`net/http/httputil`), and its answer back as that server sent it, a 404 among them (`internal/server/site.go`) |
-| Redis | 0 | Penciled in for later, not needed for a while (§ The in-process plan, item 7) |
+| Valkey | 0 or 1 | Optional (`--valkey`): the store every process shares for each sender's sends a day, in memory alone, its persistence off (§ The shared store). Without it, or while it fails, each process counts its own |
 
 ```mermaid
 flowchart LR
@@ -60,7 +60,7 @@ flowchart LR
    - Built: a process answers `503` until its feed is synced through the moment it started, and while it has not been synced within `feedUnsyncedAfter` of now (`pgBackend.Ready`), and exits when the feed loses its place, so that the restart rebuilds memory. Synced through T means every transaction committed by T is applied, as the walsender's own position shows (§ Following the feed).
    - NOT built, for stage 2: a `/readyz` that fails with it, so that the edge drains the process.
    - If every process is behind, clients get `503` + `Retry-After`.
-7. **Redis is penciled in for later, not built now.** Today it would add global rate counters, which the feed also gives (§ Limits). It earns its place only with exact global limits, which are not needed today.
+7. **Valkey keeps the one count that must be one across processes and that the feed cannot carry: each sender's sends a day** (§ The shared store). A message's row holds no sender (`PROTOCOL.md` §13), so no process learns from the feed what another's senders spent. Valkey holds it in memory alone: a store that is lost is a store refilled, and while it fails each process counts by itself. Nothing else is kept there.
 
 ## The process: `dromas-server`
 
@@ -253,11 +253,20 @@ sequenceDiagram
 ### Limits
 
 **Every limit, who pays for it and the known weaknesses → [`LIMITS.md`](LIMITS.md).** What is architecture about them:
-- **Every budget and count is per process,** in memory, because a poll can't afford a round trip. Under routing by address a mailbox's own counts are exact, on its shard's process; one keyed by a sender or by the caller's IP address is spent on each process it reaches, so up to N times with N shards (§ Routing by address). Rules at an edge in front can sit on top, keyed by /64 and /48 for IPv6.
-- **The mailbox total (`mailbox_cap`)** reads layer 1's marks, with no extra writes: every send to a mailbox lands on its shard's process, which counts it at once. **The counts of renewals, certificates and raises of a revocation of certificates** are the mailbox's own calls, so exact on its shard; **sends per sender a day** are spent on each recipient's process. Every accepted send and every renewal arrives on the feed, so each process could count across all of them; that is not built.
+- **Every budget and count is per process,** in memory, because a poll can't afford a round trip, **but a sender's sends a day with `--valkey`,** which a send, never a poll, spends in the shared store (§ The shared store). Under routing by address a mailbox's own counts are exact, on its shard's process; one keyed by a sender or by the caller's IP address is spent on each process it reaches, so up to N times with N shards (§ Routing by address), but sends a day in the shared store. Rules at an edge in front can sit on top, keyed by /64 and /48 for IPv6.
+- **The mailbox total (`mailbox_cap`)** reads layer 1's marks, with no extra writes: every send to a mailbox lands on its shard's process, which counts it at once. **The counts of renewals, certificates and raises of a revocation of certificates** are the mailbox's own calls, so exact on its shard; **sends per sender a day** are spent on each recipient's process, and are one across them in the shared store (§ The shared store).
 - **The passes remembered are per process:** a mailbox's own calls reach its shard's process alone, and its pass on a send is checked once on each recipient's process.
 - **Every limit is a bucket, the numbers a day among them:** a number a day is one back each day divided by it, into a bucket its `-burst` flag sets apart, as Let's Encrypt sets a limit by its burst, count and period, so no window empties at midnight and every refusal's wait is its key's own (the client repo's `PRECEDENTS.md`). A start refuses a number a day that is on with a bucket of nothing (`bursts`).
 - **A bucket is one time per key, when it is full again (the GCRA form of a token bucket, as Let's Encrypt's limiter keeps it, and a count given back as it refunds one: the client repo's `PRECEDENTS.md`),** so a token comes back by arithmetic at the next call and nothing runs in the background (`buckets` in `internal/server/limits.go`). `prune` drops the keys whose buckets are full, inside a call, at most once in the time an empty bucket takes to fill, and only calls on that bucket set wait for it: over 100,000 keys it took 0.93 ms when it kept them all and 14 ms when it deleted them all (measured 2026-10-18, one AWS Graviton4 core).
+
+### The shared store
+
+**With `--valkey`, a sender's sends a day are one bucket across every process, kept in Valkey** (`sharedBuckets` in `internal/server/shared.go`), as Let's Encrypt's Boulder keeps each key's GCRA time in Redis for every instance (`ratelimits/source_redis.go`, read 2026-11-13):
+- **A key is `dromas:sends:<sender's address>`, its value the bucket's time, when it is full again, in whole microseconds since the Unix epoch, and the key expires at that time:** a key that is gone is a full bucket, as a key `prune` dropped is in memory. A take and a give back are each one Lua script, the arithmetic of `buckets.next` and `buckets.giveLocked`, run by the store in one step, so sends in flight at once on several processes cannot all pass on one token. The process's clock is the time each one reads.
+- **Only a send calls it:** its reservation, its give back where nothing is stored, and its `Dromas-RateLimit`, which reads the store's bucket. A poll never does.
+- **A call that fails or takes past `SharedWait` is counted by the process alone, as with no store, and for `sharedRetry` after it no call is made:** a store that is down costs one wait of `SharedWait` each `sharedRetry`, and the log says so once until it answers again. While the store answers, the process's own buckets count nothing; while it does not, they count from what they hold, which is full for a sender the process has not counted. So a sender gets at most one more bucket on each process while the store fails, and a second failure the same day gives it nothing more, since what a process counted stays until it refills. A give back that fails leaves its token spent.
+- **The store holds nothing on disk: run it with its persistence off** (`--save ""`, `--appendonly no`). A bucket's time is a send's moment to the microsecond where its bucket was full, and the messages table keeps each message's `received_at` to the millisecond beside its recipient, so a copy at rest would pair a sender with a recipient, which `PROTOCOL.md` §13 keeps no record of. A store that restarts starts every sender's bucket full.
+- **`dromas-server limits clear` clears the store's bucket too; `limits top` lists the process's own counts,** which hold only what it counted while the store failed.
 
 ### Metrics
 
@@ -273,7 +282,7 @@ sequenceDiagram
 | `dromas_server_lists_total`, `dromas_server_fetches_total` | `kind` (`poll`, `page`; `first`, `repeat`) | lists and messages served; a send stored, a duplicate, an ack and a renewal are each a route and status of the first |
 | `dromas_server_long_polls_held`, `dromas_server_long_polls_total` | `outcome` (`changed`, `waited`, `gone`, `stopped`, `replaced`, `standing`, `refused`, `refused_range`) | long polls held now, and how each long poll ended, once however often it woke to the same page: the mailbox changed or a message in it expired, its wait passed, its caller left, `dromas-server` stopped, a later list of its mailbox was held in its place, its pass or its mailbox was no longer taken at a wake, or it was refused past `max_long_polls` or past `max_long_polls_per_range` |
 | `dromas_server_bodies_before_pass_open`, `dromas_server_bodies_before_pass_total` | `outcome` (`opened`, `refused`, `refused_range`) | request bodies open now on calls that are their address's, and each such request with a body: given its place, or refused past `max_bodies_before_pass` or past `max_bodies_before_pass_per_range` |
-| `dromas_server_store_calls_total`, `dromas_server_store_call_duration_seconds` | `service`, `operation`, `outcome` (`ok`, `not_found`, `throttled`, `error`) | every call to S3, for bodies in a bucket, with its retries; a statement to PostgreSQL is none of them |
+| `dromas_server_store_calls_total`, `dromas_server_store_call_duration_seconds` | `service`, `operation`, `outcome` (`ok`, `not_found`, `throttled`, `timeout`, `error`) | every call to S3, for bodies in a bucket, with its retries, and to Valkey (`service` `Valkey`, `operation` `take`, `give`, `read` or `clear`; `timeout` past `SharedWait`; § The shared store); a statement to PostgreSQL is none of them |
 | `dromas_server_cache_events_total` | `cache` (`mailboxes`, `accounts`, `missing`), `event` (`hit`, `miss`, `eviction`) | the record caches |
 | `dromas_server_stream_record_age_seconds` | `table` (`mailboxes`, `revocations`, `messages`, `accounts`) | how long after its transaction committed the last change from each table was applied, by the commit time the feed carries: how far behind memory follows. Set as each change is applied, so it holds its last value while no change comes |
 | `dromas_server_runtime_config_reloads_total` | `file` (`version-policy`), `result` (`ok`, `failed`) | each reload of a file of the runtime-config directory (§ Runtime config); the minute's read of bytes unchanged is none. When the file last loaded is its log line's |
@@ -313,6 +322,7 @@ sequenceDiagram
 | A statement or a call to S3 that never answers | Each statement the store makes ends at a bound (`storeTimeout`, `bounded`), and each call to S3 at the same bound, set once on its client (`bound`; § The store), whatever context its caller handed it, and so does each read a call shared by several callers makes apart from its request (a lookup's, a send's steps 6 to 9): its caller is answered `503`, and whoever waits on a shared call waits no longer | Automatic; its caller retries |
 | A write whose outcome is unknown (an answer lost, a context that ended mid-statement, a `COMMIT` with no answer) | Memory forgets what it held of the write's target, its count is kept, and its caller is answered `503` (§ The store); a registration reads its record and is answered from it | The next use reads what is held |
 | Process restart | Ready once its feed is synced through the moment it started (§ Startup) | Each mailbox's first call reads it once |
+| Valkey slow, down or restarted | A call past `SharedWait`, or one that fails, is counted by the process alone, and none is made for `sharedRetry`; a store that restarted starts every sender's bucket full (§ The shared store) | Automatic: the next call after `sharedRetry` that the store answers counts there again |
 
 ## Storage
 
@@ -426,7 +436,6 @@ dromas-server (this repo)
 | Dev | `dromas-server serve --dev`, the in-memory backend |
 | 1: first production (**live**, with the echo mailbox) | one host: a reverse proxy terminating TLS, `dromas-server` as one process for each shard, the proxy sending each mailbox's calls to its shard's (§ Routing by address), its database, and the echo mailbox beside it |
 | 2: availability and scale | a second host for availability, then hosts across AZs, the shards' processes spread over them behind a load balancer, as many as the database's replication slots and WAL senders allow (§ Following the feed) |
-| Later, only if measured | Redis if exact global limits are ever needed |
 
 ## Build order
 

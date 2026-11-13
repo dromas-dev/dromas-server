@@ -223,6 +223,10 @@ type buckets struct {
 	settled chan struct{}
 	// m counts each take (Metrics.limit); nil counts nothing.
 	m *Metrics
+	// shared, when set, is the store every process of a deployment shares,
+	// which counts a reservation while it answers, and full holds nothing
+	// for it (reserve); nil, or while it does not answer, full counts.
+	shared *sharedBuckets
 }
 
 // newBuckets is buckets of n, refilled one every interval, for the limit
@@ -243,6 +247,9 @@ type reservation struct {
 	bs   *buckets
 	key  string
 	done bool
+	// shared is set where the shared store took the token, which a release
+	// gives back there.
+	shared bool
 }
 
 // reserve takes a token for key before the work it guards. When none is
@@ -251,22 +258,44 @@ type reservation struct {
 // that would all be given back, made at once, are not refused for each
 // other. It returns how long until a token is due when it refuses. A nil
 // reservation with ok true is a bucket set that never limits.
+//
+// With a shared store, the store counts the token while it answers, and
+// this process's counts are left alone; while it does not answer, this
+// process counts, as with none, from what it counted itself: each process's
+// own bucket, full where it has counted nothing.
 func (bs *buckets) reserve(ctx context.Context, key string, now func() time.Time) (r *reservation, ok bool, wait time.Duration) {
-	if bs.n == 0 || bs.every <= 0 {
+	bs.mu.Lock()
+	n, every := bs.n, bs.every
+	bs.mu.Unlock()
+	if n == 0 || every <= 0 {
 		return nil, true, 0
 	}
 	var give *time.Timer // made only once there is something to wait for
 	for {
-		bs.mu.Lock()
 		t := now()
+		answered, shared, sharedOver := false, false, time.Duration(0)
+		if bs.shared.up(t) {
+			if took, over, err := bs.shared.take(ctx, key, n, every, t); err == nil {
+				answered, shared, sharedOver = true, took, max(over, time.Nanosecond)
+			}
+		}
+		bs.mu.Lock()
 		bs.prune(t)
 		next, over := bs.next(key, t)
+		switch {
+		case shared:
+			over = 0
+		case answered:
+			over = sharedOver
+		}
 		if over <= 0 {
-			bs.full[key] = next
+			if !shared {
+				bs.full[key] = next
+			}
 			bs.held[key]++
 			bs.mu.Unlock()
 			bs.m.limit(bs.name, true)
-			return &reservation{bs: bs, key: key}, true, 0
+			return &reservation{bs: bs, key: key, shared: shared}, true, 0
 		}
 		inFlight, settled := bs.held[key] > 0, bs.settled
 		bs.mu.Unlock()
@@ -306,11 +335,17 @@ func (r *reservation) settle(back bool, now time.Time) {
 	}
 	r.done = true
 	bs := r.bs
+	if back && r.shared {
+		bs.mu.Lock()
+		every := bs.every
+		bs.mu.Unlock()
+		bs.shared.give(r.key, every, now)
+	}
 	bs.mu.Lock()
 	if bs.held[r.key]--; bs.held[r.key] <= 0 {
 		delete(bs.held, r.key)
 	}
-	if back {
+	if back && !r.shared {
 		bs.giveLocked(r.key, now)
 	}
 	close(bs.settled)
@@ -389,12 +424,17 @@ func (bs *buckets) giveLocked(key string, now time.Time) {
 // ready reports whether key has a token at now, and takes none: for a limit
 // that counts an outcome known only after the work it guards.
 func (bs *buckets) ready(key string, now time.Time) (ok bool, wait time.Duration) {
+	shared, read := bs.shared.full(key, now)
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
 	if bs.n == 0 || bs.every <= 0 {
 		return true, 0
 	}
-	bs.mu.Lock()
-	defer bs.mu.Unlock()
-	if _, over := bs.next(key, now); over > 0 {
+	full := bs.full[key]
+	if read {
+		full = shared
+	}
+	if _, over := bs.nextOf(full, now); over > 0 {
 		return false, over
 	}
 	return true, 0
@@ -405,7 +445,11 @@ func (bs *buckets) ready(key string, now time.Time) (ok bool, wait time.Duration
 // token taken puts full one interval later; a full bucket is n intervals'
 // worth.
 func (bs *buckets) next(key string, now time.Time) (next time.Time, over time.Duration) {
-	full := bs.full[key]
+	return bs.nextOf(bs.full[key], now)
+}
+
+// nextOf is next of a bucket full again at full.
+func (bs *buckets) nextOf(full, now time.Time) (next time.Time, over time.Duration) {
 	if full.Before(now) {
 		full = now
 	}
@@ -416,12 +460,18 @@ func (bs *buckets) next(key string, now time.Time) (next time.Time, over time.Du
 // report is key's bucket at now as PROTOCOL.md §11.5's Dromas-RateLimit
 // reports a budget: the tokens left, a token taken counted as taken until
 // its interval has passed; how long until the bucket is full again; and the
-// bucket's size and interval, read under the same lock.
+// bucket's size and interval, read under the same lock. With a shared
+// store, the bucket is the store's while it answers.
 func (bs *buckets) report(key string, now time.Time) (left int, untilFull time.Duration, n int, every time.Duration) {
+	shared, read := bs.shared.full(key, now)
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 	n, every = bs.n, bs.every
-	untilFull = bs.full[key].Sub(now)
+	full := bs.full[key]
+	if read {
+		full = shared
+	}
+	untilFull = full.Sub(now)
 	if untilFull <= 0 || every <= 0 {
 		return n, 0, n, every
 	}
@@ -431,13 +481,15 @@ func (bs *buckets) report(key string, now time.Time) (left int, untilFull time.D
 
 // clear fills key's bucket at now, as if the key had never been seen, and
 // reports whether it held anything: a token taken and not yet back.
-// Reservations in flight settle as they would have.
+// Reservations in flight settle as they would have. With a shared store, it
+// is cleared there too.
 func (bs *buckets) clear(key string, now time.Time) bool {
+	cleared := bs.shared.clear(key, now)
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 	full, ok := bs.full[key]
 	delete(bs.full, key)
-	return ok && full.After(now)
+	return cleared || (ok && full.After(now))
 }
 
 // prune drops every key whose bucket is full again, once each time an empty

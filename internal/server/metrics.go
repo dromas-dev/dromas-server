@@ -74,9 +74,9 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		lists: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "lists_total",
 			Help: "Lists taken, by kind: a poll, or a page after the first of a drain."}, []string{"kind"}),
 		store: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "store_calls_total",
-			Help: "Calls to S3, where messages' bodies are kept in a bucket, retries included, by service (S3), operation (the S3 operation: PutObject, GetObject, DeleteObjects) and outcome: ok, not_found, throttled or error."}, []string{"service", "operation", "outcome"}),
+			Help: "Calls to S3, where messages' bodies are kept in a bucket, retries included, and to Valkey, the shared store of per-sender budgets (--valkey), by service (S3 or Valkey), operation (the S3 operation: PutObject, GetObject, DeleteObjects; Valkey's: take, give, read, clear) and outcome: ok, not_found, throttled, timeout (Valkey, past its deadline) or error."}, []string{"service", "operation", "outcome"}),
 		storeTime: prometheus.NewHistogramVec(prometheus.HistogramOpts{Namespace: ns, Name: "store_call_duration_seconds",
-			Help: "How long a call to S3, for messages' bodies, took, its retries included, by service (S3) and operation (the S3 operation).", Buckets: seconds}, []string{"service", "operation"}),
+			Help: "How long a call to S3, for messages' bodies, took, its retries included, or one to Valkey, by service (S3 or Valkey) and operation.", Buckets: seconds}, []string{"service", "operation"}),
 		caches: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "cache_events_total",
 			Help: "The record caches, by cache (mailboxes, accounts, missing) and event (hit, miss, eviction)."}, []string{"cache", "event"}),
 		largeRead: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "large_reads_total",
@@ -354,6 +354,15 @@ func (m *Metrics) InstrumentAWS(cfg *aws.Config) {
 			return out, md, err
 		}), middleware.After)
 	})
+}
+
+// sharedCall counts and times a call to the shared store (sharedBuckets).
+func (m *Metrics) sharedCall(op string, err error, took time.Duration) {
+	if m == nil {
+		return
+	}
+	m.store.WithLabelValues("Valkey", op, sharedOutcome(err)).Inc()
+	m.storeTime.WithLabelValues("Valkey", op).Observe(took.Seconds())
 }
 
 // storeOutcome names how a call to S3 ended, from a fixed set: never the

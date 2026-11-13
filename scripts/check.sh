@@ -28,9 +28,11 @@ fi
 unset DROMAS_CONFIG DROMAS_PROFILE DR_HOME DR_MAILBOX # no test may meet a real mailbox
 
 # `full` runs every test on the in-memory store, where the tests that need a
-# shared store with a feed skip, then, with DROMAS_TEST_POSTGRES set (and
-# libpq's environment naming a database kept for tests), every test again on
-# PostgreSQL, where none may; any other skip fails it.
+# shared store with a feed skip, and those that need Valkey, then, with
+# DROMAS_TEST_POSTGRES set (and libpq's environment naming a database kept
+# for tests) and DROMAS_TEST_VALKEY naming a Valkey kept for tests
+# (valkey://host:port), every test again on PostgreSQL, where none may; any
+# other skip fails it. test/postgres/compose.yaml starts both.
 allowed=()
 if [ -n "$darwin" ]; then allowed+=(-e 'macOS loopback buffers'); fi
 
@@ -69,7 +71,7 @@ alltests() { # [a skip's text to allow]...
 full() {
   fmt
   go vet ./...
-  DROMAS_TEST_POSTGRES='' alltests 'needs PostgreSQL'
+  DROMAS_TEST_POSTGRES='' DROMAS_TEST_VALKEY='' alltests 'needs PostgreSQL' 'needs Valkey'
   if [ -n "${DROMAS_TEST_POSTGRES-}" ]; then alltests; fi
   test/interop.sh
 }
