@@ -316,6 +316,10 @@ func TestRetryGetsOriginalReceipt(t *testing.T) {
 	if res := receive(t, b); len(res.Delivered) != 0 {
 		t.Fatalf("the same bytes after the ack were delivered again: %d", len(res.Delivered))
 	}
+	// The feed's echo of the first message's deletion can take the later
+	// message's tomb, and count it until its own deletion arrives
+	// (index.deleted): the count is held once the feed has caught up.
+	settle(t, e)
 	if n, err := e.store.Count(t.Context(), b.Address()); err != nil || n != 0 {
 		t.Fatalf("after the reader's drain the mailbox holds %d, %v; want none", n, err)
 	}
