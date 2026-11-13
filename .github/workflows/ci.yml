@@ -53,23 +53,26 @@ jobs:
           go-version: stable
           check-latest: true
       - name: postgres
-        # The test database, test/postgres/compose.yaml: a job's services take
-        # no server options, so it is started here, from the file Dependabot
-        # keeps pinned.
+        # The test database and the test Valkey, test/postgres/compose.yaml: a
+        # job's services take no server options, so they are started here,
+        # from the file Dependabot keeps pinned.
         run: |
           docker compose -f test/postgres/compose.yaml up -d
           # Over TCP: the image's first start runs its initialisation on a
           # server that listens on the Unix socket alone, then restarts.
           for _ in $(seq 60); do docker exec postgres pg_isready -h 127.0.0.1 -U postgres -d dromas_test && break; sleep 1; done
           docker exec postgres pg_isready -h 127.0.0.1 -U postgres -d dromas_test
+          for _ in $(seq 30); do docker exec valkey valkey-cli ping && break; sleep 1; done
+          docker exec valkey valkey-cli ping
       - name: tools
         run: |
           go version; ssh -V; jq --version; curl --version | head -1; bash --version | head -1; nginx -v
           go list -m github.com/dromas-dev/dromas-client
           docker exec postgres postgres --version
+          docker exec valkey valkey-server --version
       - name: check
-        # gofmt, vet, every test in memory and again on PostgreSQL (a skip
-        # fails the job, but the shared-store tests' in memory), and
+        # gofmt, vet, every test in memory and again on PostgreSQL and Valkey
+        # (a skip fails the job, but the shared-store tests' in memory), and
         # test/interop.sh on PostgreSQL, two shards behind the image's nginx:
         # scripts/check.sh, which a laptop runs too.
         env:
@@ -80,6 +83,7 @@ jobs:
           PGPASSWORD: dromas
           PGDATABASE: dromas_test
           PGSSLMODE: disable
+          DROMAS_TEST_VALKEY: valkey://127.0.0.1:6379
         run: scripts/check.sh full
 
   lint:

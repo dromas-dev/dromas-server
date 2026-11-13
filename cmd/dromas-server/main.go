@@ -102,6 +102,7 @@ func serve(args []string) error {
 	mailboxCache := fs.Int("mailbox-cache", server.DefaultMailboxCache, "mailbox records held in memory, for sends and reads of a mailbox")
 	dbConns := fs.Int("db-max-conns", 0, "the most connections to the database this process's pool holds for its calls; the feed's three are beside them (0: pgxpool's default, the greater of 4 and the number of CPUs)")
 	shard := fs.String("shard", "", "I/N: this process answers only for the mailboxes of shard I of N, N a power of two up to 64 and I from 1 to N, when the reverse proxy in front sends each mailbox's calls to one process by its address: shard I is the addresses whose first character after d_ has a base64url value v with v*N/64 == I-1; any other mailbox's call is answered 503 (empty: every mailbox)")
+	valkeyURL := fs.String("valkey", "", "the URL of a Valkey every process of the deployment reaches (valkey://host:port), with its persistence off, which keeps each sender's sends a day so that a sender has one budget across the processes; a call to it that fails or is slow is counted by this process alone, as with none, until it answers again (empty: each process counts its own)")
 	proxies := fs.String("trusted-proxy", "", "comma-separated CIDRs of the reverse proxy in front, if any, whose X-Forwarded-For names the client: its last address, the one the proxy wrote")
 	l := server.DefaultLimits()
 	fs.IntVar(&l.HeadBytes, "max-header-bytes", l.HeadBytes, "the most of a request's head, its request line and headers, the server reads: what the longest call needs, its pass at the longest a pass can be, and no more; net/http answers a longer one 431 (0: net/http's default)")
@@ -237,6 +238,15 @@ func serve(args []string) error {
 		logger.Printf("dromas-server on %s: PostgreSQL, %s", *listen, where)
 	}
 
+	if *valkeyURL != "" {
+		c, err := server.OpenValkey(*valkeyURL)
+		if err != nil {
+			return fmt.Errorf("--valkey: %w", err)
+		}
+		defer c.Close()
+		cfg.Valkey = c
+		logger.Printf("sends a day counted in the shared store (--valkey)")
+	}
 	api := server.New(cfg)
 	// Each runtime file is reloaded on SIGHUP, as Prometheus reloads
 	// --config.file, and once a minute, for a mount that changes with no

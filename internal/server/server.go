@@ -27,6 +27,7 @@ import (
 
 	"github.com/aws/smithy-go/logging"
 	"github.com/dchest/siphash"
+	"github.com/valkey-io/valkey-go"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/dromas-dev/dromas-client/protocol"
@@ -78,6 +79,11 @@ type Config struct {
 	// reverse proxy in front routes each mailbox's calls by its address
 	// (owned). The zero Shard is every address.
 	Shard Shard
+	// Valkey, when set, is the store every process of the deployment
+	// shares, which keeps each sender's sends a day so that a sender has
+	// one budget across them (sharedBuckets). None: each process counts its
+	// own.
+	Valkey valkey.Client
 }
 
 // Server is the API.
@@ -184,6 +190,9 @@ func New(c Config) *Server {
 	}
 	if s.now == nil {
 		s.now = time.Now
+	}
+	if c.Valkey != nil {
+		s.sends.shared = newSharedBuckets(c.Valkey, s.sends.name, s.log, s.metrics)
 	}
 	s.setLimits(c.Limits, &c.Policy)
 	if len(s.identityTypes) == 0 {

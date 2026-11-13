@@ -1,10 +1,12 @@
 # The PostgreSQL CI's test job runs every test on (.github/workflows/ci.yml),
-# and the one a laptop may run the same way: docker compose -f
-# test/postgres/compose.yaml up -d. Logical replication on, a replication slot
-# and a WAL sender for each store the tests run at once. The image is a tag
-# pinned by its index digest, which Dependabot moves (.github/dependabot.yml,
-# docker-compose), and its major version is the oldest this backend runs on
-# (minServerVersion).
+# and the Valkey its shared-store tests run on, which a laptop may run the
+# same way: docker compose -f test/postgres/compose.yaml up -d. PostgreSQL
+# with logical replication on, a replication slot and a WAL sender for each
+# store the tests run at once; Valkey with its persistence off, as a
+# deployment runs it (ARCHITECTURE.md § The shared store). Each image is a
+# tag pinned by its index digest, which Dependabot moves
+# (.github/dependabot.yml, docker-compose), and PostgreSQL's major version is
+# the oldest this backend runs on (minServerVersion).
 name: dromas-test
 services:
   postgres:
@@ -16,3 +18,9 @@ services:
       POSTGRES_DB: dromas_test
     ports:
       - 127.0.0.1:5432:5432
+  valkey:
+    image: valkey/valkey:9.1.3@sha256:3add1a336a920ea54770a001ab6feb3da5fceea96a40373a3a2cd469b815f0b7
+    container_name: valkey
+    command: [valkey-server, --save, "", --appendonly, "no"]
+    ports:
+      - 127.0.0.1:6379:6379

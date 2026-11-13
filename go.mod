@@ -16,6 +16,7 @@ require (
 	github.com/pressly/goose/v3 v3.29.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/spf13/pflag v1.1.0
+	github.com/valkey-io/valkey-go v1.0.79
 	golang.org/x/crypto v0.58.0
 	golang.org/x/sync v0.25.0
 )
