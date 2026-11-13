@@ -192,10 +192,12 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) error {
 	}
 	d := o.d
 	if !d.fresh || !led {
+		s.reportSends(w, from, lim)
 		return s.duplicate(w, d.h)
 	}
 	// The message made, which only its recipient may fetch (RFC 9110 §15.3.2).
 	w.Header().Set("Location", "/v1/"+to.String()+"/messages/"+hexID(d.h.ID))
+	s.reportSends(w, from, lim)
 	writeJSON(w, http.StatusCreated, receipt(d.h))
 	return nil
 }
@@ -479,6 +481,27 @@ func (s *Server) sendsOf(lim Limits) []perDay {
 		return nil
 	}
 	return []perDay{s.sendsADay(lim.SendsPerDay)}
+}
+
+// reportSends puts the sender's sends a day on a send's 201 or 200, as
+// Dromas-RateLimit (PROTOCOL.md §11.5): what is left after the call, the
+// bucket's size, its refill over a day and the whole seconds until it is
+// full, rounded up. A sender whose account lifts its sends gets no field.
+func (s *Server) reportSends(w http.ResponseWriter, from protocol.Address, lim Limits) {
+	for _, d := range s.sendsOf(lim) {
+		left, untilFull, n, every := d.bs.report(from.String(), s.now())
+		if n <= 0 || every <= 0 {
+			continue
+		}
+		b := protocol.Budget{
+			Left: int64(left), Cap: int64(n), Window: protocol.DefaultWindow,
+			Refill: int64((day + every/2) / every),
+			Full:   int64((untilFull + time.Second - 1) / time.Second),
+		}
+		if v := (protocol.RateLimit{protocol.QuotaSends: b}).String(); v != "" {
+			w.Header().Set(protocol.RateLimitField, v)
+		}
+	}
 }
 
 func receipt(h *Header) protocol.Receipt {

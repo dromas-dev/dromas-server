@@ -31,16 +31,11 @@ var answerWriters = sync.Pool{New: func() any {
 	return zw
 }}
 
-// writeJSONCompressed answers v as writeJSON does, gzipped when the request
-// takes gzip and that is smaller, with its Content-Length. Either way it
-// says that it varies by Accept-Encoding, so a cache never hands the gzip to
-// a client that did not take it.
-func writeJSONCompressed(w http.ResponseWriter, r *http.Request, v any) {
-	body, err := jsonBytes(v)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
+// writeJSONCompressed answers body, a JSON text, as writeJSON answers one,
+// gzipped when the request takes gzip and that is smaller, with its
+// Content-Length. Either way it says that it varies by Accept-Encoding, so a
+// cache never hands the gzip to a client that did not take it.
+func writeJSONCompressed(w http.ResponseWriter, r *http.Request, body []byte) {
 	h := w.Header()
 	h.Set("Content-Type", "application/json")
 	h.Add("Vary", "Accept-Encoding")
