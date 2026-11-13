@@ -23,7 +23,7 @@
 | Bodies | — | An S3 bucket, a directory bucket or an unversioned general purpose one (`--bucket`), or the data directory's `bodies/`, one host's (`--data-dir`) |
 | Edge | — | A load balancer passing TCP, then a reverse proxy that terminates TLS (for dromas.dev, an NLB and nginx on each host) and calls `dromas-server` over plain HTTP on one or more `--listen` addresses; `dromas-server` takes the client's address from the proxy's `X-Forwarded-For` (§ Behind a reverse proxy) |
 | The site | — | A deployment's site is not in this repo: with `--site-backend`, `dromas-server` passes every request outside `/v1/` and `/to/` to the deployment's own web server, as a reverse proxy does (`net/http/httputil`), and its answer back as that server sent it, a 404 among them (`internal/server/site.go`) |
-| Valkey | 0 or 1 | Optional (`--valkey`): the store every process shares for each sender's sends a day, in memory alone, its persistence off (§ The shared store). Without it, or while it fails, each process counts its own |
+| Valkey | 0, or 1 for several processes | Optional (`--valkey`), and of no use to one process, whose own count is already every send: the store several processes share for each sender's sends a day, in memory alone, its persistence off (§ The shared store). Without it, or while it fails, each process counts its own |
 
 ```mermaid
 flowchart LR
@@ -60,7 +60,7 @@ flowchart LR
    - Built: a process answers `503` until its feed is synced through the moment it started, and while it has not been synced within `feedUnsyncedAfter` of now (`pgBackend.Ready`), and exits when the feed loses its place, so that the restart rebuilds memory. Synced through T means every transaction committed by T is applied, as the walsender's own position shows (§ Following the feed).
    - NOT built, for stage 2: a `/readyz` that fails with it, so that the edge drains the process.
    - If every process is behind, clients get `503` + `Retry-After`.
-7. **Valkey keeps the one count that must be one across processes and that the feed cannot carry: each sender's sends a day** (§ The shared store). A message's row holds no sender (`PROTOCOL.md` §13), so no process learns from the feed what another's senders spent. Valkey holds it in memory alone: a store that is lost is a store refilled, and while it fails each process counts by itself. Nothing else is kept there.
+7. **Valkey, optional and only for several processes, keeps the one count that must be one across them and that the feed cannot carry: each sender's sends a day** (§ The shared store). A message's row holds no sender (`PROTOCOL.md` §13), so no process learns from the feed what another's senders spent. Valkey holds it in memory alone: a store that is lost is a store refilled, and while it fails each process counts by itself. Nothing else is kept there.
 
 ## The process: `dromas-server`
 
@@ -261,7 +261,7 @@ sequenceDiagram
 
 ### The shared store
 
-**With `--valkey`, a sender's sends a day are one bucket across every process, kept in Valkey** (`sharedBuckets` in `internal/server/shared.go`), as Let's Encrypt's Boulder keeps each key's GCRA time in Redis for every instance (`ratelimits/source_redis.go`, read 2026-11-13):
+**Optional, and only for a deployment of several processes (`--shard`): with `--valkey`, a sender's sends a day are one bucket across every process, kept in Valkey.** A single process counts every send itself, so it needs no store. It is `sharedBuckets` in `internal/server/shared.go`, as Let's Encrypt's Boulder keeps each key's GCRA time in Redis for every instance (`ratelimits/source_redis.go`, read 2026-11-13):
 - **A key is `dromas:sends:<sender's address>`, its value the bucket's time, when it is full again, in whole microseconds since the Unix epoch, and the key expires at that time:** a key that is gone is a full bucket, as a key `prune` dropped is in memory. A take and a give back are each one Lua script, the arithmetic of `buckets.next` and `buckets.giveLocked`, run by the store in one step, so sends in flight at once on several processes cannot all pass on one token. The process's clock is the time each one reads.
 - **Only a send calls it:** its reservation, its give back where nothing is stored, and its `Dromas-RateLimit`, which reads the store's bucket. A poll never does.
 - **A call that fails or takes past `SharedWait` is counted by the process alone, as with no store, and for `sharedRetry` after it no call is made:** a store that is down costs one wait of `SharedWait` each `sharedRetry`, and the log says so once until it answers again. While the store answers, the process's own buckets count nothing; while it does not, they count from what they hold, which is full for a sender the process has not counted. So a sender gets at most one more bucket on each process while the store fails, and a second failure the same day gives it nothing more, since what a process counted stays until it refills. A give back that fails leaves its token spent.
