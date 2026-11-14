@@ -448,14 +448,19 @@ func formatCursor(h Header) string {
 	return base64.RawURLEncoding.EncodeToString(append(b, h.ID[:]...))
 }
 
+// parseCursor accepts only a string that formatCursor writes. Base64
+// decoding skips CR and LF, Strict mode included (encoding/base64), so the
+// decoded cursor is written again and compared with s.
 func parseCursor(s string) (*Cursor, error) {
 	b, err := base64.RawURLEncoding.Strict().DecodeString(s)
-	if err != nil || len(b) != 8+32 {
-		return nil, fail(protocol.CodeInvalidRequest, "pass next_cursor exactly as received", "the query parameter %s is not a cursor this server handed out", memberValue(cursorParam))
+	if err == nil && len(b) == 8+32 {
+		c := &Cursor{ReceivedAt: time.UnixMilli(int64(binary.BigEndian.Uint64(b))).UTC()} //nolint:gosec // decoded from our own cursor
+		copy(c.ID[:], b[8:])
+		if formatCursor(Header{ReceivedAt: c.ReceivedAt, ID: c.ID}) == s {
+			return c, nil
+		}
 	}
-	c := &Cursor{ReceivedAt: time.UnixMilli(int64(binary.BigEndian.Uint64(b))).UTC()} //nolint:gosec // decoded from our own cursor
-	copy(c.ID[:], b[8:])
-	return c, nil
+	return nil, fail(protocol.CodeInvalidRequest, "pass next_cursor exactly as received", "the query parameter %s is not a cursor this server handed out", memberValue(cursorParam))
 }
 
 // gone is the answer for a message the mailbox does not hold.
