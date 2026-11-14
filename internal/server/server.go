@@ -1373,10 +1373,10 @@ func redacting(l *log.Logger) *log.Logger {
 // the form methodName reads and no longer than longestMethod, or its length
 // alone, so a caller makes no line longer (dromas-dev/dromas-server#11).
 // A token may hold digits and "-._!~|#", and redact finds only an unbroken
-// run of hex, so a method written as it came could carry an address split by
-// one character, or a name that reads as one redact gives (#79); and the
-// capitals A to F are hex, so a method of 64 of them would be written as such
-// a name (dromas-dev/dromas-client#413 item 1).
+// run of letters, digits, "-" and "_", so a method written as it came could
+// carry an address split by one character, or a name that reads as one redact
+// gives (#79); and capitals and "-" are of that run, so a method of 64 of them
+// would be written as such a name (dromas-dev/dromas-client#413 item 1).
 func loggedMethod(m string) string {
 	if len(m) > longestMethod || !methodName.MatchString(m) {
 		return fmt.Sprintf("(a method of %d bytes)", len(m))

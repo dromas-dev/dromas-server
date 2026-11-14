@@ -290,7 +290,7 @@ func (s *Server) take(b *Mailbox, id *protocol.Identity, statement, sig []byte, 
 // A certificate is held to the sanity refusals, each exact at this server's
 // clock (PROTOCOL.md §11.7): begun, not ended, and, unless its hash is
 // current, the signer of the mailbox's current statement, running no longer
-// than Limits.MaxCertificateLifetime. That is when a certificate is first
+// than Limits.MaxCertificateLifetime. The maximum is for a certificate first
 // taken: a renewal under the current one is not held to the maximum again,
 // so a lower maximum strands no mailbox under a certificate taken before.
 //

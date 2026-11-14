@@ -16,7 +16,8 @@ import (
 
 // A mailbox proves itself with a pass it signs for itself (PROTOCOL.md §8),
 // by its identity, which is always taken, or by a working key under exactly
-// the certificate of its current statement. The server issues nothing and
+// the certificate of its current statement, or, at a registration or a
+// renewal, of the statement the call brings. The server issues nothing and
 // stores nothing for it. A pass is checked in
 // three steps, cheapest first: the signing key it carries against the hash
 // of the mailbox's current signer's and of its identity's, which costs no
