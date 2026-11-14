@@ -25,11 +25,10 @@ func (c *recCache[K, V]) put(v V) {
 	c.putLocked(v)
 }
 
-// A copy read before a write is kept out of the record cache where the cache
-// did not hold its address: the feed's image of that write was dropped
-// there, so the copy may be older than the table
-// (dromas-dev/dromas-server#12). A copy of an address the cache holds
-// merges, as a put does, and a write to another shard's address leaves a
+// A copy read before a write is kept out of the record cache, whether or not
+// the cache holds its address: where it does not, the feed's image of that
+// write was dropped, so the copy may be older than the table
+// (dromas-dev/dromas-server#12). A write to another shard's address leaves a
 // read's token standing.
 func TestAFillAfterAWriteItDidNotSeeIsNotKept(t *testing.T) {
 	t.Parallel()

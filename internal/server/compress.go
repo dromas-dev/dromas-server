@@ -15,8 +15,8 @@ import (
 // Compression: gzip, where it saves bytes for little CPU, and nowhere else
 // (ARCHITECTURE.md § Request paths). A mailbox's read is compressed per answer:
 // it is base64 in JSON, the one large answer clients ask for often, before
-// every post. A site's pages are compressed
-// once, at start. Nothing else is: a poll is a 304 or a near-empty page, a
+// every post. A site's answer is passed on as its web server sent it.
+// Nothing else is compressed: a poll is a 304 or a near-empty page, a
 // message's ciphertext does not compress, and a list puts what senders chose
 // beside the mailbox's own values in one body, the shape of BREACH (RFC 7457
 // §2.6). A request that does not take gzip gets none.

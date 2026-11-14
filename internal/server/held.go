@@ -23,7 +23,8 @@ import (
 // passBy is the pass a call was taken under (checkPassBy), a mailbox's own
 // call's or a send's sender's: the identity's, taken while the address is not revoked and the mailbox
 // has a record, or the signer's whose key's hash is signer, taken while it
-// is the record's signer and no revocation of certificates covers it.
+// is the record's signer, the address is not revoked and no revocation of
+// certificates covers it.
 type passBy struct {
 	addr     protocol.Address
 	identity bool
