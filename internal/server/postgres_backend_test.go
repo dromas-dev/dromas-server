@@ -18,6 +18,8 @@ import (
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // The PostgreSQL backend's own risks: what its feed, its sweep and its
@@ -190,6 +192,36 @@ func TestTheSweepDeletesWhatHasExpired(t *testing.T) {
 	}
 	if _, err := s.backend.AdoptKey(ctx, "acct", [32]byte{2}); err != nil || count("adopt_keys") != 1 {
 		t.Errorf("the sweep did not delete the expired adopt key alone: the live one %v", err)
+	}
+}
+
+// The sweep's count of mailboxes is the records whose expiry has not
+// passed: a record past its expiry and not yet deleted is not counted, in a
+// schema of the test's own.
+func TestTheSweepCountsTheLiveMailboxes(t *testing.T) {
+	t.Parallel()
+	if !onPostgres() {
+		t.Skip("needs PostgreSQL: DROMAS_TEST_POSTGRES")
+	}
+	ctx := context.Background()
+	m := NewMetrics(prometheus.NewRegistry())
+	schema, bodies := freshDatabase(t)
+	s := startPostgresIn(t, schema, bodies, nil, func(c *PostgresConfig) { c.Metrics = m })
+	e := newEnv(t, relaxed(), func(c *Config) { c.Store = s })
+	gone := e.mailbox().Address()
+	for range 2 {
+		e.mailbox()
+	}
+	s.pg().countMailboxes(ctx)
+	if got := testutil.ToFloat64(m.boxes); got != 3 {
+		t.Fatalf("with three mailboxes registered, the gauge reads %v", got)
+	}
+	if _, err := s.pool().Exec(ctx, `UPDATE mailboxes SET expires_at = now() - interval '1 second' WHERE addr = $1`, gone[:]); err != nil {
+		t.Fatal(err)
+	}
+	s.pg().countMailboxes(ctx)
+	if got := testutil.ToFloat64(m.boxes); got != 2 {
+		t.Errorf("with one of three records past its expiry, the gauge reads %v; want 2", got)
 	}
 }
 

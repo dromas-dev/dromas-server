@@ -46,6 +46,7 @@ type Metrics struct {
 	streamAge  *prometheus.GaugeVec
 	holds      prometheus.Gauge
 	held       *prometheus.CounterVec
+	boxes      prometheus.Gauge
 	bodiesOpen prometheus.Gauge
 	bodies     *prometheus.CounterVec
 	versions   *prometheus.CounterVec
@@ -93,6 +94,8 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Help: "Long polls held now (PROTOCOL.md §11.11)."}),
 		held: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "long_polls_total",
 			Help: "Long polls, each once by how it ended: changed (the mailbox changed, or a message in it expired), waited (its wait passed), gone (the caller left), stopped (the server stopped), replaced (a later list of the same mailbox was held in its place), standing (at a wake, its pass or its mailbox was no longer taken), refused (past max_long_polls), or refused_range (past max_long_polls_per_range)."}, []string{"outcome"}),
+		boxes: prometheus.NewGauge(prometheus.GaugeOpts{Namespace: ns, Name: "mailboxes",
+			Help: "Mailboxes in the store whose record has not expired, counted as the sweep starts and after each pass (--sweep-interval): the whole store's, the same on every process that shares it. PostgreSQL only."}),
 		bodiesOpen: prometheus.NewGauge(prometheus.GaugeOpts{Namespace: ns, Name: "bodies_before_pass_open",
 			Help: "Request bodies open now on calls that are their address's (max_bodies_before_pass)."}),
 		bodies: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "bodies_before_pass_total",
@@ -109,7 +112,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 	for _, r := range []string{"ok", "failed"} {
 		m.reloads.WithLabelValues(versionPolicyFile, r) // each series from the start, at 0
 	}
-	reg.MustRegister(m.requests, m.latency, m.limits, m.passes, m.fetches, m.lists, m.store, m.storeTime, m.caches, m.largeRead, m.cut, m.misroutes, m.conns, m.streamAge, m.holds, m.held, m.bodiesOpen, m.bodies, m.versions, m.reloads)
+	reg.MustRegister(m.requests, m.latency, m.limits, m.passes, m.fetches, m.lists, m.store, m.storeTime, m.caches, m.largeRead, m.cut, m.misroutes, m.conns, m.streamAge, m.holds, m.held, m.boxes, m.bodiesOpen, m.bodies, m.versions, m.reloads)
 	return m
 }
 
@@ -322,6 +325,14 @@ func (m *Metrics) applied(table string, made time.Time, now time.Time) {
 		return
 	}
 	m.streamAge.WithLabelValues(table).Set(max(now.Sub(made), 0).Seconds())
+}
+
+// mailboxes sets the count of the store's live mailboxes.
+func (m *Metrics) mailboxes(n int64) {
+	if m == nil {
+		return
+	}
+	m.boxes.Set(float64(n))
 }
 
 // ConnState counts the API listener's open connections, as http.Server's
