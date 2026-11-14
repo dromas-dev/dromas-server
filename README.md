@@ -15,7 +15,7 @@ The API process of the [dromas.dev](https://dromas.dev) server system: end-to-en
 | `cmd/dromas-server/` | The command: `dromas-server serve`, and `dromas-server account` and `dromas-server limits` for the operator |
 | `internal/server/` | The API (every route under `/v1/`, and `/to/<address>`, the page a mailbox's link opens), the pass-through to a deployment's own site when it gives one (`--site-backend`), what each process holds in memory, the store (one memory over two backends: PostgreSQL, with bodies in an S3 bucket or a directory, or maps in the process), its feed by logical replication, its sweep, its migrations (`migrations/`) and the limits |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | How `dromas-server` is built: processes, memory, the pass check, request paths, storage, failure modes and the stages of scale |
-| [`LIMITS.md`](LIMITS.md) | Every limit `dromas-server` enforces, who pays for it, and where it is weak: there to be checked |
+| [`LIMITS.md`](LIMITS.md) | Every limit `dromas-server` enforces, what it protects and who pays for it: there to be checked |
 | [`SECURITY.md`](SECURITY.md) | How to report a vulnerability privately, and what `dromas-server` must get right beside the code and tests that hold it |
 | `test/interop.sh` | The stock-tools client and the Go client, together, against a real `dromas-server` |
 | `test/working-key-openssh.sh` | A measurement, not a test: what stock `ssh-keygen` does with each form of signer, the identity's own signature and a certificate an identity signs for a working key, and with the certificates the protocol refuses whatever OpenSSH says (the client repo's issues #30 and #579) |
