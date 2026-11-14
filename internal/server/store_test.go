@@ -1139,19 +1139,30 @@ func TestAWriteToARecordMadeBetweenMillisecondsIsTaken(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
 	e.clock.Add(1234567 * time.Nanosecond)
+	// The registration's own write is memory's copy where the address is
+	// remembered missing and the feed's echo of the write lands after it: an
+	// echo that lands first ends the miss and leaves nothing held
+	// (recCache.image), and the next use reads the store's copy, kept to the
+	// millisecond. A fresh address is tried until memory holds its own.
 	var to *raw
-	rememberedMiss(t, e.store.(*Memory), func() protocol.Address { // remembered missing, so the registration's own write is memory's copy
-		to = e.raw()
-		e.want(e.do("GET", to.path(""), nil, ""), http.StatusNotFound, protocol.CodeMailboxNotFound)
-		return to.id.Address()
-	})
-	to.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
-	e.want(e.do("PUT", to.path(""), to.registration(1), to.pass(1)), http.StatusCreated, "")
-	from := e.raw().register(protocol.MaxPrekeyLifetime)
-	box := to.id.Address()
-	if b, ok := e.store.Known(box); !ok || b == nil || b.Created.Nanosecond()%int(time.Millisecond) == 0 {
-		t.Fatalf("control: memory holds no copy made between milliseconds: %v", b)
+	var box protocol.Address
+	for try := 1; ; try++ {
+		rememberedMiss(t, e.store.(*Memory), func() protocol.Address {
+			to = e.raw()
+			e.want(e.do("GET", to.path(""), nil, ""), http.StatusNotFound, protocol.CodeMailboxNotFound)
+			return to.id.Address()
+		})
+		to.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+		e.want(e.do("PUT", to.path(""), to.registration(1), to.pass(1)), http.StatusCreated, "")
+		box = to.id.Address()
+		if b, ok := e.store.Known(box); ok && b != nil && b.Created.Nanosecond()%int(time.Millisecond) != 0 {
+			break
+		}
+		if try == missTries {
+			t.Fatalf("control: in %d registrations, memory held no copy made between milliseconds", missTries)
+		}
 	}
+	from := e.raw().register(protocol.MaxPrekeyLifetime)
 	to.prekey(2, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", to.path("/prekey"), to.upload(2), to.pass(2)), http.StatusOK, "")
 	e.want(e.do("PUT", to.path("/acl"), aclOf([]string{"*"}, nil), to.pass(2)), http.StatusOK, "")
