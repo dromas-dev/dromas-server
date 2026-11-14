@@ -238,7 +238,10 @@ func same(a, b mark) bool { return a.tag == b.tag && a.exp == b.exp }
 // takes none: no send stores a message where there is no record, and a load
 // that finds none reads no messages, so an insert there is the feed's late
 // echo of one deleted with the record before the load
-// (dromas-dev/dromas-server#254).
+// (dromas-dev/dromas-server#254). A later message of the same bytes,
+// received in the same millisecond as one this process removed, has that
+// one's mark: it is kept out, and the mailbox's list is empty of it, until
+// the feed has brought the removal's echo and then the later one's insert.
 func (x *index) insert(mailbox protocol.Address, k mark, now uint64) {
 	x.apply(mailbox, func(m *mailboxMem) {
 		if k.exp <= now || !m.exists {

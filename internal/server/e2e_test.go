@@ -311,6 +311,10 @@ func TestRetryGetsOriginalReceipt(t *testing.T) {
 	if res := receive(t, b); len(res.Delivered) != 1 {
 		t.Fatalf("delivered %d, want 1", len(res.Delivered))
 	}
+	// A send after the ack is received at a later millisecond, as any is: one
+	// in the same millisecond has the first message's mark, and is kept out
+	// of memory while that message's tomb waits for the feed (index.insert).
+	e.clock.Add(time.Millisecond)
 	e.want(e.do(http.MethodPost, "/v1/"+b.Address().String()+"/messages", *sent, e.pass(a)), http.StatusCreated, "")
 	// The reader skips an id it has taken, and acks it.
 	if res := receive(t, b); len(res.Delivered) != 0 {
