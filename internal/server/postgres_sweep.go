@@ -22,12 +22,14 @@ const sweepBatch = 500
 // old. It runs on the database's clock (each
 // batch's transaction's start), unlike
 // every other condition, so a process whose clock is wrong deletes nothing
-// early.
+// early. It counts the live mailboxes as it starts and after each pass
+// (countMailboxes).
 func (s *pgBackend) sweep(ctx context.Context) {
 	t := time.NewTicker(s.sweepEvery)
 	defer t.Stop()
 	retention := protocol.Retention
 	for {
+		s.countMailboxes(ctx)
 		select {
 		case <-ctx.Done():
 			return
@@ -61,6 +63,26 @@ func (s *pgBackend) sweep(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// countMailboxes sets the mailboxes gauge to the store's mailboxes whose
+// record has not expired, by the database's clock: one count on the
+// mailboxes_expires_at index. A failed count leaves the gauge as it was.
+func (s *pgBackend) countMailboxes(ctx context.Context) {
+	if s.metrics == nil {
+		return
+	}
+	var n int64
+	rctx, cancel := bounded(ctx)
+	err := s.pool.QueryRow(rctx, "SELECT count(*) FROM mailboxes WHERE expires_at > now()").Scan(&n)
+	cancel()
+	if err != nil {
+		if ctx.Err() == nil {
+			s.logf("sweep: the count of mailboxes: %v", err)
+		}
+		return
+	}
+	s.metrics.mailboxes(n)
 }
 
 // sweepRevoked deletes the messages and the record of each address revoked
