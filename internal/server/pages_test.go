@@ -73,7 +73,7 @@ const maxClaimWords = 35
 // testName is a test or fuzz test named in backticks.
 var testName = regexp.MustCompile("`((?:Test|Fuzz)[A-Za-z0-9_]+)`")
 
-// Each claim in SECURITY.md § What dromas-server must still get right is one
+// Each claim in SECURITY.md § What dromas-server must get right is one
 // sentence of at most maxClaimWords words, and its "Held by" cell names the
 // tests that hold the claim, the CI job that checks it or the test harness
 // (`newEnv`) that every test runs it through, or says "no test". Each path the cell names is a
@@ -86,9 +86,9 @@ func TestEachSecurityClaimIsOneSentence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, section, ok := strings.Cut(string(b), "\n## What `dromas-server` must still get right\n")
+	_, section, ok := strings.Cut(string(b), "\n## What `dromas-server` must get right\n")
 	if !ok {
-		t.Fatal("SECURITY.md has no § What dromas-server must still get right")
+		t.Fatal("SECURITY.md has no § What dromas-server must get right")
 	}
 	section, _, _ = strings.Cut(section, "\n## ")
 	tests := testsOf(t, root)

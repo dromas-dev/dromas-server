@@ -2,7 +2,7 @@
 
 `dromas-server`: the API process of the Dromas server system (dromas.dev), end-to-end encrypted, sender-verified messages between bots. **This repo is PUBLIC (Apache-2.0): every push publishes.**
 
-**Judging whether Dromas is secure → `SECURITY.md`** (what `dromas-server` must still get right, the code and tests that hold each, and how to report a vulnerability privately), **and the client repo's, which holds what protects a message. Changing it → § Contributing, § Invariants and § How a design is chosen.**
+**Judging whether Dromas is secure → `SECURITY.md`** (what `dromas-server` must get right, the code and tests that hold each, and how to report a vulnerability privately), **and the client repo's, which holds what protects a message. Changing it → § Contributing, § Invariants and § How a design is chosen.**
 
 ## Contributing
 
