@@ -18,6 +18,8 @@ The API process of the [dromas.dev](https://dromas.dev) server system: end-to-en
 | [`LIMITS.md`](LIMITS.md) | Every limit `dromas-server` enforces, what it protects and who pays for it: there to be checked |
 | [`SECURITY.md`](SECURITY.md) | How to report a vulnerability privately, and what `dromas-server` must get right beside the code and tests that hold it |
 | `test/interop.sh` | The stock-tools client and the Go client, together, against a real `dromas-server` |
+| `examples/compose.yaml` | A whole server system on one host with Docker Compose: Caddy in front for TLS, `dromas-server` and its own PostgreSQL (§ Run it with Docker Compose) |
+| `test/compose.sh` | That file run as § Run it with Docker Compose runs it, on this host, with two Go mailboxes exchanging messages through it, before and after a restart |
 | `test/working-key-openssh.sh` | A measurement, not a test: what stock `ssh-keygen` does with each form of signer, the identity's own signature and a certificate an identity signs for a working key, and with the certificates the protocol refuses whatever OpenSSH says (the client repo's issues #30 and #579) |
 | `Dockerfile` | `dromas-server`'s image: the static binary GoReleaser builds, copied onto distroless static (CA bundle, user `nonroot`, uid 65532); nothing is compiled in it. The echo mailbox's image is the client repo's |
 | `.github/workflows/docker-publish.yml` | The image from `main`, on every push, tagged `main`: GoReleaser's snapshot binaries into that `Dockerfile`, for `linux/amd64` and `linux/arm64`, published as `ghcr.io/dromas-dev/dromas-server` with an attestation of the build and an attested SPDX SBOM (`gh attestation verify oci://ghcr.io/dromas-dev/dromas-server@<digest> -R dromas-dev/dromas-server --signer-workflow dromas-dev/dromas-server/.github/workflows/docker-publish.yml --source-ref refs/heads/main --deny-self-hosted-runners`). A release's image is `release.yml`'s |
@@ -61,6 +63,25 @@ ALTER DEFAULT PRIVILEGES FOR ROLE dromas IN SCHEMA public GRANT SELECT, INSERT, 
 Then `dromas-server migrate` as `dromas`, `serve` as `dromas_app`, and `dromas-server account` as `dromas`: the migrations take from every role but the owner an insert or update of an account and an insert of an adopt key, which `serve` never makes. `--sweep-interval` and `--sweep-grace` set how often, and how long past its expiry, a row is deleted (`ARCHITECTURE.md` § The sweep). `dromas-server account` reaches the same database the same way. `dromas-server serve --help` lists every flag, and each is also a variable in the environment, `DROMAS_SERVER_` and its name upper case with `-` written `_` (`--names` is `DROMAS_SERVER_NAMES`, `--metrics-listen` is `DROMAS_SERVER_METRICS_LISTEN`), a flag given winning over its variable, which is the simpler way to set them in a Compose file or from a secrets manager; `ARCHITECTURE.md` § Storage has the layout. That mode also needs `--names`, the names clients call the server system by: a mailbox's pass is made for one server system by name, and `dromas-server` takes one only on a request that calls it by a name of its own (`ARCHITECTURE.md` § The pass check).
 
 Run behind a reverse proxy that terminates TLS, on hosts you run, with no third party in front: the proxy is part of the server system, since a pass is a bearer credential for its server system (`PROTOCOL.md` §2.3, §11.1, §15.8). `--listen` takes one or more TCP addresses (comma-separated, served alike), and `--trusted-proxy` names the proxy's addresses, whose `X-Forwarded-For` (its last entry) names the client every per-IP limit counts (`ARCHITECTURE.md` § Behind a reverse proxy). Without `--trusted-proxy` the peer is the client. With several processes behind the proxy, it may send each mailbox's calls to one process by the mailbox's address, and `--shard` makes each process answer for its part alone (`ARCHITECTURE.md` § Routing by address).
+
+### Run it with Docker Compose
+
+[`examples/compose.yaml`](examples/compose.yaml) is a whole server system on one host: Caddy in front, which terminates TLS with a certificate from Let's Encrypt for the name the server system is called by, then `dromas-server` and a PostgreSQL of its own, its database and roles made as above, with each message's body in a volume (`--data-dir`). On a host that name's A or AAAA record points at, with ports 80 and 443 open:
+
+```sh
+mkdir dromas && cd dromas
+curl -fsSLO https://raw.githubusercontent.com/dromas-dev/dromas-server/main/examples/compose.yaml
+umask 077
+cat > .env <<EOF
+DOMAIN=dromas.example.com
+POSTGRES_PASSWORD=$(openssl rand -hex 32)
+DROMAS_PASSWORD=$(openssl rand -hex 32)
+DROMAS_APP_PASSWORD=$(openssl rand -hex 32)
+EOF
+docker compose up -d
+```
+
+A client then uses it with `dromas init --server https://dromas.example.com`. Each image is a tag pinned by its digest; `dromas-server`'s tag is a release's version without its `v`, the same in both services that run it, and with a new one `docker compose up -d` runs the migration before the new `dromas-server` starts.
 
 ### Several processes: an optional Valkey
 
