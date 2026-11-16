@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# compose.sh — examples/compose.yaml run as README.md's "Run it with Docker Compose" runs it, on this host, with DOMAIN=localhost,
-# whose certificate Caddy makes from its own local authority, every image as the file pins it, and the Go client `dromas` from the
-# dromas-client release this module requires (a go.work, if there is one, swaps in a checkout):
-#   1. the stack starts from empty volumes: PostgreSQL, the migration, then dromas-server once healthy, then Caddy;
+# compose.sh — examples/docker-compose.yaml run as README.md's "Run it with Docker Compose" runs it, on this host, with
+# DOMAIN=localhost, whose certificate Caddy makes from its own local authority, every image as the file pins it, and the Go client
+# `dromas` from the dromas-client release this module requires (a go.work, if there is one, swaps in a checkout):
+#   1. the stack starts from empty volumes: PostgreSQL, the migration, dromas-server and Caddy, each as it should be;
 #   2. a message between two mailboxes through Caddy over TLS, its body under the data volume until it is received;
 #   3. after docker compose down and up, the volumes kept, the same two mailboxes exchange another.
 # Each mailbox is given its server and CA file at init, which writes them into its own config file, and the client's environment
@@ -16,7 +16,7 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/dromas-compose.XXXXXX") || { echo "no work dir
 pass=0; fail=0
 ok(){ echo "PASS $*"; pass=$((pass + 1)); }
 bad(){ echo "FAIL $*"; fail=$((fail + 1)); }
-compose(){ docker compose -p dromas-compose-test -f "$repo/examples/compose.yaml" --env-file "$work/.env" "$@"; }
+compose(){ docker compose -p dromas-compose-test -f "$repo/examples/docker-compose.yaml" --env-file "$work/.env" "$@"; }
 trap 'rc=$?; [ "$rc" -eq 0 ] || { echo "work dir: $work"; compose logs --no-color --tail 40; }; compose down -v > /dev/null 2>&1 || { echo "docker compose down -v failed: the project dromas-compose-test is left"; rc=1; }; [ "$rc" -eq 0 ] && rm -rf "$work"; exit "$rc"' EXIT
 
 export PATH=$PATH:/usr/local/go/bin
@@ -26,15 +26,19 @@ box(){ n=$1; shift; env -u DROMAS_SERVER_URL -u DROMAS_CA_FILE HOME="$work/$n" X
 
 (umask 077; { echo DOMAIN=localhost; for v in POSTGRES_PASSWORD DROMAS_PASSWORD DROMAS_APP_PASSWORD; do echo "$v=$(openssl rand -hex 32)"; done; } > "$work/.env")
 
-# Up, then each service as it should be, then Caddy's local root and a certificate served for localhost.
+# Up, then Caddy's local root and a certificate served for localhost, then each service as it should be once its healthcheck has
+# run (dromas-server's runs at its default interval).
 up(){
   compose up -d > "$work/up.log" 2>&1 || { bad "$1: docker compose up"; cat "$work/up.log"; return 1; }
-  states=$(compose ps -a --format json | jq -s -r 'sort_by(.Service) | map("\(.Service) \(.State) \(.Health) \(.ExitCode)") | join(", ")')
-  want="caddy running  0, dromas-migrate exited  0, dromas-server running healthy 0, postgres running healthy 0"
-  [ "$states" = "$want" ] && ok "$1: every service as it should be" || { bad "$1: services: $states"; return 1; }
-  for _ in $(seq 30); do compose cp caddy:/data/caddy/pki/authorities/local/root.crt "$work/root.crt" > /dev/null 2>&1 && break; sleep 1; done
-  for _ in $(seq 30); do curl -fsS --cacert "$work/root.crt" -o /dev/null https://localhost/v1/ 2> /dev/null && break; sleep 1; done
+  for _ in $(seq 60); do compose cp caddy:/data/caddy/pki/authorities/local/root.crt "$work/root.crt" > /dev/null 2>&1 && break; sleep 1; done
+  for _ in $(seq 60); do curl -fsS --cacert "$work/root.crt" -o /dev/null https://localhost/v1/ 2> /dev/null && break; sleep 1; done
   curl -fsS --cacert "$work/root.crt" -o /dev/null https://localhost/v1/ && ok "$1: GET https://localhost/v1/ through Caddy" || { bad "$1: GET /v1/ through Caddy"; return 1; }
+  want="caddy running  0, dromas-migrate exited  0, dromas-server running healthy 0, postgres running healthy 0"
+  for _ in $(seq 60); do
+    states=$(compose ps -a --format json | jq -s -r 'sort_by(.Service) | map("\(.Service) \(.State) \(.Health) \(.ExitCode)") | join(", ")')
+    [ "$states" = "$want" ] && break; sleep 1
+  done
+  [ "$states" = "$want" ] && ok "$1: every service as it should be" || { bad "$1: services: $states"; return 1; }
 }
 
 # One message from a to b, its body on the data volume once it is sent, and gone from it once b has it.

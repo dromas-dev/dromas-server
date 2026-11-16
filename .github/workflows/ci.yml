@@ -86,7 +86,7 @@ jobs:
           DROMAS_TEST_VALKEY: valkey://127.0.0.1:6379
         run: scripts/check.sh full
       - name: compose
-        # examples/compose.yaml as README.md's "Run it with Docker Compose"
+        # examples/docker-compose.yaml as README.md's "Run it with Docker Compose"
         # runs it, every image as the file pins it, with two Go mailboxes from
         # the client release go.mod requires: test/compose.sh, which a laptop
         # runs too.

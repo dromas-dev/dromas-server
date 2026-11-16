@@ -1,0 +1,89 @@
+# A Dromas server system on one host: Caddy for TLS, dromas-server, and its
+# own PostgreSQL. README.md's "Run it with Docker Compose" has the steps;
+# DOMAIN and the three passwords come from .env. Each image is a tag pinned
+# by its digest, which Dependabot moves; test/compose.sh runs this file.
+
+services:
+  caddy:
+    image: caddy:2.11.9@sha256:4e2425f6009577e7c651010f16679c28f7d12df3e7b1914f941a7a3370746b3c
+    command: caddy reverse-proxy --from ${DOMAIN} --to dromas-server:8080
+    restart: unless-stopped
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes: [caddy-data:/data]
+    depends_on: [dromas-server]
+
+  dromas-server:
+    image: ghcr.io/dromas-dev/dromas-server:0.6.8@sha256:70aa0925c265e3fdfa103720dc28dc86f338b80db6723987068dd03a4058ab85
+    restart: unless-stopped
+    environment:
+      PGHOST: postgres
+      PGDATABASE: dromas
+      PGUSER: dromas_app
+      PGPASSWORD: ${DROMAS_APP_PASSWORD}
+      DROMAS_SERVER_NAMES: ${DOMAIN}
+      DROMAS_SERVER_LISTEN: ":8080"
+      DROMAS_SERVER_DATA_DIR: /home/nonroot # the image user's home: a new volume takes its owner
+      DROMAS_SERVER_TRUSTED_PROXY: 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16 # Docker's networks; :8080 is not published
+      DROMAS_SERVER_IDLE_TIMEOUT: 3m # above Caddy's keepalive to its upstreams (2m)
+    volumes: [dromas-data:/home/nonroot]
+    healthcheck:
+      test: ["CMD", "/dromas-server", "healthcheck", "--url", "http://127.0.0.1:8080/v1/"]
+    depends_on:
+      dromas-migrate:
+        condition: service_completed_successfully
+
+  # Brings the schema up to date as its owner, then exits, before
+  # dromas-server starts as dromas_app, which owns nothing.
+  dromas-migrate:
+    image: ghcr.io/dromas-dev/dromas-server:0.6.8@sha256:70aa0925c265e3fdfa103720dc28dc86f338b80db6723987068dd03a4058ab85
+    entrypoint: ["/dromas-server", "migrate"]
+    environment:
+      PGHOST: postgres
+      PGDATABASE: dromas
+      PGUSER: dromas
+      PGPASSWORD: ${DROMAS_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:18.7@sha256:2ea8630df176ad090ec92136dee850397c5af8781e4bcf2e4162593691c61bbc
+    # dromas-server follows the database by logical replication.
+    command: postgres -c wal_level=logical -c max_slot_wal_keep_size=1GB
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      DROMAS_PASSWORD: ${DROMAS_PASSWORD}
+      DROMAS_APP_PASSWORD: ${DROMAS_APP_PASSWORD}
+    configs:
+      - source: roles
+        target: /docker-entrypoint-initdb.d/dromas.sh
+    volumes: [postgres-data:/var/lib/postgresql]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+
+configs:
+  # The database and its two roles, as README.md makes them, run once by the
+  # image when its data directory is empty.
+  roles:
+    content: |
+      set -eu
+      psql -v ON_ERROR_STOP=1 -U postgres \
+        -v owner_password="$$DROMAS_PASSWORD" -v app_password="$$DROMAS_APP_PASSWORD" <<'SQL'
+      CREATE ROLE dromas LOGIN PASSWORD :'owner_password';
+      CREATE ROLE dromas_app LOGIN REPLICATION PASSWORD :'app_password';
+      CREATE DATABASE dromas OWNER dromas;
+      REVOKE ALL ON DATABASE dromas FROM PUBLIC;
+      GRANT CONNECT ON DATABASE dromas TO dromas_app;
+      REVOKE CONNECT ON DATABASE postgres FROM PUBLIC;
+      REVOKE CONNECT ON DATABASE template1 FROM PUBLIC;
+      \c dromas
+      GRANT USAGE ON SCHEMA public TO dromas_app;
+      ALTER DEFAULT PRIVILEGES FOR ROLE dromas IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO dromas_app;
+      SQL
+
+volumes:
+  caddy-data:
+  dromas-data:
+  postgres-data:
