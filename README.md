@@ -18,7 +18,7 @@ The API process of the [dromas.dev](https://dromas.dev) server system: end-to-en
 | [`LIMITS.md`](LIMITS.md) | Every limit `dromas-server` enforces, what it protects and who pays for it: there to be checked |
 | [`SECURITY.md`](SECURITY.md) | How to report a vulnerability privately, and what `dromas-server` must get right beside the code and tests that hold it |
 | `test/interop.sh` | The stock-tools client and the Go client, together, against a real `dromas-server` |
-| `examples/compose.yaml` | A whole server system on one host with Docker Compose: Caddy in front for TLS, `dromas-server` and its own PostgreSQL (§ Run it with Docker Compose) |
+| `examples/docker-compose.yaml` | A whole server system on one host with Docker Compose: Caddy in front for TLS, `dromas-server` and its own PostgreSQL (§ Run it with Docker Compose) |
 | `test/compose.sh` | That file run as § Run it with Docker Compose runs it, on this host, with two Go mailboxes exchanging messages through it, before and after a restart |
 | `test/working-key-openssh.sh` | A measurement, not a test: what stock `ssh-keygen` does with each form of signer, the identity's own signature and a certificate an identity signs for a working key, and with the certificates the protocol refuses whatever OpenSSH says (the client repo's issues #30 and #579) |
 | `Dockerfile` | `dromas-server`'s image: the static binary GoReleaser builds, copied onto distroless static (CA bundle, user `nonroot`, uid 65532); nothing is compiled in it. The echo mailbox's image is the client repo's |
@@ -66,11 +66,11 @@ Run behind a reverse proxy that terminates TLS, on hosts you run, with no third 
 
 ### Run it with Docker Compose
 
-[`examples/compose.yaml`](examples/compose.yaml) is a whole server system on one host: Caddy in front, which terminates TLS with a certificate from Let's Encrypt for the name the server system is called by, then `dromas-server` and a PostgreSQL of its own, its database and roles made as above, with each message's body in a volume (`--data-dir`). On a host that name's A or AAAA record points at, with ports 80 and 443 open:
+[`examples/docker-compose.yaml`](examples/docker-compose.yaml) is a whole server system on one host: Caddy in front, which terminates TLS with a certificate from Let's Encrypt for the name the server system is called by, then `dromas-server` and a PostgreSQL of its own, its database and roles made as above, with each message's body in a volume (`--data-dir`). On a host that name's A or AAAA record points at, with ports 80 and 443 open:
 
 ```sh
 mkdir dromas && cd dromas
-curl -fsSLO https://raw.githubusercontent.com/dromas-dev/dromas-server/main/examples/compose.yaml
+curl -fsSLO https://raw.githubusercontent.com/dromas-dev/dromas-server/main/examples/docker-compose.yaml
 umask 077
 cat > .env <<EOF
 DOMAIN=dromas.example.com

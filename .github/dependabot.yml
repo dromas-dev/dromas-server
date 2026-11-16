@@ -44,10 +44,10 @@ updates:
     commit-message:
       prefix: test
 
-  # The sample, examples/compose.yaml, pinned the same way: each release of
-  # dromas-server comes as a pull request. A new major version of PostgreSQL
-  # does not, since a data directory moves to one only by an upgrade of its
-  # own.
+  # The sample, examples/docker-compose.yaml, pinned the same way: each
+  # release of dromas-server comes as a pull request. A new major version of
+  # PostgreSQL does not, since a data directory moves to one only by an
+  # upgrade of its own.
   - package-ecosystem: docker-compose
     directory: /examples
     schedule:
