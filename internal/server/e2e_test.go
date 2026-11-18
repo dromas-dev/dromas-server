@@ -100,20 +100,20 @@ func (e *env) opts() client.Options {
 // mailbox makes and registers a mailbox.
 func (e *env) mailbox() *client.Mailbox {
 	e.t.Helper()
-	b := e.heldMailbox()
-	landAll(e.t, b)
+	b, err := client.Init(context.Background(), e.t.TempDir(), landAll(e.opts()))
+	if err != nil {
+		e.t.Fatalf("init: %v", err)
+	}
 	steady(e.t, e.store, b.Address())
 	return b
 }
 
-// landAll gives a mailbox the policy that lands every sender's messages in inbox/:
+// landAll is o with the policy that lands every sender's messages in inbox/:
 // the tests that use it are of the server, not of where the client lands
 // messages.
-func landAll(t *testing.T, b *client.Mailbox) {
-	t.Helper()
-	if err := b.SetPolicy(t.Context(), client.Policy{Unknown: client.LandInbox, Server: client.AdmitAll}); err != nil {
-		t.Fatal(err)
-	}
+func landAll(o client.Options) client.Options {
+	o.Policy = client.Policy{Unknown: client.LandInbox, Server: client.AdmitAll}
+	return o
 }
 
 // heldMailbox makes a mailbox with the client's default policy, which holds messages
@@ -131,13 +131,12 @@ func (e *env) heldMailbox() *client.Mailbox {
 // once, as dromas init --offline does (client.Options.WorkingKey).
 func (e *env) certifiedMailbox() *client.Mailbox {
 	e.t.Helper()
-	o := e.opts()
+	o := landAll(e.opts())
 	o.WorkingKey = true
 	b, err := client.Init(context.Background(), e.t.TempDir(), o)
 	if err != nil {
 		e.t.Fatalf("init under a certificate: %v", err)
 	}
-	landAll(e.t, b)
 	steady(e.t, e.store, b.Address())
 	return b
 }
@@ -408,7 +407,8 @@ func TestRecoveryWithIdentityAlone(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	a, b := e.mailbox(), e.mailbox()
-	// A restored machine: the identity, nothing else.
+	// A restored machine: the identity, nothing else. Its policy is its
+	// Options' (landAll), which no file removed here holds.
 	for _, g := range []string{"keys/prekeys/*", "keys/work/*", "state"} {
 		names, _ := filepath.Glob(filepath.Join(b.Dir(), g))
 		for _, n := range names {
@@ -420,7 +420,6 @@ func TestRecoveryWithIdentityAlone(t *testing.T) {
 	if _, err := b.Rekey(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	landAll(t, b) // what SetPolicy recorded went with the state file
 	send(t, a, b, "after recovery")
 	if res := receive(t, b); len(res.Delivered) != 1 {
 		t.Fatal("no delivery after recovery")
@@ -542,7 +541,10 @@ func TestTheGoClientsACL(t *testing.T) {
 	if codeOf(err) != protocol.CodeSenderNotAllowed {
 		t.Fatalf("a send from a blocked sender: %v", err)
 	}
-	if err := b.SetPolicy(t.Context(), client.Policy{Unknown: client.LandHeld, Server: client.AdmitAllowed}); err != nil {
+	o := e.opts() // b opened again under "server allowed"
+	o.Policy = client.Policy{Unknown: client.LandHeld, Server: client.AdmitAllowed}
+	b, err = client.Open(b.Dir(), o)
+	if err != nil {
 		t.Fatal(err)
 	}
 	send(t, b, c, "hello")

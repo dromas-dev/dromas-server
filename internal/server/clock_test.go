@@ -32,12 +32,11 @@ func TestAMailboxWhoseClockIsOffByLessThanThePassAllows(t *testing.T) {
 	ctx := context.Background()
 	for _, off := range []time.Duration{-9 * time.Minute, -2 * time.Minute, -time.Second, time.Second, 2 * time.Second, 30 * time.Second, 3 * time.Minute, 49 * time.Minute, 50 * time.Minute} {
 		e := newEnv(t, relaxed())
-		b, err := client.Init(ctx, t.TempDir(), e.skewed(&off))
+		b, err := client.Init(ctx, t.TempDir(), landAll(e.skewed(&off)))
 		if err != nil {
 			t.Errorf("a clock %v off: init: %v", off, err)
 			continue
 		}
-		landAll(t, b)
 		fresh := e.mailbox() // made this moment, on the server's clock: no certificate is newer
 		if _, err := fresh.Send(ctx, b.Address(), "under a certificate made this moment"); err != nil {
 			t.Errorf("a clock %v off: a message to it: %v", off, err)
@@ -64,16 +63,14 @@ func TestTheTwoClocksFurthestApart(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
 	fast, slow := 49*time.Minute, -9*time.Minute
-	f, err := client.Init(ctx, t.TempDir(), e.skewed(&fast))
+	f, err := client.Init(ctx, t.TempDir(), landAll(e.skewed(&fast)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	landAll(t, f)
-	s, err := client.Init(ctx, t.TempDir(), e.skewed(&slow))
+	s, err := client.Init(ctx, t.TempDir(), landAll(e.skewed(&slow)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	landAll(t, s)
 	send(t, f, s, "from the fast mailbox to the slow one")
 	send(t, s, f, "from the slow mailbox to the fast one")
 	for _, b := range []*client.Mailbox{f, s} {
@@ -135,20 +132,18 @@ func TestAMailboxWhoseClockGoesBackFetchesNothing(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
 	var off time.Duration
-	b, err := client.Init(ctx, t.TempDir(), e.skewed(&off))
+	b, err := client.Init(ctx, t.TempDir(), landAll(e.skewed(&off)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	landAll(t, b)
 	if res := receive(t, b); len(res.Delivered) != 0 { // the pass is in the mailbox now, and the server remembers it
 		t.Fatal(res)
 	}
 	fast := 49 * time.Minute
-	sender, err := client.Init(ctx, t.TempDir(), e.skewed(&fast))
+	sender, err := client.Init(ctx, t.TempDir(), landAll(e.skewed(&fast)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	landAll(t, sender)
 	send(t, sender, b, "under a certificate that starts 11 minutes back")
 
 	off = -12 * time.Minute

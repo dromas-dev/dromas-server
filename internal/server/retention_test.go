@@ -29,11 +29,10 @@ func TestAMessageIsTakenWhileTheServerServesIt(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		r, err := client.Init(ctx, t.TempDir(), e.skewed(&off))
+		r, err := client.Init(ctx, t.TempDir(), landAll(e.skewed(&off)))
 		if err != nil {
 			t.Fatal(err)
 		}
-		landAll(t, r)
 		held := 0
 		for range mailboxCap + 1 {
 			if _, err := s.Send(ctx, r.Address(), "a message"); codeOf(err) == protocol.CodeMailboxFull {
@@ -75,11 +74,10 @@ func TestAMessageIsTakenWhileTheServerServesIt(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			r, err := client.Init(ctx, t.TempDir(), e.skewed(&ro))
+			r, err := client.Init(ctx, t.TempDir(), landAll(e.skewed(&ro)))
 			if err != nil {
 				t.Fatal(err)
 			}
-			landAll(t, r)
 			sent, err := s.Send(ctx, r.Address(), "a message")
 			if err != nil {
 				t.Fatal(err)

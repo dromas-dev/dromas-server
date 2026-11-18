@@ -62,6 +62,16 @@ func (e *env) asVersion(v string) {
 	})
 }
 
+// namesVersion is a transport, over http.DefaultTransport, whose every request
+// names version v in Dromas-Version: one mailbox's version, in a parallel test.
+type namesVersion string
+
+func (v namesVersion) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set(protocol.VersionHeader, string(v))
+	return http.DefaultTransport.RoundTrip(r)
+}
+
 // A request whose version is below the floor, or covered by a sunset whose
 // date has passed at the server's clock, is answered 410 client_version_unsupported,
 // with min_version where there is a floor (PROTOCOL.md §11.17). A request
@@ -121,7 +131,7 @@ func TestASunsetIsPassedByTheServersClock(t *testing.T) {
 		off := c.off
 		e, _ := versionsEnv(t, relaxed())
 		o := e.skewed(&off)
-		o.Version = "1.3.7" // sunset at the server's start plus an hour
+		o.HTTPClient = &http.Client{Transport: namesVersion("1.3.7")} // sunset at the server's start plus an hour
 		e.clock.Add(15 * time.Minute)
 		b, err := client.Init(ctx, t.TempDir(), o)
 		if err != nil {
