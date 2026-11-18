@@ -449,25 +449,24 @@ func (r *raw) registerCertified(d time.Duration) uint64 {
 }
 
 // A signature is in its one form (PROTOCOL.md §3.2), the bytes the Go client
-// and ssh-keygen -Y sign write, and so at most its identity's key type's
-// bound (protocol.SignatureBound); it is kept and served byte for byte as it
-// was sent (§13). A byte after its END line, or one more than the bound, is
-// invalid_key at a registration and at a renewal. A pass is at most
-// protocol.MaxPassAuthorization. A certificate with an extension or a
-// critical option makes a signature over the bound, which is refused for
-// that before the certificate is read: a statement under one is invalid_key, and
-// a pass under one, never the mailbox's current certificate,
-// certificate_superseded.
+// and ssh-keygen -Y sign write, and at most protocol.MaxSignature bytes, which
+// is refused before it is parsed; it is kept and served byte for byte as it
+// was sent (§13). A byte after its END line, or a signature of MaxSignature
+// and one bytes, is invalid_key at a registration and at a renewal. A pass is
+// at most protocol.MaxPassAuthorization. A certificate with an extension or a
+// critical option is not in a certificate's one form, and is refused for that
+// though the signature under it is within MaxSignature: a statement under one
+// is invalid_key, and a pass under one, never the mailbox's current
+// certificate, certificate_superseded.
 func TestASignatureIsBounded(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	now := e.clock.Now()
-	bound := protocol.SignatureBound(protocol.IdentityEd25519)
 
 	r := e.raw().certified()
 	r.prekey(2, now.Add(protocol.PrekeyLifetime), nil)
-	if n := len(r.sig[2]); n > bound {
-		t.Fatalf("a statement under a certificate in its one form is %d bytes, over the bound %d", n, bound)
+	if n := len(r.sig[2]); n > protocol.MaxSignature {
+		t.Fatalf("a statement under a certificate in its one form is %d bytes, over MaxSignature %d", n, protocol.MaxSignature)
 	}
 	e.want(e.do("PUT", r.path(""), r.registration(2), r.pass(2)), 201, "")
 	var got protocol.MailboxResponse
@@ -511,8 +510,8 @@ func TestASignatureIsBounded(t *testing.T) {
 			t.Fatal(err)
 		}
 		r.prekeyUnder(under, 4, now.Add(protocol.PrekeyLifetime), nil)
-		if n := len(r.sig[4]); n <= bound {
-			t.Fatalf("a certificate with %s: a statement under it is %d bytes, within the bound %d: the test does not reach the case", name, n, bound)
+		if n := len(r.sig[4]); n > protocol.MaxSignature {
+			t.Fatalf("a certificate with %s: a statement under it is %d bytes, over MaxSignature %d: refused for its length, not its certificate's form", name, n, protocol.MaxSignature)
 		}
 		t.Logf("a certificate with %s", name)
 		e.want(e.do("PUT", r.path("/prekey"), r.upload(4), r.pass(4)), 400, protocol.CodeInvalidKey)

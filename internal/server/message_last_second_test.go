@@ -41,11 +41,10 @@ func TestAMessageAtTheLastSecondOfItsLife(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			r, err := client.Init(ctx, t.TempDir(), e.skewed(&ro))
+			r, err := client.Init(ctx, t.TempDir(), landAll(e.skewed(&ro)))
 			if err != nil {
 				t.Fatal(err)
 			}
-			landAll(t, r)
 			read := "/v1/" + r.Address().String()
 			e.setMiddle(func(w http.ResponseWriter, q *http.Request, next http.Handler) {
 				if q.Method == http.MethodGet && q.URL.Path == read {

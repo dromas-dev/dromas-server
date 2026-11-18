@@ -314,11 +314,10 @@ func TestGoClientOnAP256Identity(t *testing.T) {
 	e := newEnv(t, relaxed())
 	o := e.opts()
 	o.IdentityType = protocol.IdentityP256
-	p, err := client.Init(context.Background(), t.TempDir(), o)
+	p, err := client.Init(context.Background(), t.TempDir(), landAll(o))
 	if err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	landAll(t, p)
 	ed := e.mailbox()
 	send(t, p, ed, "from the P-256 mailbox")
 	send(t, ed, p, "to the P-256 mailbox")
