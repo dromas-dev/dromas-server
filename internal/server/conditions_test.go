@@ -303,3 +303,43 @@ func TestAPreconditionIsIgnoredWhereTheAnswerWouldBeARefusal(t *testing.T) {
 		}
 	}
 }
+
+// A lookup's 200 carries a weak ETag, the same gzipped or not; a lookup whose
+// If-None-Match names it, weakly or strongly, is 304 with the tag, Vary and
+// no content; another tag, or none, is the 200; the tag changes with the
+// answer, at a renewal (PROTOCOL.md §11.8).
+func TestALookupCarriesAWeakTagAndIs304ToIt(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, relaxed())
+	b := e.raw().register(protocol.MaxPrekeyLifetime)
+	url := e.srv.URL + b.path("")
+	plain, body := rawCall(t, http.MethodGet, url)
+	tag := plain.Header.Get("ETag")
+	if plain.StatusCode != http.StatusOK || len(tag) < 4 || tag[:3] != `W/"` {
+		t.Fatalf("a lookup: %d with ETag %q, want 200 with a weak tag", plain.StatusCode, tag)
+	}
+	if zipped, _ := rawCall(t, http.MethodGet, url, "Accept-Encoding", "gzip"); zipped.Header.Get("Content-Encoding") != "gzip" || zipped.Header.Get("ETag") != tag {
+		t.Fatalf("a gzipped lookup: %q with ETag %q, want gzip with %q", zipped.Header.Get("Content-Encoding"), zipped.Header.Get("ETag"), tag)
+	}
+	for _, inm := range []string{tag, tag[2:], `"other", ` + tag} {
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			resp, got := rawCall(t, method, url, "If-None-Match", inm)
+			if resp.StatusCode != http.StatusNotModified || resp.Header.Get("ETag") != tag || !varies(resp) || len(got) != 0 {
+				t.Errorf("%s with If-None-Match %q: %d, ETag %q, Vary %q, %d bytes; want 304 with %q and no content", method, inm, resp.StatusCode, resp.Header.Get("ETag"), resp.Header.Values("Vary"), len(got), tag)
+			}
+		}
+	}
+	if resp, got := rawCall(t, http.MethodGet, url, "If-None-Match", `W/"other"`); resp.StatusCode != http.StatusOK || !bytes.Equal(got, body) {
+		t.Fatalf("a lookup naming another tag: %d, want the 200", resp.StatusCode)
+	}
+	b.prekey(2, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+	e.want(e.do("PUT", b.path("/prekey"), b.upload(2), b.pass(2)), http.StatusOK, "")
+	resp, _ := rawCall(t, http.MethodGet, url, "If-None-Match", tag)
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("ETag") == tag || resp.Header.Get("ETag") == "" {
+		t.Fatalf("a lookup after a renewal naming the old tag: %d with ETag %q, want 200 with a new tag", resp.StatusCode, resp.Header.Get("ETag"))
+	}
+	gone := e.raw()
+	if resp, _ := rawCall(t, http.MethodGet, e.srv.URL+gone.path(""), "If-None-Match", "*"); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("a lookup of no mailbox with If-None-Match *: %d, want 404", resp.StatusCode)
+	}
+}

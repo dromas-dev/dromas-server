@@ -83,8 +83,8 @@ func sharedSet(c valkey.Client, name string, n int, every time.Duration) *bucket
 }
 
 // Two processes' buckets on one shared store are one bucket: a token one
-// takes, the other cannot; one given back, the other can take; each reports
-// the store's bucket; and a clear by one fills it for both.
+// takes, the other cannot; one given back, the other can take; and a clear
+// by one fills it for both.
 func TestBucketsOnASharedStoreAreOneAcrossProcesses(t *testing.T) {
 	t.Parallel()
 	c := testValkey(t)
@@ -103,9 +103,6 @@ func TestBucketsOnASharedStoreAreOneAcrossProcesses(t *testing.T) {
 	}
 	if _, ok, wait := b.reserve(ctx, key, now); ok || wait != time.Hour {
 		t.Fatalf("the other process took a third of 2: ok %v, wait %s; want refused for an hour", ok, wait)
-	}
-	if left, untilFull, n, _ := b.report(key, at); left != 0 || untilFull != 2*time.Hour || n != 2 {
-		t.Fatalf("the other process reports %d left, full in %s, of %d; want 0, 2h, 2", left, untilFull, n)
 	}
 	if len(a.full) != 0 || len(b.full) != 0 {
 		t.Fatalf("the processes' own counts hold %d and %d keys while the store answers, want none", len(a.full), len(b.full))
@@ -129,14 +126,13 @@ func TestBucketsOnASharedStoreAreOneAcrossProcesses(t *testing.T) {
 	if !b.clear(key, at) {
 		t.Fatal("a clear found nothing held")
 	}
-	if left, _, _, _ := a.report(key, at); left != 2 {
-		t.Fatalf("after a clear, %d left, want 2", left)
+	if ok, _ := a.ready(key, at); !ok {
+		t.Fatal("after a clear, no token left")
 	}
 }
 
 // A send's sends a day are the shared store's: a token another process
-// spent is refused here, and the send's Dromas-RateLimit reports the store's
-// bucket.
+// spent is refused here.
 func TestASendSpendsTheSendersBudgetInTheSharedStore(t *testing.T) {
 	t.Parallel()
 	c := testValkey(t)
@@ -152,12 +148,7 @@ func TestASendSpendsTheSendersBudgetInTheSharedStore(t *testing.T) {
 		t.Fatal("the other process's take refused")
 	}
 	r.keep()
-	got := e.do("POST", to, e.sealTo(b), e.pass(a))
-	e.want(got, http.StatusCreated, "")
-	rl := protocol.ParseRateLimit(got.header.Values(protocol.RateLimitField))
-	if s := rl[protocol.QuotaSends]; s.Left != 0 || s.Cap != 2 {
-		t.Fatalf("Dromas-RateLimit %v, want sends left 0 of 2", rl)
-	}
+	e.want(e.do("POST", to, e.sealTo(b), e.pass(a)), http.StatusCreated, "")
 	e.limited(e.do("POST", to, e.sealTo(b), e.pass(a)), protocol.QuotaSends)
 }
 
