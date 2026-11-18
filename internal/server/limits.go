@@ -457,28 +457,6 @@ func (bs *buckets) nextOf(full, now time.Time) (next time.Time, over time.Durati
 	return next, next.Sub(now) - time.Duration(bs.n)*bs.every
 }
 
-// report is key's bucket at now as PROTOCOL.md §11.5's Dromas-RateLimit
-// reports a budget: the tokens left, a token taken counted as taken until
-// its interval has passed; how long until the bucket is full again; and the
-// bucket's size and interval, read under the same lock. With a shared
-// store, the bucket is the store's while it answers.
-func (bs *buckets) report(key string, now time.Time) (left int, untilFull time.Duration, n int, every time.Duration) {
-	shared, read := bs.shared.full(key, now)
-	bs.mu.Lock()
-	defer bs.mu.Unlock()
-	n, every = bs.n, bs.every
-	full := bs.full[key]
-	if read {
-		full = shared
-	}
-	untilFull = full.Sub(now)
-	if untilFull <= 0 || every <= 0 {
-		return n, 0, n, every
-	}
-	taken := int((untilFull + every - 1) / every)
-	return max(n-taken, 0), untilFull, n, every
-}
-
 // clear fills key's bucket at now, as if the key had never been seen, and
 // reports whether it held anything: a token taken and not yet back.
 // Reservations in flight settle as they would have. With a shared store, it
