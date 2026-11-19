@@ -14,6 +14,7 @@ import (
 // is read as a run of shorthands, and no option has one, so each is refused
 // before anything starts.
 func TestAOneDashLongFlagIsRefused(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name string
 		run  func() error
@@ -43,6 +44,7 @@ func TestAOneDashLongFlagIsRefused(t *testing.T) {
 // shorthand forms (StringP, IntVarP, ...), so --name is each option's only
 // spelling.
 func TestNoOptionHasAShorthand(t *testing.T) {
+	t.Parallel()
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
