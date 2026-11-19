@@ -341,8 +341,8 @@ func serve(args []string) error {
 	// Only a feed that lost its place fails the exit: the feed ends with
 	// the store, after Shutdown, so however long Shutdown waits is no loss.
 	select {
-	case <-feedLost:
-		return errors.New("stopped: memory could not be shown current")
+	case err := <-feedLost:
+		return fmt.Errorf("stopped: memory could not be shown current: %w", err)
 	default:
 		return nil
 	}
