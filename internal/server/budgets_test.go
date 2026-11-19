@@ -414,9 +414,10 @@ func (s *readsMeet) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, 
 // before either writes, make one mailbox: one is 201, and the other meets the
 // mailbox at its write and is answered 200 from its record (registered,
 // bounded). Each kept its registration before its signatures (register,
-// g.keep), so the two have spent two: this pins that spend, and whether the
-// second's is given back is open (dromas-dev/dromas-client#443 item 1).
-func TestIdenticalRegistrationsAtOnceSpendARegistrationEach(t *testing.T) {
+// g.keep), and the one answered 200 gives its back (refund), as Boulder's
+// NewAccount refunds the loser: the two spend one. Control: with no refund,
+// the first fresh registration after them is refused.
+func TestIdenticalRegistrationsAtOnceSpendOneRegistration(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	l.RegistrationsPerHour = 2
@@ -439,7 +440,10 @@ func TestIdenticalRegistrationsAtOnceSpendARegistrationEach(t *testing.T) {
 	}
 	fresh := e.raw()
 	fresh.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
-	e.limited(e.do("PUT", fresh.path(""), fresh.registration(1), fresh.pass(1)), protocol.QuotaRegistrations)
+	e.want(e.do("PUT", fresh.path(""), fresh.registration(1), fresh.pass(1)), http.StatusCreated, "")
+	last := e.raw()
+	last.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+	e.limited(e.do("PUT", last.path(""), last.registration(1), last.pass(1)), protocol.QuotaRegistrations)
 }
 
 // A revocation of certificates through a serial no higher than the one held

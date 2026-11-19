@@ -555,6 +555,27 @@ func (c addressCount) release(now time.Time) {
 	c.byIP.release(now)
 }
 
+// refund gives back both counts once kept, for a call found not to count
+// only after they bound its work, as Boulder's NewAccount refunds a
+// registration that meets an account already made (refundLimits). Each goes
+// back as a release would give it (giveLocked, sharedBuckets.give).
+func (c addressCount) refund(now time.Time) {
+	for _, r := range []*reservation{c.byRange, c.byIP} {
+		if r == nil {
+			continue
+		}
+		r.bs.mu.Lock()
+		every := r.bs.every
+		if !r.shared {
+			r.bs.giveLocked(r.key, now)
+		}
+		r.bs.mu.Unlock()
+		if r.shared {
+			r.bs.shared.give(r.key, every, now)
+		}
+	}
+}
+
 // reserve reserves a count of host by both its keys before the work they
 // guard, to be kept or given back once its outcome is known (LIMITS.md,
 // rule 4). Each is reserved before the other is settled, so a refusal by

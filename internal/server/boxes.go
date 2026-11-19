@@ -33,8 +33,9 @@ const hintDocument = "the identity document is \"dromas-v1\", LF, one SSH public
 // that would change nothing; dromas-dev/dromas-client#410), but for one that found nothing
 // at its read and meets a mailbox at its write (ErrExists), one an identical
 // registration made meanwhile among them: it kept its counts before its
-// signatures, and is answered as registered with them spent (registered's
-// bounded; dromas-dev/dromas-client#443). Memory answers with
+// signatures, and is answered as registered (registered's bounded). An
+// identical one, answered 200, then gives its counts back (refund), as
+// Boulder's NewAccount refunds the loser of the same race. Memory answers with
 // nothing counted. A read is counted once, as what it turns out to be: the
 // registrations it would spend, the address's and its /48's, are reserved
 // before it, given back if it finds a mailbox or a revocation, and kept if it
@@ -176,7 +177,11 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 	case rerr != nil:
 		return rerr
 	case settled(read):
-		return s.registered(w, r, id, read, &req, true)
+		answer := s.registered(w, r, id, read, &req, true)
+		if answer == nil && exists { // the identical registration another request made: this one made nothing
+			g.refund(s.now())
+		}
+		return answer
 	case revoked:
 		return statementRevoked()
 	case !exists:
@@ -214,7 +219,8 @@ func settled(b *Mailbox) bool { return b.open() || b != nil && b.State == Revoke
 // another request meanwhile or by its own write whose outcome is unknown:
 // its registrations counts were taken, and they bound the pass's check
 // (checkPassBounded), which its own statement's pass has passed already
-// where the mailbox is the one it sent.
+// where the mailbox is the one it sent; register gives them back where
+// another request made it.
 func (s *Server) registered(w http.ResponseWriter, r *http.Request, id *protocol.Identity, cur *Mailbox, req *protocol.RegisterRequest, bounded bool) error {
 	switch {
 	case cur.State == Revoked:
