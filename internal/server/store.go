@@ -58,11 +58,8 @@ type Mailbox struct {
 	// this build verifies (protocol.Declaration). A sender of a type §4.1
 	// defines needs no declaration.
 	SenderKeyTypes []string
-	// Retired holds the newest retired prekeys (Limits.RetiredKept), each
-	// until its not_after: its key may not come back.
-	Retired []Retired
-	Rev     uint64 // the record's revision, 0 with no record; a write must name the one it read
-	Created time.Time
+	Rev            uint64 // the record's revision, 0 with no record; a write must name the one it read
+	Created        time.Time
 	// Expires is when the record may go: the sweep deletes it some time
 	// after (PROTOCOL.md §13). Every registration and renewal raises it to
 	// when nothing the mailbox has published is valid any more, and nothing
@@ -335,13 +332,6 @@ type AdoptKey struct {
 // good reports whether the key has a use left and has not expired.
 func (k *AdoptKey) good(now time.Time) bool { return k.Uses >= 1 && now.Before(k.Expires) }
 
-// Retired is what is kept of a retired prekey while it is live.
-type Retired struct {
-	Type     protocol.KeyType
-	NotAfter time.Time
-	KeyHash  [32]byte // SHA-256 of the age recipient
-}
-
 // Header is one message's metadata: everything but its body.
 type Header struct {
 	ID         [32]byte // SHA-256 of the ciphertext
@@ -556,7 +546,6 @@ var ttlMs = uint64(protocol.Retention / time.Millisecond)
 
 func cloneMailbox(b *Mailbox) *Mailbox {
 	c := *b
-	c.Retired = slices.Clone(b.Retired)
 	c.SenderKeyTypes = slices.Clone(b.SenderKeyTypes)
 	c.RevokedCerts, c.RevokedCertsSig = slices.Clone(b.RevokedCerts), slices.Clone(b.RevokedCertsSig)
 	c.ACL = cloneACL(b.ACL)

@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/rand"
 	"embed"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -575,23 +574,7 @@ func (r row) json(name string, v any) error {
 // The mailbox record.
 
 // mailboxCols are a mailbox record's columns, as ReadAddress reads them.
-const mailboxCols = "m.addr, m.identity, m.created, m.statement, m.statement_sig, m.rank, m.signer, m.senders, m.retired, m.acl, m.account, m.expires_at, m.rev"
-
-// retiredJSON is a retired prekey as the retired column keeps it.
-type retiredJSON struct {
-	Type     string `json:"type"`
-	NotAfter uint64 `json:"not_after"`
-	KeyHash  string `json:"key_hash"` // hex
-}
-
-func retiredColumn(b *Mailbox) []byte {
-	l := make([]retiredJSON, 0, len(b.Retired))
-	for _, r := range b.Retired {
-		l = append(l, retiredJSON{string(r.Type), ms(r.NotAfter), hex.EncodeToString(r.KeyHash[:])})
-	}
-	doc, _ := json.Marshal(l) // strings and numbers always marshal
-	return doc
-}
+const mailboxCols = "m.addr, m.identity, m.created, m.statement, m.statement_sig, m.rank, m.signer, m.senders, m.acl, m.account, m.expires_at, m.rev"
 
 func aclColumn(b *Mailbox) []byte {
 	if b.ACL == nil {
@@ -725,23 +708,6 @@ func decodeMailbox(r row) (*Mailbox, error) {
 	if len(b.SenderKeyTypes) == 0 {
 		b.SenderKeyTypes = nil
 	}
-	var retired []retiredJSON
-	if err := r.json("retired", &retired); err != nil {
-		return nil, err
-	}
-	for _, x := range retired {
-		h, err := hex.DecodeString(x.KeyHash)
-		if err != nil || len(h) != 32 {
-			return nil, errors.New("row: a retired prekey's key_hash is not 32 bytes")
-		}
-		notAfter, err := fromMs(x.NotAfter)
-		if err != nil {
-			return nil, err
-		}
-		ret := Retired{Type: protocol.KeyType(x.Type), NotAfter: notAfter}
-		copy(ret.KeyHash[:], h)
-		b.Retired = append(b.Retired, ret)
-	}
 	return b, nil
 }
 
@@ -836,8 +802,8 @@ func (s *pgBackend) CreateMailbox(ctx context.Context, b *Mailbox) error {
 			return ErrStale // a revocation the registration's checks did not read
 		}
 		tag, err := tx.Exec(ctx, `INSERT INTO mailboxes (addr, identity, created, statement, statement_sig, rank, signer, senders, retired, acl, account, expires_at, rev)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT (addr) DO NOTHING`,
-			b.Addr[:], b.Identity, msTime(b.Created), b.Statement, b.Signature, numeric(b.Rank), b.Signer[:], sendersColumn(b), retiredColumn(b), aclColumn(b), accountColumn(b), expiresColumn(b), toInt(b.Rev))
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '[]', $9, $10, $11, $12) ON CONFLICT (addr) DO NOTHING`,
+			b.Addr[:], b.Identity, msTime(b.Created), b.Statement, b.Signature, numeric(b.Rank), b.Signer[:], sendersColumn(b), aclColumn(b), accountColumn(b), expiresColumn(b), toInt(b.Rev))
 		if err != nil {
 			return err
 		}
@@ -893,11 +859,11 @@ func (s *pgBackend) UpdateMailbox(ctx context.Context, b *Mailbox) error {
 	if err := b.writable(); err != nil {
 		return refused(err)
 	}
-	held, hargs := passHeld(ctx, 12)
-	n, err := s.exec(ctx, `UPDATE mailboxes SET statement = $2, statement_sig = $3, rank = $4, signer = $5, senders = $6, retired = $7,
-		acl = COALESCE($8, acl), expires_at = $9, rev = rev + 1
-		WHERE addr = $1 AND created = $10 AND rev = $11 AND `+held,
-		append([]any{b.Addr[:], b.Statement, b.Signature, numeric(b.Rank), b.Signer[:], sendersColumn(b), retiredColumn(b), aclColumn(b), expiresColumn(b), msTime(b.Created), toInt(b.Rev)}, hargs...)...)
+	held, hargs := passHeld(ctx, 11)
+	n, err := s.exec(ctx, `UPDATE mailboxes SET statement = $2, statement_sig = $3, rank = $4, signer = $5, senders = $6,
+		acl = COALESCE($7, acl), expires_at = $8, rev = rev + 1
+		WHERE addr = $1 AND created = $9 AND rev = $10 AND `+held,
+		append([]any{b.Addr[:], b.Statement, b.Signature, numeric(b.Rank), b.Signer[:], sendersColumn(b), aclColumn(b), expiresColumn(b), msTime(b.Created), toInt(b.Rev)}, hargs...)...)
 	if err != nil {
 		return err
 	}

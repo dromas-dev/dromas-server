@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -1166,8 +1165,6 @@ func TestPrekeyRenewal(t *testing.T) {
 
 	// The identity signs the mailbox's statements to begin with.
 	e.want(put(1, 1), 200, "") // an identical retry of the current statement
-	r.prekey(2, now.Add(time.Hour), r.keys[1])
-	e.want(put(2, 2), 400, protocol.CodePrekeyAlreadyUsed) // the same key again
 	r.prekey(2, now.Add(time.Hour), nil)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(2), ""), 401, protocol.CodeInvalidPass)
 	e.want(e.do("PUT", r.path("/prekey"), r.upload(2), unknown.pass(2)), 401, protocol.CodeInvalidPass)
@@ -1212,8 +1209,10 @@ func TestPrekeyRenewal(t *testing.T) {
 	r.prekeyUnder(current, 3, now.Add(time.Hour), nil)
 	e.want(put(3, 3), 200, "")
 	e.want(poll(r.pass(3)), 200, "")
+	// A prekey's key is not compared with the ones before: a new key each
+	// renewal is the client's rule (PROTOCOL.md §12.4).
 	r.prekeyUnder(current, 4, now.Add(time.Hour), r.keys[2])
-	e.want(put(4, 4), 400, protocol.CodePrekeyAlreadyUsed) // a live retired key
+	e.want(put(4, 4), 200, "") // a live retired key
 	// Under the mailbox's current certificate the serial must rise.
 	r.prekeyUnder(current, 3, now.Add(2*time.Hour), nil)
 	e.want(put(3, 3), 409, protocol.CodeSerialTooLow)
@@ -1701,8 +1700,7 @@ func TestSendNamesTheCurrentPrekey(t *testing.T) {
 
 // A mailbox renews its prekey RenewalsPerDay times at once, then is told to wait
 // for the next, which comes back a day divided by that number later; an identical retry of the current statement
-// is not a renewal. Its record keeps only the RetiredKept newest retired
-// prekeys, so a mailbox that renews often cannot grow it.
+// is not a renewal.
 func TestRenewalLimits(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
@@ -1710,17 +1708,14 @@ func TestRenewalLimits(t *testing.T) {
 	// its current signer, the identity, and counts under the renewals; a
 	// renewal under a later certificate counts under the certificates
 	// (TestTheIdentitysActsAreCountedApart).
-	l.RenewalsPerDay, l.CertificatesPerDay, l.RetiredKept, l.RenewalsBurst, l.CertificatesBurst = 3, 3, 2, 3, 3
+	l.RenewalsPerDay, l.CertificatesPerDay, l.RenewalsBurst, l.CertificatesBurst = 3, 3, 3, 3
 	e := newEnv(t, l)
 	ctx := context.Background()
 	b := e.mailbox()
-	var renewed []*protocol.Prekey
 	for i := range 3 {
-		p, err := b.Rekey(ctx)
-		if err != nil {
+		if _, err := b.Rekey(ctx); err != nil {
 			t.Fatalf("renewal %d: %v", i+1, err)
 		}
-		renewed = append(renewed, p)
 	}
 	_, err := b.Rekey(ctx)
 	var ae *client.APIError
@@ -1729,14 +1724,6 @@ func TestRenewalLimits(t *testing.T) {
 	}
 	cur, _ := e.store.Mailbox(ctx, b.Address())
 	e.want(e.do("PUT", "/v1/"+b.Address().String()+"/prekey", protocol.PrekeyRequest{Prekey: cur.Statement, PrekeySignature: cur.Signature}, e.pass(b)), 200, "")
-	if len(cur.Retired) != 2 {
-		t.Fatalf("the record keeps %d retired prekeys, want 2", len(cur.Retired))
-	}
-	for i, p := range renewed[:2] { // the first two renewals: the third is current
-		if cur.Retired[i].KeyHash != sha256.Sum256([]byte(p.Key)) {
-			t.Fatalf("retired[%d] is not prekey %d: the newest are not the ones kept", i, p.Serial)
-		}
-	}
 	e.clock.Add(8*time.Hour - time.Second)
 	if _, err := b.Rekey(ctx); !limitedBy(err, protocol.QuotaRenewals) {
 		t.Fatalf("a renewal a second before the next comes back: %v", err)
