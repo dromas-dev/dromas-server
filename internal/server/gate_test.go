@@ -24,19 +24,13 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// recorded is a request body that records whether anything read it, and
-// whether anything read it before counted reported its call counted.
+// recorded is a request body that records whether anything read it.
 type recorded struct {
-	r       io.Reader
-	read    bool
-	early   bool
-	counted func() bool
+	r    io.Reader
+	read bool
 }
 
 func (b *recorded) Read(p []byte) (int, error) {
-	if !b.read && b.counted != nil && !b.counted() {
-		b.early = true
-	}
 	b.read = true
 	return b.r.Read(p)
 }
@@ -100,14 +94,11 @@ func respelled(t *testing.T, pass string) string {
 // and one the server holds nothing of), the link page, a site's page and a
 // request no route answers are refused 429 requests, whatever the call
 // carries, with nothing else done: no other count of any limit taken, no
-// pass parsed or checked, no mailbox looked up, nothing of its body read before
-// it was counted. What is read of the body after, net/http's own drain
-// before its answer, is the connection's (dromas-dev/dromas-client#413
-// item 3). The one call that
-// goes on is a mailbox's: a pass this process has checked, of a mailbox that is
-// live, to a route that takes that mailbox's pass (a send takes any mailbox's, a
-// call about a mailbox only its own, and the read of a mailbox none:
-// dromas-dev/dromas-client#352). Its answer moves a count of its mailbox's,
+// pass parsed or checked, no mailbox looked up, no body read. The one call
+// that goes on is a mailbox's: a pass this process has checked, of a
+// mailbox that is live, to a route that takes that mailbox's pass (a send
+// takes any mailbox's, a call about a mailbox only its own, and the read of
+// a mailbox none: dromas-dev/dromas-client#352). Its answer moves a count of its mailbox's,
 // whatever it is. A new route is held to this by being one of routes(), and
 // a new state by being one of these; and each route that answers GET is
 // held to it for HEAD too.
@@ -244,9 +235,6 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 				req.Header.Set("Authorization", v.auth)
 			}
 			limits, passes := counts(t, reg, "dromas_server_limit_requests_total"), counts(t, reg, "dromas_server_passes_total")
-			body.counted = func() bool {
-				return moved(limits, counts(t, reg, "dromas_server_limit_requests_total"))["decision=denied,limit=requests,subject=ip"] == 1
-			}
 			w := httptest.NewRecorder()
 			if tg.direct {
 				direct.ServeHTTP(w, req)
@@ -274,8 +262,8 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 			if d := moved(passes, counts(t, reg, "dromas_server_passes_total")); len(d) != 0 {
 				t.Errorf("%s: passes looked at: %v", what, d)
 			}
-			if body.early {
-				t.Errorf("%s: its body was read before it was counted", what)
+			if body.read {
+				t.Errorf("%s: its body was read", what)
 			}
 		}
 	}

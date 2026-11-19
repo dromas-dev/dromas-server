@@ -162,6 +162,13 @@ func TestABodyThatStopsIsCutBehindEveryAnswer(t *testing.T) {
 			if d := counts(t, reg, "dromas_server_limit_requests_total")["decision=denied,limit=requests,subject=ip"]; c.limited && d != 1 {
 				t.Errorf("refused for the flood budget %v times, want 1", d)
 			}
+			want := 0.0 // net/http's drain behind an answer written first is not counted
+			if c.status == "408" {
+				want = 1
+			}
+			if cut := counts(t, reg, "dromas_server_bodies_cut_total")[""]; cut != want {
+				t.Errorf("dromas_server_bodies_cut_total %v, want %v", cut, want)
+			}
 			t.Logf("cut after %v", time.Since(start).Round(10*time.Millisecond))
 		})
 	}
@@ -208,9 +215,10 @@ func TestAChunkedBodyCutInItsTrailerIs408(t *testing.T) {
 // before it is read, gets that answer (#82): net/http drains the body
 // with a reader of its own, so no byte of the drain moves the read
 // deadline, the drain is cut at body_timeout from the head, and the answer
-// goes out after it, under a write deadline from then (pacedBody.drained). Each body is 3,000 bytes at 2,000 a second, where a handler's reads
-// would give it a second and three more; the control is a body its handler
-// reads, answered after the whole of it.
+// goes out after it, under a write deadline from then (pacedBody.drained).
+// Each body is 3,000 bytes at 2,000 a second, where a handler's reads would
+// give it a second and three more; the control is a body its handler reads,
+// answered after the whole of it.
 func TestAnAnswerWrittenFirstOutlivesTheDrainOfItsBody(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -238,8 +246,7 @@ func TestAnAnswerWrittenFirstOutlivesTheDrainOfItsBody(t *testing.T) {
 			if c.limits != nil {
 				c.limits(&l)
 			}
-			reg := prometheus.NewRegistry()
-			s := New(Config{Store: NewMemStore(time.Now), Limits: l, Metrics: NewMetrics(reg)})
+			s := New(Config{Store: NewMemStore(time.Now), Limits: l})
 			addr, _ := served(t, s, l)
 			if c.spend {
 				resp, err := http.Get("http://" + addr + protocol.LinkPath + nobody)
@@ -286,8 +293,7 @@ func TestALargeAnswerWrittenFirstGoesOutAfterTheDrainOfItsBody(t *testing.T) {
 	e.want(e.do(http.MethodPost, to.path("/messages"), to.sealed(1, ct.Bytes()), from.pass(1)), http.StatusCreated, "")
 	id := sha256.Sum256(ct.Bytes())
 	l := pacedLimits()
-	reg := prometheus.NewRegistry()
-	s := New(Config{Store: e.store, Limits: l, Metrics: NewMetrics(reg), Now: e.clock.Now})
+	s := New(Config{Store: e.store, Limits: l, Now: e.clock.Now})
 	addr, _ := served(t, s, l)
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {

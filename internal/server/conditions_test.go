@@ -305,8 +305,9 @@ func TestAPreconditionIsIgnoredWhereTheAnswerWouldBeARefusal(t *testing.T) {
 }
 
 // A lookup's 200 carries a weak ETag; a lookup whose If-None-Match names
-// it, weakly or strongly, is 304 with the tag and no content; another tag, or none, is the 200; the tag changes with the
-// answer, at a renewal (PROTOCOL.md §11.8).
+// it, weakly or strongly, is 304 with the tag, no Vary and no content;
+// another tag, or none, is the 200; the tag changes with the answer, at a
+// renewal (PROTOCOL.md §11.8).
 func TestALookupCarriesAWeakTagAndIs304ToIt(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
@@ -320,8 +321,8 @@ func TestALookupCarriesAWeakTagAndIs304ToIt(t *testing.T) {
 	for _, inm := range []string{tag, tag[2:], `"other", ` + tag} {
 		for _, method := range []string{http.MethodGet, http.MethodHead} {
 			resp, got := rawCall(t, method, url, "If-None-Match", inm)
-			if resp.StatusCode != http.StatusNotModified || resp.Header.Get("ETag") != tag || len(got) != 0 {
-				t.Errorf("%s with If-None-Match %q: %d, ETag %q, %d bytes; want 304 with %q and no content", method, inm, resp.StatusCode, resp.Header.Get("ETag"), len(got), tag)
+			if resp.StatusCode != http.StatusNotModified || resp.Header.Get("ETag") != tag || varies(resp) || len(got) != 0 {
+				t.Errorf("%s with If-None-Match %q: %d, ETag %q, Vary %q, %d bytes; want 304 with %q, no Vary and no content", method, inm, resp.StatusCode, resp.Header.Get("ETag"), resp.Header.Values("Vary"), len(got), tag)
 			}
 		}
 	}
