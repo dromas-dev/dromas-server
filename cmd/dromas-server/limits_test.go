@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net"
 	"net/http"
@@ -11,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dromas-dev/dromas-client/protocol"
 	"github.com/dromas-dev/dromas-server/internal/server"
 )
 
@@ -75,5 +78,44 @@ func TestTheAdminSocket(t *testing.T) {
 	}
 	if err := limits("raise", []string{"--socket", path}); err == nil {
 		t.Fatal("a limits command that is not one")
+	}
+}
+
+// An answer of the operator's socket past 64 KiB is copied whole, so limits
+// top of many keys prints JSON. Control: a read cut at 64 KiB prints its
+// first 64 KiB, no JSON, and returns no error.
+func TestALargeAdminAnswerIsCopiedWhole(t *testing.T) {
+	t.Parallel()
+	dir, err := os.MkdirTemp("", "dr") // a short path: a Unix socket's is at most 108 bytes
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "admin.sock")
+	l, err := net.Listen("unix", path) // not listenAdmin, whose umask is the process's
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := make([]server.Indebted, 1000) // limits top's most keys, mailboxes, at about 93 bytes each
+	for i := range keys {
+		keys[i] = server.Indebted{Key: protocol.AddressOf(fmt.Appendf(nil, "%d", i)).String(), FullIn: 86400}
+	}
+	answer, err := json.Marshal(map[string]any{"limit": "mailbox_rate_limited", "keys": keys})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(answer) <= 64<<10 {
+		t.Fatalf("control: the answer is %d bytes, not past 64 KiB", len(answer))
+	}
+	go func() {
+		_ = http.Serve(l, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(answer) }))
+	}()
+	t.Cleanup(func() { _ = l.Close() })
+	var out bytes.Buffer
+	if err := adminCall(path, http.MethodGet, "/limits/top?limit=mailbox_rate_limited&n=1000", &out); err != nil {
+		t.Fatal(err)
+	}
+	if !json.Valid(out.Bytes()) || !bytes.Equal(out.Bytes(), answer) {
+		t.Fatalf("limits top printed %d bytes of the %d answered, valid JSON %v", out.Len(), len(answer), json.Valid(out.Bytes()))
 	}
 }

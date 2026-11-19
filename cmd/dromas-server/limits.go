@@ -78,7 +78,9 @@ func limits(cmd string, args []string) error {
 }
 
 // adminCall calls method on path on the server listening at socket, and
-// copies a 200's body to out.
+// copies a 200's body to out. The body is read whole: the server bounds
+// every answer of its socket (limits top's by topMost keys), and a body cut
+// short is no JSON.
 func adminCall(socket, method, path string, out io.Writer) error {
 	c := &http.Client{
 		Timeout: 10 * time.Second,
@@ -97,7 +99,7 @@ func adminCall(socket, method, path string, out io.Writer) error {
 		return err
 	}
 	defer resp.Body.Close() //nolint:errcheck // read to the end below
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
 	}
