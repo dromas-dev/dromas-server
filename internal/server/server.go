@@ -605,7 +605,7 @@ func (s *Server) whenReady(h http.Handler) http.Handler {
 // otherwise, or when that entry is not an address, the peer's own. Entries
 // before the last were written by whoever called the proxy, and are never
 // read. Every X-Forwarded-For line is one list (RFC 9110 §5.3), with spaces
-// and tabs around each entry (OWS, §5.6.3), as acceptsGzip reads one.
+// and tabs around each entry (OWS, §5.6.3).
 func (s *Server) clientIP(r *http.Request) string {
 	if s.fromProxy(r) {
 		list := strings.Join(r.Header.Values("X-Forwarded-For"), ",")
