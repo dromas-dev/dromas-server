@@ -2,7 +2,8 @@
 # every pull request and every merge group (the merge queue's test of a pull
 # request on main and those queued ahead of it, GitHub's merge_group event),
 # so each commit's result is on the public record, and
-# once a day, when govulncheck meets advisories published since. The fuzz
+# once a day, for govulncheck, which meets the advisories published since:
+# the daily run runs every job here but the fuzz, the test matrix too. The fuzz
 # targets run once a week, an hour each, as dromas-client's do (its ci.yml's
 # fuzz-targets and fuzz). release.yml runs it all again on a release's tag
 # before it builds (workflow_call).
