@@ -101,9 +101,9 @@ func respelled(t *testing.T, pass string) string {
 // request no route answers are refused 429 requests, whatever the call
 // carries, with nothing else done: no other count of any limit taken, no
 // pass parsed or checked, no mailbox looked up, nothing of its body read before
-// it was counted. What is read of the body after, the drain before its
-// answer (pacedBody.drain), is the connection's, as net/http's own drain
-// was (dromas-dev/dromas-client#413 item 3). The one call that
+// it was counted. What is read of the body after, net/http's own drain
+// before its answer, is the connection's (dromas-dev/dromas-client#413
+// item 3). The one call that
 // goes on is a mailbox's: a pass this process has checked, of a mailbox that is
 // live, to a route that takes that mailbox's pass (a send takes any mailbox's, a
 // call about a mailbox only its own, and the read of a mailbox none:

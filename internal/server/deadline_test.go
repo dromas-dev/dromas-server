@@ -98,12 +98,10 @@ func closesWithin(conn net.Conn, d time.Duration) (bool, string) {
 
 // A body that stops after its head is cut off at the read deadline, behind
 // any answer: one a handler gives after it reads, and every one written
-// before the body is read, whose body the server drains first (#77). Cut
+// before the body is read, whose body net/http drains first (#77). Cut
 // off where a handler reads it, the answer is 408 request_timeout (RFC 9110
 // §15.5.9); behind an answer written first, the drain is cut and that
-// answer goes out after it (#82), then the connection ends. Either way the
-// cut is counted once, in the one place every cut is
-// (dromas-dev/dromas-client#413 item 3).
+// answer goes out after it (#82), then the connection ends.
 func TestABodyThatStopsIsCutBehindEveryAnswer(t *testing.T) {
 	t.Parallel()
 	nobody := "d_" + strings.Repeat("ab", 32)
@@ -164,9 +162,6 @@ func TestABodyThatStopsIsCutBehindEveryAnswer(t *testing.T) {
 			if d := counts(t, reg, "dromas_server_limit_requests_total")["decision=denied,limit=requests,subject=ip"]; c.limited && d != 1 {
 				t.Errorf("refused for the flood budget %v times, want 1", d)
 			}
-			if cut := counts(t, reg, "dromas_server_bodies_cut_total")[""]; cut != 1 {
-				t.Errorf("a body cut off at its deadline: dromas_server_bodies_cut_total %v, want 1", cut)
-			}
 			t.Logf("cut after %v", time.Since(start).Round(10*time.Millisecond))
 		})
 	}
@@ -210,12 +205,10 @@ func TestAChunkedBodyCutInItsTrailerIs408(t *testing.T) {
 }
 
 // A body that keeps coming above body_min_rate, behind an answer written
-// before it is read, gets that answer (#82): the server drains the body
-// through the paced body, before the answer's first byte goes out, and no
-// byte of the drain moves the read deadline, so the drain is cut at
-// body_timeout from the head, counted as every cut is
-// (dromas-dev/dromas-client#413 item 3), and the answer goes out after
-// it. Each body is 3,000 bytes at 2,000 a second, where a handler's reads
+// before it is read, gets that answer (#82): net/http drains the body
+// with a reader of its own, so no byte of the drain moves the read
+// deadline, the drain is cut at body_timeout from the head, and the answer
+// goes out after it, under a write deadline from then (pacedBody.drained). Each body is 3,000 bytes at 2,000 a second, where a handler's reads
 // would give it a second and three more; the control is a body its handler
 // reads, answered after the whole of it.
 func TestAnAnswerWrittenFirstOutlivesTheDrainOfItsBody(t *testing.T) {
@@ -260,26 +253,25 @@ func TestAnAnswerWrittenFirstOutlivesTheDrainOfItsBody(t *testing.T) {
 			if !strings.HasPrefix(status, "HTTP/1.1 "+c.status+" ") {
 				t.Errorf("a body moving at twice body_min_rate: answered %q, want %s", status, c.status)
 			}
-			cut := counts(t, reg, "dromas_server_bodies_cut_total")[""]
 			switch control := c.name == "read by its handler (control)"; {
-			case control && (sent != 3000 || at < last || cut != 0):
-				t.Errorf("a body its handler reads: answered at %v with %d of 3000 bytes sent, the last at %v, %v cut; want the answer after the whole body, none cut", at.Round(10*time.Millisecond), sent, last.Round(10*time.Millisecond), cut)
-			case !control && (at > last || cut != 1):
-				t.Errorf("behind an answer written first: answered at %v, the body's last bytes at %v, %v cut; want the drain cut at body_timeout, before the body's end, and counted once", at.Round(10*time.Millisecond), last.Round(10*time.Millisecond), cut)
+			case control && (sent != 3000 || at < last):
+				t.Errorf("a body its handler reads: answered at %v with %d of 3000 bytes sent, the last at %v; want the answer after the whole body", at.Round(10*time.Millisecond), sent, last.Round(10*time.Millisecond))
+			case !control && at > last:
+				t.Errorf("behind an answer written first: answered at %v, the body's last bytes at %v; want the drain cut at body_timeout, before the body's end", at.Round(10*time.Millisecond), last.Round(10*time.Millisecond))
 			}
 		})
 	}
 }
 
 // An answer larger than net/http's buffer, written before a body that stops
-// is read, goes out whole once the drain of the body is cut, and the cut is
-// counted once (dromas-dev/dromas-client#437 item 1): every other test's
-// answer fits the buffer, which net/http writes only as the handler
-// returns, after the drain there. This one is a fetch of a 32 KiB message,
-// with a body of 1,000 bytes that stops after one. Control: with no drain
-// before the first write (pacedWriter.Write), net/http drains the body
-// itself inside that write, to the read deadline, and the write's deadline
-// has passed when it ends: nothing is answered.
+// is read, goes out whole once the drain of the body is cut
+// (dromas-dev/dromas-client#437 item 1): every other test's answer fits
+// the buffer, which net/http writes only as the handler returns, after the
+// drain there. This one is a fetch of a 32 KiB message, with a body of
+// 1,000 bytes that stops after one. net/http drains the body inside the
+// first write that reaches the connection, to the read deadline. Control:
+// with pacedBody.drained returning now, the write's deadline has passed
+// when the drain ends: nothing is answered.
 func TestALargeAnswerWrittenFirstGoesOutAfterTheDrainOfItsBody(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
@@ -317,9 +309,6 @@ func TestALargeAnswerWrittenFirstGoesOutAfterTheDrainOfItsBody(t *testing.T) {
 	body, err := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK || err != nil || !bytes.Equal(body, ct.Bytes()) {
 		t.Errorf("answered %s with %d of the message's %d bytes (%v), want 200 and all of them", resp.Status, len(body), ct.Len(), err)
-	}
-	if cut := counts(t, reg, "dromas_server_bodies_cut_total")[""]; cut != 1 {
-		t.Errorf("dromas_server_bodies_cut_total %v, want 1", cut)
 	}
 }
 
@@ -364,97 +353,6 @@ func trickle(t *testing.T, addr, head string, size, rate int) (status string, at
 		t.Fatalf("the connection was held 5 s past the body's end")
 	}
 	return status, at, sent, last
-}
-
-// A body the server would not drain is not read at all behind an answer
-// written first, as net/http reads none of it (go1.27's
-// chunkWriter.writeHeader): one whose request asks to close the connection,
-// one that waits for 100 Continue, which is never sent, and one whose
-// Content-Length leaves more than net/http's bound. Each is answered at
-// once, long before its deadline, with no cut, and the connection is
-// closed (dromas-dev/dromas-client#413 item 3).
-func TestABodyTheServerWouldNotDrainIsNotRead(t *testing.T) {
-	t.Parallel()
-	nobody := "d_" + strings.Repeat("ab", 32)
-	for _, c := range []struct{ name, head, body string }{
-		{"its request asks to close", "Connection: close\r\nContent-Length: 1000\r\n", "{"},
-		{"it waits for 100 Continue", "Expect: 100-continue\r\nContent-Length: 1000\r\n", ""},
-		{"its Content-Length leaves more than net/http's bound", fmt.Sprintf("Content-Length: %d\r\n", drainBound+1), "{"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			l := relaxed()
-			l.BodyTimeout, l.BodyMinRate = 4*time.Second, 1<<20
-			reg := prometheus.NewRegistry()
-			s := New(Config{Store: NewMemStore(time.Now), Limits: l, Metrics: NewMetrics(reg)})
-			addr, _ := served(t, s, l)
-			conn, err := net.Dial("tcp", addr)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = conn.Close() }()
-			if _, err := io.WriteString(conn, "POST /v1/"+nobody+"/nothing/here HTTP/1.1\r\nHost: "+addr+"\r\n"+c.head+"\r\n"+c.body); err != nil {
-				t.Fatal(err)
-			}
-			start := time.Now()
-			ok, got := closesWithin(conn, 2*time.Second)
-			t.Logf("closed %v after %v: %.40q", ok, time.Since(start).Round(10*time.Millisecond), got)
-			if !ok || !strings.HasPrefix(got, "HTTP/1.1 404 ") {
-				t.Errorf("a body the server would not drain: %.60q, closed %v; want 404 at once, then the connection closed", got, ok)
-			}
-			if cut := counts(t, reg, "dromas_server_bodies_cut_total")[""]; cut != 0 {
-				t.Errorf("dromas_server_bodies_cut_total %v, want 0: nothing was read to cut", cut)
-			}
-		})
-	}
-}
-
-// A body that keeps coming past net/http's bound, behind an answer written
-// first, is drained to that bound and no further: the answer goes out
-// while the body is still coming, and the connection is closed, as net/http
-// closes one it will not drain (dromas-dev/dromas-client#413 item 3).
-// The body is chunked, so nothing says how long it is, and comes at four
-// times the bound a second for two seconds.
-func TestADrainStopsAtNetHTTPsBound(t *testing.T) {
-	t.Parallel()
-	l := relaxed()
-	l.BodyTimeout, l.BodyMinRate = time.Second, 1024
-	s := New(Config{Store: NewMemStore(time.Now), Limits: l})
-	addr, _ := served(t, s, l)
-	conn, err := net.Dial("tcp", addr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = conn.Close() }()
-	if _, err := io.WriteString(conn, "POST /nothing HTTP/1.1\r\nHost: "+addr+"\r\nTransfer-Encoding: chunked\r\n\r\n"); err != nil {
-		t.Fatal(err)
-	}
-	start := time.Now()
-	stopped := make(chan time.Duration, 1)
-	go func() {
-		piece := fmt.Sprintf("%x\r\n%s\r\n", drainBound/16, strings.Repeat(" ", drainBound/16))
-		for i := 0; i < 128 && time.Since(start) < 4*time.Second; i++ {
-			if _, err := io.WriteString(conn, piece); err != nil {
-				break
-			}
-			time.Sleep(time.Second / 64)
-		}
-		stopped <- time.Since(start)
-	}()
-	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	at := time.Since(start)
-	_ = resp.Body.Close()
-	end := <-stopped
-	t.Logf("%s at %v; the body stopped going at %v", resp.Status, at.Round(10*time.Millisecond), end.Round(10*time.Millisecond))
-	if resp.StatusCode != http.StatusNotFound || !resp.Close {
-		t.Errorf("answered %s, closing %v; want 404 and the connection closed", resp.Status, resp.Close)
-	}
-	if at > time.Second {
-		t.Errorf("answered at %v, past the second the bound takes to come: the drain went past it", at.Round(10*time.Millisecond))
-	}
 }
 
 // An answer its peer never reads is cut off at the write deadline, every
