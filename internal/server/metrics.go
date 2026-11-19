@@ -109,8 +109,10 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		reloads: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "runtime_config_reloads_total",
 			Help: "Reloads of each file of the runtime-config directory, by file (version-policy, limits) and result: ok (read, checked and in force) or failed (not read, too large or refused: what was in force stays)."}, []string{"file", "result"}),
 	}
-	for _, r := range []string{"ok", "failed"} {
-		m.reloads.WithLabelValues(versionPolicyFile, r) // each series from the start, at 0
+	for _, f := range []string{versionPolicyFile, limitsFile} {
+		for _, r := range []string{"ok", "failed"} {
+			m.reloads.WithLabelValues(f, r) // each series from the start, at 0
+		}
 	}
 	reg.MustRegister(m.requests, m.latency, m.limits, m.passes, m.fetches, m.lists, m.store, m.storeTime, m.caches, m.largeRead, m.cut, m.misroutes, m.conns, m.streamAge, m.holds, m.held, m.boxes, m.bodiesOpen, m.bodies, m.versions, m.reloads)
 	return m

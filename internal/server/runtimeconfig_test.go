@@ -301,3 +301,22 @@ func TestAPolicyNamesNoMemberOfTheServersOwn(t *testing.T) {
 		t.Fatalf("the document of a policy: max_certificate_lifetime_seconds %d, %v; want %d", d.MaxCertificateLifetime, err, l.MaxCertificateLifetime/time.Second)
 	}
 }
+
+// A fresh scrape has every runtime file's reload series, ok and failed, at
+// 0 (Prometheus' "Avoid missing metrics"): each file by the name its
+// Reloader counts it under. Control: the limits file's series are missing
+// until its first reload.
+func TestEveryRuntimeFilesReloadsAreThereFromTheStart(t *testing.T) {
+	t.Parallel()
+	reg := prometheus.NewRegistry()
+	s := New(Config{Store: NewMemStore(time.Now), Limits: relaxed(), Metrics: NewMetrics(reg)})
+	got := counts(t, reg, "dromas_server_runtime_config_reloads_total")
+	for _, r := range []*Reloader{s.VersionPolicy("", nil), s.Limits("", nil, relaxed())} {
+		for _, result := range []string{"ok", "failed"} {
+			key := "file=" + r.name + ",result=" + result
+			if v, ok := got[key]; !ok || v != 0 {
+				t.Errorf("%s: %v, present %v; want it at 0 from the start", key, v, ok)
+			}
+		}
+	}
+}
