@@ -99,11 +99,9 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
 	// (PROTOCOL.md §11.11): read, held until the mailbox changes, the wait
 	// passes or the server stops, and read again; then answered as any list.
 	// An expiry is no change memory applies, so it ends no hold: the page at
-	// the hold's end is the page as it then stands. The mailbox's change is taken before each read,
-	// so none is missed between; and the page of a list asked to wait is read
-	// strongly consistent, so it holds every change memory applied before
-	// the read, and the next change wakes it: an eventually consistent page
-	// that missed one could be held on, and no later change would come.
+	// the hold's end is the page as it then stands. The mailbox's change is
+	// taken before each read, so none is missed between, and the page holds
+	// every change memory applied before the read (Store.List).
 	asked := wait > 0 && !hasCursor
 	var until time.Time
 	if asked {
@@ -130,12 +128,12 @@ again:
 	}
 	resp := protocol.MessageList{Count: int64(n), Messages: []protocol.MessageInfo{}}
 	if n > 0 && (after == nil || more > 0) {
-		page, err := s.store.List(ctx, mailbox, after, pageSize+1, asked)
+		page, err := s.store.List(ctx, mailbox, after, pageSize+1)
 		if errors.Is(err, ErrStale) {
 			if ctx, err = s.recheck(r, cursorParam, waitParam); err != nil {
 				return err
 			}
-			page, err = s.store.List(ctx, mailbox, after, pageSize+1, asked)
+			page, err = s.store.List(ctx, mailbox, after, pageSize+1)
 		}
 		if errors.Is(err, ErrStale) {
 			return changedDuring()

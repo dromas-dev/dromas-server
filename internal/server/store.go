@@ -640,10 +640,9 @@ type Store interface {
 	// instead.
 	PutMessage(ctx context.Context, mailbox protocol.Address, h *Header, body []byte) (*Header, error)
 	// List returns up to limit live headers, oldest first by (ReceivedAt,
-	// ID), after the given key (nil: from the start). Consistent reads them
-	// strongly consistent: every write applied to memory before the read is
-	// in the page.
-	List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error)
+	// ID), after the given key (nil: from the start), strongly consistent:
+	// every write applied to memory before the read is in the page.
+	List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int) ([]Header, error)
 	// Message returns a live message and its body, or ErrNotFound: the body
 	// from byte from on where from is inside it, above 0 and below its Size,
 	// and otherwise whole, as a fetch answers a range (PROTOCOL.md §11.12).

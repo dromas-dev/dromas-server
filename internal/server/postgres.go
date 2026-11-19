@@ -1061,8 +1061,7 @@ func (s *pgBackend) ReadLive(ctx context.Context, mailbox protocol.Address) ([]H
 
 // List implements Backend: a page of the mailbox's live messages, oldest
 // first by (received_at, id), after the cursor, held to the call's pass.
-// Every read is consistent.
-func (s *pgBackend) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, _ bool) ([]Header, error) {
+func (s *pgBackend) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int) ([]Header, error) {
 	return s.list(ctx, mailbox, after, limit, true)
 }
 

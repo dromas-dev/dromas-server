@@ -148,7 +148,7 @@ func TestEveryCallOfTheBackendEndsAtItsBound(t *testing.T) {
 		"ReadAddress": func(ctx context.Context, b Backend) error { _, _, err := b.ReadAddress(ctx, mailbox.Addr); return err },
 		"ReadLive":    func(ctx context.Context, b Backend) error { _, err := b.ReadLive(ctx, mailbox.Addr); return err },
 		"List": func(ctx context.Context, b Backend) error {
-			_, err := b.List(ctx, mailbox.Addr, nil, 10, false)
+			_, err := b.List(ctx, mailbox.Addr, nil, 10)
 			return err
 		},
 		"Message": func(ctx context.Context, b Backend) error {

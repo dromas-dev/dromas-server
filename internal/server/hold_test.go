@@ -359,49 +359,6 @@ func TestALongPollHeldPastAMessagesExpiryIsAnsweredThePageAsItStands(t *testing.
 	}
 }
 
-// laggingList is a backend whose eventually consistent page lags every
-// write: it misses every message, as a Query read just after a write can.
-type laggingList struct{ *memBackend }
-
-func (b laggingList) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error) {
-	if !consistent {
-		return nil, nil
-	}
-	return b.memBackend.List(ctx, mailbox, after, limit, consistent)
-}
-
-// The page of a list asked to wait is read strongly consistent: a long poll
-// woken by a send is answered a page that holds it, never one that lags the
-// count, whose tag a client could hold on with no later change to wake it.
-func TestALongPollIsAnsweredAPageThatHoldsWhatWokeIt(t *testing.T) {
-	t.Parallel()
-	e := newEnv(t, relaxed(), func(c *Config) {
-		m := newMemory(c.Now, DefaultMailboxCache, nil, nil)
-		b := laggingList{newMemBackend(m.clock)}
-		m.backend = b
-		if err := b.Start(context.Background(), m.apply); err != nil {
-			t.Fatal(err)
-		}
-		c.Store, c.Ready = m, b.Ready
-	})
-	from, to, tag := emptyTag(e)
-	c := longPoll(e, to, tag, "wait=60")
-	holdingNow(t, e.server, 1)
-	e.want(e.do("POST", to.path("/messages"), to.sealed(1, ciphertextTo(t, to)), from.pass(1)), http.StatusCreated, "")
-	got := <-c
-	e.want(got.r, http.StatusOK, "")
-	var page protocol.MessageList
-	if err := protocol.Unmarshal(got.r.body, &page); err != nil || page.Count != 1 || len(page.Messages) != 1 {
-		t.Fatalf("the woken page: %s (%v); want the message the count holds", got.r.body, err)
-	}
-	// Control: a list not asked to wait reads the page eventually consistent.
-	r := e.do("GET", to.path("/messages"), nil, to.pass(1))
-	e.want(r, http.StatusOK, "")
-	if err := protocol.Unmarshal(r.body, &page); err != nil || page.Count != 1 || len(page.Messages) != 0 {
-		t.Fatalf("control: a list not asked to wait: %s; want the lagging page", r.body)
-	}
-}
-
 // A long poll woken by changes that leave its page as it was is held again:
 // it is one poll, and one long poll, counted once by how it ended, and it is
 // no longer counted held once answered.

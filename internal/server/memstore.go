@@ -292,7 +292,7 @@ func less(a, b Header) int {
 }
 
 // List implements Backend: every read of the maps is consistent.
-func (s *memBackend) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, _ bool) ([]Header, error) {
+func (s *memBackend) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int) ([]Header, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.held(ctx) {

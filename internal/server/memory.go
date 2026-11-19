@@ -528,12 +528,9 @@ func (s *Memory) PutMessage(ctx context.Context, mailbox protocol.Address, h *He
 	return nil, err
 }
 
-// List implements Store: the backend's page. consistent asks for a read
-// strongly consistent, as a long poll's must be, which no later change may
-// wake (Server.list); both backends here read every page as committed, and
-// ignore it.
-func (s *Memory) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error) {
-	hs, err := s.backend.List(ctx, mailbox, after, limit, consistent)
+// List implements Store: the backend's page.
+func (s *Memory) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int) ([]Header, error) {
+	hs, err := s.backend.List(ctx, mailbox, after, limit)
 	if errors.Is(err, ErrStale) {
 		s.forget(mailbox) // the call's pass no longer holds: memory is behind
 	}
