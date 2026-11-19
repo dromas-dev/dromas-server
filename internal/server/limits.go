@@ -255,9 +255,12 @@ type reservation struct {
 
 // reserve takes a token for key before the work it guards. When none is
 // left only because reservations of the same key are still in flight, it
-// waits for one to settle, up to reserveWait or the end of ctx: so calls
-// that would all be given back, made at once, are not refused for each
-// other. It returns how long until a token is due when it refuses. A nil
+// waits for one to settle, up to reserveWait or the end of ctx, and the
+// call is taken once the calls in flight are given back: so honest calls
+// made at once that will all be given back, the cold lookups of a crowd
+// behind one address after a restart among them, are not refused for each
+// other (TestColdCallsAtOnceAreAllAnswered). It returns how long until a
+// token is due when it refuses. A nil
 // reservation with ok true is a bucket set that never limits.
 //
 // With a shared store, the store counts the token while it answers, and

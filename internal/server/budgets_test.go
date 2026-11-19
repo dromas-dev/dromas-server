@@ -694,6 +694,88 @@ func TestAReservationWaitsForOthersInFlight(t *testing.T) {
 	}
 }
 
+// Honest calls from one address at once that each reserve a miss and give
+// it back, more of them than the address has misses, are all answered: a
+// call past the misses waits for those in flight and is taken once they are
+// given back (buckets.reserve, LIMITS.md rule 4). The cases are lookups of
+// mailboxes that exist, cold, each read from the table, and the restart:
+// mailboxes behind one address that each make their first call, a list with
+// a pass, to a process that holds nothing of them, as followers paused for
+// the same minute come back to a process just started. Control: with no
+// wait for the calls in flight, a call past the misses is refused 429
+// misses.
+func TestColdCallsAtOnceAreAllAnswered(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name    string
+		n       int
+		read    time.Duration
+		restart bool
+	}{
+		{"11 lookups", 11, 20 * time.Millisecond, false},
+		{"50 lookups", 50, 2 * time.Millisecond, false},
+		{"11 first calls after a restart", 11, 20 * time.Millisecond, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			l := relaxed()
+			l.MissesPerMinute = DefaultLimits().MissesPerMinute
+			if c.n <= l.MissesPerMinute {
+				t.Fatalf("%d calls are within the %d misses", c.n, l.MissesPerMinute)
+			}
+			e := newEnv(t, l)
+			var bs []*raw
+			for range c.n {
+				bs = append(bs, e.raw().register(protocol.MaxPrekeyLifetime))
+			}
+			fed(t, e.store)
+			// A process that holds nothing of them, each read taking c.read.
+			srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: &ctxMailbox{Store: e.store, d: c.read}, Limits: l, Now: e.clock.Now}).Handler()))
+			t.Cleanup(srv.Close)
+			e2 := &env{t: t, clock: e.clock, srv: srv}
+			reqs := make([]*http.Request, c.n)
+			for i, b := range bs {
+				path := b.path("")
+				if c.restart {
+					path = b.path("/messages")
+				}
+				req, err := http.NewRequest(http.MethodGet, srv.URL+path, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if c.restart {
+					req.Header.Set("Authorization", e2.passFor(b.by[1], b.id.Address(), e2.name()))
+				}
+				reqs[i] = req
+			}
+			answers := make([]string, c.n)
+			var wg sync.WaitGroup
+			start := make(chan struct{})
+			for i, req := range reqs {
+				wg.Go(func() {
+					<-start
+					resp, err := http.DefaultClient.Do(req)
+					if err != nil {
+						answers[i] = err.Error()
+						return
+					}
+					defer func() { _ = resp.Body.Close() }()
+					var p struct{ Code string }
+					_ = json.NewDecoder(resp.Body).Decode(&p)
+					answers[i] = fmt.Sprint(resp.StatusCode, " ", p.Code)
+				})
+			}
+			close(start)
+			wg.Wait()
+			for i, a := range answers {
+				if a != "200 " {
+					t.Errorf("call %d of %d at once: %s, want 200", i+1, c.n, a)
+				}
+			}
+		})
+	}
+}
+
 // slowPut holds each message write, as a store's two writes do, so sends in
 // flight at once meet the counts together.
 type slowPut struct {
