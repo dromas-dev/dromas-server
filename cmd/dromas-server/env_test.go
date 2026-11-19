@@ -98,8 +98,9 @@ func serveFlags(t *testing.T) []string {
 	return names
 }
 
-// A secret is its variable, or the file its _FILE variable names, less one
-// trailing newline; both set is refused; neither is none.
+// A secret is its variable, or the file its _FILE variable names, less every
+// trailing newline; both non-empty is refused, and one set empty is as one
+// unset (the PostgreSQL image's file_env); neither is none.
 func TestASecretIsItsVariableOrItsFile(t *testing.T) {
 	const name = "DROMAS_SERVER_TEST_SECRET"
 	if s, err := secret(name); err != nil || s != "" {
@@ -110,17 +111,27 @@ func TestASecretIsItsVariableOrItsFile(t *testing.T) {
 		t.Fatalf("the variable: %q, %v", s, err)
 	}
 	path := filepath.Join(t.TempDir(), "secret")
-	if err := os.WriteFile(path, []byte("from the file\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("from the file\n\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(name+"_FILE", path)
 	if _, err := secret(name); err == nil {
 		t.Fatal("both set was taken")
 	}
+	t.Setenv(name, "")
+	if s, err := secret(name); err != nil || s != "from the file" {
+		t.Fatalf("the variable empty beside the file: %q, %v; want the file's", s, err)
+	}
 	os.Unsetenv(name)
 	if s, err := secret(name); err != nil || s != "from the file" {
 		t.Fatalf("the file: %q, %v", s, err)
 	}
+	t.Setenv(name, "from the variable")
+	t.Setenv(name+"_FILE", "")
+	if s, err := secret(name); err != nil || s != "from the variable" {
+		t.Fatalf("the file's variable empty beside the variable: %q, %v; want the variable's", s, err)
+	}
+	os.Unsetenv(name)
 	t.Setenv(name+"_FILE", filepath.Join(t.TempDir(), "none"))
 	if _, err := secret(name); err == nil {
 		t.Fatal("a file that is not there was taken")
