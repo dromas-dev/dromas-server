@@ -19,8 +19,8 @@ import (
 )
 
 // listenAdmin listens on the Unix socket at path for the operator's
-// commands, readable and writable by this process's user alone from the
-// moment it is made (listenOwn). A socket left there by a process before
+// commands, on unix readable and writable by this process's user alone from
+// the moment it is made (listenOwn). A socket left there by a process before
 // this one is replaced; anything else at that path is an error.
 func listenAdmin(path string) (net.Listener, error) {
 	if fi, err := os.Lstat(path); err == nil {
