@@ -193,6 +193,7 @@ func serve(args []string) error {
 		cfg.SiteBackend = u
 	}
 	var start func() error
+	var feedLost chan error // nil but on PostgreSQL: a nil channel is never ready
 	switch {
 	case *dev:
 		if *bucket != "" || *dataDir != "" {
@@ -223,25 +224,31 @@ func serve(args []string) error {
 			pc.AWS = awsCfg
 			where = "bodies in bucket " + *bucket
 		}
-		fatal := make(chan error, 1)
-		pc.Fatal = func(err error) { fatal <- err }
-		store, err := server.NewPostgresStore(ctx, pc)
+		feedLost = make(chan error, 1)
+		pc.Fatal = func(err error) {
+			logger.Printf("%v: exiting, so a restart rebuilds memory", err)
+			feedLost <- err
+			stop()
+		}
+		// The store's pool, feed and sweep end once Shutdown has answered
+		// every request in flight, as Caddy runs its stop callbacks after
+		// its servers have shut down and Mattermost closes its store last;
+		// a signal before the feed is started ends the start.
+		storeCtx, endStore := context.WithCancel(context.Background())
+		defer endStore()
+		startOnly := context.AfterFunc(ctx, endStore)
+		store, err := server.NewPostgresStore(storeCtx, pc)
 		if err != nil {
 			return err
 		}
 		cfg.Store, cfg.Ready = store, store.Ready
 		start = func() error {
 			t := time.Now()
-			if err := store.Start(ctx); err != nil {
+			if err := store.Start(storeCtx); err != nil {
 				return fmt.Errorf("following the database: %w", err)
 			}
+			startOnly()
 			logger.Printf("following the database (the feed started in %s; 503 until it is synced); mailboxes load on first use", time.Since(t).Round(time.Millisecond))
-			go func() {
-				if err := <-fatal; err != nil {
-					logger.Printf("%v: exiting, so a restart rebuilds memory", err)
-					stop()
-				}
-			}()
 			return nil
 		}
 		logger.Printf("dromas-server on %s: PostgreSQL, %s", *listen, where)
@@ -323,15 +330,22 @@ func serve(args []string) error {
 		return err
 	case <-ctx.Done():
 	}
-	shut, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(shut); err != nil {
+	// A second signal ends the process at once (Go's ExampleNotifyContext;
+	// Caddy's second SIGINT forces its exit). Shutdown waits on every request
+	// in flight with no bound of its own: the supervisor's kill bounds it, as
+	// Caddy's grace period is eternal by default.
+	stop()
+	if err := srv.Shutdown(context.Background()); err != nil {
 		return err
 	}
-	if start != nil && !cfg.Ready() {
+	// Only a feed that lost its place fails the exit: the feed ends with
+	// the store, after Shutdown, so however long Shutdown waits is no loss.
+	select {
+	case <-feedLost:
 		return errors.New("stopped: memory could not be shown current")
+	default:
+		return nil
 	}
-	return nil
 }
 
 // listenAll listens on each of a comma-separated list of TCP addresses, for
