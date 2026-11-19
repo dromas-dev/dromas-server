@@ -339,6 +339,30 @@ func TestTheBodiesDirectoryDeletesTheDirectoriesItEmpties(t *testing.T) {
 	}
 }
 
+// Start returns once the slot is made and the stream started, before the
+// feed's first sync, and the store is not ready until that sync, which
+// waits on no bound of Start's (dromas-dev/dromas-server#336): a walsender
+// decoding WAL the publication leaves out reports its position only at its
+// next keepalive. Start returns as it starts the feed's goroutines, and a
+// sync takes a read of the flushed position and the walsender's answer to a
+// status update after it, at most a SyncInterval apart. Control: a Start
+// that waits for the sync returns ready.
+func TestStartReturnsBeforeTheFeedsFirstSync(t *testing.T) {
+	t.Parallel()
+	if !onPostgres() {
+		t.Skip("needs PostgreSQL: DROMAS_TEST_POSTGRES")
+	}
+	schema, bodies := testDatabase(t)
+	s, ctx := newPostgresIn(t, schema, bodies, nil, func(c *PostgresConfig) { c.SyncInterval = 2 * time.Second })
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if s.Ready() {
+		t.Fatal("the store is ready as Start returns: Start waited for the feed's first sync")
+	}
+	untilReady(t, s)
+}
+
 // A store whose feed's session ends is no longer ready, and calls Fatal: its
 // memory can no longer be shown current.
 func TestALostFeedIsNotReady(t *testing.T) {
@@ -452,6 +476,7 @@ func TestTheFeedAppliesATransactionOnlyOnceItsCommitIsVisible(t *testing.T) {
 	if err := follower.Start(fctx); err != nil {
 		t.Fatal(err)
 	}
+	untilReady(t, follower)
 	waitFor := func(what string, ok func() bool) {
 		t.Helper()
 		for start := time.Now(); !ok(); time.Sleep(20 * time.Millisecond) {

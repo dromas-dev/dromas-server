@@ -65,8 +65,11 @@ type feedTarget struct {
 }
 
 // Start implements Backend: it makes this process's slot, starts the
-// stream, and returns once the feed is synced through the moment it was
-// started; the feed is followed until ctx ends, each change handed to apply.
+// stream, and returns; the feed is followed until ctx ends, each change
+// handed to apply. Making the slot and starting the stream are bounded
+// (feedStartWithin); the first sync is not: Ready is false until the feed
+// is synced through the moment it was started, and every call is answered
+// 503 until then (whenReady).
 func (s *pgBackend) Start(ctx context.Context, apply func(Change)) error {
 	s.apply = apply
 	sctx, cancel := context.WithTimeout(ctx, feedStartWithin)
@@ -117,25 +120,17 @@ func (s *pgBackend) Start(ctx context.Context, apply func(Change)) error {
 	if s.visible != nil {
 		f.visible = s.visible
 	}
-	began := time.Now()
+	// Started before run can lose the place, which unsets it. Every
+	// position targets reads is read after this, so the feed's first sync
+	// is through the moment it was started.
+	s.started.Store(true)
 	go f.run(fctx)
 	go f.targets(fctx)
-	for {
-		if s.synced.Load() >= monoNanos(began) {
-			s.started.Store(true)
-			if s.sweepEvery > 0 {
-				go s.sweep(fctx)
-			}
-			context.AfterFunc(ctx, stop)
-			return nil
-		}
-		select {
-		case <-sctx.Done():
-			stop() // ends run and targets, and their connections
-			return fmt.Errorf("postgres: the feed did not catch up: %w", sctx.Err())
-		case <-time.After(10 * time.Millisecond):
-		}
+	if s.sweepEvery > 0 {
+		go s.sweep(fctx)
 	}
+	context.AfterFunc(ctx, stop)
+	return nil
 }
 
 // Ready implements Backend: the feed is followed, and has been synced

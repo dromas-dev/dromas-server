@@ -235,7 +235,7 @@ func serve(args []string) error {
 			if err := store.Start(ctx); err != nil {
 				return fmt.Errorf("following the database: %w", err)
 			}
-			logger.Printf("following the database (ready in %s); mailboxes load on first use", time.Since(t).Round(time.Millisecond))
+			logger.Printf("following the database (the feed started in %s; 503 until it is synced); mailboxes load on first use", time.Since(t).Round(time.Millisecond))
 			go func() {
 				if err := <-fatal; err != nil {
 					logger.Printf("%v: exiting, so a restart rebuilds memory", err)

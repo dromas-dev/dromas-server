@@ -55,6 +55,7 @@ func newTwoProcesses(t *testing.T) *twoProcesses {
 	if err := f.Start(fctx); err != nil {
 		t.Fatal(err)
 	}
+	untilReady(t, f)
 	x.b = newEnv(t, relaxed(), func(c *Config) { c.Store, c.Ready, c.Now = f, f.Ready, x.a.clock.Now })
 	x.b.store = f
 	x.b.clock = x.a.clock

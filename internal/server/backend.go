@@ -118,7 +118,7 @@ type Backend interface {
 
 	// Start hands every change to what the backend keeps, from then on, to
 	// apply: in order for each row, and at least once. It returns once the
-	// feed is followed, and the feed ends with ctx.
+	// feed is started, and the feed ends with ctx.
 	Start(ctx context.Context, apply func(Change)) error
 	// Ready reports whether the feed is followed.
 	Ready() bool
