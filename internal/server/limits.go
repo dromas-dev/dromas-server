@@ -60,8 +60,9 @@ type Limits struct {
 	RangeRequestRefill time.Duration
 
 	// Budgets: a burst at once and one more each refill (LIMITS.md).
-	ReceiveBurst                 int           // per mailbox: new messages it takes, from all senders together (decided: 50, on, and never off: ReceiveCeiling)
-	ReceiveRefill                time.Duration // (decided: 6 s, ten a minute; never shorter than ReceiveCeiling, which an account lifts it to)
+	ReceiveBurst                 int           // per mailbox: new messages it takes, from all senders together (decided: 50, on)
+	ReceiveRefill                time.Duration // (decided: 6 s, ten a minute)
+	AccountReceiveRefill         time.Duration // the refill an unmetered account lifts its mailboxes' new messages to, with ReceiveBurst's burst, never slower than ReceiveRefill (decided: 100 ms, ten a second)
 	DrainBurst                   int           // per mailbox: its first fetches of held messages, spent only by its own calls (decided: 50, on); an account lifts it
 	DrainRefill                  time.Duration // (decided: 6 s, ten a minute)
 	CallBurst                    int           // per mailbox: its calls with its pass that no other budget counts [tunable]; an account lifts it
@@ -143,6 +144,7 @@ func DefaultLimits() Limits {
 		RangeRequestRefill:           time.Millisecond,
 		ReceiveBurst:                 50,
 		ReceiveRefill:                6 * time.Second,
+		AccountReceiveRefill:         time.Second / 10,
 		DrainBurst:                   50,
 		DrainRefill:                  6 * time.Second,
 		CallBurst:                    50,
@@ -169,16 +171,15 @@ func (l Limits) maxCertificate() uint64 {
 // ceiling is the largest ciphertext any sender may send.
 func (l Limits) ceiling() int { return max(l.MaxSize, l.AccountMaxSize) }
 
-// ReceiveCeiling is the shortest refill of any mailbox's budget of new messages: no
-// mailbox takes new messages faster than one each, ten a second, whatever its account
-// lifts, and dromas-server serve does not start with flags that would (decided).
-// Every message is a row and a body until it is acked or expires, so the
-// ceiling bounds what one mailbox adds to the store (ARCHITECTURE.md
-// § Storage).
-const ReceiveCeiling = time.Second / 10
-
-// liftedReceives is the refill of new messages an account lifts a mailbox's to.
-func (l Limits) liftedReceives() time.Duration { return min(l.ReceiveRefill, ReceiveCeiling) }
+// liftedReceives is the refill of new messages an account lifts a mailbox's
+// to: AccountReceiveRefill, never slower than the server's own, and off (0)
+// where either is.
+func (l Limits) liftedReceives() time.Duration {
+	if l.ReceiveRefill == 0 || l.AccountReceiveRefill == 0 {
+		return 0
+	}
+	return min(l.ReceiveRefill, l.AccountReceiveRefill)
+}
 
 // uncappedPages is how many list pages a mailbox is taken to hold when no mailbox
 // cap bounds it.

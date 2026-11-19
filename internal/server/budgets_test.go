@@ -90,8 +90,8 @@ func TestASendersCallsBoundTheDedupeRead(t *testing.T) {
 
 // A mailbox takes new messages at a rate of its own, from every sender together
 // (Limits.ReceiveBurst): past it a send is mailbox_rate_limited and waits in its
-// sender's outbox. A retry spends none of it, and an account lifts it to
-// ReceiveCeiling, never past it.
+// sender's outbox. A retry spends none of it, and an unmetered account lifts
+// it to Limits.AccountReceiveRefill.
 func TestTheReceiveBudget(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -118,8 +118,8 @@ func TestTheReceiveBudget(t *testing.T) {
 		t.Fatalf("the mailbox holds %d messages (%v), want 3", n, err)
 	}
 
-	// An unmetered account's mailbox takes messages at the ceiling: the same burst,
-	// then one each ReceiveCeiling, and never with no budget.
+	// An unmetered account's mailbox takes messages at the lifted refill: the
+	// same burst, then one each AccountReceiveRefill.
 	_, key := accountEnv(t, e, true, 1)
 	echo := e.mailbox()
 	adopt(t, echo, key)
@@ -135,9 +135,9 @@ func TestTheReceiveBudget(t *testing.T) {
 	if top, ok := e.server.Top(string(protocol.CodeMailboxRateLimited), 10); !ok || !slices.ContainsFunc(top, func(d Indebted) bool { return d.Key == echo.Address().String() }) {
 		t.Errorf("the operator's top of mailbox_rate_limited, %v, does not list the unmetered mailbox", top)
 	}
-	e.clock.Add(ReceiveCeiling)
+	e.clock.Add(l.AccountReceiveRefill)
 	if rs, err := s3.Flush(ctx); err != nil || len(rs) != 1 {
-		t.Fatalf("the waiting message after one refill at the ceiling: %v, %v", rs, err)
+		t.Fatalf("the waiting message after one lifted refill: %v, %v", rs, err)
 	}
 }
 

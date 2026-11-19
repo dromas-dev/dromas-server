@@ -151,29 +151,36 @@ func TestASizeCapTheProtocolDoesNotAllowIsRefused(t *testing.T) {
 	}
 }
 
-// A budget of new messages turned off, or refilled faster than
-// ReceiveCeiling, is refused, naming its member. Control: a budget of one at
-// the ceiling passes.
-func TestNewMessagesPastTheCeilingAreRefused(t *testing.T) {
+// The budget of new messages is a tunable like any other: off when both its
+// members are 0, and at any refill. A negative is refused, and so is a burst
+// with no refill or a refill with no burst, each naming its member. Control:
+// a budget of one each millisecond, and one off, pass.
+func TestTheReceiveBudgetIsATunable(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
-		m    string
-		v    any
-		says string
+		m     string
+		v     any
+		named string // the member the refusal names: a pair half off is named by its burst
+		says  string
 	}{
-		{"receive_burst", 0, "no budget"},
-		{"receive_burst", -1, "no budget"},
-		{"receive_refill", time.Duration(0), "shorter than"},
-		{"receive_refill", ReceiveCeiling - time.Millisecond, "shorter than"},
+		{"receive_burst", -1, "receive_burst", "not a number"},
+		{"receive_refill", -time.Second, "receive_refill", "not a refill"},
+		{"account_receive_refill", -time.Second, "account_receive_refill", "not a refill"},
+		{"receive_burst", 0, "receive_burst", "neither"},
+		{"receive_refill", time.Duration(0), "receive_burst", "neither"},
 	} {
-		if err := refusedFile(c.m, c.v); err == nil || !strings.HasPrefix(err.Error(), c.m+":") || !strings.Contains(err.Error(), c.says) {
-			t.Errorf("%s %v: %v, want a refusal naming the member and saying %q", c.m, c.v, err, c.says)
+		if err := refusedFile(c.m, c.v); err == nil || !strings.HasPrefix(err.Error(), c.named+":") || !strings.Contains(err.Error(), c.says) {
+			t.Errorf("%s %v: %v, want a refusal naming %s and saying %q", c.m, c.v, err, c.named, c.says)
 		}
 	}
-	l := DefaultLimits()
-	l.ReceiveBurst, l.ReceiveRefill = 1, ReceiveCeiling
-	if err := l.Check(); err != nil {
-		t.Errorf("at the ceiling: %v", err)
+	for _, file := range []string{
+		`{"receive_burst": 1, "receive_refill": "1ms"}`,
+		`{"receive_burst": 0, "receive_refill": "0s"}`,
+		`{"account_receive_refill": "0s"}`,
+	} {
+		if _, err := ParseLimits([]byte(file), DefaultLimits()); err != nil {
+			t.Errorf("%s: %v", file, err)
+		}
 	}
 }
 

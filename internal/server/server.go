@@ -116,7 +116,7 @@ type Server struct {
 	bodies   *openBodies  // the bodies open at once on calls that are their address's
 	calls    *buckets     // per mailbox: its calls with its pass that no other budget counts
 	receives *buckets     // per mailbox: new messages it takes
-	lifted   *buckets     // per mailbox whose account lifts its new messages: at ReceiveCeiling
+	lifted   *buckets     // per mailbox whose account lifts its new messages: at AccountReceiveRefill
 	drained  *buckets     // per mailbox: its first fetches of held messages
 	sends    *buckets     // per sender, a number a day
 	renewals *buckets     // per mailbox, a number a day: renewals by its current signer
