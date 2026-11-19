@@ -9,30 +9,31 @@ import (
 	"github.com/dromas-dev/dromas-client/protocol"
 )
 
-// Limits are the server's numbers. Decided ones are marked; the rest are
-// tunables, and a zero turns that limit off.
+// Limits are the server's numbers; a zero turns a limit off but where its
+// field says otherwise. Each one's default, decided or a tunable's, is
+// DefaultLimits', with the reason for its value beside it.
 type Limits struct {
 	MaxSize        int           // the cap on a ciphertext, in bytes, and what a send reads of its body; nothing may depend on its value
-	MailboxCap     int           // total per mailbox, a storage ceiling [tunable]
-	SendsPerDay    int           // per sender, a number a day: one back each day divided by it, into a bucket of SendsBurst (decided: 50)
-	SendsBurst     int           // per sender: the sends it may make at once, the bucket SendsPerDay refills (decided: 60)
-	PollBurst      int           // polls a mailbox may make at once (decided: 10); also the fetches of messages already fetched
-	PollRefill     time.Duration // one more poll each (decided: 50 s; once a minute is stated); also one more such fetch
-	PollAfter      int           // seconds, told to clients (decided: 60)
-	MaxWait        time.Duration // the longest a list is held, whatever its wait asks (PROTOCOL.md §11.11) [tunable]
-	MaxLongPolls   int           // long polls this process holds at once, one a mailbox; past it a long poll of a mailbox that holds none is answered 503 (0: none held) [tunable]
+	MailboxCap     int           // total per mailbox, a storage ceiling
+	SendsPerDay    int           // per sender, a number a day: one back each day divided by it, into a bucket of SendsBurst
+	SendsBurst     int           // per sender: the sends it may make at once, the bucket SendsPerDay refills
+	PollBurst      int           // polls a mailbox may make at once; also the fetches of messages already fetched
+	PollRefill     time.Duration // one more poll each; also one more such fetch
+	PollAfter      int           // seconds, told to clients
+	MaxWait        time.Duration // the longest a list is held, whatever its wait asks (PROTOCOL.md §11.11)
+	MaxLongPolls   int           // long polls this process holds at once, one a mailbox; past it a long poll of a mailbox that holds none is answered 503 (0: none held)
 	AccountMaxSize int           // the most an account lifts MaxSize to, so what a send reads first; up to MaxSize, nothing
-	RenewalsPerDay int           // prekey renewals per mailbox, a number a day as SendsPerDay (decided: 5), so no mailbox's renewals can fill the mailboxes table's writes (each one WAL and a feed change on every process)
-	RenewalsBurst  int           // per mailbox: the renewals it may make at once, the bucket RenewalsPerDay refills (decided: 5, as its number a day)
-	RetiredKept    int           // retired prekeys a mailbox record keeps for the new-key rule, newest first (decided: 10), so a record stays small
+	RenewalsPerDay int           // prekey renewals per mailbox, a number a day as SendsPerDay
+	RenewalsBurst  int           // per mailbox: the renewals it may make at once, the bucket RenewalsPerDay refills
+	RetiredKept    int           // retired prekeys a mailbox record keeps for the new-key rule, newest first
 
-	RegistrationsPerHour      int // per IPv4 address or IPv6 /64, at once and an hour: a spike limit, which honest use meets once a mailbox (decided: 50, a household standing up dozens of agents at once)
-	RangeRegistrationsPerHour int // per IPv6 /48, beside the /64's (decided: 500, Let's Encrypt's ratio of the two, until measured)
-	SendsPerMinutePerIP       int // the pre-auth send rate per IP [tunable]
-	RangeSendsPerMinute       int // per IPv6 /48, beside the /64's [tunable]
-	MissesPerMinute           int // per IP: reads of the mailboxes table that find no mailbox, and checks that fail (decided: 10 for now)
-	RangeMissesPerMinute      int // per IPv6 /48, beside the /64's: a last-resort clamp on reads of the mailboxes table that every caller shares (decided: 100, ten /64s' worth; honest calls rarely miss)
-	MaxLongPollsPerRange      int // per IPv4 address or IPv6 /48: long polls held at once, past which a long poll is answered 503 (0: off); a last-resort clamp so one range cannot fill MaxLongPolls, never a limit of normal use (decided: 10,000, ten held mailboxes for each of the thousand subscribers the densest carrier NAT puts behind one address)
+	RegistrationsPerHour      int // per IPv4 address or IPv6 /64, at once and an hour: a spike limit, which honest use meets once a mailbox
+	RangeRegistrationsPerHour int // per IPv6 /48, beside the /64's
+	SendsPerMinutePerIP       int // the pre-auth send rate per IP
+	RangeSendsPerMinute       int // per IPv6 /48, beside the /64's
+	MissesPerMinute           int // per IP: reads of the mailboxes table that find no mailbox, and checks that fail
+	RangeMissesPerMinute      int // per IPv6 /48, beside the /64's: a last-resort clamp on reads of the mailboxes table that every caller shares
+	MaxLongPollsPerRange      int // per IPv4 address or IPv6 /48: long polls held at once, past which a long poll is answered 503 (0: off); a last-resort clamp so one range cannot fill MaxLongPolls, never a limit of normal use
 
 	// MaxBodiesBeforePass is how many request bodies the calls of one IPv4
 	// address or IPv6 /64 that are its address's (gate) may have open at
@@ -43,34 +44,31 @@ type Limits struct {
 	// one range holds that way. Last-resort clamps: an honest body arrives
 	// in about a round trip, and the rate of the calls that send one is
 	// bounded by the registrations, the renewals and the flood budget, so
-	// honest use keeps few open at once (decided: 256 and 1,024, about 20 MB
-	// and 80 MB at the bodies' cap).
+	// honest use keeps few open at once.
 	MaxBodiesBeforePass         int
 	MaxBodiesBeforePassPerRange int
 
 	// Requests is the flood budget of an IPv4 address or IPv6 /64: every call
-	// with no pass and every request no route matches (decided: 100 at once,
-	// 50 a second).
+	// with no pass and every request no route matches.
 	RequestBurst  int
 	RequestRefill time.Duration
 	// RangeRequests is the flood budget of an IPv6 /48, beside the /64's: a
-	// last-resort clamp, each call it counts up to two signature checks
-	// (decided: 2,000 at once, 1,000 a second, twenty /64s' worth).
+	// last-resort clamp, each call it counts up to two signature checks.
 	RangeRequestBurst  int
 	RangeRequestRefill time.Duration
 
 	// Budgets: a burst at once and one more each refill (LIMITS.md).
-	ReceiveBurst                 int           // per mailbox: new messages it takes, from all senders together (decided: 50, on)
-	ReceiveRefill                time.Duration // (decided: 6 s, ten a minute)
-	AccountReceiveRefill         time.Duration // the refill an unmetered account lifts its mailboxes' new messages to, with ReceiveBurst's burst, never slower than ReceiveRefill (decided: 100 ms, ten a second)
-	DrainBurst                   int           // per mailbox: its first fetches of held messages, spent only by its own calls (decided: 50, on); an account lifts it
-	DrainRefill                  time.Duration // (decided: 6 s, ten a minute)
-	CallBurst                    int           // per mailbox: its calls with its pass that no other budget counts [tunable]; an account lifts it
-	CallRefill                   time.Duration // [tunable]
-	CertificatesPerDay           int           // per mailbox, a number a day: renewals under a later certificate, but for one that replaces a revoked certificate (decided: 5, as renewals)
-	CertificateRevocationsPerDay int           // per mailbox, a number a day: raises of its revocation of certificates (decided: a count of its own, apart from CertificatesPerDay; 10) [tunable]
-	CertificatesBurst            int           // per mailbox: the bucket CertificatesPerDay refills (decided: 5, as its number a day)
-	CertificateRevocationsBurst  int           // per mailbox: the bucket CertificateRevocationsPerDay refills (decided: 10, as its number a day) [tunable]
+	ReceiveBurst                 int           // per mailbox: new messages it takes, from all senders together
+	ReceiveRefill                time.Duration // with ReceiveBurst, on with it and off with it
+	AccountReceiveRefill         time.Duration // the refill an unmetered account lifts its mailboxes' new messages to, with ReceiveBurst's burst, never slower than ReceiveRefill
+	DrainBurst                   int           // per mailbox: its first fetches of held messages, spent only by its own calls; an account lifts it
+	DrainRefill                  time.Duration
+	CallBurst                    int // per mailbox: its calls with its pass that no other budget counts; an account lifts it
+	CallRefill                   time.Duration
+	CertificatesPerDay           int // per mailbox, a number a day: renewals under a later certificate, but for one that replaces a revoked certificate
+	CertificateRevocationsPerDay int // per mailbox, a number a day: raises of its revocation of certificates, a count of its own, apart from CertificatesPerDay
+	CertificatesBurst            int // per mailbox: the bucket CertificatesPerDay refills
+	CertificateRevocationsBurst  int // per mailbox: the bucket CertificateRevocationsPerDay refills
 
 	// MaxCertificateLifetime is the longest a certificate the server takes
 	// when it first takes one may run, its valid-before less its valid-after
@@ -80,12 +78,11 @@ type Limits struct {
 	// above protocol.TTL and protocol.MaxSkew together and at most
 	// protocol.MaxCertificateLifetime, or dromas-server serve does not start:
 	// a client signs no message under a certificate with the TTL or less left,
-	// and dates one the hour back, and every verifier refuses a longer one
-	// (decided: the protocol's maximum, 45 days and the hour).
+	// and dates one the hour back, and every verifier refuses a longer one.
 	MaxCertificateLifetime time.Duration
 
 	// ACLEntries is the most entries a mailbox's ACL holds, its two lists
-	// together [tunable]: a mailbox's record, with its ACL, is held in the mailbox
+	// together: a mailbox's record, with its ACL, is held in the mailbox
 	// cache, so this bounds what one record costs memory there. Never off,
 	// and at most protocol.MaxACLEntries: dromas-server serve does not start
 	// otherwise.
@@ -98,15 +95,15 @@ type Limits struct {
 	// server drains of a body after its handler has what the handler's reads
 	// left, and the answer's time runs from the end of the drain (paced). It
 	// is also the longest a send waits for the one large read.
-	BodyTimeout time.Duration // [tunable]
-	BodyMinRate int           // bytes a second [tunable]
+	BodyTimeout time.Duration
+	BodyMinRate int // bytes a second
 
 	// HeadBytes is the most of a request's head, its request line and its
 	// headers, that the server reads (http.Server.MaxHeaderBytes): what the
 	// longest call needs, a pass of protocol.MaxPassAuthorization bytes
 	// with the request line and the other headers a client and a proxy in
-	// front of it send, and no more (decided: least need). Its default
-	// follows the longest pass (headBytes).
+	// front of it send, and no more. Its default follows the longest pass
+	// (headBytes).
 	// A head is read before any count, since the address a call is counted
 	// by may be one of its headers (LIMITS.md, rule 1).
 	HeadBytes int
@@ -115,49 +112,50 @@ type Limits struct {
 	HeadTimeout time.Duration
 }
 
-// DefaultLimits are the decided numbers, and the proposed values of the
-// tunables that have one. Tunables with no proposed value are off.
+// DefaultLimits are the default of each limit: a decided value, with its
+// reason beside it, or a tunable's proposed one. Tunables with no proposed
+// value are off.
 func DefaultLimits() Limits {
 	return Limits{
 		MaxSize:                      64 << 10,
-		MailboxCap:                   1000,
-		SendsPerDay:                  50,
-		SendsBurst:                   60,
-		PollBurst:                    10,
-		PollRefill:                   50 * time.Second,
-		PollAfter:                    60,
-		MaxWait:                      5 * time.Minute,
-		MaxLongPolls:                 50_000,
-		MaxLongPollsPerRange:         10_000,
-		RenewalsPerDay:               5,
-		RenewalsBurst:                5,
-		RetiredKept:                  10,
-		RegistrationsPerHour:         50,
-		RangeRegistrationsPerHour:    500,
-		MissesPerMinute:              10,
-		RangeMissesPerMinute:         100,
-		MaxBodiesBeforePass:          256,
-		MaxBodiesBeforePassPerRange:  1024,
-		RequestBurst:                 100,
-		RequestRefill:                20 * time.Millisecond,
-		RangeRequestBurst:            2000,
-		RangeRequestRefill:           time.Millisecond,
-		ReceiveBurst:                 50,
-		ReceiveRefill:                6 * time.Second,
-		AccountReceiveRefill:         time.Second / 10,
-		DrainBurst:                   50,
-		DrainRefill:                  6 * time.Second,
-		CallBurst:                    50,
-		CallRefill:                   6 * time.Second,
-		CertificatesPerDay:           5,
-		CertificateRevocationsPerDay: 10,
-		CertificatesBurst:            5,
-		CertificateRevocationsBurst:  10,
-		MaxCertificateLifetime:       protocol.MaxCertificateLifetime,
-		ACLEntries:                   500,
-		BodyTimeout:                  20 * time.Second,
-		BodyMinRate:                  500,
-		HeadBytes:                    headBytes(),
+		MailboxCap:                   1000,                            // tunable
+		SendsPerDay:                  50,                              // decided
+		SendsBurst:                   60,                              // decided
+		PollBurst:                    10,                              // decided
+		PollRefill:                   50 * time.Second,                // decided: once a minute is stated
+		PollAfter:                    60,                              // decided
+		MaxWait:                      5 * time.Minute,                 // tunable
+		MaxLongPolls:                 50_000,                          // tunable
+		MaxLongPollsPerRange:         10_000,                          // decided: ten held mailboxes for each of the thousand subscribers the densest carrier NAT puts behind one address
+		RenewalsPerDay:               5,                               // decided: so no mailbox's renewals can fill the mailboxes table's writes (each one WAL and a feed change on every process)
+		RenewalsBurst:                5,                               // decided: as its number a day
+		RetiredKept:                  10,                              // decided: so a record stays small
+		RegistrationsPerHour:         50,                              // decided: a household standing up dozens of agents at once
+		RangeRegistrationsPerHour:    500,                             // decided: chosen with no measurement, and low on purpose, since raising a limit breaks no one and lowering one does
+		MissesPerMinute:              10,                              // decided, for now
+		RangeMissesPerMinute:         100,                             // decided: ten /64s' worth; honest calls rarely miss
+		MaxBodiesBeforePass:          256,                             // decided: about 20 MB at the bodies' cap
+		MaxBodiesBeforePassPerRange:  1024,                            // decided: about 80 MB at the bodies' cap
+		RequestBurst:                 100,                             // decided
+		RequestRefill:                20 * time.Millisecond,           // decided: 50 a second
+		RangeRequestBurst:            2000,                            // decided: twenty /64s' worth
+		RangeRequestRefill:           time.Millisecond,                // decided: 1,000 a second, twenty /64s' worth
+		ReceiveBurst:                 50,                              // decided: on
+		ReceiveRefill:                6 * time.Second,                 // decided: ten a minute
+		AccountReceiveRefill:         time.Second / 10,                // decided: ten a second
+		DrainBurst:                   50,                              // decided: on
+		DrainRefill:                  6 * time.Second,                 // decided: ten a minute
+		CallBurst:                    50,                              // tunable
+		CallRefill:                   6 * time.Second,                 // tunable
+		CertificatesPerDay:           5,                               // decided: as renewals
+		CertificateRevocationsPerDay: 10,                              // tunable
+		CertificatesBurst:            5,                               // decided: as its number a day
+		CertificateRevocationsBurst:  10,                              // tunable: as its number a day
+		MaxCertificateLifetime:       protocol.MaxCertificateLifetime, // decided: the protocol's maximum
+		ACLEntries:                   500,                             // tunable
+		BodyTimeout:                  20 * time.Second,                // tunable
+		BodyMinRate:                  500,                             // tunable
+		HeadBytes:                    headBytes(),                     // decided: least need
 		HeadTimeout:                  10 * time.Second,
 	}
 }
