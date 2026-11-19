@@ -308,6 +308,41 @@ func (b *readsCounted) ReadLive(ctx context.Context, mailbox protocol.Address) (
 	return b.Backend.ReadLive(ctx, mailbox)
 }
 
+// A mailbox's first call to a process makes the reads that load it
+// (ARCHITECTURE.md § Startup), and a call after it makes none: a poll of a
+// loaded mailbox never leaves the process. Two memories over one in-memory
+// backend, the second's reads counted, as a process started after the
+// mailbox was made.
+func TestAMailboxsFirstCallReadsItAndTheNextReadsNothing(t *testing.T) {
+	t.Parallel()
+	clk := &clock{t: time.Now().UTC().Truncate(time.Second)}
+	b := newMemBackend(clk.Now)
+	first := newMemory(clk.Now, DefaultMailboxCache, nil, nil)
+	first.backend = b
+	_ = b.Start(context.Background(), first.apply)
+	counted := &readsCounted{Backend: b}
+	second := newMemory(clk.Now, DefaultMailboxCache, nil, nil)
+	second.backend = counted
+	serve := func(m *Memory) *env {
+		srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: m, Limits: relaxed(), Now: clk.Now}).Handler()))
+		t.Cleanup(srv.Close)
+		return &env{t: t, clock: clk, srv: srv}
+	}
+	e, e2 := serve(first), serve(second)
+	r := e.raw().register(protocol.MaxPrekeyLifetime)
+	poll := func() reply {
+		return e2.do("GET", r.path("/messages"), nil, e2.passFor(r.by[1], r.id.Address(), e2.name()))
+	}
+	e2.want(poll(), http.StatusOK, "")
+	if n := counted.reads.Swap(0); n == 0 {
+		t.Fatal("control: the mailbox's first call read nothing of the backend")
+	}
+	e2.want(poll(), http.StatusOK, "")
+	if n := counted.reads.Load(); n != 0 {
+		t.Errorf("a call to a loaded mailbox made %d reads of the backend; want none", n)
+	}
+}
+
 // A second process in the window a revocation of an address opens there
 // (dromas-dev/dromas-client#365, #505): it holds the mailbox, its record cache
 // has lost the record, as --mailbox-cache's LRU does under load, and its feed

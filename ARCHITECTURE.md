@@ -324,7 +324,7 @@ sequenceDiagram
 | S3, or the data directory, unavailable | Sends and fetches fail (a send's body not stored is a refusal, `errNotStored`); polls and lists, which read no body, still work. An ack's row is deleted and its body left, collected by age | Wait |
 | A statement or a call to S3 that never answers | Each statement the store makes ends at a bound (`storeTimeout`, `bounded`), and each call to S3 at the same bound, set once on its client (`bound`; § The store), whatever context its caller handed it, and so does each read a call shared by several callers makes apart from its request (a lookup's, a send's steps 6 to 9): its caller is answered `503`, and whoever waits on a shared call waits no longer | Automatic; its caller retries |
 | A write whose outcome is unknown (an answer lost, a context that ended mid-statement, a `COMMIT` with no answer) | Memory forgets what it held of the write's target, its count is kept, and its caller is answered `503` (§ The store); a registration reads its record and is answered from it | The next use reads what is held |
-| Process restart | Ready once its feed is synced through the moment it started (§ Startup) | Each mailbox's first call reads it once |
+| Process restart | Ready once its feed is synced through the moment it started (§ Startup) | Each mailbox's first call makes the reads that load it on its first use (§ Startup) |
 | Valkey slow, down or restarted | A call past `SharedWait`, or one that fails, is counted by the process alone, and none is made for `sharedRetry`; a store that restarted starts every sender's bucket full (§ The shared store) | Automatic: the next call after `sharedRetry` that the store answers counts there again |
 
 ## Storage
