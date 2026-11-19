@@ -320,27 +320,6 @@ func (x *index) count(mailbox protocol.Address, now uint64) int {
 	return len(m.marks)
 }
 
-// nextExpiry returns the earliest expiry (unix ms) of a mailbox's marks, or 0
-// for a mailbox with none or not loaded. It prunes nothing: a mark that expired
-// since the mailbox was last read is a change its reader has not seen, so its
-// expiry, now past, is returned.
-func (x *index) nextExpiry(mailbox protocol.Address) uint64 {
-	sh := x.shard(mailbox)
-	sh.mu.Lock()
-	defer sh.mu.Unlock()
-	m := sh.held(mailbox)
-	if m == nil {
-		return 0
-	}
-	var first uint64
-	for _, k := range m.marks {
-		if first == 0 || k.exp < first {
-			first = k.exp
-		}
-	}
-	return first
-}
-
 // after returns how many live messages a mailbox holds past a list position: the
 // list is oldest first, by receipt time (so by expiry) and then id.
 func (x *index) after(mailbox protocol.Address, exp, id, now uint64) (n int) {

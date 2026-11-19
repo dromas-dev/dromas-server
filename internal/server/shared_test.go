@@ -449,8 +449,6 @@ func (c *countingStore) Held(a protocol.Address) (Standing, bool) { return c.s.H
 
 func (c *countingStore) Changed(a protocol.Address) <-chan struct{} { return c.s.Changed(a) }
 
-func (c *countingStore) NextExpiry(a protocol.Address) time.Time { return c.s.NextExpiry(a) }
-
 func (c *countingStore) Known(a protocol.Address) (*Mailbox, bool) { return c.s.Known(a) }
 
 func (c *countingStore) Begin(a protocol.Address) uint64 { return c.s.Begin(a) }

@@ -179,14 +179,6 @@ func (s *Memory) Held(a protocol.Address) (Standing, bool) { return s.idx.standi
 // (Store.Changed).
 func (s *Memory) Changed(a protocol.Address) <-chan struct{} { return s.idx.changed(a) }
 
-// NextExpiry implements Store, from the index.
-func (s *Memory) NextExpiry(a protocol.Address) time.Time {
-	if exp := s.idx.nextExpiry(a); exp != 0 {
-		return time.UnixMilli(int64(exp)) //nolint:gosec // a unix ms of a live message
-	}
-	return time.Time{}
-}
-
 // applyMailbox records a mailbox record this process wrote: b is what is held of
 // its address, the record and the revocations read with it. Those were read
 // before the write, so in the step that counts the write (recCache.write)
