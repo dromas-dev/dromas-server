@@ -101,9 +101,8 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		bodies: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "bodies_before_pass_total",
 			Help: "Requests with a body on calls that are their address's, by outcome: opened, refused (past max_bodies_before_pass of its IPv4 address or IPv6 /64), or refused_range (past max_bodies_before_pass_per_range of its IPv6 /48)."}, []string{"outcome"}),
 		// By the policy's verdict on the request's version, never the version
-		// itself, which the caller writes: Kubernetes counts requests to
-		// deprecated APIs the same way, apiserver_requested_deprecated_apis
-		// (from memory), labelled by what its own code defines.
+		// itself, which the caller writes: a label holds no unbounded set of
+		// values (Prometheus's naming guide, § Labels, read 2026-11-19).
 		versions: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "version_requests_total",
 			Help: "Requests under /v1/, by what the version policy says of the version each names (PROTOCOL.md §11.17): retired (answered 410 client_version_unsupported, but on GET /v1/), sunset (a sunset covers it, not yet passed), deprecated (a deprecation covers it, no sunset does), or current."}, []string{"state"}),
 		reloads: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "runtime_config_reloads_total",
