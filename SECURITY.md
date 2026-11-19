@@ -17,7 +17,7 @@ gh api repos/dromas-dev/dromas-server/security-advisories/reports \
 
 - **Here:** `dromas-server`, and dromas.dev as it is run.
 - **The protocol, the clients or the vectors:** dromas-client, by the same route. Not sure which? Either one.
-- **How to write one, what is not a vulnerability, and what happens next:** dromas-client's [`SECURITY.md`](https://github.com/dromas-dev/dromas-client/blob/main/SECURITY.md). It applies here as written. Its § Decided questions lists the security questions already decided, for this server system too, each with its reasoning and the issue that decided it. A way around a limit that `LIMITS.md` does not already list as a known weakness is graded by its impact, as Go's security policy grades a resource exhaustion (go.dev/doc/security/policy, read 2026-11-19): one of medium or greater impact on many users is a vulnerability, and one of minor impact, or on few, a public issue.
+- **How to write one, what is not a vulnerability, and what happens next:** dromas-client's [`SECURITY.md`](https://github.com/dromas-dev/dromas-client/blob/main/SECURITY.md). It applies here as written. Its § Decided questions lists the security questions already decided, for this server system too, each with its reasoning and the issue that decided it. A way around a limit that `LIMITS.md` does not already list as a known weakness is graded by its impact, as Go's security policy grades a resource exhaustion (go.dev/doc/security/policy, read 2026-11-19): a vulnerability where its impact is medium or greater on many users, and otherwise a public issue.
 
 ## What `dromas-server` must get right
 
