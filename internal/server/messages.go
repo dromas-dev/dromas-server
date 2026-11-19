@@ -16,7 +16,8 @@ import (
 	"github.com/dromas-dev/dromas-client/protocol"
 )
 
-// pageSize is the list page: up to 50 messages (the delivery contract).
+// pageSize is the list page: up to this many messages, dromas-server's
+// choice (PROTOCOL.md §11.11 fixes none).
 const pageSize = 50
 
 // list is GET /v1/<address>/messages (PROTOCOL.md §11.11): metadata only,
