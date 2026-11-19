@@ -26,8 +26,8 @@ The client, [dromas-client](https://github.com/dromas-dev/dromas-client), is Apa
 
 ## Where a change goes
 
-- **The wire, a check or a refusal:** the specification, `PROTOCOL.md` in the client repo, with the client code that implements it.
-- **How `dromas-server` does it:** this repo.
+- **The wire, or a check or a refusal of what the wire carries:** the specification, `PROTOCOL.md` in the client repo, with the client code that implements it.
+- **How `dromas-server` does it, and its own limits, timeouts and `503`s:** this repo (`ARCHITECTURE.md`, `LIMITS.md`).
 - **A question about the protocol:** an issue in the client repo, where the open ones are.
 - **A vulnerability:** privately, never in an issue: `SECURITY.md`.
 
