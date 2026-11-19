@@ -648,7 +648,7 @@ type Store interface {
 	// and otherwise whole, as a fetch answers a range (PROTOCOL.md §11.12).
 	// So a fetch that resumes reads only the rest from where a body is kept.
 	Message(ctx context.Context, mailbox protocol.Address, id [32]byte, from int64) (*Header, []byte, error)
-	// DeleteMessage acks a message: its body goes, then its row, and
+	// DeleteMessage acks a message: its row goes, then its body, and
 	// nothing of it is kept (PROTOCOL.md §13). ErrNotFound if it is not
 	// live.
 	DeleteMessage(ctx context.Context, mailbox protocol.Address, id [32]byte) error
@@ -683,8 +683,9 @@ type Store interface {
 	// from memory as Count does: what a list from that cursor would return.
 	After(ctx context.Context, mailbox protocol.Address, c *Cursor) (int, error)
 	// Holds reports whether a mailbox holds a live message with this id, from
-	// memory as Count does. False is certain; true may be another message
-	// whose id starts alike, so the caller still reads it.
+	// memory as Count does, by the id's tag, a keyed hash of it (markTag).
+	// False is certain; true may be another message whose tag is the same,
+	// so the caller still reads it.
 	Holds(ctx context.Context, mailbox protocol.Address, id [32]byte) (bool, error)
 	// Fetched is Holds for a fetch: it also reports whether this process has
 	// served the message before, and counts this serving. The count lives
