@@ -331,9 +331,13 @@ func holdingNow(t *testing.T, s *Server, n int64) {
 	}
 }
 
-// A message's expiry is no change memory applies, and ends no hold: a long
-// poll on a page that holds the message is answered at its wait's end, the
-// page as it then stands, without the message (PROTOCOL.md §11.11).
+// A long poll on a page that holds a message is answered, once the message
+// has expired, the page as it then stands, without the message, and no
+// later than its wait's end (PROTOCOL.md §11.11). Either time is right: an
+// expiry is no change memory applies, so it ends no hold, and a server MAY
+// hold past it to the wait's end; but any wake of the hold before then,
+// such as a change the feed brings, reads the page again and answers it
+// at once.
 func TestALongPollHeldPastAMessagesExpiryIsAnsweredThePageAsItStands(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
@@ -354,8 +358,8 @@ func TestALongPollHeldPastAMessagesExpiryIsAnsweredThePageAsItStands(t *testing.
 	e.clock.Add(left) // it expires now, by the server's clock
 	got := <-c
 	e.want(got.r, http.StatusOK, "")
-	if got.took < l.MaxWait || got.r.header.Get("ETag") == tag || !bytes.Contains(got.r.body, []byte(`"total_count":0`)) {
-		t.Fatalf("the long poll was answered after %v, tag %q, %s; want the empty page at max_wait", got.took, got.r.header.Get("ETag"), got.r.body)
+	if got.took > l.MaxWait+2*time.Second || got.r.header.Get("ETag") == tag || !bytes.Contains(got.r.body, []byte(`"total_count":0`)) {
+		t.Fatalf("the long poll was answered after %v, tag %q, %s; want the empty page by max_wait", got.took, got.r.header.Get("ETag"), got.r.body)
 	}
 }
 
