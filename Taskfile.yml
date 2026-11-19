@@ -42,8 +42,10 @@ tasks:
         msg: "main is not origin/main: git pull --ff-only"
       - sh: '[ -z "$(git tag --points-at HEAD "v*")" ]'
         msg: This commit is released already
-      - sh: '[ "$(gh run list --workflow release.yml --event workflow_dispatch --commit "$(git rev-parse HEAD)" --status success --json databaseId --jq length)" -gt 0 ]'
-        msg: "no hand-run of release.yml has passed on this commit (every build and test a tag runs): gh workflow run release.yml --ref main"
+      - sh: '[ "$(gh run list --workflow release.yml --event push --commit "$(git rev-parse HEAD)" --status success --json databaseId --jq length)" -gt 0 ]'
+        msg: "release.yml's snapshot has not passed on this commit's push to main (every build a tag runs): gh run list --workflow release.yml --commit {{.COMMIT}}"
+      - sh: '[ "$(gh run list --workflow ci.yml --event push --commit "$(git rev-parse HEAD)" --status success --json databaseId --jq length)" -gt 0 ]'
+        msg: "ci.yml has not passed on this commit's push to main (every test a tag runs): gh run list --workflow ci.yml --commit {{.COMMIT}}"
       - sh: '[ -z "{{.NOTES}}" ] || [ -s "{{.NOTES}}" ]'
         msg: NOTES names no file with anything in it
       - sh: ssh-add -T "$(git config user.signingkey)"
