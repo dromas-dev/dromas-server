@@ -162,6 +162,5 @@ type Change struct {
 	Mailbox     *Mailbox     // RecordChange
 	Revocations *Revocations // RevocationsChange
 	Header      *Header      // MessageChange: of a row deleted, its ID alone
-	Live        bool         // MessageChange: in the list
 	Account     *Account     // AccountChange
 }

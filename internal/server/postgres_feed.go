@@ -657,7 +657,6 @@ func changeOf(table string, r row, gone bool) (Change, error) {
 		c := Change{Kind: MessageChange, Addr: box, Gone: gone, Header: &Header{ID: id}}
 		if !gone {
 			c.Header, c.Err = decodeHeader(r)
-			c.Live = c.Err == nil
 		}
 		return c, nil
 	case "accounts":

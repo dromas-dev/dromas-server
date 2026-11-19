@@ -256,17 +256,14 @@ func (x *index) insert(mailbox protocol.Address, k mark, now uint64) {
 	})
 }
 
-// remove removes a message. A removal by this process leaves a tomb until
-// the feed echoes it (echo true) or the message would have expired.
-func (x *index) remove(mailbox protocol.Address, tag, exp, now uint64, echo bool) {
+// remove removes a message this process deleted. It leaves a tomb until
+// the feed echoes the deletion (deleted) or the message would have expired.
+func (x *index) remove(mailbox protocol.Address, tag, exp, now uint64) {
 	x.apply(mailbox, func(m *mailboxMem) {
 		m.prune(now)
 		k := mark{tag: tag, exp: exp}
 		m.marks = slices.DeleteFunc(m.marks, func(t mark) bool { return same(t, k) })
-		switch {
-		case echo:
-			m.tombs = slices.DeleteFunc(m.tombs, func(t mark) bool { return same(t, k) })
-		case exp > now && !slices.ContainsFunc(m.tombs, func(t mark) bool { return same(t, k) }):
+		if exp > now && !slices.ContainsFunc(m.tombs, func(t mark) bool { return same(t, k) }) {
 			m.tombs = append(m.tombs, k)
 		}
 	})

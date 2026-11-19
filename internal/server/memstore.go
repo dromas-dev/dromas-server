@@ -280,7 +280,7 @@ func (s *memBackend) PutMessage(ctx context.Context, mailbox protocol.Address, h
 	}
 	s.messages[mailbox][h.ID] = &memMessage{h: *h, body: bytes.Clone(body)}
 	echo := *h
-	s.changed(Change{Kind: MessageChange, Addr: mailbox, Header: &echo, Live: true})
+	s.changed(Change{Kind: MessageChange, Addr: mailbox, Header: &echo})
 	return nil
 }
 

@@ -230,7 +230,7 @@ func (s *Memory) forget(a protocol.Address) {
 // retired takes a message this process deleted out of memory, leaving a
 // tomb until the feed's echo (index.remove, index.deleted).
 func (s *Memory) retired(mailbox protocol.Address, id [32]byte, received time.Time) {
-	s.idx.remove(mailbox, s.idx.tagOf(id), ms(received)+ttlMs, s.nowMs(), false)
+	s.idx.remove(mailbox, s.idx.tagOf(id), ms(received)+ttlMs, s.nowMs())
 }
 
 // apply applies one change of the backend's feed to memory: one rule for
@@ -292,10 +292,8 @@ func (s *Memory) apply(c Change) {
 			// expired and taken by the TTL, whose mark memory dropped at its
 			// expiry.
 			s.idx.deleted(c.Addr, s.idx.tagOf(c.Header.ID), s.nowMs())
-		case c.Live:
+		default:
 			s.idx.insert(c.Addr, s.idx.newMark(c.Header.ID, ms(c.Header.ReceivedAt)+ttlMs), s.nowMs())
-		default: // out of the list and kept, as an ack of a build before dromas-dev/dromas-client#507 left it
-			s.idx.remove(c.Addr, s.idx.tagOf(c.Header.ID), ms(c.Header.ReceivedAt)+ttlMs, s.nowMs(), true)
 		}
 	case AccountChange:
 		if gone {
