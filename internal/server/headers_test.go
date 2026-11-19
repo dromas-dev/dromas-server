@@ -26,11 +26,9 @@ func TestEveryAPIAnswerTellsABrowserItIsNoPage(t *testing.T) {
 		"not an address":      e.do("GET", "/v1/nope", nil, ""),
 	}
 	want := map[string]string{
-		"Content-Security-Policy":      "default-src 'none'; frame-ancestors 'none'",
-		"X-Content-Type-Options":       "nosniff",
-		"Referrer-Policy":              "no-referrer",
-		"Cross-Origin-Resource-Policy": "same-origin",
-		"Cross-Origin-Opener-Policy":   "same-origin",
+		"Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+		"X-Content-Type-Options":  "nosniff",
+		"Referrer-Policy":         "no-referrer",
 	}
 	for name, r := range answers {
 		for h, v := range want {

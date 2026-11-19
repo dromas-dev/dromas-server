@@ -530,8 +530,10 @@ func (s *Server) HTTPServer(addr string, idle time.Duration) *http.Server {
 // answer served again from a cache would be this server's word outliving the
 // fact: a prekey that was replaced, or a mailbox that has since been revoked. A
 // 410 is cacheable by default (RFC 9110 §15.5.11), so this is said outright.
-// Each answer also carries the headers OWASP's REST Security Cheat Sheet
-// gives an API (apiHeaders).
+// Each answer also carries the browser headers of apiHeaders. no-store,
+// frame-ancestors 'none' and nosniff are what OWASP's REST Security Cheat
+// Sheet gives an API; default-src 'none' and Referrer-Policy are of its table
+// of headers for an answer rendered as HTML (read 2026-11-19).
 func notStored(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -542,16 +544,13 @@ func notStored(h http.Handler) http.Handler {
 
 // apiHeaderFields are what a browser is told of an API answer, which is never
 // a page: render nothing it names and frame it nowhere (a CSP of
-// default-src 'none', frame-ancestors 'none'), never sniff its type, send
-// no Referer from it, and let no other origin load or open it
-// (Cross-Origin-Resource-Policy, -Opener-Policy). A client of the API reads
-// none of them. A 304 carries none of them (notModified.write).
+// default-src 'none', frame-ancestors 'none'), never sniff its type, and
+// send no Referer from it. Their sources are notStored's. A client of the
+// API reads none of them. A 304 carries none of them (notModified.write).
 var apiHeaderFields = [...][2]string{
 	{"Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'"},
 	{"X-Content-Type-Options", "nosniff"},
 	{"Referrer-Policy", "no-referrer"},
-	{"Cross-Origin-Resource-Policy", "same-origin"},
-	{"Cross-Origin-Opener-Policy", "same-origin"},
 }
 
 // apiHeaders sets apiHeaderFields.
