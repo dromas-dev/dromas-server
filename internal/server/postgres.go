@@ -562,15 +562,6 @@ func (r row) strings(name string) ([]string, error) {
 	return nil, fmt.Errorf("row: %s is missing or not a text array", name)
 }
 
-// json reads a json or jsonb column into v.
-func (r row) json(name string, v any) error {
-	b, ok := r[name].(json.RawMessage)
-	if !ok {
-		return fmt.Errorf("row: %s is missing or not JSON", name)
-	}
-	return json.Unmarshal(b, v)
-}
-
 // The mailbox record.
 
 // mailboxCols are a mailbox record's columns, as ReadAddress reads them.
