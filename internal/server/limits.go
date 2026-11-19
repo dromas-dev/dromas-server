@@ -696,9 +696,8 @@ func hostAddr(host string) (netip.Addr, bool) {
 // headBytes is the head the longest call needs: a pass as long as one can be,
 // with 2 KiB for its request line and the other headers a client and a proxy
 // in front of it send, rounded up to a power of two. A pass is as long as
-// the largest signature bound of any identity key type the client defines,
-// so a type with a larger bound raises it with the client release that
-// defines that type.
+// the signature bound, protocol.MaxSignature, so a key type with longer
+// signatures raises it with the client release that defines that type.
 func headBytes() int {
 	n := 1 << 10
 	for n < protocol.MaxPassAuthorization+2<<10 {
