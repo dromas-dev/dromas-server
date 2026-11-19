@@ -275,7 +275,7 @@ func (bs *buckets) reserve(ctx context.Context, key string, now func() time.Time
 	for {
 		t := now()
 		answered, shared, sharedOver := false, false, time.Duration(0)
-		if bs.shared.up(t) {
+		if bs.shared.up() {
 			if took, over, err := bs.shared.take(ctx, key, n, every, t); err == nil {
 				answered, shared, sharedOver = true, took, max(over, time.Nanosecond)
 			}
@@ -425,7 +425,7 @@ func (bs *buckets) giveLocked(key string, now time.Time) {
 // ready reports whether key has a token at now, and takes none: for a limit
 // that counts an outcome known only after the work it guards.
 func (bs *buckets) ready(key string, now time.Time) (ok bool, wait time.Duration) {
-	shared, read := bs.shared.full(key, now)
+	shared, read := bs.shared.full(key)
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 	if bs.n == 0 || bs.every <= 0 {
@@ -463,7 +463,7 @@ func (bs *buckets) nextOf(full, now time.Time) (next time.Time, over time.Durati
 // Reservations in flight settle as they would have. With a shared store, it
 // is cleared there too.
 func (bs *buckets) clear(key string, now time.Time) bool {
-	cleared := bs.shared.clear(key, now)
+	cleared := bs.shared.clear(key)
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 	full, ok := bs.full[key]

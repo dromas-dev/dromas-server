@@ -15,13 +15,11 @@ import (
 // SharedWait bounds each call to the shared store, which is a round trip to
 // a store in memory beside the processes: past it, the store is slow, and
 // the count is the process's own (sharedBuckets). It is a send's wait at
-// most, beside a send's own write to the database.
+// most, beside a send's own write to the database. Every call is made, as
+// Let's Encrypt's Boulder makes each to its Redis with a timeout of its own
+// and no circuit breaker (ratelimits/source_redis.go): so while the store
+// hangs, each take waits up to SharedWait, and so does each give-back.
 const SharedWait = 50 * time.Millisecond
-
-// sharedRetry is how long a process counts by itself after a call to the
-// shared store failed, before it tries the store again: so a store that is
-// down costs one wait of SharedWait each interval, not one each call.
-const sharedRetry = time.Second
 
 // sharedBuckets keeps the times of a bucket set in Valkey, which every
 // process of a deployment reaches: a key's bucket is then one across them
@@ -34,19 +32,16 @@ const sharedRetry = time.Second
 // ARCHITECTURE.md § The shared store).
 //
 // A call that fails or takes past SharedWait is counted in the process's own
-// buckets instead, as if there were no store, for sharedRetry: the process's
-// own buckets count every take either way, so what they hold then is what
-// that process alone has spent.
+// buckets instead, as if there were no store: the process's own buckets
+// count every take either way, so what they hold then is what that process
+// alone has spent.
 type sharedBuckets struct {
 	c      valkey.Client
 	prefix string
 	log    *log.Logger
 	m      *Metrics
-	// retry is the time, in nanoseconds since the Unix epoch, before which no
-	// call is made; down is set while the store has not answered since it
-	// failed.
-	retry atomic.Int64
-	down  atomic.Bool
+	// down is set while the store has not answered since it failed.
+	down atomic.Bool
 }
 
 // OpenValkey is the client of the Valkey at url (valkey://[user@]host:port),
@@ -118,16 +113,13 @@ end
 return 1
 `)
 
-// up reports whether a call to the store is made at now: sh is set, and no
-// call failed within sharedRetry.
-func (sh *sharedBuckets) up(now time.Time) bool {
-	return sh != nil && now.UnixNano() >= sh.retry.Load()
-}
+// up reports whether a call to the store is made: sh is set.
+func (sh *sharedBuckets) up() bool { return sh != nil }
 
 // done records a call's outcome: a failure, the store's own error or its
-// deadline, sets the process to count by itself for sharedRetry, which the
-// log says once until the store answers again.
-func (sh *sharedBuckets) done(op string, start, now time.Time, err error) error {
+// deadline, which the call's process counts by itself, the log says once
+// until the store answers again.
+func (sh *sharedBuckets) done(op string, start time.Time, err error) error {
 	sh.m.sharedCall(op, err, time.Since(start))
 	if err == nil {
 		if sh.down.Swap(false) && sh.log != nil {
@@ -135,7 +127,6 @@ func (sh *sharedBuckets) done(op string, start, now time.Time, err error) error 
 		}
 		return nil
 	}
-	sh.retry.Store(now.Add(sharedRetry).UnixNano())
 	if !sh.down.Swap(true) && sh.log != nil {
 		sh.log.Printf("the shared store failed (%v): %scounted by each process alone until it answers", err, sh.prefix)
 	}
@@ -155,7 +146,7 @@ func (sh *sharedBuckets) take(ctx context.Context, key string, n int, every time
 	if err == nil && len(res) != 2 {
 		err = fmt.Errorf("the take answered %d values", len(res))
 	}
-	if err = sh.done("take", start, now, err); err != nil {
+	if err = sh.done("take", start, err); err != nil {
 		return false, 0, err
 	}
 	return res[0] == 1, time.Duration(res[1]) * time.Microsecond, nil
@@ -164,20 +155,20 @@ func (sh *sharedBuckets) take(ctx context.Context, key string, n int, every time
 // give puts back a token taken for key, as buckets.giveLocked does. A give
 // that fails is not made again: that token stays spent.
 func (sh *sharedBuckets) give(key string, every time.Duration, now time.Time) {
-	if !sh.up(now) {
+	if !sh.up() {
 		return
 	}
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), SharedWait)
 	defer cancel()
 	err := giveScript.Exec(ctx, sh.c, []string{sh.prefix + key}, []string{micros(now), microsOf(every)}).Error()
-	_ = sh.done("give", start, now, err)
+	_ = sh.done("give", start, err)
 }
 
 // full is the time key's bucket is full again, the zero time for a full
 // one, and whether the store answered.
-func (sh *sharedBuckets) full(key string, now time.Time) (time.Time, bool) {
-	if !sh.up(now) {
+func (sh *sharedBuckets) full(key string) (time.Time, bool) {
+	if !sh.up() {
 		return time.Time{}, false
 	}
 	start := time.Now()
@@ -185,25 +176,25 @@ func (sh *sharedBuckets) full(key string, now time.Time) (time.Time, bool) {
 	defer cancel()
 	v, err := sh.c.Do(ctx, sh.c.B().Get().Key(sh.prefix+key).Build()).AsInt64()
 	if valkey.IsValkeyNil(err) {
-		_ = sh.done("read", start, now, nil)
+		_ = sh.done("read", start, nil)
 		return time.Time{}, true
 	}
-	if sh.done("read", start, now, err) != nil {
+	if sh.done("read", start, err) != nil {
 		return time.Time{}, false
 	}
 	return time.UnixMicro(v), true
 }
 
 // clear fills key's bucket, and reports whether the store held one.
-func (sh *sharedBuckets) clear(key string, now time.Time) bool {
-	if !sh.up(now) {
+func (sh *sharedBuckets) clear(key string) bool {
+	if !sh.up() {
 		return false
 	}
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), SharedWait)
 	defer cancel()
 	n, err := sh.c.Do(ctx, sh.c.B().Del().Key(sh.prefix+key).Build()).AsInt64()
-	return sh.done("clear", start, now, err) == nil && n > 0
+	return sh.done("clear", start, err) == nil && n > 0
 }
 
 // sharedOutcome is a call's outcome as the metrics name it: ok, timeout
