@@ -195,7 +195,7 @@ sequenceDiagram
   P2->>B: 200 with count and a page, its ETag and Retry-After
 ```
 
-**`dromas-server` compresses no answer, whatever the request's `Accept-Encoding`** (`PROTOCOL.md` §15.8): a compressed lookup's length would follow the mailbox's own bytes, a page puts what senders chose beside the mailbox's own values, the shape of BREACH (RFC 7457 §2.6), and age ciphertext does not compress (§ Storage). A site's answer is its web server's, passed on as that server sent it, compressed or not.
+**`dromas-server` compresses no answer, whatever the request's `Accept-Encoding`** (`PROTOCOL.md` §15.8), at a cost of 24% and 27% more bytes on lookups of 1.6 KB and 4.1 KB (measured 2026-10-18): a compressed lookup's length would follow the mailbox's own bytes, a page puts what senders chose beside the mailbox's own values, the shape of BREACH (RFC 7457 §2.6), and age ciphertext does not compress (§ Storage). A site's answer is its web server's, passed on as that server sent it, compressed or not.
 
 
 ### Runtime config
@@ -455,5 +455,5 @@ dromas-server (this repo)
 
 - **Estimates:**
   - ~50 B per mark, measured, and ~100 B per listed message.
-- **Measured:** the poll cost (33 to 34 µs with a pass `dromas-server` remembers, over loopback HTTP on one core, access log included, measured 2026-10-13: `bench/README.md`), a new pass's check (about 180 µs), memory per mailbox, and the compression table. The poll's figure is of an access line redacted segment by segment, 0.5 µs; the access line as built, each log line redacted whole with a regexp and the path quoted, measures 3.3 µs alone (measured 2026-10-20), and the poll has not been measured with it.
+- **Measured:** the poll cost (33 to 34 µs with a pass `dromas-server` remembers, over loopback HTTP on one core, access log included, measured 2026-10-13: `bench/README.md`), a new pass's check (about 180 µs), and memory per mailbox. The poll's figure is of an access line redacted segment by segment, 0.5 µs; the access line as built, each log line redacted whole with a regexp and the path quoted, measures 3.3 µs alone (measured 2026-10-20), and the poll has not been measured with it.
 - **From PostgreSQL's docs and source, read 2026-11-07:** a temporary slot's life (*Streaming Replication Protocol*) and a keepalive's position (`walsender.c`).

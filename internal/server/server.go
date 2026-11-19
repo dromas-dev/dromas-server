@@ -530,10 +530,11 @@ func (s *Server) HTTPServer(addr string, idle time.Duration) *http.Server {
 // answer served again from a cache would be this server's word outliving the
 // fact: a prekey that was replaced, or a mailbox that has since been revoked. A
 // 410 is cacheable by default (RFC 9110 §15.5.11), so this is said outright.
-// Each answer also carries the browser headers of apiHeaders. no-store,
-// frame-ancestors 'none' and nosniff are what OWASP's REST Security Cheat
-// Sheet gives an API; default-src 'none' and Referrer-Policy are of its table
-// of headers for an answer rendered as HTML (read 2026-11-19).
+// Each answer also carries the browser headers of apiHeaders. no-store, and
+// apiHeaders' frame-ancestors 'none' and nosniff, are what OWASP's REST
+// Security Cheat Sheet gives an API; default-src 'none' and Referrer-Policy
+// are of its table of headers for an answer rendered as HTML
+// (read 2026-11-19).
 func notStored(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
