@@ -419,7 +419,7 @@ func TestThrottleIs503(t *testing.T) {
 	}
 }
 
-// Until the store has loaded its memory, every call is a 503.
+// Until its feed is synced, and while it is unsynced, every call is a 503.
 func TestNotReadyIs503(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: NewMemStore(time.Now), Limits: relaxed(), Ready: func() bool { return false }}).Handler()))

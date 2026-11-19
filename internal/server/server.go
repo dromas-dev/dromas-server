@@ -39,9 +39,9 @@ type Config struct {
 	Limits Limits
 	Now    func() time.Time // time.Now if nil
 	Log    *log.Logger      // no access log if nil
-	// Ready, when set, reports whether the store has loaded its memory; until
-	// it has, every call is answered 503 rather than wrong (ARCHITECTURE.md
-	// § Startup).
+	// Ready, when set, reports whether the store's feed is synced; until it
+	// is, and while it is unsynced, every call is answered 503 rather than
+	// wrong (ARCHITECTURE.md § Startup).
 	Ready func() bool
 	// TrustedProxies are the peers whose X-Forwarded-For names the client
 	// (clientIP): behind a reverse proxy every request arrives from the
@@ -582,7 +582,7 @@ func (s *Server) date(w http.ResponseWriter) {
 }
 
 // whenReady answers 503 while the store cannot show that its memory is
-// current: until it is loaded, and while the feed is unsynced. A
+// current: until its feed is synced, and while it is unsynced. A
 // poll answered then could read a count of zero that is not true.
 func (s *Server) whenReady(h http.Handler) http.Handler {
 	if s.ready == nil {

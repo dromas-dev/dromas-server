@@ -10,7 +10,7 @@ import (
 )
 
 // healthcheck succeeds only once the server answers its document: a
-// process whose store has not loaded its memory answers 503 and fails it,
+// process whose feed is not synced answers 503 and fails it,
 // the same process ready passes it, and a closed address fails it.
 func TestTheHealthcheckPassesOnlyAReadyServer(t *testing.T) {
 	t.Parallel()
