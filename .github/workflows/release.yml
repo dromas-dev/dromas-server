@@ -224,8 +224,8 @@ jobs:
 
   rebuild:
     needs: release
-    # A skipped job upstream (tag, on a hand-run) skips every job after it
-    # unless the job says otherwise.
+    # A skipped job upstream (tag, off a tag; ci, on a push to main) skips
+    # every job after it unless the job says otherwise.
     if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
