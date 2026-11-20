@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"path"
 	"slices"
 	"strings"
@@ -345,7 +346,8 @@ func TestTheBodiesDirectoryDeletesTheDirectoriesItEmpties(t *testing.T) {
 // decoding WAL the publication leaves out reports its position only at its
 // next keepalive. Start returns as it starts the feed's goroutines, and a
 // sync takes a read of the flushed position and the walsender's answer to a
-// status update after it, at most a SyncInterval apart. Control: a Start
+// status update after it, at most a SyncInterval apart. The first sync is
+// logged once, as a hot standby logs its consistent state. Control: a Start
 // that waits for the sync returns ready.
 func TestStartReturnsBeforeTheFeedsFirstSync(t *testing.T) {
 	t.Parallel()
@@ -353,7 +355,12 @@ func TestStartReturnsBeforeTheFeedsFirstSync(t *testing.T) {
 		t.Skip("needs PostgreSQL: DROMAS_TEST_POSTGRES")
 	}
 	schema, bodies := testDatabase(t)
-	s, ctx := newPostgresIn(t, schema, bodies, nil, func(c *PostgresConfig) { c.SyncInterval = 2 * time.Second })
+	var mu sync.Mutex
+	var logged bytes.Buffer
+	s, ctx := newPostgresIn(t, schema, bodies, nil, func(c *PostgresConfig) {
+		c.SyncInterval = 2 * time.Second
+		c.Log = log.New(lockedWriter{&mu, &logged}, "", 0)
+	})
 	if err := s.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -361,6 +368,12 @@ func TestStartReturnsBeforeTheFeedsFirstSync(t *testing.T) {
 		t.Fatal("the store is ready as Start returns: Start waited for the feed's first sync")
 	}
 	untilReady(t, s)
+	fed(t, s) // a sync after the first
+	mu.Lock()
+	defer mu.Unlock()
+	if n := strings.Count(logged.String(), "feed: synced in "); n != 1 {
+		t.Errorf("the first sync was logged %d times; want once: %q", n, logged.String())
+	}
 }
 
 // A store whose feed's session ends is no longer ready, and calls Fatal: its
