@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,6 +105,86 @@ func TestNoLogLineCarriesAnAddress(t *testing.T) {
 	}
 	if !strings.Contains(line, "PutObject") || strings.Contains(line, to.Address().String()) || !strings.Contains(line, string(redact([]byte(to.Address().String())))) {
 		t.Errorf("a real S3 client's error, logged: %q, in:\n%s", line, logged.String())
+	}
+}
+
+// No log line carries a client's IP address (SECURITY.md, § Minimal
+// logs): calls through a trusted proxy, whose X-Forwarded-For names the
+// client as the limits read it, are answered every way a line is written
+// for (the access line of each, a refusal past a limit, a store's error),
+// and no line holds the address the proxy named, or its /64.
+func TestNoLogLineCarriesTheClientsAddress(t *testing.T) {
+	t.Parallel()
+	var logged lockedBuffer
+	var failing protocol.Address
+	failing[0], failing[31] = 0xab, 0xcd
+	l := relaxed()
+	l.MissesPerMinute = 2
+	s := New(Config{Store: errorWithURL{NewMemStore(time.Now), failing, strings.Repeat("ef", 32)}, Limits: l, Now: time.Now,
+		Log:            log.New(&logged, "", log.LstdFlags),
+		TrustedProxies: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("::1/128")}})
+	srv := httptest.NewServer(apitest.Handler(t, s.Handler()))
+	t.Cleanup(srv.Close)
+	nobody := func(i byte) protocol.Address {
+		var a protocol.Address
+		a[0], a[1] = 1, i
+		return a
+	}
+	call := func(client, path string) int {
+		t.Helper()
+		r, err := http.NewRequest(http.MethodGet, srv.URL+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Header.Set("X-Forwarded-For", "198.51.100.1, "+client) // the proxy's entry is the last
+		r.Close = true
+		resp, err := srv.Client().Do(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	for _, client := range []string{"203.0.113.77", "2001:db8:77:77::77"} {
+		for _, c := range []struct {
+			path string
+			want int
+		}{
+			{"/v1/", http.StatusOK},
+			{"/v1/" + failing.String(), http.StatusServiceUnavailable},
+			{"/nowhere", http.StatusNotFound},
+		} {
+			if got := call(client, c.path); got != c.want {
+				t.Fatalf("%s from %s: %d, want %d", c.path, client, got, c.want)
+			}
+		}
+		refused := false
+		for i := range byte(5) { // misses until its address's are spent
+			got := call(client, "/v1/"+nobody(i).String())
+			if refused = got == http.StatusTooManyRequests; refused {
+				break
+			}
+			if got != http.StatusNotFound {
+				t.Fatalf("a miss from %s: %d, want 404 or 429", client, got)
+			}
+		}
+		if !refused {
+			t.Fatalf("%s's misses were never refused", client)
+		}
+	}
+	// The limits read the address the proxy named: another one's first miss is no 429.
+	if got := call("203.0.113.78", "/v1/"+nobody(9).String()); got != http.StatusNotFound {
+		t.Fatalf("another client's first miss: %d, want 404", got)
+	}
+	srv.Close() // every connection closed: every line is written
+	if n := strings.Count(logged.String(), "\n"); n < 9 {
+		t.Fatalf("%d lines logged, want one for each call at least:\n%s", n, logged.String())
+	}
+	for _, held := range []string{"203.0.113.7", "2001:db8:77:77"} {
+		if strings.Contains(logged.String(), held) {
+			t.Errorf("a log line holds %s:\n%s", held, logged.String())
+		}
 	}
 }
 

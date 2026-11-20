@@ -41,6 +41,7 @@ func headOf(t *testing.T, addr, head string) int {
 // before any handler runs. With the bound off, net/http's default, the
 // longer head is read.
 func TestTheHeadIsReadToWhatTheLongestCallNeeds(t *testing.T) {
+	t.Parallel()
 	serve := func(l server.Limits) (string, *int) {
 		reached := new(int)
 		srv := server.HTTPServer("", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

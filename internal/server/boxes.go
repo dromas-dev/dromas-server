@@ -196,7 +196,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 // address's revocation of certificates covers (PROTOCOL.md §10.2): one at or
 // below it.
 func statementRevoked() *problem {
-	return fail(protocol.CodeCertificateRevoked, "certify a new working key above the revocation of certificates: dromas prekey renew", "the statement is signed under a certificate this address's revocation of certificates covers")
+	return fail(protocol.CodeCertificateRevoked, "certify a new working key above the revocation of certificates: dromas prekey renew where the identity can sign, or dromas cert request for the identity's holder to certify", "the statement is signed under a certificate this address's revocation of certificates covers")
 }
 
 // settled reports whether what is held of an address answers a registration
@@ -308,7 +308,7 @@ func (s *Server) checkPrekey(id *protocol.Identity, statement, sig []byte, curre
 	}
 	if c := signer.Certificate(); c != nil && signerHash(id, signer) != current {
 		if limit := s.limits().maxCertificate(); uint64(max(c.Lifetime(), 0)/time.Second) > limit {
-			return nil, nil, fail(protocol.CodeCertificateLifetimeTooLong, "certify a new working key for no longer than this server's maximum, max_certificate_lifetime_seconds in GET /v1/: dromas prekey renew",
+			return nil, nil, fail(protocol.CodeCertificateLifetimeTooLong, "certify a new working key for no longer than this server's maximum, max_certificate_lifetime_seconds in GET /v1/: dromas prekey renew where the identity can sign, or dromas cert request for the identity's holder to certify",
 				"the certificate runs longer than this server takes one for, %d seconds", maxLifetimeValue(limit))
 		}
 	}
@@ -415,7 +415,7 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 		if b.Rank == 0 {
 			return fail(protocol.CodeCertificateSuperseded, "sign the prekey with the mailbox's identity, or under a certificate: dromas prekey renew", "the statement must be signed by the mailbox's identity or under a certificate")
 		}
-		return fail(protocol.CodeCertificateSuperseded, "certify a new working key at a higher serial: dromas prekey renew", "the certificate's serial must be above %d, or the certificate be the mailbox's current one", certificateSerialValue(b.Rank))
+		return fail(protocol.CodeCertificateSuperseded, "certify a new working key at a higher serial: dromas prekey renew where the identity can sign, or dromas cert request for the identity's holder to certify", "the certificate's serial must be above %d, or the certificate be the mailbox's current one", certificateSerialValue(b.Rank))
 	}
 	if o.Rank == b.Rank && o.Serial <= b.Prekey.Serial {
 		return fail(protocol.CodeSerialTooLow, "a newer prekey is already published: dromas prekey renew takes the next serial", "under the mailbox's current signer the serial must be above %d", prekeySerialValue(b.Prekey.Serial))

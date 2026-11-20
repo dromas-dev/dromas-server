@@ -17,6 +17,7 @@ import (
 // URI; a time written out (2006-01-02T15:04:05Z) is an example of a format,
 // not a date of anything.
 func TestEveryPageSaysWhatHoldsNow(t *testing.T) {
+	t.Parallel()
 	date := regexp.MustCompile(`20[0-9]{2}-[01][0-9]-[0-3][0-9]`)
 	allowed := regexp.MustCompile(`(?i)(\b(read|measured|review|dated) |tag:dromas\.dev,)20[0-9]{2}-[01][0-9]-[0-3][0-9]|20[0-9]{2}-[01][0-9]-[0-3][0-9]T[0-9]{2}:`)
 	root := filepath.Join("..", "..")
@@ -81,6 +82,7 @@ var testName = regexp.MustCompile("`((?:Test|Fuzz)[A-Za-z0-9_]+)`")
 // "dromas-client/", and each test it names is a test of this repo, defined in
 // the test file the cell names it under.
 func TestEachSecurityClaimIsOneSentence(t *testing.T) {
+	t.Parallel()
 	root := filepath.Join("..", "..")
 	b, err := os.ReadFile(filepath.Join(root, "SECURITY.md"))
 	if err != nil {

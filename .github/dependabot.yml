@@ -5,7 +5,8 @@ version: 2
 updates:
   - package-ecosystem: gomod
     directory: /
-    # Indirect modules too, as go get -u ./... moves them.
+    # Indirect modules too, as go get -u ./... moves them, among them each
+    # tool go.mod's tool lines name (govulncheck), whose module is indirect.
     allow:
       - dependency-type: all
     schedule:

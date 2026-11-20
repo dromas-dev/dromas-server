@@ -183,7 +183,7 @@ func invalidPass(hint, detail string) *problem {
 // publishes a prekey under a certificate above it, which needs no pass under
 // the old one.
 func listedCertificate() *problem {
-	return fail(protocol.CodeCertificateRevoked, "publish a new prekey under a new certificate: dromas prekey renew", "the mailbox's current certificate is one its identity's revocation of certificates covers")
+	return fail(protocol.CodeCertificateRevoked, "publish a new prekey under a new certificate: dromas prekey renew where the identity can sign, or dromas cert request for the identity's holder to certify", "the mailbox's current certificate is one its identity's revocation of certificates covers")
 }
 
 // The hints of a 401: what a client does about it.
@@ -338,7 +338,7 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, sign
 	case errors.Is(err, protocol.ErrCertificateNotBegun):
 		return passBy{}, fail(protocol.CodePassExpired, "a certificate starts an hour before it is made: check this machine's clock, then dromas prekey renew", "the certificate the pass is signed under has not begun")
 	case errors.Is(err, protocol.ErrCertificateTime):
-		return passBy{}, fail(protocol.CodePassExpired, "publish a new prekey, which comes with a new certificate: dromas prekey renew", "the certificate the pass is signed under has ended")
+		return passBy{}, fail(protocol.CodePassExpired, "publish a new prekey, which comes with a new certificate: dromas prekey renew where the identity can sign, or dromas cert request for the identity's holder to certify", "the certificate the pass is signed under has ended")
 	case err != nil:
 		return passBy{}, invalidPass(hintNewPass, "the pass is not this mailbox's for this server")
 	}

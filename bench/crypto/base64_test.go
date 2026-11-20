@@ -12,6 +12,7 @@ import (
 // encoding/base64 decodes it to the exact bytes (the decoder ignores \r and \n). A measurement,
 // not a test of the server: a send's body is the ciphertext itself, raw (PROTOCOL.md §11.10).
 func TestWrappedBase64DecodesExactly(t *testing.T) {
+	t.Parallel()
 	raw := make([]byte, 10440) // a 10 KiB plaintext's binary age file
 	rand.Read(raw)
 	flat := base64.StdEncoding.EncodeToString(raw)

@@ -10,18 +10,27 @@
 #   SPDX SBOM of it, each attestation pushed to the registry;
 # - verify: the published release and image are checked as the release's
 #   notes have a user check them, as GoReleaser checks its own;
-# - rebuild: the release is built again from its tag on another image, and
-#   each archive must come out as the release job made it, which verify has
-#   checked against what was published.
-# By hand (workflow_dispatch), all of it but the tag and verify, on main as a
-# snapshot published nowhere: so a release's every build and test runs
-# before any tag is made. Actions are
-# pinned by commit, each with its release beside it, and GoReleaser by its
-# version.
+# - rebuild: the release is built again from its tag on another runner image,
+#   and each archive must come out as the release job made it, which verify
+#   has checked against what was published, as the Go project builds its own
+#   published releases again with gorebuild (go.dev/blog/rebuild,
+#   read 2026-11-19). That shows the build is deterministic; it is no rebuild
+#   by another party.
+# On every push to main, the release and rebuild jobs, built as a snapshot,
+# its checksums signed keyless under main's identity (a Rekor entry, as
+# GoReleaser's own snapshot's are), and nothing else published, as
+# GoReleaser's own release.yml and trivy's canary.yaml build one on every
+# push to main; ci.yml's own run on that push is its tests. So a
+# release's every build and test has run on its commit before any tag is
+# made, and task release (Taskfile.yml) checks both runs passed. By hand
+# (workflow_dispatch), all of it but the tag and verify, on main as the same
+# snapshot. Actions are pinned by commit, each with its release beside it,
+# and GoReleaser by its version.
 name: release
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -62,7 +71,8 @@ jobs:
 
   ci:
     needs: tag
-    if: ${{ !failure() && !cancelled() }}
+    # Not on a push to main, which runs ci.yml itself.
+    if: ${{ !failure() && !cancelled() && (github.ref_type == 'tag' || github.event_name != 'push') }}
     uses: ./.github/workflows/ci.yml
     permissions:
       contents: read
@@ -216,8 +226,8 @@ jobs:
 
   rebuild:
     needs: release
-    # A skipped job upstream (tag, on a hand-run) skips every job after it
-    # unless the job says otherwise.
+    # A skipped job upstream (tag, off a tag; ci, on a push to main) skips
+    # every job after it unless the job says otherwise.
     if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
