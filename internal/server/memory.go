@@ -179,14 +179,6 @@ func (s *Memory) Held(a protocol.Address) (Standing, bool) { return s.idx.standi
 // (Store.Changed).
 func (s *Memory) Changed(a protocol.Address) <-chan struct{} { return s.idx.changed(a) }
 
-// NextExpiry implements Store, from the index.
-func (s *Memory) NextExpiry(a protocol.Address) time.Time {
-	if exp := s.idx.nextExpiry(a); exp != 0 {
-		return time.UnixMilli(int64(exp)) //nolint:gosec // a unix ms of a live message
-	}
-	return time.Time{}
-}
-
 // applyMailbox records a mailbox record this process wrote: b is what is held of
 // its address, the record and the revocations read with it. Those were read
 // before the write, so in the step that counts the write (recCache.write)
@@ -238,7 +230,7 @@ func (s *Memory) forget(a protocol.Address) {
 // retired takes a message this process deleted out of memory, leaving a
 // tomb until the feed's echo (index.remove, index.deleted).
 func (s *Memory) retired(mailbox protocol.Address, id [32]byte, received time.Time) {
-	s.idx.remove(mailbox, s.idx.tagOf(id), ms(received)+ttlMs, s.nowMs(), false)
+	s.idx.remove(mailbox, s.idx.tagOf(id), ms(received)+ttlMs, s.nowMs())
 }
 
 // apply applies one change of the backend's feed to memory: one rule for
@@ -300,10 +292,8 @@ func (s *Memory) apply(c Change) {
 			// expired and taken by the TTL, whose mark memory dropped at its
 			// expiry.
 			s.idx.deleted(c.Addr, s.idx.tagOf(c.Header.ID), s.nowMs())
-		case c.Live:
+		default:
 			s.idx.insert(c.Addr, s.idx.newMark(c.Header.ID, ms(c.Header.ReceivedAt)+ttlMs), s.nowMs())
-		default: // out of the list and kept, as an ack of a build before dromas-dev/dromas-client#507 left it
-			s.idx.remove(c.Addr, s.idx.tagOf(c.Header.ID), ms(c.Header.ReceivedAt)+ttlMs, s.nowMs(), true)
 		}
 	case AccountChange:
 		if gone {
@@ -536,12 +526,9 @@ func (s *Memory) PutMessage(ctx context.Context, mailbox protocol.Address, h *He
 	return nil, err
 }
 
-// List implements Store: the backend's page. consistent asks for a read
-// strongly consistent, as a long poll's must be, which no later change may
-// wake (Server.list); both backends here read every page as committed, and
-// ignore it.
-func (s *Memory) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error) {
-	hs, err := s.backend.List(ctx, mailbox, after, limit, consistent)
+// List implements Store: the backend's page.
+func (s *Memory) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int) ([]Header, error) {
+	hs, err := s.backend.List(ctx, mailbox, after, limit)
 	if errors.Is(err, ErrStale) {
 		s.forget(mailbox) // the call's pass no longer holds: memory is behind
 	}

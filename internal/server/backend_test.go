@@ -476,10 +476,9 @@ func TestEveryChangeMemoryAppliesToAMailboxWakesItsLongPolls(t *testing.T) {
 		MessageChange: func(w *heldWorld) map[string]Change {
 			fresh := &Header{ID: [32]byte{0x1d, 9}, Size: 3, ReceivedAt: w.now, ExpiresAt: w.now.Add(protocol.Retention)}
 			return map[string]Change{
-				"live":                  {Kind: MessageChange, Addr: w.a, Header: fresh, Live: true},
-				"gone":                  {Kind: MessageChange, Addr: w.a, Header: &Header{ID: w.msgs[0].ID}, Gone: true},
-				"out of the list, kept": {Kind: MessageChange, Addr: w.a, Header: w.msgs[0]},
-				"unread":                {Kind: MessageChange, Addr: w.a, Err: bad},
+				"live":   {Kind: MessageChange, Addr: w.a, Header: fresh},
+				"gone":   {Kind: MessageChange, Addr: w.a, Header: &Header{ID: w.msgs[0].ID}, Gone: true},
+				"unread": {Kind: MessageChange, Addr: w.a, Err: bad},
 			}
 		},
 		AccountChange: func(*heldWorld) map[string]Change { return nil }, // an account's: no mailbox's

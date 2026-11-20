@@ -302,8 +302,8 @@ func (f *faults) ReadLive(ctx context.Context, mailbox protocol.Address) ([]Head
 	return hs, err
 }
 
-func (f *faults) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error) {
-	hs, err := f.Backend.List(ctx, mailbox, after, limit, consistent)
+func (f *faults) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int) ([]Header, error) {
+	hs, err := f.Backend.List(ctx, mailbox, after, limit)
 	f.answered("List")
 	return hs, err
 }
@@ -449,8 +449,6 @@ func (c *countingStore) Held(a protocol.Address) (Standing, bool) { return c.s.H
 
 func (c *countingStore) Changed(a protocol.Address) <-chan struct{} { return c.s.Changed(a) }
 
-func (c *countingStore) NextExpiry(a protocol.Address) time.Time { return c.s.NextExpiry(a) }
-
 func (c *countingStore) Known(a protocol.Address) (*Mailbox, bool) { return c.s.Known(a) }
 
 func (c *countingStore) Begin(a protocol.Address) uint64 { return c.s.Begin(a) }
@@ -516,9 +514,9 @@ func (c *countingStore) PutMessage(ctx context.Context, mailbox protocol.Address
 	return c.s.PutMessage(ctx, mailbox, h, body)
 }
 
-func (c *countingStore) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error) {
+func (c *countingStore) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int) ([]Header, error) {
 	c.count()
-	return c.s.List(ctx, mailbox, after, limit, consistent)
+	return c.s.List(ctx, mailbox, after, limit)
 }
 
 func (c *countingStore) Message(ctx context.Context, mailbox protocol.Address, id [32]byte, from int64) (*Header, []byte, error) {

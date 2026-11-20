@@ -148,7 +148,7 @@ func TestEveryCallOfTheBackendEndsAtItsBound(t *testing.T) {
 		"ReadAddress": func(ctx context.Context, b Backend) error { _, _, err := b.ReadAddress(ctx, mailbox.Addr); return err },
 		"ReadLive":    func(ctx context.Context, b Backend) error { _, err := b.ReadLive(ctx, mailbox.Addr); return err },
 		"List": func(ctx context.Context, b Backend) error {
-			_, err := b.List(ctx, mailbox.Addr, nil, 10, false)
+			_, err := b.List(ctx, mailbox.Addr, nil, 10)
 			return err
 		},
 		"Message": func(ctx context.Context, b Backend) error {
@@ -524,18 +524,10 @@ func (s *readDeadlines) Account(ctx context.Context, id string) (*Account, error
 	return s.Store.Account(ctx, id)
 }
 
-func (s *readDeadlines) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error) {
-	if a == s.to {
-		s.note("Mailbox", ctx)
-	}
-	return s.Store.Mailbox(ctx, a)
-}
-
 // Each read a send's shared call makes runs apart from the request that
 // leads it, and is handed a context bounded by storeTimeout, so the bound
-// holds on any store: the dedupe, the mailbox cap's reads, the
-// recipient's account and its record read again after the write
-// (dromas-dev/dromas-server#91).
+// holds on any store: the dedupe, the mailbox cap's reads and the
+// recipient's account (dromas-dev/dromas-server#91).
 func TestEveryReadOfASendsSharedCallIsBounded(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -555,7 +547,7 @@ func TestEveryReadOfASendsSharedCallIsBounded(t *testing.T) {
 	e.want(e.sendTo(to, 1, from, 1), http.StatusCreated, "")
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, read := range []string{"Header", "Count", "Account", "Mailbox"} {
+	for _, read := range []string{"Header", "Count", "Account"} {
 		d, ok := s.seen[read]
 		t.Logf("%s: deadline %v (-1: none)", read, d)
 		if !ok || d <= 0 || d > storeTimeout {

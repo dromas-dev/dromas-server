@@ -15,11 +15,12 @@ import (
 const sweepBatch = 500
 
 // sweep deletes, each sweepEvery, the rows past their expiry by more than
-// sweepGrace, which no read takes as live (PostgreSQL has no TTL), and what
-// a revoked address left beside its revocation, which no call is answered
-// from (a message a send stored as the revocation's delete ran, a record
-// whose delete failed; PROTOCOL.md §11.15), and collects bodies on disk as
-// old. It runs on the database's clock (each
+// sweepGrace, which no read takes as live (PostgreSQL has no TTL), and the
+// record left beside a revocation of its address, by a delete that failed or
+// a registration that raced it, which no call is answered from (PROTOCOL.md
+// §11.15), once no message row is left beside it (sweepRevoked), and
+// collects bodies on disk as old. A revoked address's leftover rows and
+// bodies go by age (ARCHITECTURE.md § The sweep). It runs on the database's clock (each
 // batch's transaction's start), unlike
 // every other condition, so a process whose clock is wrong deletes nothing
 // early. It counts the live mailboxes as it starts and after each pass
@@ -85,13 +86,15 @@ func (s *pgBackend) countMailboxes(ctx context.Context) {
 	s.metrics.mailboxes(n)
 }
 
-// sweepRevoked deletes the messages and the record of each address revoked
-// that are left beside its revocation.
+// sweepRevoked deletes the record of each address revoked that is left
+// beside its revocation, which holds the mailbox's sender list, once no
+// message row of the address is left: while one is, a load reads the
+// address's messages through the record, so a revocation sent again can
+// still delete them (Server.deleteHeld).
 func (s *pgBackend) sweepRevoked(ctx context.Context) {
-	for _, x := range []struct{ table, column string }{{"messages", "box"}, {"mailboxes", "addr"}} {
-		if err := s.sweepTable(ctx, x.table, x.column+` IN (SELECT addr FROM revocations WHERE revocation IS NOT NULL)`); err != nil && ctx.Err() == nil {
-			s.logf("sweep: %s of revoked addresses: %v", x.table, err)
-		}
+	if err := s.sweepTable(ctx, "mailboxes", `addr IN (SELECT addr FROM revocations WHERE revocation IS NOT NULL)
+		AND NOT EXISTS (SELECT 1 FROM messages WHERE messages.box = mailboxes.addr)`); err != nil && ctx.Err() == nil {
+		s.logf("sweep: mailboxes of revoked addresses: %v", err)
 	}
 }
 
