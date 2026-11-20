@@ -792,8 +792,8 @@ func (s *pgBackend) CreateMailbox(ctx context.Context, b *Mailbox) error {
 		if revoked {
 			return ErrStale // a revocation the registration's checks did not read
 		}
-		tag, err := tx.Exec(ctx, `INSERT INTO mailboxes (addr, identity, created, statement, statement_sig, rank, signer, senders, retired, acl, account, expires_at, rev)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '[]', $9, $10, $11, $12) ON CONFLICT (addr) DO NOTHING`,
+		tag, err := tx.Exec(ctx, `INSERT INTO mailboxes (addr, identity, created, statement, statement_sig, rank, signer, senders, acl, account, expires_at, rev)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) ON CONFLICT (addr) DO NOTHING`,
 			b.Addr[:], b.Identity, msTime(b.Created), b.Statement, b.Signature, numeric(b.Rank), b.Signer[:], sendersColumn(b), aclColumn(b), accountColumn(b), expiresColumn(b), toInt(b.Rev))
 		if err != nil {
 			return err
@@ -922,8 +922,9 @@ func (s *pgBackend) Revoke(ctx context.Context, a protocol.Address, rv *Revocati
 			return ErrStale // it brings nothing the row lacks, or the row is not what want asks
 		}
 		got = rows[0]
-		// The record's rev raised, so a renewal or a send held to the record
-		// as read before waits on its row and changes nothing.
+		// The record's rev raised, so a renewal held to the record as read
+		// waits on its row and changes nothing; a send whose statement began
+		// after the commit stores nothing.
 		err = tx.QueryRow(ctx, `UPDATE mailboxes SET rev = rev + 1 WHERE addr = $1 RETURNING created, rev`, a[:]).Scan(&created, &rev)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil // no mailbox
