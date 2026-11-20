@@ -29,8 +29,8 @@ type Limits struct {
 
 	RegistrationsPerHour      int // per IPv4 address or IPv6 /64, at once and an hour: a spike limit, which honest use meets once a mailbox
 	RangeRegistrationsPerHour int // per IPv6 /48, beside the /64's
-	SendsPerMinutePerIP       int // the pre-auth send rate per IP
-	RangeSendsPerMinute       int // per IPv6 /48, beside the /64's
+	SendsPerMinutePerIP       int // the pre-auth send rate per IP [tunable]
+	RangeSendsPerMinute       int // per IPv6 /48, beside the /64's [tunable]
 	MissesPerMinute           int // per IP: reads of the mailboxes table that find no mailbox, and checks that fail
 	RangeMissesPerMinute      int // per IPv6 /48, beside the /64's: a last-resort clamp on reads of the mailboxes table that every caller shares
 	MaxLongPollsPerRange      int // per IPv4 address or IPv6 /48: long polls held at once, past which a long poll is answered 503 (0: off); a last-resort clamp so one range cannot fill MaxLongPolls, never a limit of normal use
@@ -117,7 +117,7 @@ type Limits struct {
 // value are off.
 func DefaultLimits() Limits {
 	return Limits{
-		MaxSize:                      64 << 10,
+		MaxSize:                      64 << 10,                        // tunable
 		MailboxCap:                   1000,                            // tunable
 		SendsPerDay:                  50,                              // decided
 		SendsBurst:                   60,                              // decided
@@ -148,15 +148,15 @@ func DefaultLimits() Limits {
 		CallBurst:                    50,                              // tunable
 		CallRefill:                   6 * time.Second,                 // tunable
 		CertificatesPerDay:           5,                               // decided: as renewals
-		CertificateRevocationsPerDay: 10,                              // tunable
+		CertificateRevocationsPerDay: 10,                              // decided: a count of its own, apart from CertificatesPerDay; tunable
 		CertificatesBurst:            5,                               // decided: as its number a day
-		CertificateRevocationsBurst:  10,                              // tunable: as its number a day
+		CertificateRevocationsBurst:  10,                              // decided: as its number a day; tunable
 		MaxCertificateLifetime:       protocol.MaxCertificateLifetime, // decided: the protocol's maximum
 		ACLEntries:                   500,                             // tunable
 		BodyTimeout:                  20 * time.Second,                // tunable
 		BodyMinRate:                  500,                             // tunable
 		HeadBytes:                    headBytes(),                     // decided: least need
-		HeadTimeout:                  10 * time.Second,
+		HeadTimeout:                  10 * time.Second,                // tunable
 	}
 }
 
