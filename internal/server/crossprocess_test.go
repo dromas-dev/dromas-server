@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"sync"
 	"testing"
@@ -225,7 +226,8 @@ func TestAProcessBehindStoresNothingAnACLElsewhereDenies(t *testing.T) {
 
 // After a revocation of an address on A, B, behind, stores no send to it,
 // and answers it as revoked (PROTOCOL.md §11.15). What a send left all the
-// same, the sweep deletes (TestTheSweepTakesWhatARevokedAddressLeft).
+// same is never served, and goes by age
+// (TestARevocationCommittedDuringASendsWriteLeavesARowNeverServed).
 func TestAProcessBehindStoresNothingForAnAddressRevokedElsewhere(t *testing.T) {
 	t.Parallel()
 	x := newTwoProcesses(t)
@@ -443,8 +445,11 @@ func TestAProcessBehindRegistersNoAddressRevokedElsewhere(t *testing.T) {
 	x.hold(false)
 }
 
-// The sweep deletes the messages and the record left beside a revocation of
-// their address, which no call is answered from, and no other address's.
+// The sweep deletes the record left beside a revocation of its address,
+// which no call is answered from, once no message row of the address is
+// left, and no other address's. The messages left go by age, never by the
+// sweep of revoked addresses, and the record stays beside them, so a
+// revocation sent again can still delete them (ARCHITECTURE.md § The sweep).
 func TestTheSweepTakesWhatARevokedAddressLeft(t *testing.T) {
 	t.Parallel()
 	if !onPostgres() {
@@ -476,12 +481,85 @@ func TestTheSweepTakesWhatARevokedAddressLeft(t *testing.T) {
 		t.Fatalf("before the sweep, the revoked address holds %d messages and %d records; want 1 and 1", m, r)
 	}
 	s.pg().sweepRevoked(t.Context())
+	if m, r := rows(gone.id.Address()); m != 1 || r != 1 {
+		t.Errorf("after the sweep, the revoked address holds %d messages and %d records; want its message, which goes by age, and the record beside it", m, r)
+	}
+	// Its message gone, as its expiry takes it, the record goes too.
+	ga := gone.id.Address()
+	if _, err := s.pool().Exec(t.Context(), `DELETE FROM messages WHERE box = $1`, ga[:]); err != nil {
+		t.Fatal(err)
+	}
+	s.pg().sweepRevoked(t.Context())
 	if m, r := rows(gone.id.Address()); m != 0 || r != 0 {
-		t.Errorf("after the sweep, the revoked address holds %d messages and %d records; want none", m, r)
+		t.Errorf("after the sweep, the revoked address with no message holds %d messages and %d records; want none", m, r)
 	}
 	if m, r := rows(kept.id.Address()); m != 1 || r != 1 {
 		t.Errorf("after the sweep, another address holds %d messages and %d records; want 1 and 1", m, r)
 	}
+}
+
+// A revocation that commits while a send's write statement runs, after that
+// statement read the record, leaves the send stored and answered 201: its
+// row is never served (a list, a fetch, a HEAD, a lookup), since every call
+// naming the address answers 410, and goes by age (ARCHITECTURE.md § The
+// sweep). The statement is held at its insert by a row of the same id that
+// another transaction holds uncommitted, which rolls back once the
+// revocation has committed. Control: a send that reads its recipient again
+// after its write deletes the row and answers 410.
+func TestARevocationCommittedDuringASendsWriteLeavesARowNeverServed(t *testing.T) {
+	t.Parallel()
+	e, s := sharedEnv(t)
+	ctx := t.Context()
+	from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
+	addr := to.id.Address()
+	ct := sealFor(t, to, 1)
+	id := sha256.Sum256(ct)
+	holder, err := s.pool().Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(context.Background()) }()
+	var pid int32
+	if err := holder.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := holder.Exec(ctx, `INSERT INTO messages (box, id, size, received_at, nonce) VALUES ($1, $2, 0, now(), $3)`, addr[:], id[:], make([]byte, 8)); err != nil {
+		t.Fatal(err)
+	}
+	sent := make(chan reply, 1)
+	go func() { sent <- e.do("POST", to.path("/messages"), to.sealed(1, ct), from.pass(1)) }()
+	// The send's statement has read the record, and waits on the row held.
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		var n int
+		if err := s.pool().QueryRow(ctx, `SELECT count(*)::int FROM pg_stat_activity WHERE $1::int = ANY (pg_blocking_pids(pid))`, pid).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the send's write never waited on the row held")
+		}
+	}
+	sig, err := protocol.Sign(to.signer, protocol.RevocationStatement(addr), protocol.RevokeNamespace(addr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.want(e.do("PUT", revocationPath(addr), protocol.Revocations{Identity: to.id.Document(), Revocation: sig}, ""), http.StatusCreated, "")
+	if err := holder.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	e.want(<-sent, http.StatusCreated, "")
+	if s.storedMsg(t, addr, id) == nil {
+		t.Fatal("the send answered 201 left no row")
+	}
+	e.want(e.do("GET", to.path("/messages"), nil, to.pass(1)), http.StatusGone, protocol.CodeMailboxRevoked)
+	msg := to.path("/messages/" + hex.EncodeToString(id[:]))
+	e.want(e.do("GET", msg, nil, to.pass(1)), http.StatusGone, protocol.CodeMailboxRevoked)
+	if got := e.head(msg, to.pass(1)); got.StatusCode != http.StatusGone {
+		t.Errorf("HEAD of the row the send left: %d; want 410", got.StatusCode)
+	}
+	e.want(e.do("GET", to.path(""), nil, ""), http.StatusGone, protocol.CodeMailboxRevoked)
 }
 
 // A record made again at its address on A, once the sweep took the one

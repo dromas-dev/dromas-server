@@ -256,17 +256,14 @@ func (x *index) insert(mailbox protocol.Address, k mark, now uint64) {
 	})
 }
 
-// remove removes a message. A removal by this process leaves a tomb until
-// the feed echoes it (echo true) or the message would have expired.
-func (x *index) remove(mailbox protocol.Address, tag, exp, now uint64, echo bool) {
+// remove removes a message this process deleted. It leaves a tomb until
+// the feed echoes the deletion (deleted) or the message would have expired.
+func (x *index) remove(mailbox protocol.Address, tag, exp, now uint64) {
 	x.apply(mailbox, func(m *mailboxMem) {
 		m.prune(now)
 		k := mark{tag: tag, exp: exp}
 		m.marks = slices.DeleteFunc(m.marks, func(t mark) bool { return same(t, k) })
-		switch {
-		case echo:
-			m.tombs = slices.DeleteFunc(m.tombs, func(t mark) bool { return same(t, k) })
-		case exp > now && !slices.ContainsFunc(m.tombs, func(t mark) bool { return same(t, k) }):
+		if exp > now && !slices.ContainsFunc(m.tombs, func(t mark) bool { return same(t, k) }) {
 			m.tombs = append(m.tombs, k)
 		}
 	})
@@ -318,27 +315,6 @@ func (x *index) count(mailbox protocol.Address, now uint64) int {
 	}
 	m.prune(now)
 	return len(m.marks)
-}
-
-// nextExpiry returns the earliest expiry (unix ms) of a mailbox's marks, or 0
-// for a mailbox with none or not loaded. It prunes nothing: a mark that expired
-// since the mailbox was last read is a change its reader has not seen, so its
-// expiry, now past, is returned.
-func (x *index) nextExpiry(mailbox protocol.Address) uint64 {
-	sh := x.shard(mailbox)
-	sh.mu.Lock()
-	defer sh.mu.Unlock()
-	m := sh.held(mailbox)
-	if m == nil {
-		return 0
-	}
-	var first uint64
-	for _, k := range m.marks {
-		if first == 0 || k.exp < first {
-			first = k.exp
-		}
-	}
-	return first
 }
 
 // after returns how many live messages a mailbox holds past a list position: the

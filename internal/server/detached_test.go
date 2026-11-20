@@ -150,8 +150,8 @@ func (s *heldPut) PutMessage(ctx context.Context, mailbox protocol.Address, h *H
 
 // A message sent around a revocation of its mailbox's address does not outlive it
 // (dromas-dev/dromas-server#15): a send that passed its check of the mailbox
-// before the revocation and writes after it deletes what it wrote, and is
-// answered 410.
+// before the revocation and writes after it stores nothing, its write held to
+// the record as its checks read it, and is answered 410.
 func TestAMessageSentAroundARevocationDoesNotOutliveIt(t *testing.T) {
 	t.Parallel()
 	ctx0 := context.Background()

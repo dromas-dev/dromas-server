@@ -96,13 +96,12 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
 		s.metrics.list(true)
 	}
 	// A first page asked to wait is held while the If-None-Match names it
-	// (PROTOCOL.md §11.11): read, held until the mailbox changes, its first
-	// message expires, the wait passes or the server stops, and read again;
-	// then answered as any list. The mailbox's change is taken before each read,
-	// so none is missed between; and the page of a list asked to wait is read
-	// strongly consistent, so it holds every change memory applied before
-	// the read, and the next change wakes it: an eventually consistent page
-	// that missed one could be held on, and no later change would come.
+	// (PROTOCOL.md §11.11): read, held until the mailbox changes, the wait
+	// passes or the server stops, and read again; then answered as any list.
+	// An expiry is no change memory applies, so it ends no hold: the page at
+	// the hold's end is the page as it then stands. The mailbox's change is
+	// taken before each read, so none is missed between, and the page holds
+	// every change memory applied before the read (Store.List).
 	asked := wait > 0 && !hasCursor
 	var until time.Time
 	if asked {
@@ -129,12 +128,12 @@ again:
 	}
 	resp := protocol.MessageList{Count: int64(n), Messages: []protocol.MessageInfo{}}
 	if n > 0 && (after == nil || more > 0) {
-		page, err := s.store.List(ctx, mailbox, after, pageSize+1, asked)
+		page, err := s.store.List(ctx, mailbox, after, pageSize+1)
 		if errors.Is(err, ErrStale) {
 			if ctx, err = s.recheck(r, cursorParam, waitParam); err != nil {
 				return err
 			}
-			page, err = s.store.List(ctx, mailbox, after, pageSize+1, asked)
+			page, err = s.store.List(ctx, mailbox, after, pageSize+1)
 		}
 		if errors.Is(err, ErrStale) {
 			return changedDuring()
@@ -185,23 +184,12 @@ again:
 				}
 				holding = true
 			}
-			// An expiry is no change memory applies: the hold's timer ends
-			// at the mailbox's first, by the store's clock, if it comes before
-			// the wait's end.
-			d := time.Until(until)
-			if next := s.store.NextExpiry(mailbox); !next.IsZero() {
-				d = min(d, next.Sub(s.now()))
-			}
-			t := time.NewTimer(d)
+			t := time.NewTimer(time.Until(until))
 			select {
 			case <-changed:
 				ended = "changed"
 			case <-t.C:
-				if time.Now().Before(until) {
-					ended = "changed" // its first message expired
-				} else {
-					ended, until = "waited", time.Time{}
-				}
+				ended, until = "waited", time.Time{}
 			case <-s.stopping:
 				ended, until = "stopped", time.Time{}
 			case <-replaced:

@@ -25,7 +25,6 @@ type Limits struct {
 	AccountMaxSize int           // the most an account lifts MaxSize to, so what a send reads first; up to MaxSize, nothing
 	RenewalsPerDay int           // prekey renewals per mailbox, a number a day as SendsPerDay
 	RenewalsBurst  int           // per mailbox: the renewals it may make at once, the bucket RenewalsPerDay refills
-	RetiredKept    int           // retired prekeys a mailbox record keeps for the new-key rule, newest first
 
 	RegistrationsPerHour      int // per IPv4 address or IPv6 /64, at once and an hour: a spike limit, which honest use meets once a mailbox
 	RangeRegistrationsPerHour int // per IPv6 /48, beside the /64's
@@ -133,7 +132,6 @@ func DefaultLimits() Limits {
 		MaxLongPollsPerRange:         10_000,                          // decided: ten held mailboxes for each of the thousand subscribers the densest carrier NAT puts behind one address
 		RenewalsPerDay:               5,                               // decided: so no mailbox's renewals can fill the mailboxes table's writes (each one WAL and a feed change on every process)
 		RenewalsBurst:                5,                               // decided: as its number a day
-		RetiredKept:                  10,                              // decided: so a record stays small
 		RegistrationsPerHour:         50,                              // decided: a household standing up dozens of agents at once
 		RangeRegistrationsPerHour:    500,                             // decided: chosen with no measurement, and low on purpose, since raising a limit breaks no one and lowering one does
 		MissesPerMinute:              10,                              // decided, for now

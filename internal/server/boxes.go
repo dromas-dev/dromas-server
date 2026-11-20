@@ -3,7 +3,6 @@ package server
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/http"
@@ -261,29 +260,15 @@ func (s *Server) registered(w http.ResponseWriter, r *http.Request, id *protocol
 }
 
 // take makes p, signed by signer, mailbox b's current prekey statement
-// (PROTOCOL.md §11.9): a key the mailbox published before, its current one or
-// a live retired one, is refused; the statement it replaces retires while it
-// is live, and only the newest retired are kept. The record's expiry is
-// raised to when nothing of the new statement is valid, if that is later
-// (keep).
-func (s *Server) take(b *Mailbox, id *protocol.Identity, statement, sig []byte, p *protocol.Prekey, signer *protocol.Signer, senders []string, now time.Time) error {
-	keyHash := sha256.Sum256([]byte(p.Key))
-	retired := slices.DeleteFunc(b.Retired, func(x Retired) bool { return !now.Before(x.NotAfter) })
-	if keyHash == sha256.Sum256([]byte(b.Prekey.Key)) || slices.ContainsFunc(retired, func(x Retired) bool { return x.KeyHash == keyHash }) {
-		return fail(protocol.CodePrekeyAlreadyUsed, "every prekey must be a NEW key: dromas prekey renew makes one", "this key was already published")
-	}
-	if now.Before(b.Prekey.NotAfter) {
-		retired = append(retired, Retired{Type: b.Prekey.Type(), NotAfter: b.Prekey.NotAfter, KeyHash: sha256.Sum256([]byte(b.Prekey.Key))})
-	}
-	if n := s.limits().RetiredKept; n > 0 && len(retired) > n {
-		retired = retired[len(retired)-n:]
-	}
-	b.Retired = retired
+// (PROTOCOL.md §11.9), in place of the one before, whatever its key: a new
+// key each renewal is the client's rule (PROTOCOL.md §12.4). The record's
+// expiry is raised to when nothing of the new statement is valid, if that is
+// later (keep).
+func take(b *Mailbox, id *protocol.Identity, statement, sig []byte, p *protocol.Prekey, signer *protocol.Signer, senders []string) {
 	b.Statement, b.Signature, b.Prekey = statement, sig, p
 	b.Rank, b.Signer = signer.Rank(), signerHash(id, signer)
 	b.SenderKeyTypes = protocol.Declaration(senders) // the declaration that comes with this prekey, in place of the one before
 	b.Expires = keep(b.Expires, p, signer)
-	return nil
 }
 
 // checkPrekey verifies a prekey statement of the identity id's mailbox,
@@ -482,7 +467,6 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 	if err := precondition(r, targetState{exists: true, hint: hintConditions}); err != nil {
 		return err
 	}
-	now := s.now()
 	var counted *reservation // nil, so kept and given back as nothing, when the renewal is not counted
 	if len(count) > 0 {
 		var ok bool
@@ -499,9 +483,7 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 			counted.release(s.now())
 		}
 	}()
-	if err := s.take(b, id, req.Prekey, req.PrekeySignature, p, signer, req.SenderKeyTypes, now); err != nil {
-		return err
-	}
+	take(b, id, req.Prekey, req.PrekeySignature, p, signer, req.SenderKeyTypes)
 	if err := s.store.UpdateMailbox(detached(r.Context()), b); err != nil {
 		stored = mayHaveApplied(err)
 		if errors.Is(err, ErrStale) {
@@ -786,7 +768,8 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) error {
 // loads nothing and changes nothing, and what is left waits for its expiry,
 // served to nobody (ARCHITECTURE.md § Startup). The record stays there too:
 // a load reads an address's messages only while its record is left, so deleting
-// it would leave the messages where no process looks for them.
+// it would leave the messages where no process looks for them; the sweep
+// deletes it only once no message row is left (sweepRevoked).
 func (s *Server) deleteHeld(ctx context.Context, b *Mailbox) error {
 	if _, held := s.store.Held(b.Addr); !held {
 		return nil
