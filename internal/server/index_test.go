@@ -61,8 +61,8 @@ func TestIndex(t *testing.T) {
 	t.Run("a late insert does not bring back an ack", func(t *testing.T) {
 		x := loaded(t, mailbox, mailboxRead{exists: true})
 		x.insert(mailbox, k1, now)
-		x.remove(mailbox, k1.tag, k1.exp, now, false) // our ack
-		x.insert(mailbox, k1, now)                    // the feed's late insert
+		x.remove(mailbox, k1.tag, k1.exp, now) // our ack
+		x.insert(mailbox, k1, now)             // the feed's late insert
 		if n := x.count(mailbox, now); n != 0 {
 			t.Fatal("the acked message came back")
 		}
@@ -74,7 +74,7 @@ func TestIndex(t *testing.T) {
 
 	t.Run("an ack of a message the feed has not shown yet", func(t *testing.T) {
 		x := loaded(t, mailbox, mailboxRead{exists: true})
-		x.remove(mailbox, k1.tag, k1.exp, now, false)
+		x.remove(mailbox, k1.tag, k1.exp, now)
 		x.insert(mailbox, k1, now)
 		if n := x.count(mailbox, now); n != 0 {
 			t.Fatal("the acked message came back")
@@ -84,8 +84,8 @@ func TestIndex(t *testing.T) {
 	t.Run("a tomb whose echo came first dies at its expiry", func(t *testing.T) {
 		x := loaded(t, mailbox, mailboxRead{exists: true})
 		x.insert(mailbox, k1, now)
-		x.deleted(mailbox, k1.tag, now)               // the echo, first
-		x.remove(mailbox, k1.tag, k1.exp, now, false) // then our own apply
+		x.deleted(mailbox, k1.tag, now)        // the echo, first
+		x.remove(mailbox, k1.tag, k1.exp, now) // then our own apply
 		x.count(mailbox, k1.exp)
 		if x.tombs(mailbox) != 0 {
 			t.Fatal("the tomb outlived the message's expiry")
@@ -108,13 +108,13 @@ func TestIndex(t *testing.T) {
 		}
 	})
 
-	t.Run("a removal by image names the message, not just its id", func(t *testing.T) {
+	t.Run("a removal names the message, not just its id", func(t *testing.T) {
 		// The same ciphertext, resent after the first expired: the late
 		// removal of the first must not remove the second.
 		x := loaded(t, mailbox, mailboxRead{exists: true})
 		again := mark{tag: k1.tag, id: k1.id, exp: k1.exp + 1000}
 		x.insert(mailbox, again, k1.exp)
-		x.remove(mailbox, k1.tag, k1.exp, k1.exp, true)
+		x.remove(mailbox, k1.tag, k1.exp, k1.exp)
 		if n := x.count(mailbox, k1.exp); n != 1 {
 			t.Fatal("the resent message was removed")
 		}
@@ -131,7 +131,7 @@ func TestIndex(t *testing.T) {
 			x := loaded(t, mailbox, mailboxRead{exists: true})
 			x.insert(mailbox, k1, now)
 			if ours {
-				x.remove(mailbox, k1.tag, k1.exp, now, false)
+				x.remove(mailbox, k1.tag, k1.exp, now)
 			}
 			x.insert(mailbox, again, now)
 			x.deleted(mailbox, k1.tag, now)
@@ -262,8 +262,8 @@ func TestIndexLoad(t *testing.T) {
 		if n := x.count(mailbox, now); n != 0 {
 			t.Fatal("counted while loading")
 		}
-		x.remove(mailbox, k1.tag, k1.exp, now, true) // acked meanwhile
-		x.insert(mailbox, k2, now)                   // and a new message
+		x.deleted(mailbox, k1.tag, now) // acked meanwhile, by the feed
+		x.insert(mailbox, k2, now)      // and a new message
 		x.setStanding(mailbox, Standing{State: Active, Signer: [32]byte{1}}, version{rev: 2})
 		close(release)
 		if err := <-done; err != nil {
@@ -380,7 +380,7 @@ func TestALateInsertDuringTheLoadOfAnAddressWithNoRecordCountsNothing(t *testing
 		})
 	}()
 	<-read
-	m.apply(Change{Kind: MessageChange, Addr: addr, Header: &live[0], Live: true}) // the send's insert, echoed late
+	m.apply(Change{Kind: MessageChange, Addr: addr, Header: &live[0]}) // the send's insert, echoed late
 	close(release)
 	if err := <-done; err != nil {
 		t.Fatal(err)
@@ -410,7 +410,7 @@ func TestEveryChangeToAMailboxWakesItsLongPolls(t *testing.T) {
 	}
 	for name, change := range map[string]func(x *index){
 		"insert":   func(x *index) { x.insert(mailbox, k, now) },
-		"remove":   func(x *index) { x.remove(mailbox, k.tag, k.exp, now, false) },
+		"remove":   func(x *index) { x.remove(mailbox, k.tag, k.exp, now) },
 		"deleted":  func(x *index) { x.deleted(mailbox, k.tag, now) },
 		"standing": func(x *index) { x.setRevocations(mailbox, true, 0) },
 		"forget":   func(x *index) { x.forget(mailbox) },

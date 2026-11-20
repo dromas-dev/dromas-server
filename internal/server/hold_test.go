@@ -331,13 +331,17 @@ func holdingNow(t *testing.T, s *Server, n int64) {
 	}
 }
 
-// A message's expiry is no change memory applies, and it changes the page:
-// a long poll on a page that holds the message is answered as it expires,
-// not at max_wait (PROTOCOL.md §11.11).
-func TestALongPollIsAnsweredWhenAMessageExpires(t *testing.T) {
+// A long poll on a page that holds a message is answered, once the message
+// has expired, the page as it then stands, without the message, and no
+// later than its wait's end (PROTOCOL.md §11.11). Either time is right: an
+// expiry is no change memory applies, so it ends no hold, and a server MAY
+// hold past it to the wait's end; but any wake of the hold before then,
+// such as a change the feed brings, reads the page again and answers it
+// at once.
+func TestALongPollHeldPastAMessagesExpiryIsAnsweredThePageAsItStands(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.MaxWait = 4 * time.Second
+	l.MaxWait = 2 * time.Second
 	e := newEnv(t, l)
 	from, to, _ := emptyTag(e)
 	e.want(e.do("POST", to.path("/messages"), to.sealed(1, ciphertextTo(t, to)), from.pass(1)), http.StatusCreated, "")
@@ -354,51 +358,8 @@ func TestALongPollIsAnsweredWhenAMessageExpires(t *testing.T) {
 	e.clock.Add(left) // it expires now, by the server's clock
 	got := <-c
 	e.want(got.r, http.StatusOK, "")
-	if got.took >= l.MaxWait-time.Second || got.r.header.Get("ETag") == tag || !bytes.Contains(got.r.body, []byte(`"total_count":0`)) {
-		t.Fatalf("the long poll was answered after %v, tag %q, %s; want the empty page as the message expired", got.took, got.r.header.Get("ETag"), got.r.body)
-	}
-}
-
-// laggingList is a backend whose eventually consistent page lags every
-// write: it misses every message, as a Query read just after a write can.
-type laggingList struct{ *memBackend }
-
-func (b laggingList) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error) {
-	if !consistent {
-		return nil, nil
-	}
-	return b.memBackend.List(ctx, mailbox, after, limit, consistent)
-}
-
-// The page of a list asked to wait is read strongly consistent: a long poll
-// woken by a send is answered a page that holds it, never one that lags the
-// count, whose tag a client could hold on with no later change to wake it.
-func TestALongPollIsAnsweredAPageThatHoldsWhatWokeIt(t *testing.T) {
-	t.Parallel()
-	e := newEnv(t, relaxed(), func(c *Config) {
-		m := newMemory(c.Now, DefaultMailboxCache, nil, nil)
-		b := laggingList{newMemBackend(m.clock)}
-		m.backend = b
-		if err := b.Start(context.Background(), m.apply); err != nil {
-			t.Fatal(err)
-		}
-		c.Store, c.Ready = m, b.Ready
-	})
-	from, to, tag := emptyTag(e)
-	c := longPoll(e, to, tag, "wait=60")
-	holdingNow(t, e.server, 1)
-	e.want(e.do("POST", to.path("/messages"), to.sealed(1, ciphertextTo(t, to)), from.pass(1)), http.StatusCreated, "")
-	got := <-c
-	e.want(got.r, http.StatusOK, "")
-	var page protocol.MessageList
-	if err := protocol.Unmarshal(got.r.body, &page); err != nil || page.Count != 1 || len(page.Messages) != 1 {
-		t.Fatalf("the woken page: %s (%v); want the message the count holds", got.r.body, err)
-	}
-	// Control: a list not asked to wait reads the page eventually consistent.
-	r := e.do("GET", to.path("/messages"), nil, to.pass(1))
-	e.want(r, http.StatusOK, "")
-	if err := protocol.Unmarshal(r.body, &page); err != nil || page.Count != 1 || len(page.Messages) != 0 {
-		t.Fatalf("control: a list not asked to wait: %s; want the lagging page", r.body)
+	if got.took > l.MaxWait+2*time.Second || got.r.header.Get("ETag") == tag || !bytes.Contains(got.r.body, []byte(`"total_count":0`)) {
+		t.Fatalf("the long poll was answered after %v, tag %q, %s; want the empty page by max_wait", got.took, got.r.header.Get("ETag"), got.r.body)
 	}
 }
 

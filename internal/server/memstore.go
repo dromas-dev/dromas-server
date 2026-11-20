@@ -280,7 +280,7 @@ func (s *memBackend) PutMessage(ctx context.Context, mailbox protocol.Address, h
 	}
 	s.messages[mailbox][h.ID] = &memMessage{h: *h, body: bytes.Clone(body)}
 	echo := *h
-	s.changed(Change{Kind: MessageChange, Addr: mailbox, Header: &echo, Live: true})
+	s.changed(Change{Kind: MessageChange, Addr: mailbox, Header: &echo})
 	return nil
 }
 
@@ -292,7 +292,7 @@ func less(a, b Header) int {
 }
 
 // List implements Backend: every read of the maps is consistent.
-func (s *memBackend) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, _ bool) ([]Header, error) {
+func (s *memBackend) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int) ([]Header, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.held(ctx) {

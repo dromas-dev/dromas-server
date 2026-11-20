@@ -373,26 +373,6 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 		return delivered{h: orig}, nil // a send of the same ciphertext from another process, or a stale dedupe read
 	}
 	stored = true
-	// The mailbox's address may have been revoked since step 5 read it: then
-	// what this wrote is deleted, as the revocation deleted the rest, and the
-	// send is answered as the mailbox now stands (dromas-dev/dromas-server#15).
-	// One process has the change in memory at once; with more, this is to be
-	// a strongly consistent read (ARCHITECTURE.md, stage 2).
-	read, cancel = bounded(ctx)
-	cur, err := s.mailbox(read, to)
-	cancel()
-	if err != nil {
-		return delivered{}, err
-	} else if !cur.open() {
-		if err := s.store.DeleteMessage(ctx, to, msgID); err != nil && !errors.Is(err, ErrNotFound) {
-			return delivered{}, err
-		}
-		stored = false
-		if cur != nil && cur.State == Revoked {
-			return delivered{}, revokedWith(cur)
-		}
-		return delivered{}, noSuchMailbox
-	}
 	return delivered{h: h, fresh: true}, nil
 }
 
