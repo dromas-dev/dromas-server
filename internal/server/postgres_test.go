@@ -218,15 +218,30 @@ func freshDatabase(t *testing.T) (string, string) {
 }
 
 // startPostgresIn is a store on schema, its bodies under the directory
-// bodies, its config changed by with if set, started, stopped when the test
-// ends. A feed that loses its place fails the test, unless with sets Fatal.
+// bodies, its config changed by with if set, started and ready, stopped when
+// the test ends. A feed that loses its place fails the test, unless with
+// sets Fatal.
 func startPostgresIn(t testing.TB, schema, bodies string, now func() time.Time, with func(*PostgresConfig)) *Memory {
 	t.Helper()
 	s, ctx := newPostgresIn(t, schema, bodies, now, with)
 	if err := s.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
+	untilReady(t, s)
 	return s
+}
+
+// untilReady waits for a store just started to be ready: its feed's first
+// sync, which waits on a keepalive from the walsender, sent only every
+// wal_sender_timeout/2 while it decodes WAL the publication leaves out
+// (another test's schema). A session silent for feedSilentAfter is lost.
+func untilReady(t testing.TB, s *Memory) {
+	t.Helper()
+	for start := time.Now(); !s.Ready(); time.Sleep(10 * time.Millisecond) {
+		if time.Since(start) > feedSilentAfter {
+			t.Fatalf("the store is not ready %v after its start", feedSilentAfter)
+		}
+	}
 }
 
 // newPostgresIn is startPostgresIn's store not yet started, and the context

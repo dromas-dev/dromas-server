@@ -65,10 +65,14 @@ type feedTarget struct {
 }
 
 // Start implements Backend: it makes this process's slot, starts the
-// stream, and returns once the feed is synced through the moment it was
-// started; the feed is followed until ctx ends, each change handed to apply.
+// stream, and returns; the feed is followed until ctx ends, each change
+// handed to apply. Making the slot and starting the stream are bounded
+// (feedStartWithin); the first sync is not: Ready is false until the feed
+// is synced through the moment it was started, and every call is answered
+// 503 until then (whenReady).
 func (s *pgBackend) Start(ctx context.Context, apply func(Change)) error {
 	s.apply = apply
+	began := time.Now()
 	sctx, cancel := context.WithTimeout(ctx, feedStartWithin)
 	defer cancel()
 	conn, err := pgconn.ConnectConfig(sctx, s.replication)
@@ -112,30 +116,22 @@ func (s *pgBackend) Start(ctx context.Context, apply func(Change)) error {
 	}
 	s.snapPID.Store(snap.PgConn().PID())
 	fctx, stop := context.WithCancel(ctx)
-	f := &pgFeed{s: s, conn: conn, pos: pos, snap: snap, applied: from, relations: map[uint32]*pglogrepl.RelationMessage{}, types: pgtype.NewMap()}
+	f := &pgFeed{s: s, began: began, conn: conn, pos: pos, snap: snap, applied: from, relations: map[uint32]*pglogrepl.RelationMessage{}, types: pgtype.NewMap()}
 	f.visible = f.sees
 	if s.visible != nil {
 		f.visible = s.visible
 	}
-	began := time.Now()
+	// Started before run can lose the place, which unsets it. Every
+	// position targets reads is read after this, so the feed's first sync
+	// is through the moment it was started.
+	s.started.Store(true)
 	go f.run(fctx)
 	go f.targets(fctx)
-	for {
-		if s.synced.Load() >= monoNanos(began) {
-			s.started.Store(true)
-			if s.sweepEvery > 0 {
-				go s.sweep(fctx)
-			}
-			context.AfterFunc(ctx, stop)
-			return nil
-		}
-		select {
-		case <-sctx.Done():
-			stop() // ends run and targets, and their connections
-			return fmt.Errorf("postgres: the feed did not catch up: %w", sctx.Err())
-		case <-time.After(10 * time.Millisecond):
-		}
+	if s.sweepEvery > 0 {
+		go s.sweep(fctx)
 	}
+	context.AfterFunc(ctx, stop)
+	return nil
 }
 
 // Ready implements Backend: the feed is followed, and has been synced
@@ -162,6 +158,7 @@ func randomHex(n int) string {
 // pos, which is targets'.
 type pgFeed struct {
 	s       *pgBackend
+	began   time.Time // when Start began, for the first sync's log line
 	conn    *pgconn.PgConn
 	pos     *pgx.Conn     // targets' own
 	snap    *pgx.Conn     // run's own: whether a commit is visible (sees)
@@ -346,8 +343,10 @@ func (f *pgFeed) heard(end pglogrepl.LSN) {
 		f.waiting = nil
 	}
 	f.mu.Unlock()
-	if w != nil && end >= w.lsn {
-		f.s.synced.Store(monoNanos(w.at))
+	// The first sync is logged once, as a PostgreSQL hot standby logs that
+	// it has reached a consistent state: from then on the store is ready.
+	if w != nil && end >= w.lsn && f.s.synced.Swap(monoNanos(w.at)) == 0 {
+		f.s.logf("feed: synced in %s: ready", time.Since(f.began).Round(time.Millisecond))
 	}
 }
 
