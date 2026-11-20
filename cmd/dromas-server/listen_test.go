@@ -49,20 +49,30 @@ func TestOneServerAnswersOnEveryListenAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer held.Close() //nolint:errcheck // the test is ending
-	free, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	// The address before the one in use is free, then listened on again: a
+	// listenAll that left it open fails that every time, where another test's
+	// listener taking the port between the close and the listen (the tests
+	// run in parallel, children of serve among them) fails it once.
+	var left error
+	for range 3 {
+		free, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		freeAddr := free.Addr().String()
+		_ = free.Close()
+		if _, err := listenAll(freeAddr + "," + held.Addr().String()); err == nil || !strings.Contains(err.Error(), held.Addr().String()) {
+			t.Fatalf("a list with an address in use: %v, want an error naming it", err)
+		}
+		again, err := net.Listen("tcp", freeAddr)
+		if left = err; err == nil {
+			_ = again.Close()
+			break
+		}
 	}
-	freeAddr := free.Addr().String()
-	_ = free.Close()
-	if _, err := listenAll(freeAddr + "," + held.Addr().String()); err == nil || !strings.Contains(err.Error(), held.Addr().String()) {
-		t.Fatalf("a list with an address in use: %v, want an error naming it", err)
+	if left != nil {
+		t.Fatalf("the address before the one in use was left open: %v", left)
 	}
-	again, err := net.Listen("tcp", freeAddr)
-	if err != nil {
-		t.Fatalf("the address before the one in use was left open: %v", err)
-	}
-	_ = again.Close()
 	if _, err := listenAll(" , "); err == nil {
 		t.Fatal("an empty list was taken")
 	}
