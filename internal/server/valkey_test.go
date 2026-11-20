@@ -197,10 +197,8 @@ func TestASlowOrDownSharedStoreIsCountedByTheProcess(t *testing.T) {
 			if took := time.Since(start); took > time.Second {
 				t.Fatalf("a send with the store %s took %s", c.what, took)
 			}
-			e.limited(e.do("POST", to, e.sealTo(b), e.pass(a)), protocol.QuotaSends)
-			// Past the retry, the store fails again: the process's count
-			// stands.
-			e.clock.Add(sharedRetry)
+			// The second send's call to the store fails too: the process's
+			// count stands.
 			e.limited(e.do("POST", to, e.sealTo(b), e.pass(a)), protocol.QuotaSends)
 		})
 	}

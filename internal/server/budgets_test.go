@@ -90,8 +90,8 @@ func TestASendersCallsBoundTheDedupeRead(t *testing.T) {
 
 // A mailbox takes new messages at a rate of its own, from every sender together
 // (Limits.ReceiveBurst): past it a send is mailbox_rate_limited and waits in its
-// sender's outbox. A retry spends none of it, and an account lifts it to
-// ReceiveCeiling, never past it.
+// sender's outbox. A retry spends none of it, and an unmetered account lifts
+// it to Limits.AccountReceiveRefill.
 func TestTheReceiveBudget(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -118,8 +118,8 @@ func TestTheReceiveBudget(t *testing.T) {
 		t.Fatalf("the mailbox holds %d messages (%v), want 3", n, err)
 	}
 
-	// An unmetered account's mailbox takes messages at the ceiling: the same burst,
-	// then one each ReceiveCeiling, and never with no budget.
+	// An unmetered account's mailbox takes messages at the lifted refill: the
+	// same burst, then one each AccountReceiveRefill.
 	_, key := accountEnv(t, e, true, 1)
 	echo := e.mailbox()
 	adopt(t, echo, key)
@@ -135,9 +135,9 @@ func TestTheReceiveBudget(t *testing.T) {
 	if top, ok := e.server.Top(string(protocol.CodeMailboxRateLimited), 10); !ok || !slices.ContainsFunc(top, func(d Indebted) bool { return d.Key == echo.Address().String() }) {
 		t.Errorf("the operator's top of mailbox_rate_limited, %v, does not list the unmetered mailbox", top)
 	}
-	e.clock.Add(ReceiveCeiling)
+	e.clock.Add(l.AccountReceiveRefill)
 	if rs, err := s3.Flush(ctx); err != nil || len(rs) != 1 {
-		t.Fatalf("the waiting message after one refill at the ceiling: %v, %v", rs, err)
+		t.Fatalf("the waiting message after one lifted refill: %v, %v", rs, err)
 	}
 }
 
@@ -413,33 +413,52 @@ func (s *readsMeet) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, 
 // Two identical registrations of a new address at once, each reading it
 // before either writes, make one mailbox: one is 201, and the other meets the
 // mailbox at its write and is answered 200 from its record (registered,
-// bounded). Each kept its registration before its signatures (register,
-// g.keep), so the two have spent two: this pins that spend, and whether the
-// second's is given back is open (dromas-dev/dromas-client#443 item 1).
-func TestIdenticalRegistrationsAtOnceSpendARegistrationEach(t *testing.T) {
+// bounded). Each kept its registrations before its signatures (register,
+// g.keep), and the one answered 200 gives them back (refund), as Boulder's
+// NewAccount refunds the loser: the two spend one of each count, from IPv4
+// the address's and from IPv6 the /48's. Control: with no refund, the first
+// fresh registration after them is refused.
+func TestIdenticalRegistrationsAtOnceSpendOneRegistration(t *testing.T) {
 	t.Parallel()
-	l := relaxed()
-	l.RegistrationsPerHour = 2
-	meet := &readsMeet{both: make(chan struct{})}
-	e := newEnv(t, l, func(c *Config) { meet.Store, c.Store = c.Store, unknownStore{meet} })
-	r := e.raw()
-	r.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
-	meet.a = r.id.Address()
-	reg, pass := r.registration(1), r.pass(1)
-	answers := make(chan reply, 2)
-	for range 2 {
-		go func() { answers <- e.do("PUT", r.path(""), reg, pass) }()
+	for _, c := range []struct {
+		name, ip, fresh string // the race's caller, and the fresh registrations'
+		quota           protocol.Quota
+		limits          func(*Limits)
+	}{
+		{"the address's", "192.0.2.7", "192.0.2.7", protocol.QuotaRegistrations, func(l *Limits) { l.RegistrationsPerHour = 2 }},
+		{"the /48's", "2001:db8:1:1::1", "2001:db8:1:2::1", protocol.QuotaRegistrationsRange, func(l *Limits) { l.RangeRegistrationsPerHour = 2 }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			l := relaxed()
+			c.limits(&l)
+			meet := &readsMeet{both: make(chan struct{})}
+			e := newEnv(t, l, func(c *Config) { meet.Store, c.Store = c.Store, unknownStore{meet} })
+			call := e.caller()
+			r := e.raw()
+			r.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+			meet.a = r.id.Address()
+			reg, pass := r.registration(1), r.pass(1)
+			answers := make(chan reply, 2)
+			for range 2 {
+				go func() { answers <- call(c.ip, "PUT", r.path(""), reg, pass) }()
+			}
+			a, b := <-answers, <-answers
+			if meet.late.Load() {
+				t.Fatal("the second registration never read the address while the first waited")
+			}
+			if got := fmt.Sprint(a.status, " ", b.status); got != "201 200" && got != "200 201" {
+				t.Fatalf("two identical registrations at once: %s %s, %s %s; want 201 and 200", got, a.code(), b.code(), b.body)
+			}
+			register := func() reply {
+				fresh := e.raw()
+				fresh.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+				return call(c.fresh, "PUT", fresh.path(""), fresh.registration(1), fresh.pass(1))
+			}
+			e.want(register(), http.StatusCreated, "")
+			e.limited(register(), c.quota)
+		})
 	}
-	a, b := <-answers, <-answers
-	if meet.late.Load() {
-		t.Fatal("the second registration never read the address while the first waited")
-	}
-	if got := fmt.Sprint(a.status, " ", b.status); got != "201 200" && got != "200 201" {
-		t.Fatalf("two identical registrations at once: %s %s, %s %s; want 201 and 200", got, a.code(), b.code(), b.body)
-	}
-	fresh := e.raw()
-	fresh.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
-	e.limited(e.do("PUT", fresh.path(""), fresh.registration(1), fresh.pass(1)), protocol.QuotaRegistrations)
 }
 
 // A revocation of certificates through a serial no higher than the one held
@@ -687,6 +706,88 @@ func TestAReservationWaitsForOthersInFlight(t *testing.T) {
 	}()
 	if <-done {
 		t.Fatal("a reservation with no token and none in flight was taken")
+	}
+}
+
+// Honest calls from one address at once that each reserve a miss and give
+// it back, more of them than the address has misses, are all answered: a
+// call past the misses waits for those in flight and is taken once they are
+// given back (buckets.reserve, LIMITS.md rule 4). The cases are lookups of
+// mailboxes that exist, cold, each read from the table, and the restart:
+// mailboxes behind one address that each make their first call, a list with
+// a pass, to a process that holds nothing of them, as followers paused for
+// the same minute come back to a process just started. Control: with no
+// wait for the calls in flight, a call past the misses is refused 429
+// misses.
+func TestColdCallsAtOnceAreAllAnswered(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name    string
+		n       int
+		read    time.Duration
+		restart bool
+	}{
+		{"11 lookups", 11, 20 * time.Millisecond, false},
+		{"50 lookups", 50, 2 * time.Millisecond, false},
+		{"11 first calls after a restart", 11, 20 * time.Millisecond, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			l := relaxed()
+			l.MissesPerMinute = DefaultLimits().MissesPerMinute
+			if c.n <= l.MissesPerMinute {
+				t.Fatalf("%d calls are within the %d misses", c.n, l.MissesPerMinute)
+			}
+			e := newEnv(t, l)
+			var bs []*raw
+			for range c.n {
+				bs = append(bs, e.raw().register(protocol.MaxPrekeyLifetime))
+			}
+			fed(t, e.store)
+			// A process that holds nothing of them, each read taking c.read.
+			srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: &ctxMailbox{Store: e.store, d: c.read}, Limits: l, Now: e.clock.Now}).Handler()))
+			t.Cleanup(srv.Close)
+			e2 := &env{t: t, clock: e.clock, srv: srv}
+			reqs := make([]*http.Request, c.n)
+			for i, b := range bs {
+				path := b.path("")
+				if c.restart {
+					path = b.path("/messages")
+				}
+				req, err := http.NewRequest(http.MethodGet, srv.URL+path, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if c.restart {
+					req.Header.Set("Authorization", e2.passFor(b.by[1], b.id.Address(), e2.name()))
+				}
+				reqs[i] = req
+			}
+			answers := make([]string, c.n)
+			var wg sync.WaitGroup
+			start := make(chan struct{})
+			for i, req := range reqs {
+				wg.Go(func() {
+					<-start
+					resp, err := http.DefaultClient.Do(req)
+					if err != nil {
+						answers[i] = err.Error()
+						return
+					}
+					defer func() { _ = resp.Body.Close() }()
+					var p struct{ Code string }
+					_ = json.NewDecoder(resp.Body).Decode(&p)
+					answers[i] = fmt.Sprint(resp.StatusCode, " ", p.Code)
+				})
+			}
+			close(start)
+			wg.Wait()
+			for i, a := range answers {
+				if a != "200 " {
+					t.Errorf("call %d of %d at once: %s, want 200", i+1, c.n, a)
+				}
+			}
+		})
 	}
 }
 

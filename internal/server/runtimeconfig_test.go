@@ -168,8 +168,8 @@ func TestTheVersionPolicyIsReadAgainEachMinute(t *testing.T) {
 // A reload that fails keeps the policy in force, counts failed, and logs one
 // line naming the path and why, never what the file holds: a file that
 // breaks a policy's form (on a signal, and once by the minute's read, which
-// reads the same bytes again as no reload), one past the bound, and one that
-// is gone, which fails each minute it is gone. A good file after them is in
+// reads the same bytes again as no reload), one that is not JSON, and one
+// that is gone, which fails each minute it is gone. A good file after them is in
 // force at the next minute.
 func TestAFailedReloadKeepsTheVersionPolicy(t *testing.T) {
 	t.Parallel()
@@ -186,11 +186,11 @@ func TestAFailedReloadKeepsTheVersionPolicy(t *testing.T) {
 		if _, failed := r.reloads(t); failed != 1 {
 			t.Errorf("the same bad bytes a minute on: %v failed, want no reload", failed)
 		}
-		r.write(t, policyText("1.2", "1.6")+strings.Repeat(" ", MaxVersionPolicy))
+		r.write(t, strings.TrimSuffix(policyText("1.2", "1.6"), "}"))
 		time.Sleep(ReloadEvery)
 		synctest.Wait()
 		if _, failed := r.reloads(t); r.latest() != "1.5" || failed != 2 {
-			t.Errorf("a file past the bound: latest %s, %v failed", r.latest(), failed)
+			t.Errorf("a file that is not JSON: latest %s, %v failed", r.latest(), failed)
 		}
 		if err := os.Remove(r.path); err != nil {
 			t.Fatal(err)
