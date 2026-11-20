@@ -22,12 +22,7 @@ import (
 // server runs, but for the ones http.Server fixes at start (startupOnly), which
 // are serve's flags, as Prometheus keeps its flags for what cannot change
 // while it runs and its configuration file for what can. A member that is no
-// limit is refused, but for the ones of ignoredMembers.
-
-// ignoredMembers are members a limits file may hold that set nothing:
-// retired_kept, which the release before this one reads, so a file written
-// for it loads here too.
-var ignoredMembers = map[string]bool{"retired_kept": true}
+// limit is refused.
 
 // startupOnly are the Limits fields http.Server fixes when it starts
 // (HTTPServer): serve's --max-header-bytes and --header-timeout, never a
@@ -94,9 +89,6 @@ func ParseLimits(b []byte, base Limits) (Limits, error) {
 	v := reflect.ValueOf(&l).Elem()
 	for m, raw := range members {
 		field, ok := byMember[m]
-		if !ok && ignoredMembers[m] {
-			continue
-		}
 		if !ok {
 			return Limits{}, fmt.Errorf("its member %q is no limit", m)
 		}

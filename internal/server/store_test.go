@@ -28,7 +28,7 @@ func recordRow(b *Mailbox) row {
 	r := row{
 		"addr": bytes.Clone(b.Addr[:]), "identity": b.Identity, "created": msTime(b.Created),
 		"statement": b.Statement, "statement_sig": b.Signature, "rank": numeric(b.Rank), "signer": bytes.Clone(b.Signer[:]),
-		"senders": sendersColumn(b), "retired": json.RawMessage(`[]`), "acl": nil, "account": nil, "expires_at": expiresColumn(b), "rev": toInt(b.Rev),
+		"senders": sendersColumn(b), "acl": nil, "account": nil, "expires_at": expiresColumn(b), "rev": toInt(b.Rev),
 	}
 	if acl := aclColumn(b); acl != nil {
 		r["acl"] = json.RawMessage(acl)

@@ -86,9 +86,6 @@ func TestALimitsFileLaysOverItsBase(t *testing.T) {
 	if got, err := ParseLimits([]byte(`{}`), base); err != nil || got != base {
 		t.Fatalf("an empty file: %v, %+v", err, got)
 	}
-	if got, err := ParseLimits([]byte(`{"retired_kept": 10}`), base); err != nil || got != base {
-		t.Fatalf("a file with retired_kept, which sets nothing: %v, %+v", err, got)
-	}
 }
 
 // A file that is not an object of limits, names a member that is no limit (a
