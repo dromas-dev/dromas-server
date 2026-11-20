@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -304,14 +305,31 @@ func TestAPolicyNamesNoMemberOfTheServersOwn(t *testing.T) {
 
 // A fresh scrape has every runtime file's reload series, ok and failed, at
 // 0 (Prometheus' "Avoid missing metrics"): each file by the name its
-// Reloader counts it under. Control: the limits file's series are missing
-// until its first reload.
+// Reloader counts it under, the Reloaders taken from Server's method set,
+// each method whose one result is a *Reloader, called with zero arguments.
+// Control: the limits file's series are missing until its first reload.
 func TestEveryRuntimeFilesReloadsAreThereFromTheStart(t *testing.T) {
 	t.Parallel()
 	reg := prometheus.NewRegistry()
 	s := New(Config{Store: NewMemStore(time.Now), Limits: relaxed(), Metrics: NewMetrics(reg)})
 	got := counts(t, reg, "dromas_server_runtime_config_reloads_total")
-	for _, r := range []*Reloader{s.VersionPolicy("", nil), s.Limits("", nil, relaxed())} {
+	var reloaders []*Reloader
+	sv, rt := reflect.ValueOf(s), reflect.TypeFor[*Reloader]()
+	for i := range sv.NumMethod() {
+		m := sv.Method(i)
+		if m.Type().NumOut() != 1 || m.Type().Out(0) != rt {
+			continue
+		}
+		args := make([]reflect.Value, m.Type().NumIn())
+		for j := range args {
+			args[j] = reflect.Zero(m.Type().In(j))
+		}
+		reloaders = append(reloaders, m.Call(args)[0].Interface().(*Reloader))
+	}
+	if len(reloaders) < 2 {
+		t.Fatalf("control: %d of Server's methods make a Reloader; want the version policy's and the limits'", len(reloaders))
+	}
+	for _, r := range reloaders {
 		for _, result := range []string{"ok", "failed"} {
 			key := "file=" + r.name + ",result=" + result
 			if v, ok := got[key]; !ok || v != 0 {
