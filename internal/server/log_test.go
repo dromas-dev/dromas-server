@@ -108,24 +108,6 @@ func TestNoLogLineCarriesAnAddress(t *testing.T) {
 	}
 }
 
-// The access log writes one line a request, built from what the routers
-// matched and never from the path as sent (dromas-dev/dromas-server#11,
-// #62): a route's pattern, each wildcard's value as logName names it,
-// whatever the value holds; a site's page as the site's pattern and its
-// path's length; and a path no route answered by its length alone. So
-// nothing a caller sent can end a line, pass for the server's own words,
-// make it longer, or put an address in it past the redaction, an address
-// with one character escaped among them, which the router decodes and a
-// run of hex in the path as sent would split. A method is written as it
-// came only in the form of the IANA method registry's, capitals and
-// hyphens, and no longer than the longest method it lists; any other is
-// written as its length alone, so it can carry no address split by a
-// character a token may hold, no run of 63 hex, no name that reads as one
-// redact gives (#79), and no run of 64 of the capitals A to F, which redact
-// would write as such a name (dromas-dev/dromas-client#413 item 1).
-// The server is not wrapped in apitest: a site's pages are a deployment's
-// web server's, which api/openapi.yaml does not describe (site_test.go's
-// are not either).
 // No log line carries a client's IP address (SECURITY.md, § Minimal
 // logs): calls through a trusted proxy, whose X-Forwarded-For names the
 // client as the limits read it, are answered every way a line is written
@@ -206,6 +188,24 @@ func TestNoLogLineCarriesTheClientsAddress(t *testing.T) {
 	}
 }
 
+// The access log writes one line a request, built from what the routers
+// matched and never from the path as sent (dromas-dev/dromas-server#11,
+// #62): a route's pattern, each wildcard's value as logName names it,
+// whatever the value holds; a site's page as the site's pattern and its
+// path's length; and a path no route answered by its length alone. So
+// nothing a caller sent can end a line, pass for the server's own words,
+// make it longer, or put an address in it past the redaction, an address
+// with one character escaped among them, which the router decodes and a
+// run of hex in the path as sent would split. A method is written as it
+// came only in the form of the IANA method registry's, capitals and
+// hyphens, and no longer than the longest method it lists; any other is
+// written as its length alone, so it can carry no address split by a
+// character a token may hold, no run of 63 hex, no name that reads as one
+// redact gives (#79), and no run of 64 of the capitals A to F, which redact
+// would write as such a name (dromas-dev/dromas-client#413 item 1).
+// The server is not wrapped in apitest: a site's pages are a deployment's
+// web server's, which api/openapi.yaml does not describe (site_test.go's
+// are not either).
 func TestTheAccessLogWritesWhatTheRoutersMatched(t *testing.T) {
 	t.Parallel()
 	site := t.TempDir()
