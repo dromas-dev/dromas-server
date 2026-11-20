@@ -109,15 +109,15 @@ func TestAFetchResumesByRange(t *testing.T) {
 	}
 }
 
-// A ranged fetch is counted as any fetch is (PROTOCOL.md §11.12): a fetch of a
-// message fetched before, ranged or not, takes from the mailbox's allowance of
-// repeats, and past it is 429 fetch_rate_limited.
+// A ranged fetch is counted as any fetch is (PROTOCOL.md §11.12): ranged or
+// not, it spends a token of the mailbox's messages taken out, and past them
+// is 429 fetch_rate_limited.
 func TestARangedFetchIsCountedAsAnyFetch(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	a, b := e.mailbox(), e.mailbox()
 	l := relaxed()
-	l.PollBurst, l.PollRefill = 1, time.Minute
+	l.DrainBurst, l.DrainRefill = 2, time.Minute
 	e2, _ := ranged(t, e, l)
 	tok := e2.pass(b)
 	path := "/v1/" + b.Address().String() + "/messages/" + send(t, a, b, "cut, then resumed").ID

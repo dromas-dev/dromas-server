@@ -612,12 +612,3 @@ func (s *Memory) Holds(ctx context.Context, mailbox protocol.Address, id [32]byt
 	}
 	return s.idx.holds(mailbox, s.idx.tagOf(id), s.nowMs()), nil
 }
-
-// Fetched implements Store, from memory as Holds does.
-func (s *Memory) Fetched(ctx context.Context, mailbox protocol.Address, id [32]byte) (held, again bool, err error) {
-	if err := s.ensure(ctx, mailbox); err != nil {
-		return false, false, err
-	}
-	held, again = s.idx.fetched(mailbox, s.idx.tagOf(id), s.nowMs())
-	return held, again, nil
-}

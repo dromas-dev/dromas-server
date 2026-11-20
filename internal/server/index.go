@@ -53,7 +53,6 @@ type mark struct {
 	tag uint64 // markTag of the message id: what the mark is known by
 	id  uint64 // first 8 bytes of the message id, for the list's order within a millisecond only
 	exp uint64 // expiry in unix ms: received_at + TTL
-	n   uint8  // fetches of it this process has served, to 255: a second one is a repeat
 }
 
 // mailboxMem is one mailbox in memory.
@@ -347,29 +346,6 @@ func (x *index) holds(mailbox protocol.Address, tag, now uint64) bool {
 	}
 	m.prune(now)
 	return slices.ContainsFunc(m.marks, func(k mark) bool { return k.tag == tag })
-}
-
-// fetched is holds for a fetch: it also reports whether this process has
-// served the message before, and counts this serving.
-func (x *index) fetched(mailbox protocol.Address, tag, now uint64) (held, again bool) {
-	sh := x.shard(mailbox)
-	sh.mu.Lock()
-	defer sh.mu.Unlock()
-	m := sh.held(mailbox)
-	if m == nil {
-		return false, false
-	}
-	m.prune(now)
-	for i := range m.marks {
-		if k := &m.marks[i]; k.tag == tag {
-			again = k.n > 0
-			if k.n < 255 {
-				k.n++
-			}
-			return true, again
-		}
-	}
-	return false, false
 }
 
 // setStanding records a mailbox's standing, of a record at version v, unless

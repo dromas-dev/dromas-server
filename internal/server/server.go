@@ -108,7 +108,6 @@ type Server struct {
 
 	polls    *buckets     // per mailbox
 	pages    *buckets     // per mailbox: list pages after the first
-	repeats  *buckets     // per mailbox: fetches of a message already fetched
 	regs     addressLimit // registrations
 	sendIPs  addressLimit // sends, before their pass
 	misses   addressLimit // reads of the mailboxes table that found no mailbox, and checks that failed
@@ -117,7 +116,7 @@ type Server struct {
 	calls    *buckets     // per mailbox: its calls with its pass that no other budget counts
 	receives *buckets     // per mailbox: new messages it takes
 	lifted   *buckets     // per mailbox whose account lifts its new messages: at AccountReceiveRefill
-	drained  *buckets     // per mailbox: its first fetches of held messages
+	drained  *buckets     // per mailbox: its fetches of held messages
 	sends    *buckets     // per sender, a number a day
 	renewals *buckets     // per mailbox, a number a day: renewals by its current signer
 	certs    *buckets     // per mailbox, a number a day: renewals under a later certificate, which only its identity can make
@@ -170,7 +169,6 @@ func New(c Config) *Server {
 		metrics:       c.Metrics,
 		polls:         newBuckets(string(protocol.QuotaPolls), 0, 0),
 		pages:         newBuckets(string(protocol.QuotaPages), 0, 0),
-		repeats:       newBuckets(string(protocol.CodeFetchRateLimited), 0, 0),
 		regs:          newAddressLimit(protocol.QuotaRegistrations, protocol.QuotaRegistrationsRange, "registrations"),
 		sendIPs:       newAddressLimit(protocol.QuotaSendsBeforePass, protocol.QuotaSendsBeforePassRange, "sends"),
 		misses:        newAddressLimit(protocol.QuotaMisses, protocol.QuotaMissesRange, "calls"),
@@ -225,7 +223,6 @@ func (s *Server) setLimits(l Limits, policy *protocol.ServerDocument) {
 		every time.Duration
 	}{
 		{s.polls, l.PollBurst, l.PollRefill},
-		{s.repeats, l.PollBurst, l.PollRefill},
 		{s.calls, l.CallBurst, l.CallRefill},
 		{s.receives, l.ReceiveBurst, l.ReceiveRefill},
 		{s.lifted, l.ReceiveBurst, l.liftedReceives()},
@@ -1190,15 +1187,6 @@ func revokedWith(b *Mailbox) *problem {
 	return p
 }
 
-// fetchedAlready refuses a fetch of a message the mailbox has fetched before, once
-// its allowance for that is spent (fetch in messages.go).
-func fetchedAlready(wait time.Duration) *problem {
-	p := fail(protocol.CodeFetchRateLimited, "keep each message when you fetch it, then ack it (dromas recv does both); to fetch this one again, wait for Retry-After",
-		"this message was fetched before, and the mailbox's allowance for fetching again is spent")
-	p.retryAfter = wait
-	return p
-}
-
 // rateLimited is a 429 for a call past limit q, which it names with whom q
 // counted the call against (PROTOCOL.md §11.5), and how long to wait in
 // Retry-After.
@@ -1212,7 +1200,7 @@ func rateLimited(q protocol.Quota, wait time.Duration, format string, values ...
 const day = 24 * time.Hour
 
 // spent is a 429 of code, with how long to wait in Retry-After: a limit with
-// a code of its own (a paced drain, a repeat fetch).
+// a code of its own (a paced drain).
 func spent(code protocol.Code, wait time.Duration, format string, values ...value) *problem {
 	p := fail(code, "wait for Retry-After, then retry", format, values...)
 	p.retryAfter = wait

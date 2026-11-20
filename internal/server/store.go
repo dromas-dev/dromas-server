@@ -687,10 +687,6 @@ type Store interface {
 	// False is certain; true may be another message whose tag is the same,
 	// so the caller still reads it.
 	Holds(ctx context.Context, mailbox protocol.Address, id [32]byte) (bool, error)
-	// Fetched is Holds for a fetch: it also reports whether this process has
-	// served the message before, and counts this serving. The count lives
-	// with the message in memory, so a restart forgets it.
-	Fetched(ctx context.Context, mailbox protocol.Address, id [32]byte) (held, again bool, err error)
 }
 
 // Cursor is a position in a mailbox's list: the last key returned.

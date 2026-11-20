@@ -474,7 +474,7 @@ func (s *Server) held(ctx context.Context, r *http.Request, mailbox protocol.Add
 // notHeld answers a fetch or an ack of an id mailbox a does not hold, as
 // memory shows it: gone, once the pass ctx carries is read to hold
 // (Store.PassHeld), so a pass another process ended is refused here as a
-// fresh call would be (heldRead). A held message's first fetch spends the
+// fresh call would be (heldRead). A fetch of a held message spends the
 // mailbox's budget of messages taken out (Limits.DrainBurst), and its ack is
 // paid for by its receive; anything else is a call, spent from the mailbox's
 // budget (Limits.CallBurst) before anything is read: this, a false
@@ -556,11 +556,11 @@ func (s *Server) fetch(w http.ResponseWriter, r *http.Request) error {
 		w.WriteHeader(http.StatusOK)
 		return nil
 	}
-	// A first fetch of a held message is a new message drained, and spends the
-	// mailbox's budget of them (Limits.DrainBurst): how many messages a mailbox takes out,
-	// whoever sent them, which only the mailbox's own calls spend. Whether a fetch
-	// is a first one is known only once memory counts it, so a token is
-	// reserved before and given back if it was not.
+	// A fetch of a held message spends the mailbox's budget of messages taken
+	// out (Limits.DrainBurst): the bodies' bandwidth, whoever sent them, which
+	// only the mailbox's own calls spend. Whether the mailbox holds the message
+	// is known only once memory reads it, so a token is reserved before and
+	// given back if it does not.
 	lim, err := s.limitsOf(r.Context(), mailbox)
 	if err != nil {
 		return err
@@ -570,12 +570,12 @@ func (s *Server) fetch(w http.ResponseWriter, r *http.Request) error {
 		var ok bool
 		var wait time.Duration
 		if drain, ok, wait = s.drained.reserve(r.Context(), mailbox.String(), s.now); !ok {
-			return spent(protocol.CodeFetchRateLimited, wait, "this mailbox has taken out as many new messages as it may for now: the rest waits on the server")
+			return spent(protocol.CodeFetchRateLimited, wait, "this mailbox has taken out as many messages as it may for now: the rest waits on the server")
 		}
 	}
 	defer func() { drain.release(s.now()) }() // settled below, but for a panic
-	held, again, err := s.store.Fetched(r.Context(), mailbox, id)
-	if err != nil || !held || again {
+	held, err := s.store.Holds(r.Context(), mailbox, id)
+	if err != nil || !held {
 		drain.release(s.now())
 	} else {
 		drain.keep()
@@ -585,14 +585,6 @@ func (s *Server) fetch(w http.ResponseWriter, r *http.Request) error {
 	}
 	if !held {
 		return s.notHeld(ctx, r, mailbox)
-	}
-	// A message is fetched once and kept by its reader. Fetching it again is
-	// for catching up after a failure, so it has an allowance of its own, and
-	// only a repeat ever touches it: PollBurst at once, one more each PollRefill.
-	if again {
-		if ok, wait := s.repeats.take(mailbox.String(), s.now()); !ok {
-			return fetchedAlready(wait)
-		}
 	}
 	// Read after the preconditions, as RFC 9110 §14.2 has a Range read: a
 	// false one answered above leaves it unread.
@@ -618,7 +610,7 @@ func (s *Server) fetch(w http.ResponseWriter, r *http.Request) error {
 	if ranged && int64(len(body)) != size-from {
 		return fmt.Errorf("the store read %d bytes of a message of %d from byte %d", len(body), size, from)
 	}
-	s.metrics.fetch(again)
+	s.metrics.fetch()
 	h := w.Header()
 	h.Set("Content-Type", protocol.CiphertextContentType)
 	h.Set("Content-Length", strconv.Itoa(len(body)))

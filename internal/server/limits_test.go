@@ -309,14 +309,16 @@ func TestARememberedMissIsFree(t *testing.T) {
 	e2.want(read(e.raw().id.Address()), http.StatusTooManyRequests, protocol.CodeRateLimited) // another address needs a read
 }
 
-// A message is fetched once and kept. Its first fetch is never limited; a
-// fetch of one already fetched takes from the mailbox's allowance for catching up
-// after a failure, which polls and first fetches never touch.
-func TestAFetchedMessageIsFetchedAgainFromAnAllowance(t *testing.T) {
+// Every fetch of a held message spends the mailbox's budget of messages
+// taken out, a fetch of one fetched before among them; a fetch past it
+// reads nothing of storage, the polls are a budget of their own, and an ack
+// is never limited.
+func TestEveryFetchSpendsTheBudgetOfMessagesTakenOut(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	a, b := e.mailbox(), e.mailbox()
 	l := relaxed()
+	l.DrainBurst, l.DrainRefill = 3, time.Minute
 	l.PollBurst, l.PollRefill = 2, time.Minute
 	e2, cs := counted(t, e, l)
 	tok := e2.pass(b)
@@ -326,62 +328,26 @@ func TestAFetchedMessageIsFetchedAgainFromAnAllowance(t *testing.T) {
 	id1, id2 := send(t, a, b, "one").ID, send(t, a, b, "two").ID
 	e2.want(msg(http.MethodGet, id1), http.StatusOK, "")
 	e2.want(msg(http.MethodGet, id2), http.StatusOK, "")
-	e2.want(msg(http.MethodGet, id1), http.StatusOK, "") // again: one of the two at once
-	e2.want(msg(http.MethodGet, id1), http.StatusOK, "") // the other
+	e2.want(msg(http.MethodGet, id1), http.StatusOK, "") // fetched before: the third token
 	before := cs.calls.Load()
-	r := msg(http.MethodGet, id1)
+	r := msg(http.MethodGet, id2)
 	e2.want(r, http.StatusTooManyRequests, protocol.CodeFetchRateLimited)
-	if !strings.Contains(string(r.body), "fetched before") || r.header.Get("Retry-After") != "60" {
-		t.Fatalf("a fetch past the allowance: Retry-After %q, %s", r.header.Get("Retry-After"), r.body)
+	if r.header.Get("Retry-After") != "60" {
+		t.Fatalf("a fetch past the budget: Retry-After %q, %s", r.header.Get("Retry-After"), r.body)
 	}
-	e2.want(msg(http.MethodGet, id2), http.StatusTooManyRequests, protocol.CodeFetchRateLimited) // the allowance is the mailbox's
 	if n := cs.calls.Load(); n != before {
-		t.Fatalf("%d storage calls for fetches past the allowance", n-before)
+		t.Fatalf("%d storage calls for a fetch past the budget", n-before)
 	}
-	for range 2 { // the polls are another allowance, untouched
+	for range 2 { // the polls are another budget, untouched
 		if r := e2.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages", nil, tok); r.status != http.StatusOK {
 			t.Fatalf("a poll: %d %s", r.status, r.body)
 		}
 	}
-	id3 := send(t, a, b, "three").ID
-	e2.want(msg(http.MethodGet, id3), http.StatusOK, "") // a first fetch is never limited
-	e2.want(msg(http.MethodGet, id3), http.StatusTooManyRequests, protocol.CodeFetchRateLimited)
-	e.clock.Add(time.Minute) // one back
+	e.clock.Add(l.DrainRefill) // one back
 	e2.want(msg(http.MethodGet, id1), http.StatusOK, "")
 	e2.want(msg(http.MethodGet, id1), http.StatusTooManyRequests, protocol.CodeFetchRateLimited)
 	e2.want(msg(http.MethodDelete, id1), http.StatusNoContent, "") // an ack is never limited
 	e2.want(msg(http.MethodGet, id1), http.StatusNotFound, protocol.CodeMessageNotFound)
-}
-
-// The count of fetches lives in the message's mark and stops at 255.
-func TestIndexCountsFetches(t *testing.T) {
-	t.Parallel()
-	x := newIndex()
-	var mailbox protocol.Address
-	mailbox[0] = 3
-	now := uint64(1000)
-	if err := x.ensure(context.Background(), mailbox, func() (mailboxRead, error) {
-		return mailboxRead{exists: true, marks: []mark{{tag: 7, id: 7, exp: now + 1}, {tag: 8, id: 8, exp: now + 1}}}, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if held, again := x.fetched(mailbox, 7, now); !held || again {
-		t.Fatalf("a first fetch: held %v, again %v", held, again)
-	}
-	for range 300 {
-		if held, again := x.fetched(mailbox, 7, now); !held || !again {
-			t.Fatalf("a later fetch: held %v, again %v", held, again)
-		}
-	}
-	if held, again := x.fetched(mailbox, 8, now); !held || again {
-		t.Fatalf("another message's first fetch: held %v, again %v", held, again)
-	}
-	if held, _ := x.fetched(mailbox, 9, now); held {
-		t.Fatal("a message the mailbox does not hold")
-	}
-	if held, _ := x.fetched(mailbox, 7, now+1); held {
-		t.Fatal("an expired message")
-	}
 }
 
 // The server remembers the pass each mailbox showed last, and nothing else of
