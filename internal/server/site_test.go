@@ -2,6 +2,8 @@ package server
 
 import (
 	"bufio"
+	"bytes"
+	"compress/gzip"
 	"io"
 	"net"
 	"net/http"
@@ -412,5 +414,34 @@ func TestAStalledBodyToTheSiteIsATimeout(t *testing.T) {
 	}
 	if got := send("POST /page HTTP/1.1\r\nContent-Length: 3", "abc"); got != 299 {
 		t.Errorf("a body that came whole, to a site slower than its deadline: %d, want the site's 299", got)
+	}
+}
+
+// A site's answer is its web server's, as that server sent it: dromas-server
+// compresses none of it, whatever the request takes, and a gzip the site
+// made itself comes back as it was made.
+func TestASitesAnswerIsCompressedOnlyByTheSite(t *testing.T) {
+	t.Parallel()
+	text := strings.Repeat("what an agent reads first\n", 40)
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	if _, err := io.WriteString(zw, text); err != nil || zw.Close() != nil {
+		t.Fatal(err)
+	}
+	backend := backendOf(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/gz" {
+			w.Header().Set("Content-Encoding", "gzip")
+			_, _ = w.Write(gz.Bytes())
+			return
+		}
+		_, _ = io.WriteString(w, text)
+	}))
+	srv := httptest.NewServer(New(Config{Store: NewMemStore(time.Now), Limits: relaxed(), SiteBackend: backend}).Handler())
+	t.Cleanup(srv.Close)
+	if resp, got := rawCall(t, http.MethodGet, srv.URL+"/plain", "Accept-Encoding", "gzip"); resp.Header.Get("Content-Encoding") != "" || string(got) != text || varies(resp) {
+		t.Errorf("the site's plain answer, to a request that takes gzip: %q, %d bytes, Vary %q", resp.Header.Get("Content-Encoding"), len(got), resp.Header.Values("Vary"))
+	}
+	if resp, got := rawCall(t, http.MethodGet, srv.URL+"/gz", "Accept-Encoding", "gzip"); resp.Header.Get("Content-Encoding") != "gzip" || !bytes.Equal(got, gz.Bytes()) {
+		t.Errorf("the site's own gzip: %q, %d bytes, want its %d", resp.Header.Get("Content-Encoding"), len(got), gz.Len())
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/dromas-dev/dromas-client/protocol"
@@ -522,9 +523,8 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 // with no mailbox is 404, whatever its identity revoked of its certificates.
 // It takes no pass: it is public, and the gate counts it by the address it
 // comes from, whatever Authorization it carries, which nothing here reads
-// (PROTOCOL.md §11.8, §11.5; dromas-dev/dromas-client#352). It is the one
-// answer of the API that is gzipped, to a request that takes it, and carries
-// a weak ETag, lookupTag: a lookup whose If-None-Match names it is 304, which
+// (PROTOCOL.md §11.8, §11.5; dromas-dev/dromas-client#352). It carries a
+// weak ETag, lookupTag: a lookup whose If-None-Match names it is 304, which
 // the gate has counted as any lookup (dromas-dev/dromas-client#894).
 func (s *Server) getMailbox(w http.ResponseWriter, r *http.Request) error {
 	h, err := pathAddr(r)
@@ -548,18 +548,22 @@ func (s *Server) getMailbox(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	tag := lookupTag(body)
-	if err := precondition(r, targetState{exists: true, tag: tag, hint: hintConditions, also: []string{"Vary", "Accept-Encoding"}}); err != nil {
+	if err := precondition(r, targetState{exists: true, tag: tag, hint: hintConditions}); err != nil {
 		return err
 	}
-	w.Header().Set("ETag", tag)
-	writeJSONCompressed(w, r, body)
+	hdr := w.Header()
+	hdr.Set("ETag", tag)
+	hdr.Set("Content-Type", "application/json")
+	hdr.Set("Content-Length", strconv.Itoa(len(body)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
 	return nil
 }
 
-// lookupTag is a lookup's ETag: weak, since one tag names the answer gzipped
-// and not (RFC 9110 §8.8.1), and otherwise entityTag of the JSON before any
-// coding, so it changes whenever the answer's content does, needs nothing
-// stored, and every process makes the same one (PROTOCOL.md §11.8).
+// lookupTag is a lookup's ETag: weak, as PROTOCOL.md §11.8 has it (RFC 9110
+// §8.8.1), and otherwise entityTag of the JSON, so it changes whenever the
+// answer's content does, needs nothing stored, and every process makes the
+// same one.
 func lookupTag(body []byte) string { return "W/" + entityTag(body) }
 
 // getRevocations is GET /v1/<address>/revocation (PROTOCOL.md §11.15): the
