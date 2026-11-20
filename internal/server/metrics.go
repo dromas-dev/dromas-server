@@ -34,7 +34,7 @@ type Metrics struct {
 	latency    *prometheus.HistogramVec
 	limits     *prometheus.CounterVec
 	passes     *prometheus.CounterVec
-	fetches    *prometheus.CounterVec
+	fetches    prometheus.Counter
 	lists      *prometheus.CounterVec
 	store      *prometheus.CounterVec
 	storeTime  *prometheus.HistogramVec
@@ -70,8 +70,8 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Help: "Each take of a limit, by its name (a rate_limited's quota_id, or the code of its own), whom it counts (mailbox or ip) and the decision (allowed or denied)."}, []string{"limit", "subject", "decision"}),
 		passes: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "passes_total",
 			Help: "Passes, by outcome: remembered (taken from memory), checked (verified), refused (with its code)."}, []string{"outcome", "code"}),
-		fetches: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "fetches_total",
-			Help: "Messages served, by kind: first, or a repeat of one fetched before."}, []string{"kind"}),
+		fetches: prometheus.NewCounter(prometheus.CounterOpts{Namespace: ns, Name: "fetches_total",
+			Help: "Messages served."}),
 		lists: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "lists_total",
 			Help: "Lists taken, by kind: a poll, or a page after the first of a drain."}, []string{"kind"}),
 		store: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "store_calls_total",
@@ -229,16 +229,12 @@ func (m *Metrics) pass(remembered bool, err error) {
 	}
 }
 
-// fetch counts a message served, a repeat when again.
-func (m *Metrics) fetch(again bool) {
+// fetch counts a message served.
+func (m *Metrics) fetch() {
 	if m == nil {
 		return
 	}
-	kind := "first"
-	if again {
-		kind = "repeat"
-	}
-	m.fetches.WithLabelValues(kind).Inc()
+	m.fetches.Inc()
 }
 
 // list counts a list taken, a page after the first when continues.

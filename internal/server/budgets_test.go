@@ -1018,8 +1018,8 @@ func (s panicStore) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, 
 	return s.Store.Mailbox(ctx, a)
 }
 
-func (s panicStore) Fetched(context.Context, protocol.Address, [32]byte) (bool, bool, error) {
-	panic("a panic in a fetch's count")
+func (s panicStore) Holds(context.Context, protocol.Address, [32]byte) (bool, error) {
+	panic("a panic in a fetch's read of memory")
 }
 
 func (s panicStore) Revoke(context.Context, protocol.Address, *Revocations, Expect) error {
@@ -1030,7 +1030,7 @@ func (s panicStore) Revoke(context.Context, protocol.Address, *Revocations, Expe
 // ends, a panic included (dromas-dev/dromas-server#36): after a panic in
 // a lookup's read, a registration's read, under the registrations it
 // reserved (dromas-dev/dromas-client#450 item 1), a fetch of a held
-// message, which counts it once memory shows it held (#86), and a raise of
+// message, which spends a token once memory shows it held (#86), and a raise of
 // a revocation of certificates, no reservation is held and no read is in
 // flight, and the next lookup of the address is answered.
 func TestAPanicSettlesItsReservations(t *testing.T) {
@@ -1126,11 +1126,11 @@ func (l *lockedBuffer) String() string {
 	return l.b.String()
 }
 
-// A mailbox takes messages out at a rate of its own (Limits.DrainBurst): its first
-// fetch of each held message spends the budget, which only its own calls
-// spend. Past it a fetch is rate_limited and the rest waits on the server;
-// a fetch that is not a first one gives its token back; an account can lift
-// it.
+// A mailbox takes messages out at a rate of its own (Limits.DrainBurst): every
+// fetch of a held message spends the budget, a fetch of one fetched before
+// too, and only its own calls spend it. Past it a fetch is
+// fetch_rate_limited and the rest waits on the server; a fetch of a message
+// it does not hold gives its token back; an account can lift it.
 func TestTheDrainBudget(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
@@ -1152,15 +1152,14 @@ func TestTheDrainBudget(t *testing.T) {
 	unknown := strings.Repeat("cd", 32)
 	e2.want(fetch(unknown), http.StatusNotFound, protocol.CodeMessageNotFound) // given back: not a new message
 	e2.want(fetch(ids[0].ID), http.StatusOK, "")
-	e2.want(fetch(ids[0].ID), http.StatusOK, "") // a repeat: given back, and its own allowance spent
-	e2.want(fetch(ids[1].ID), http.StatusOK, "")
-	r := fetch(ids[2].ID)
+	e2.want(fetch(ids[0].ID), http.StatusOK, "") // fetched before: spends a token too
+	r := fetch(ids[1].ID)
 	e2.want(r, http.StatusTooManyRequests, protocol.CodeFetchRateLimited)
 	if r.header.Get("Retry-After") == "" || !strings.Contains(string(r.body), "waits on the server") {
-		t.Fatalf("the third first fetch: %s", r.body)
+		t.Fatalf("the third fetch: %s", r.body)
 	}
 	e.clock.Add(l.DrainRefill)
-	e2.want(fetch(ids[2].ID), http.StatusOK, "")
+	e2.want(fetch(ids[1].ID), http.StatusOK, "")
 
 	// An unmetered account's mailbox drains with no budget.
 	_, key := accountEnv(t, e, true, 1)

@@ -60,7 +60,7 @@ type Limits struct {
 	ReceiveBurst                 int           // per mailbox: new messages it takes, from all senders together
 	ReceiveRefill                time.Duration // with ReceiveBurst, on with it and off with it
 	AccountReceiveRefill         time.Duration // the refill an unmetered account lifts its mailboxes' new messages to, with ReceiveBurst's burst, never slower than ReceiveRefill
-	DrainBurst                   int           // per mailbox: its first fetches of held messages, spent only by its own calls; an account lifts it
+	DrainBurst                   int           // per mailbox: its fetches of held messages, spent only by its own calls; an account lifts it
 	DrainRefill                  time.Duration
 	CallBurst                    int // per mailbox: its calls with its pass that no other budget counts; an account lifts it
 	CallRefill                   time.Duration

@@ -70,15 +70,14 @@ flowchart LR
 
 | Layer | Holds | Size (estimate) | Used for | Under memory pressure |
 |---|---|---|---|---|
-| **1. Counts** — always resident | For each mailbox WITH messages, one 32-byte mark per live message (a keyed tag, id, expiry, a count of its fetches) | 40 to 53 B per live message, plus 319 B per loaded mailbox on an Ed25519 identity (measured 2026-10-27) | **Every poll:** the count, exact once the feed's changes are applied; the mailbox cap | Never shed: it IS the poll. If it doesn't fit, that's capacity, because every process holds all of it |
+| **1. Counts** — always resident | For each mailbox WITH messages, one 24-byte mark per live message (a keyed tag, id, expiry) | 40 to 53 B per live message, plus 319 B per loaded mailbox on an Ed25519 identity (measured 2026-10-27) | **Every poll:** the count, exact once the feed's changes are applied; the mailbox cap | Never shed: it IS the poll. If it doesn't fit, that's capacity, because every process holds all of it |
 | **2. Listings** — optional | Full metadata for recently listed mailboxes: id, size, received_at | ~100 B per message | Serving a list from memory | Shrinks first (an LRU under a byte budget), down to off; lists then come from the messages table |
 
 ```go
 type mark struct { // layer 1
 	tag  uint64 // first 8 bytes of HMAC-SHA-256 of the whole id, under a key this process made at random: what the mark is known by
 	id   uint64 // first 8 bytes of the message id, for the list's order within a millisecond only
-	exp  uint64 // expiry in unix ms: received_at + the TTL less an hour and two minutes (protocol.Retention), so it also gives the body's key (§ Storage)
-	n    uint8  // fetches of it this process has served: a second one is a repeat (PROTOCOL.md §11.12); 32 B in all
+	exp  uint64 // expiry in unix ms: received_at + the TTL less an hour and two minutes (protocol.Retention), so it also gives the body's key (§ Storage); 24 B in all
 }
 
 type Mailbox struct { // layer 1, a sketch: the marks of a mailbox with messages. A loaded mailbox with none holds only its standing
@@ -271,7 +270,8 @@ sequenceDiagram
 | `dromas_server_limit_requests_total` | `limit` (a `rate_limited`'s quota, or the code of its own), `subject` (`mailbox`, `ip`), `decision` (`allowed`, `denied`) | each take of each limit, as Boulder's limiter counts each spend |
 | `dromas_server_limit_keys` | `limit` | the keys each limit holds now |
 | `dromas_server_passes_total` | `outcome` (`remembered`, `checked`, `refused`), `code` | passes taken from memory, verified, and refused |
-| `dromas_server_lists_total`, `dromas_server_fetches_total` | `kind` (`poll`, `page`; `first`, `repeat`) | lists and messages served; a send stored, a duplicate, an ack and a renewal are each a route and status of the first |
+| `dromas_server_lists_total` | `kind` (`poll`, `page`) | lists taken |
+| `dromas_server_fetches_total` | | messages served; a send stored, a duplicate, an ack and a renewal are each a route and status of the first metric |
 | `dromas_server_long_polls_held`, `dromas_server_long_polls_total` | `outcome` (`changed`, `waited`, `gone`, `stopped`, `replaced`, `standing`, `refused`, `refused_range`) | long polls held now, and how each long poll ended, once however often it woke to the same page: the mailbox changed, its wait passed, its caller left, `dromas-server` stopped, a later list of its mailbox was held in its place, its pass or its mailbox was no longer taken at a wake, or it was refused past `max_long_polls` or past `max_long_polls_per_range` |
 | `dromas_server_bodies_before_pass_open`, `dromas_server_bodies_before_pass_total` | `outcome` (`opened`, `refused`, `refused_range`) | request bodies open now on calls that are their address's, and each such request with a body: given its place, or refused past `max_bodies_before_pass` or past `max_bodies_before_pass_per_range` |
 | `dromas_server_store_calls_total`, `dromas_server_store_call_duration_seconds` | `service`, `operation`, `outcome` (`ok`, `not_found`, `throttled`, `timeout`, `error`) | every call to S3, for bodies in a bucket, with its retries, and to Valkey (`service` `Valkey`, `operation` `take`, `give`, `read` or `clear`; `timeout` past `SharedWait`; § The shared store); a statement to PostgreSQL is none of them |
@@ -312,7 +312,7 @@ sequenceDiagram
 | A lost replication session (the walsender, the network, the database's restart, a `TRUNCATE`, an error the walsender sends) | The process exits (§ Following the feed) | The restart makes a new slot: memory starts empty, and each mailbox is read again on its first use (§ Startup) |
 | `dromas-server migrate` fails: a lock it waited for past `lock_timeout`, a statement past `statement_timeout`, a migration that does not apply | It exits non-zero; the failed file rolled back whole, and a file of `-- +goose NO TRANSACTION` kept what it did, which it is written to take again; the processes running go on, and a new build's `serve` refuses the schema (§ Storage) | Run it again, once what held the lock is gone, or fix the migration |
 | A slot invalidated by `max_slot_wal_keep_size` (a process that stopped reading) | A lost place: the process exits | As a lost session |
-| A process falls behind the feed | It answers `503`, `GET /v1/` among its answers, once it has not been synced within `feedUnsyncedAfter`, so a load balancer that checks it takes it out of rotation | It catches up, and is ready again once synced |
+| A process falls behind the feed | It answers `503`, `GET /v1/` among its answers, once it has not been synced within `feedUnsyncedAfter`, so a load balancer that checks it takes it out of rotation. One transaction that changes very many rows, in any table, holds every process's feed until PostgreSQL has decoded it, so an operator makes a bulk write in batches, each its own transaction | It catches up, and is ready again once synced |
 | S3, or the data directory, unavailable | Sends and fetches fail (a send's body not stored is a refusal, `errNotStored`); polls and lists, which read no body, still work. An ack's row is deleted and its body left, collected by age | Wait |
 | A statement or a call to S3 that never answers | Each statement the store makes ends at a bound (`storeTimeout`, `bounded`), and each call to S3 at the same bound, set once on its client (`bound`; § The store), whatever context its caller handed it, and so does each read a call shared by several callers makes apart from its request (a lookup's, a send's steps 6 to 9): its caller is answered `503`, and whoever waits on a shared call waits no longer | Automatic; its caller retries |
 | A write whose outcome is unknown (an answer lost, a context that ended mid-statement, a `COMMIT` with no answer) | Memory forgets what it held of the write's target, its count is kept, and its caller is answered `503` (§ The store); a registration reads its record and is answered from it | The next use reads what is held |
@@ -450,7 +450,6 @@ dromas-server (this repo)
 - **Limits and resident state:**
   - per-process shares plus edge rules for the per-IP limits;
   - eviction of a mailbox nothing uses: the index holds a loaded mailbox until the process restarts or its record is deleted.
-- **The readiness threshold:** `Ready`'s bound on the feed, `feedUnsyncedAfter`, past which `GET /v1/` answers `503` with the rest, and which a replay of a long transaction outside the publication passes (dromas-dev/dromas-server#342).
 - **The legal posture** of an operator that holds only ciphertext.
 
 ## Estimates and measurements

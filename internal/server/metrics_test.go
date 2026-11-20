@@ -34,8 +34,8 @@ func (e *env) sent(r reply) string {
 
 // The metrics count what the server does and refuses (dromas-dev/dromas-server#59):
 // each request by its route, status and code; each take of a limit by its
-// name, whom it counts and whether it was allowed; passes, lists and
-// fetches by kind; and how many keys each limit holds.
+// name, whom it counts and whether it was allowed; passes and lists by kind;
+// messages served; and how many keys each limit holds.
 func TestMetricsCountWhatTheServerDoes(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
@@ -65,8 +65,7 @@ func TestMetricsCountWhatTheServerDoes(t *testing.T) {
 		{"polls denied", m.limits.WithLabelValues("polls", "mailbox", "denied"), 1},
 		{"new messages taken", m.limits.WithLabelValues("mailbox_rate_limited", "mailbox", "allowed"), 1},
 		{"polls", m.lists.WithLabelValues("poll"), 1},
-		{"first fetches", m.fetches.WithLabelValues("first"), 1},
-		{"repeat fetches", m.fetches.WithLabelValues("repeat"), 1},
+		{"fetches", m.fetches, 2},
 		{"a value that is no pass", m.passes.WithLabelValues("refused", string(protocol.CodeInvalidPass)), 1},
 	} {
 		if got := testutil.ToFloat64(c.got); got != c.want {

@@ -214,15 +214,13 @@ func TestAHeadIsItsGetWithoutContent(t *testing.T) {
 	}
 }
 
-// A message's HEAD takes no token of new messages and marks nothing (the client
-// repo's #412 item 4): after three, with a budget of two tokens, the mailbox's
-// first fetch is its first, and only the one after it is a repeat, within
-// an allowance of one.
-func TestAMessagesHeadTakesNoTokenAndMarksNothing(t *testing.T) {
+// A message's HEAD takes no token of messages taken out (the client repo's
+// #412 item 4): after three, with a budget of two tokens, the mailbox fetches
+// the message twice, and the third fetch is refused.
+func TestAMessagesHeadTakesNoToken(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	l.DrainBurst, l.DrainRefill = 2, time.Hour
-	l.PollBurst, l.PollRefill = 1, time.Hour // the repeat allowance: one
 	e := newEnv(t, l)
 	to, msg := holding(e)
 	pass := to.pass(1)
@@ -253,13 +251,13 @@ func TestASendsRetryWithAFalsePreconditionIs412(t *testing.T) {
 	}
 }
 
-// A fetch whose precondition is false leaves the message unfetched (the
-// client repo's #412 item 6): the mailbox's next fetch of it is its first, and
-// only the one after that spends the repeat allowance, here one.
-func TestAFetchWithAFalsePreconditionLeavesTheMessageUnfetched(t *testing.T) {
+// A fetch whose precondition is false takes no token of messages taken out
+// (the client repo's #412 item 6): with a budget of two, after two such
+// fetches, the mailbox fetches the message twice, and the third is refused.
+func TestAFetchWithAFalsePreconditionTakesNoToken(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.PollBurst, l.PollRefill = 1, time.Hour // the repeat allowance: one
+	l.DrainBurst, l.DrainRefill = 2, time.Hour
 	e := newEnv(t, l)
 	to, msg := holding(e)
 	pass := to.pass(1)
@@ -270,7 +268,7 @@ func TestAFetchWithAFalsePreconditionLeavesTheMessageUnfetched(t *testing.T) {
 	}
 	for i, want := range []int{http.StatusOK, http.StatusOK, http.StatusTooManyRequests} {
 		if got := e.do("GET", msg, nil, pass); got.status != want {
-			t.Errorf("fetch %d after the two with a false precondition: %d %s, want %d (the first, one repeat, then fetch_rate_limited)", i+1, got.status, got.code(), want)
+			t.Errorf("fetch %d after the two with a false precondition: %d %s, want %d (two tokens, then fetch_rate_limited)", i+1, got.status, got.code(), want)
 		}
 	}
 }
@@ -376,16 +374,16 @@ func (d *drains) cursors() map[protocol.Address]string {
 	return maps.Clone(d.next)
 }
 
-// served is how many times this process has served each live message memory
-// holds, by its mailbox and tag: the mark a fetch makes.
-func (x *index) served() map[string]uint8 {
-	m := map[string]uint8{}
+// marked is the expiry of each live message memory holds, by its mailbox
+// and tag: every mark memory keeps.
+func (x *index) marked() map[string]uint64 {
+	m := map[string]uint64{}
 	for i := range x.shards {
 		sh := &x.shards[i]
 		sh.mu.Lock()
 		for a, b := range sh.mailboxes {
 			for _, k := range b.marks {
-				m[fmt.Sprintf("%x/%x", a, k.tag)] = k.n
+				m[fmt.Sprintf("%x/%x", a, k.tag)] = k.exp
 			}
 		}
 		sh.mu.Unlock()
@@ -673,7 +671,7 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 							spends[string(protocol.QuotaRequests)]++
 						}
 						mem := e.store.(*Memory)
-						before, cursors, marks, wrote := debts(e.server, e.clock.Now()), e.server.drains.cursors(), mem.idx.served(), inj.wrote.Load()
+						before, cursors, marks, wrote := debts(e.server, e.clock.Now()), e.server.drains.cursors(), mem.idx.marked(), inj.wrote.Load()
 						var status int
 						if rt.method == http.MethodHead {
 							status = e.head(q.path, q.pass, f.field, value).StatusCode
@@ -706,7 +704,7 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 						if got := e.server.drains.cursors(); !maps.Equal(got, cursors) {
 							t.Errorf("the cursors handed out went from %v to %v", cursors, got)
 						}
-						if got := mem.idx.served(); !maps.Equal(got, marks) {
+						if got := mem.idx.marked(); !maps.Equal(got, marks) {
 							t.Errorf("the messages' marks went from %v to %v", marks, got)
 						}
 						if got := inj.wrote.Load(); got != wrote {

@@ -465,10 +465,6 @@ func (c *countingStore) Holds(ctx context.Context, mailbox protocol.Address, id 
 	return c.s.Holds(ctx, mailbox, id)
 }
 
-func (c *countingStore) Fetched(ctx context.Context, mailbox protocol.Address, id [32]byte) (bool, bool, error) {
-	return c.s.Fetched(ctx, mailbox, id)
-}
-
 func (c *countingStore) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error) {
 	c.count()
 	return c.s.Mailbox(ctx, a)

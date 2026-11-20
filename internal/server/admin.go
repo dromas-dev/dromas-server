@@ -44,7 +44,7 @@ func (s *Server) addressLimits() []addressLimit {
 // refill an account lifts to has the buckets of each (receivesAt).
 func (s *Server) limitsByName() map[string][]*buckets {
 	m := map[string][]*buckets{}
-	sets := []*buckets{s.polls, s.pages, s.repeats, s.calls, s.receives, s.lifted, s.drained, s.sends, s.renewals, s.certs, s.raises}
+	sets := []*buckets{s.polls, s.pages, s.calls, s.receives, s.lifted, s.drained, s.sends, s.renewals, s.certs, s.raises}
 	for _, l := range s.addressLimits() {
 		sets = append(sets, l.ip, l.rng)
 	}
