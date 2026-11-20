@@ -116,9 +116,9 @@ return 1
 // up reports whether a call to the store is made: sh is set.
 func (sh *sharedBuckets) up() bool { return sh != nil }
 
-// done records a call's outcome: a failure, the store's own error or its
-// deadline, which the call's process counts by itself, the log says once
-// until the store answers again.
+// done records a call's outcome. A failure, the store's own error or its
+// deadline, leaves the call to the process's own count, and the log says so
+// once until the store answers again.
 func (sh *sharedBuckets) done(op string, start time.Time, err error) error {
 	sh.m.sharedCall(op, err, time.Since(start))
 	if err == nil {
