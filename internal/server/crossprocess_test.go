@@ -556,8 +556,8 @@ func TestARevocationCommittedDuringASendsWriteLeavesARowNeverServed(t *testing.T
 	e.want(e.do("GET", to.path("/messages"), nil, to.pass(1)), http.StatusGone, protocol.CodeMailboxRevoked)
 	msg := to.path("/messages/" + hex.EncodeToString(id[:]))
 	e.want(e.do("GET", msg, nil, to.pass(1)), http.StatusGone, protocol.CodeMailboxRevoked)
-	if got := e.do(http.MethodHead, msg, nil, to.pass(1)); got.status != http.StatusGone {
-		t.Errorf("HEAD of the row the send left: %d; want 410", got.status)
+	if got := e.head(msg, to.pass(1)); got.StatusCode != http.StatusGone {
+		t.Errorf("HEAD of the row the send left: %d; want 410", got.StatusCode)
 	}
 	e.want(e.do("GET", to.path(""), nil, ""), http.StatusGone, protocol.CodeMailboxRevoked)
 }
