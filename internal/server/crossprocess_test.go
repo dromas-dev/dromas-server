@@ -226,7 +226,8 @@ func TestAProcessBehindStoresNothingAnACLElsewhereDenies(t *testing.T) {
 
 // After a revocation of an address on A, B, behind, stores no send to it,
 // and answers it as revoked (PROTOCOL.md §11.15). What a send left all the
-// same is never served, and goes by age (TestTheSweepTakesWhatARevokedAddressLeft).
+// same is never served, and goes by age
+// (TestARevocationCommittedDuringASendsWriteLeavesARowNeverServed).
 func TestAProcessBehindStoresNothingForAnAddressRevokedElsewhere(t *testing.T) {
 	t.Parallel()
 	x := newTwoProcesses(t)
@@ -445,9 +446,10 @@ func TestAProcessBehindRegistersNoAddressRevokedElsewhere(t *testing.T) {
 }
 
 // The sweep deletes the record left beside a revocation of its address,
-// which no call is answered from, and no other address's. The messages left
-// go by age, never by the sweep of revoked addresses (ARCHITECTURE.md § The
-// sweep).
+// which no call is answered from, once no message row of the address is
+// left, and no other address's. The messages left go by age, never by the
+// sweep of revoked addresses, and the record stays beside them, so a
+// revocation sent again can still delete them (ARCHITECTURE.md § The sweep).
 func TestTheSweepTakesWhatARevokedAddressLeft(t *testing.T) {
 	t.Parallel()
 	if !onPostgres() {
@@ -479,8 +481,17 @@ func TestTheSweepTakesWhatARevokedAddressLeft(t *testing.T) {
 		t.Fatalf("before the sweep, the revoked address holds %d messages and %d records; want 1 and 1", m, r)
 	}
 	s.pg().sweepRevoked(t.Context())
-	if m, r := rows(gone.id.Address()); m != 1 || r != 0 {
-		t.Errorf("after the sweep, the revoked address holds %d messages and %d records; want its message, which goes by age, and no record", m, r)
+	if m, r := rows(gone.id.Address()); m != 1 || r != 1 {
+		t.Errorf("after the sweep, the revoked address holds %d messages and %d records; want its message, which goes by age, and the record beside it", m, r)
+	}
+	// Its message gone, as its expiry takes it, the record goes too.
+	ga := gone.id.Address()
+	if _, err := s.pool().Exec(t.Context(), `DELETE FROM messages WHERE box = $1`, ga[:]); err != nil {
+		t.Fatal(err)
+	}
+	s.pg().sweepRevoked(t.Context())
+	if m, r := rows(gone.id.Address()); m != 0 || r != 0 {
+		t.Errorf("after the sweep, the revoked address with no message holds %d messages and %d records; want none", m, r)
 	}
 	if m, r := rows(kept.id.Address()); m != 1 || r != 1 {
 		t.Errorf("after the sweep, another address holds %d messages and %d records; want 1 and 1", m, r)

@@ -758,7 +758,8 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) error {
 // loads nothing and changes nothing, and what is left waits for its expiry,
 // served to nobody (ARCHITECTURE.md § Startup). The record stays there too:
 // a load reads an address's messages only while its record is left, so deleting
-// it would leave the messages where no process looks for them.
+// it would leave the messages where no process looks for them; the sweep
+// deletes it only once no message row is left (sweepRevoked).
 func (s *Server) deleteHeld(ctx context.Context, b *Mailbox) error {
 	if _, held := s.store.Held(b.Addr); !held {
 		return nil

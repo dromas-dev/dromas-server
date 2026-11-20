@@ -16,10 +16,11 @@ const sweepBatch = 500
 
 // sweep deletes, each sweepEvery, the rows past their expiry by more than
 // sweepGrace, which no read takes as live (PostgreSQL has no TTL), and the
-// record a revoked address left beside its revocation, whose delete failed,
-// which no call is answered from (PROTOCOL.md §11.15), and collects bodies on
-// disk as old. A revoked address's leftover rows and bodies go by age
-// (ARCHITECTURE.md § The sweep). It runs on the database's clock (each
+// record left beside a revocation of its address, by a delete that failed or
+// a registration that raced it, which no call is answered from (PROTOCOL.md
+// §11.15), once no message row is left beside it (sweepRevoked), and
+// collects bodies on disk as old. A revoked address's leftover rows and
+// bodies go by age (ARCHITECTURE.md § The sweep). It runs on the database's clock (each
 // batch's transaction's start), unlike
 // every other condition, so a process whose clock is wrong deletes nothing
 // early. It counts the live mailboxes as it starts and after each pass
@@ -86,9 +87,13 @@ func (s *pgBackend) countMailboxes(ctx context.Context) {
 }
 
 // sweepRevoked deletes the record of each address revoked that is left
-// beside its revocation: it holds the mailbox's sender list.
+// beside its revocation, which holds the mailbox's sender list, once no
+// message row of the address is left: while one is, a load reads the
+// address's messages through the record, so a revocation sent again can
+// still delete them (Server.deleteHeld).
 func (s *pgBackend) sweepRevoked(ctx context.Context) {
-	if err := s.sweepTable(ctx, "mailboxes", `addr IN (SELECT addr FROM revocations WHERE revocation IS NOT NULL)`); err != nil && ctx.Err() == nil {
+	if err := s.sweepTable(ctx, "mailboxes", `addr IN (SELECT addr FROM revocations WHERE revocation IS NOT NULL)
+		AND NOT EXISTS (SELECT 1 FROM messages WHERE messages.box = mailboxes.addr)`); err != nil && ctx.Err() == nil {
 		s.logf("sweep: mailboxes of revoked addresses: %v", err)
 	}
 }
