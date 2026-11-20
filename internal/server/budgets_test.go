@@ -413,37 +413,52 @@ func (s *readsMeet) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, 
 // Two identical registrations of a new address at once, each reading it
 // before either writes, make one mailbox: one is 201, and the other meets the
 // mailbox at its write and is answered 200 from its record (registered,
-// bounded). Each kept its registration before its signatures (register,
-// g.keep), and the one answered 200 gives its back (refund), as Boulder's
-// NewAccount refunds the loser: the two spend one. Control: with no refund,
-// the first fresh registration after them is refused.
+// bounded). Each kept its registrations before its signatures (register,
+// g.keep), and the one answered 200 gives them back (refund), as Boulder's
+// NewAccount refunds the loser: the two spend one of each count, from IPv4
+// the address's and from IPv6 the /48's. Control: with no refund, the first
+// fresh registration after them is refused.
 func TestIdenticalRegistrationsAtOnceSpendOneRegistration(t *testing.T) {
 	t.Parallel()
-	l := relaxed()
-	l.RegistrationsPerHour = 2
-	meet := &readsMeet{both: make(chan struct{})}
-	e := newEnv(t, l, func(c *Config) { meet.Store, c.Store = c.Store, unknownStore{meet} })
-	r := e.raw()
-	r.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
-	meet.a = r.id.Address()
-	reg, pass := r.registration(1), r.pass(1)
-	answers := make(chan reply, 2)
-	for range 2 {
-		go func() { answers <- e.do("PUT", r.path(""), reg, pass) }()
+	for _, c := range []struct {
+		name, ip, fresh string // the race's caller, and the fresh registrations'
+		quota           protocol.Quota
+		limits          func(*Limits)
+	}{
+		{"the address's", "192.0.2.7", "192.0.2.7", protocol.QuotaRegistrations, func(l *Limits) { l.RegistrationsPerHour = 2 }},
+		{"the /48's", "2001:db8:1:1::1", "2001:db8:1:2::1", protocol.QuotaRegistrationsRange, func(l *Limits) { l.RangeRegistrationsPerHour = 2 }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			l := relaxed()
+			c.limits(&l)
+			meet := &readsMeet{both: make(chan struct{})}
+			e := newEnv(t, l, func(c *Config) { meet.Store, c.Store = c.Store, unknownStore{meet} })
+			call := e.caller()
+			r := e.raw()
+			r.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+			meet.a = r.id.Address()
+			reg, pass := r.registration(1), r.pass(1)
+			answers := make(chan reply, 2)
+			for range 2 {
+				go func() { answers <- call(c.ip, "PUT", r.path(""), reg, pass) }()
+			}
+			a, b := <-answers, <-answers
+			if meet.late.Load() {
+				t.Fatal("the second registration never read the address while the first waited")
+			}
+			if got := fmt.Sprint(a.status, " ", b.status); got != "201 200" && got != "200 201" {
+				t.Fatalf("two identical registrations at once: %s %s, %s %s; want 201 and 200", got, a.code(), b.code(), b.body)
+			}
+			register := func() reply {
+				fresh := e.raw()
+				fresh.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+				return call(c.fresh, "PUT", fresh.path(""), fresh.registration(1), fresh.pass(1))
+			}
+			e.want(register(), http.StatusCreated, "")
+			e.limited(register(), c.quota)
+		})
 	}
-	a, b := <-answers, <-answers
-	if meet.late.Load() {
-		t.Fatal("the second registration never read the address while the first waited")
-	}
-	if got := fmt.Sprint(a.status, " ", b.status); got != "201 200" && got != "200 201" {
-		t.Fatalf("two identical registrations at once: %s %s, %s %s; want 201 and 200", got, a.code(), b.code(), b.body)
-	}
-	fresh := e.raw()
-	fresh.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
-	e.want(e.do("PUT", fresh.path(""), fresh.registration(1), fresh.pass(1)), http.StatusCreated, "")
-	last := e.raw()
-	last.prekey(1, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
-	e.limited(e.do("PUT", last.path(""), last.registration(1), last.pass(1)), protocol.QuotaRegistrations)
 }
 
 // A revocation of certificates through a serial no higher than the one held
