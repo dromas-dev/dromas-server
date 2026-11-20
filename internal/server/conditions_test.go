@@ -202,6 +202,9 @@ func TestEveryRouteEvaluatesItsPreconditions(t *testing.T) {
 		}, unchanged: func(e *env, c call) {
 			e.want(e.do("GET", c.path, nil, c.pass), http.StatusOK, "")
 		}},
+		{name: "the server's document", exists: true, ok: 200, setup: func(*env) call {
+			return call{"GET", protocol.DocumentPath, nil, ""}
+		}},
 		{name: "the link page", exists: true, ok: 200, setup: func(*env) call {
 			return call{"GET", protocol.LinkPath + "d_" + strings.Repeat("ab", 32), nil, ""}
 		}},
