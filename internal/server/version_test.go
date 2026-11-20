@@ -234,9 +234,6 @@ func TestARetiredVersionReadsNothing(t *testing.T) {
 		t.Helper()
 		limits, passes := counts(t, reg, "dromas_server_limit_requests_total"), counts(t, reg, "dromas_server_passes_total")
 		rb := &recorded{r: strings.NewReader(body)}
-		rb.counted = func() bool {
-			return moved(limits, counts(t, reg, "dromas_server_limit_requests_total"))["decision=allowed,limit=requests,subject=ip"] == 1
-		}
 		req := httptest.NewRequest(method, path, rb)
 		req.Host = e.name()
 		req.RemoteAddr = ip + ":40000"
@@ -258,8 +255,8 @@ func TestARetiredVersionReadsNothing(t *testing.T) {
 	if got.status != http.StatusGone || got.problem().Code != protocol.CodeClientVersionUnsupported {
 		t.Errorf("a retired version with a pass that does not verify: %d %s, want 410 client_version_unsupported", got.status, got.body)
 	}
-	if len(passes) != 0 || rb.early {
-		t.Errorf("a retired version: passes looked at %v, body read before it was counted %v", passes, rb.early)
+	if len(passes) != 0 || rb.read {
+		t.Errorf("a retired version: passes looked at %v, body read %v", passes, rb.read)
 	}
 	if len(limits) != 1 || limits["decision=allowed,limit=requests,subject=ip"] != 1 {
 		t.Errorf("a retired version: limits taken %v, want its address's requests alone", limits)

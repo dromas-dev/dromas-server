@@ -120,7 +120,7 @@ func writeConditions(w http.ResponseWriter, err error) {
 }
 
 // write answers 304 with n's fields, and with none of apiHeaderFields: a 304
-// has no content for a browser to render, sniff, frame or load, and every
+// has no content for a browser to render, sniff or frame, and every
 // field it carries is sent again on each poll a mailbox makes.
 func (n *notModified) write(w http.ResponseWriter) {
 	h := w.Header()
