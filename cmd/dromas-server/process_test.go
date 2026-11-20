@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -15,11 +17,17 @@ import (
 // serveArgs, set in a test binary's environment, makes it dromas-server
 // serve with these arguments, one to a line (TestMain), so a test can run a
 // serve of its own and signal it, as os/exec's tests run their helper
-// process.
+// process. That serve exits once its stdin ends, as it does when the test
+// binary that holds the pipe's other end is gone, however it went.
 const serveArgs = "DROMAS_TEST_SERVE_ARGS"
 
 func TestMain(m *testing.M) {
 	if args, ok := os.LookupEnv(serveArgs); ok {
+		go func() {
+			_, _ = io.Copy(io.Discard, os.Stdin)
+			fmt.Fprintln(os.Stderr, "the test that ran this serve is gone")
+			os.Exit(1)
+		}()
 		os.Args = append([]string{"dromas-server", "serve"}, strings.Split(args, "\n")...)
 		main() // log.Fatal, exit 1, on serve's error
 		os.Exit(0)
@@ -30,7 +38,8 @@ func TestMain(m *testing.M) {
 // serveProcess is a dromas-server serve of the test's own, in a process.
 type serveProcess struct {
 	cmd    *exec.Cmd
-	addr   string // its --listen
+	stdin  io.WriteCloser // held open while the test runs
+	addr   string         // its --listen
 	mu     sync.Mutex
 	stderr bytes.Buffer
 	exited chan struct{} // closed once it has exited, cmd.ProcessState then set
@@ -38,9 +47,27 @@ type serveProcess struct {
 
 // startServe runs serve on a free loopback port, with env added to the
 // test's environment, less every DROMAS_SERVER_ variable, and the arguments
-// args gives for that address after --listen; it is killed when the test
-// ends.
-func startServe(t *testing.T, env []string, args func(addr string) []string) *serveProcess {
+// args gives for that address after --listen, and waits within d for it to
+// answer GET /v1/ 200; it is killed when the test ends. A port taken between
+// its choice and serve's listen is chosen again, once.
+func startServe(t *testing.T, env []string, args func(addr string) []string, d time.Duration) *serveProcess {
+	t.Helper()
+	for try := 1; ; try++ {
+		p := launchServe(t, env, args)
+		err := p.ready(d)
+		if err == nil {
+			return p
+		}
+		if try == 1 && p.gone() && strings.Contains(p.log(), "address already in use") {
+			t.Logf("%s was taken before serve listened on it: another", p.addr)
+			continue
+		}
+		t.Fatal(err)
+	}
+}
+
+// launchServe runs serve as startServe says, and returns at once.
+func launchServe(t *testing.T, env []string, args func(addr string) []string) *serveProcess {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -61,6 +88,9 @@ func startServe(t *testing.T, env []string, args func(addr string) []string) *se
 	p.cmd.Env = append(p.cmd.Env, env...)
 	p.cmd.Env = append(p.cmd.Env, serveArgs+"="+strings.Join(append([]string{"--listen", p.addr}, args(p.addr)...), "\n"))
 	p.cmd.Stderr = lockedWriter{&p.mu, &p.stderr}
+	if p.stdin, err = p.cmd.StdinPipe(); err != nil {
+		t.Fatal(err)
+	}
 	if err := p.cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -82,23 +112,30 @@ func (p *serveProcess) log() string {
 	return p.stderr.String()
 }
 
+// gone reports whether the process has exited.
+func (p *serveProcess) gone() bool {
+	select {
+	case <-p.exited:
+		return true
+	default:
+		return false
+	}
+}
+
 // ready waits for the process to answer GET /v1/ 200, within d.
-func (p *serveProcess) ready(t *testing.T, d time.Duration) {
-	t.Helper()
+func (p *serveProcess) ready(d time.Duration) error {
 	for start := time.Now(); ; time.Sleep(50 * time.Millisecond) {
-		select {
-		case <-p.exited:
-			t.Fatalf("serve exited before it was ready: %v", p.cmd.ProcessState)
-		default:
+		if p.gone() {
+			return fmt.Errorf("serve exited before it was ready: %v", p.cmd.ProcessState)
 		}
 		if resp, err := http.Get("http://" + p.addr + "/v1/"); err == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
-				return
+				return nil
 			}
 		}
 		if time.Since(start) > d {
-			t.Fatalf("serve is not ready after %v", d)
+			return fmt.Errorf("serve is not ready after %v", d)
 		}
 	}
 }

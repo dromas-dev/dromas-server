@@ -60,8 +60,7 @@ func TestASignalWaitsForEveryRequestInFlight(t *testing.T) {
 	if testing.Short() {
 		t.Skip("long: -short skips it; scripts/check.sh full and CI run it")
 	}
-	p := startServe(t, nil, dev)
-	p.ready(t, 10*time.Second)
+	p := startServe(t, nil, dev, 10*time.Second)
 	c, r := heldRegistration(t, p)
 	if _, err := io.WriteString(c, "{"); err != nil {
 		t.Fatal(err)
@@ -95,8 +94,7 @@ func TestASignalWaitsForEveryRequestInFlight(t *testing.T) {
 // waits on the request.
 func TestASecondSignalEndsTheProcessAtOnce(t *testing.T) {
 	t.Parallel()
-	p := startServe(t, nil, dev)
-	p.ready(t, 10*time.Second)
+	p := startServe(t, nil, dev, 10*time.Second)
 	heldRegistration(t, p)
 	if err := p.cmd.Process.Signal(os.Interrupt); err != nil {
 		t.Fatal(err)
@@ -137,8 +135,7 @@ func startServeOnPostgres(t *testing.T) (*serveProcess, string) {
 	data := t.TempDir()
 	p := startServe(t, []string{"PGAPPNAME=" + app}, func(addr string) []string {
 		return []string{"--data-dir", data, "--names", addr}
-	})
-	p.ready(t, 90*time.Second) // the feed's first sync, which waits on the walsender's keepalive
+	}, 90*time.Second) // the feed's first sync, which waits on the walsender's keepalive
 	return p, app
 }
 
