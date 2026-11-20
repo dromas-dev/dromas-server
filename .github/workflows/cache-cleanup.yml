@@ -1,0 +1,29 @@
+# A closed pull request's caches deleted, as GitHub's own example does
+# (docs.github.com, Managing caches, Force deleting cache entries): a cache a
+# pull request's run saves is scoped to its merge ref, and one its merge-queue
+# run saves to its queue branch, so neither is restored again, and both hold
+# the repository's cache storage until they expire. The same deletion for both
+# refs. A pull request from a fork gets a read-only token, and deletes nothing.
+name: cache cleanup
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions: {}
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: delete the pull request's caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          ids=$(gh cache list --limit 1000 --json id,ref --jq ".[] | select(.ref == \"refs/pull/$PR/merge\" or (.ref | startswith(\"refs/heads/gh-readonly-queue/main/pr-$PR-\"))) | .id")
+          for id in $ids; do gh cache delete "$id" || true; done
