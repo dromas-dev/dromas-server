@@ -500,12 +500,12 @@ func TestTheSweepTakesWhatARevokedAddressLeft(t *testing.T) {
 
 // A revocation that commits while a send's write statement runs, after that
 // statement read the record, leaves the send stored and answered 201: its
-// row is never served, since every call naming the address answers 410,
-// and goes by age (ARCHITECTURE.md § The sweep). The statement is held at
-// its insert by a row of the same id that another transaction holds
-// uncommitted, which rolls back once the revocation has committed. Control:
-// a send that reads its recipient again after its write deletes the row and
-// answers 410.
+// row is never served (a list, a fetch, a HEAD, a lookup), since every call
+// naming the address answers 410, and goes by age (ARCHITECTURE.md § The
+// sweep). The statement is held at its insert by a row of the same id that
+// another transaction holds uncommitted, which rolls back once the
+// revocation has committed. Control: a send that reads its recipient again
+// after its write deletes the row and answers 410.
 func TestARevocationCommittedDuringASendsWriteLeavesARowNeverServed(t *testing.T) {
 	t.Parallel()
 	e, s := sharedEnv(t)
@@ -554,7 +554,11 @@ func TestARevocationCommittedDuringASendsWriteLeavesARowNeverServed(t *testing.T
 		t.Fatal("the send answered 201 left no row")
 	}
 	e.want(e.do("GET", to.path("/messages"), nil, to.pass(1)), http.StatusGone, protocol.CodeMailboxRevoked)
-	e.want(e.do("GET", to.path("/messages/"+hex.EncodeToString(id[:])), nil, to.pass(1)), http.StatusGone, protocol.CodeMailboxRevoked)
+	msg := to.path("/messages/" + hex.EncodeToString(id[:]))
+	e.want(e.do("GET", msg, nil, to.pass(1)), http.StatusGone, protocol.CodeMailboxRevoked)
+	if got := e.do(http.MethodHead, msg, nil, to.pass(1)); got.status != http.StatusGone {
+		t.Errorf("HEAD of the row the send left: %d; want 410", got.status)
+	}
 	e.want(e.do("GET", to.path(""), nil, ""), http.StatusGone, protocol.CodeMailboxRevoked)
 }
 

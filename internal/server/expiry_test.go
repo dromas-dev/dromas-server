@@ -311,7 +311,8 @@ func (b *readsCounted) ReadLive(ctx context.Context, mailbox protocol.Address) (
 // A mailbox's first call to a process makes the reads that load it
 // (ARCHITECTURE.md § Startup), and a call after it makes none: a poll of a
 // loaded mailbox never leaves the process. Two memories over one in-memory
-// backend, the second's reads counted, as a process started after the
+// backend, every call of the second's backend counted (faults: each read at
+// its answer, each write as it reaches it), as a process started after the
 // mailbox was made.
 func TestAMailboxsFirstCallReadsItAndTheNextReadsNothing(t *testing.T) {
 	t.Parallel()
@@ -320,9 +321,11 @@ func TestAMailboxsFirstCallReadsItAndTheNextReadsNothing(t *testing.T) {
 	first := newMemory(clk.Now, DefaultMailboxCache, nil, nil)
 	first.backend = b
 	_ = b.Start(context.Background(), first.apply)
-	counted := &readsCounted{Backend: b}
 	second := newMemory(clk.Now, DefaultMailboxCache, nil, nil)
-	second.backend = counted
+	second.backend = b
+	counted := injectFaults(second)
+	var reads atomic.Int64
+	counted.read = func(string) { reads.Add(1) }
 	serve := func(m *Memory) *env {
 		srv := httptest.NewServer(apitest.Handler(t, New(Config{Store: m, Limits: relaxed(), Now: clk.Now}).Handler()))
 		t.Cleanup(srv.Close)
@@ -334,12 +337,13 @@ func TestAMailboxsFirstCallReadsItAndTheNextReadsNothing(t *testing.T) {
 		return e2.do("GET", r.path("/messages"), nil, e2.passFor(r.by[1], r.id.Address(), e2.name()))
 	}
 	e2.want(poll(), http.StatusOK, "")
-	if n := counted.reads.Swap(0); n == 0 {
+	if n := reads.Swap(0); n == 0 {
 		t.Fatal("control: the mailbox's first call read nothing of the backend")
 	}
+	wrote := counted.wrote.Load()
 	e2.want(poll(), http.StatusOK, "")
-	if n := counted.reads.Load(); n != 0 {
-		t.Errorf("a call to a loaded mailbox made %d reads of the backend; want none", n)
+	if n, w := reads.Load(), counted.wrote.Load()-wrote; n != 0 || w != 0 {
+		t.Errorf("a call to a loaded mailbox made %d reads and %d writes of the backend; want none", n, w)
 	}
 }
 
