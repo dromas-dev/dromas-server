@@ -28,6 +28,8 @@ tasks:
         sh: git fetch -q --tags origin && {{if .VERSION}}echo "{{.VERSION}}"{{else}}svu {{.BUMP}}{{end}}
       COMMIT:
         sh: git rev-parse --short HEAD
+      SHA:
+        sh: git rev-parse HEAD
     prompt: "This signs {{.NEXT}} on {{.COMMIT}} and pushes it, which publishes the release. Continue?"
     preconditions:
       - sh: '[ "{{.BUMP}}" = patch ] || [ "{{.BUMP}}" = minor ]'
@@ -43,9 +45,9 @@ tasks:
       - sh: '[ -z "$(git tag --points-at HEAD "v*")" ]'
         msg: This commit is released already
       - sh: '[ "$(gh run list --workflow release.yml --event push --commit "$(git rev-parse HEAD)" --status success --json databaseId --jq length)" -gt 0 ]'
-        msg: "release.yml's snapshot has not passed on this commit's push to main (every build a tag runs): gh run list --workflow release.yml --commit {{.COMMIT}}"
+        msg: "release.yml's snapshot has not passed on this commit's push to main (every build a tag runs): gh run list --workflow release.yml --commit {{.SHA}}"
       - sh: '[ "$(gh run list --workflow ci.yml --event push --commit "$(git rev-parse HEAD)" --status success --json databaseId --jq length)" -gt 0 ]'
-        msg: "ci.yml has not passed on this commit's push to main (every test a tag runs): gh run list --workflow ci.yml --commit {{.COMMIT}}"
+        msg: "ci.yml has not passed on this commit's push to main (every test a tag runs): gh run list --workflow ci.yml --commit {{.SHA}}"
       - sh: '[ -z "{{.NOTES}}" ] || [ -s "{{.NOTES}}" ]'
         msg: NOTES names no file with anything in it
       - sh: ssh-add -T "$(git config user.signingkey)"

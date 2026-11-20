@@ -6,7 +6,7 @@
 #   scripts/check.sh         quick: gofmt, vet and the tests -short keeps, while working
 #   scripts/check.sh full    CI's test job: gofmt, vet, every test (in memory, then on PostgreSQL), the skip check, test/interop.sh
 #   scripts/check.sh push    full, then golangci-lint, squawk (where installed) and govulncheck: before a push
-#   scripts/check.sh vuln    govulncheck alone, at the version go.mod's tool line requires
+#   scripts/check.sh vuln    govulncheck alone, at the version go.mod requires for its tool line
 #
 # The tests build with -tags dromas_nofsync, so the client they drive flushes
 # no write to the disk (dromas-client's client/fsync.go). -short skips the
