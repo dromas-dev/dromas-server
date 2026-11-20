@@ -108,8 +108,8 @@ fi
 export DR_SERVER_URL="http://127.0.0.1:$port" DROMAS_SERVER_URL="http://127.0.0.1:$port"
 b64=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_
 shardof(){ local c=${1:2:1} p; p=${b64%%"$c"*}; echo $(( ${#p} * shards / 64 + 1 )); }   # <address> → the shard it is, from 1 to $shards
-for a in "d_$(printf 'A%.0s' $(seq 64))" "d_$(printf 'g%.0s' $(seq 64))"; do   # one address of each shard: up once each answers other than 503 (loading)
-  for _ in $(seq 300); do
+for a in "d_$(printf 'A%.0s' $(seq 64))" "d_$(printf 'g%.0s' $(seq 64))"; do   # one address of each shard: up once each answers other than 503 (its feed's first sync, which waits on the walsender's keepalive: 90 s, as the Go tests wait)
+  for _ in $(seq 900); do
     code=$(curl -s -o /dev/null -w '%{http_code}' "$DR_SERVER_URL/v1/$a"); [ "$code" != 000 ] && [ "$code" != 502 ] && [ "$code" != 503 ] && break; sleep 0.1
   done
   [ "$code" != 000 ] && [ "$code" != 502 ] && [ "$code" != 503 ] || { echo "the server did not answer on port $port for shard $(shardof "$a")"; exit 1; }

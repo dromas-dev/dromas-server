@@ -114,7 +114,8 @@ var migrations embed.FS
 
 // NewPostgresStore returns the store over PostgreSQL: Memory over the
 // PostgreSQL backend, on a schema Migrate has brought up to date, not ready
-// until Start returns. The pool is closed when ctx ends.
+// until Start has returned and the feed is synced (Ready). The pool is
+// closed when ctx ends.
 func NewPostgresStore(ctx context.Context, c PostgresConfig) (*Memory, error) {
 	if c.Bucket != "" && c.DataDir != "" {
 		return nil, errors.New("postgres: name a bucket or a data directory, not both")

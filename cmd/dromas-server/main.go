@@ -107,7 +107,7 @@ func serve(args []string) error {
 	l := server.DefaultLimits()
 	fs.IntVar(&l.HeadBytes, "max-header-bytes", l.HeadBytes, "the most of a request's head, its request line and headers, the server reads: what the longest call needs, its pass at the longest a pass can be, and no more; net/http answers a longer one 431 (0: net/http's default)")
 	fs.DurationVar(&l.HeadTimeout, "header-timeout", l.HeadTimeout, "how long a request's head, its request line and headers, may take to arrive before any handler sees it (0: off)")
-	adminSocket := fs.String("admin-socket", "", "a Unix socket for the operator's commands (dromas-server limits): 0600 from the moment this process makes it, never on the API's listener (empty: none)")
+	adminSocket := fs.String("admin-socket", "", "a Unix socket for the operator's commands (dromas-server limits): on unix, 0600 from the moment this process makes it; never on the API's listener (empty: none)")
 	idle := fs.Duration("idle-timeout", 75*time.Second, "how long an idle keep-alive connection stays open (nginx's default as a server): above the idle timeout of a proxy in front, which may otherwise reuse a connection this one has just closed")
 	metricsListen := fs.String("metrics-listen", "", "address to serve the operator's metrics on, at /metrics in Prometheus' text format: a listener of its own, never the API's (empty: none)")
 	siteBackend := fs.String("site-backend", "", "the URL of a deployment's own web server, http or https and a host alone, which every request outside /v1/ and /to/ is passed to, as a reverse proxy passes it (empty: none; those paths are 404)")
@@ -193,6 +193,7 @@ func serve(args []string) error {
 		cfg.SiteBackend = u
 	}
 	var start func() error
+	var feedLost chan error // nil but on PostgreSQL: a nil channel is never ready
 	switch {
 	case *dev:
 		if *bucket != "" || *dataDir != "" {
@@ -223,25 +224,31 @@ func serve(args []string) error {
 			pc.AWS = awsCfg
 			where = "bodies in bucket " + *bucket
 		}
-		fatal := make(chan error, 1)
-		pc.Fatal = func(err error) { fatal <- err }
-		store, err := server.NewPostgresStore(ctx, pc)
+		feedLost = make(chan error, 1)
+		pc.Fatal = func(err error) {
+			logger.Printf("%v: exiting, so a restart rebuilds memory", err)
+			feedLost <- err
+			stop()
+		}
+		// The store's pool, feed and sweep end once Shutdown has answered
+		// every request in flight, as Caddy runs its stop callbacks after
+		// its servers have shut down and Mattermost closes its store last;
+		// a signal before the feed is started ends the start.
+		storeCtx, endStore := context.WithCancel(context.Background())
+		defer endStore()
+		startOnly := context.AfterFunc(ctx, endStore)
+		store, err := server.NewPostgresStore(storeCtx, pc)
 		if err != nil {
 			return err
 		}
 		cfg.Store, cfg.Ready = store, store.Ready
 		start = func() error {
 			t := time.Now()
-			if err := store.Start(ctx); err != nil {
+			if err := store.Start(storeCtx); err != nil {
 				return fmt.Errorf("following the database: %w", err)
 			}
-			logger.Printf("following the database (ready in %s); mailboxes load on first use", time.Since(t).Round(time.Millisecond))
-			go func() {
-				if err := <-fatal; err != nil {
-					logger.Printf("%v: exiting, so a restart rebuilds memory", err)
-					stop()
-				}
-			}()
+			startOnly()
+			logger.Printf("following the database (the feed started in %s; 503 until it is synced); mailboxes load on first use", time.Since(t).Round(time.Millisecond))
 			return nil
 		}
 		logger.Printf("dromas-server on %s: PostgreSQL, %s", *listen, where)
@@ -323,15 +330,22 @@ func serve(args []string) error {
 		return err
 	case <-ctx.Done():
 	}
-	shut, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(shut); err != nil {
+	// A second signal ends the process at once (Go's ExampleNotifyContext;
+	// Caddy's second SIGINT forces its exit). Shutdown waits on every request
+	// in flight with no bound of its own: the supervisor's kill bounds it, as
+	// Caddy's grace period is eternal by default.
+	stop()
+	if err := srv.Shutdown(context.Background()); err != nil {
 		return err
 	}
-	if start != nil && !cfg.Ready() {
-		return errors.New("stopped: memory could not be shown current")
+	// Only a feed that lost its place fails the exit: the feed ends with
+	// the store, after Shutdown, so however long Shutdown waits is no loss.
+	select {
+	case err := <-feedLost:
+		return fmt.Errorf("stopped: memory could not be shown current: %w", err)
+	default:
+		return nil
 	}
-	return nil
 }
 
 // listenAll listens on each of a comma-separated list of TCP addresses, for

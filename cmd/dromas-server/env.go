@@ -48,21 +48,21 @@ func fromEnv(fs *flag.FlagSet) error {
 
 // secret is a secret serve reads from its environment alone, never a flag,
 // which a process list and a command line show: the variable name, or the
-// file the variable name_FILE names, with one trailing newline dropped, as
-// the official PostgreSQL image reads POSTGRES_PASSWORD_FILE. Both set is
-// refused. Empty: none.
+// file the variable name_FILE names, with every trailing newline dropped, as
+// the official PostgreSQL image reads POSTGRES_PASSWORD_FILE (file_env).
+// Both non-empty is refused; a variable set empty is as one unset. Empty:
+// none.
 func secret(name string) (string, error) {
-	value, hasValue := os.LookupEnv(name)
-	path, hasPath := os.LookupEnv(name + "_FILE")
+	value, path := os.Getenv(name), os.Getenv(name+"_FILE")
 	switch {
-	case hasValue && hasPath:
+	case value != "" && path != "":
 		return "", fmt.Errorf("%s and %s_FILE are both set: set one", name, name)
-	case hasPath:
+	case path != "":
 		b, err := os.ReadFile(path) //nolint:gosec // the file the operator names for the secret
 		if err != nil {
 			return "", fmt.Errorf("%s_FILE: %w", name, err)
 		}
-		return strings.TrimSuffix(strings.TrimSuffix(string(b), "\n"), "\r"), nil
+		return strings.TrimRight(string(b), "\n"), nil
 	}
 	return value, nil
 }

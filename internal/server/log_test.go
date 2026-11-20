@@ -240,6 +240,7 @@ func TestAFollowersPanicIsLoggedRedactedAndEndsTheProcess(t *testing.T) {
 	if err := s.pg().Start(ctx, func(Change) { panic("boom at " + id) }); err != nil {
 		t.Fatal(err)
 	}
+	untilReady(t, s)
 	acct, err := NewAccountID()
 	if err != nil {
 		t.Fatal(err)
