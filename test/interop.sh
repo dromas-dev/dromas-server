@@ -244,8 +244,8 @@ record_of "$V1" > "$work/v1.json" && [ "$(curl -s -o /dev/null -w '%{http_code}'
   && ok "a recipe mailbox's record, made with ssh-keygen and put with curl: 410 from then on, and the server shows the record in it to anyone" || bad "the recipe mailbox's revocation: $(cat "$work/v1.json")"
 out=$(gocli "$V2" recv 2>&1); [ $? -eq 0 ] && grep -q '"code":"sender_revoked"' <<< "$out" && ! grep -q '"body"' <<< "$out" && holds "$V2" "$V1A" \
   && ok "the Go client refuses messages from the revoked recipe mailbox, and keeps the revocation it checked" || bad "Go recv from a revoked mailbox: $out"
-out=$(printf 'x\n' | gocli "$V2" send "$V1L" 2>&1); [ $? -ne 0 ] && erred "$out" && ! ls "$V2"/outbox/"$V1A".*.P > /dev/null 2>&1 \
-  && ok "the Go client sends nothing to it: an error, and nothing waits in its outbox" || bad "Go send to a revoked mailbox: $out"
+out=$(printf 'x\n' | gocli "$V2" send "$V1L" 2>&1); [ $? -ne 0 ] && erred "$out" && holds "$V2" "$V1A" && ! ls "$V2"/outbox/"$V1A".*.P > /dev/null 2>&1 \
+  && ok "the Go client sends nothing to it: an error, the revocation kept, and nothing waits in its outbox" || bad "Go send to a revoked mailbox: $out"
 # The Go client revokes its mailbox; the recipe refuses the message it had sent, and sends it nothing.
 printf 'sent before the revocation\n' | gocli "$V3" send "$V4L" > /dev/null 2> "$work/err" || bad "revocation: the Go send: $(cat "$work/err")"
 out=$(gocli "$V3" revocation publish "$V4A" 2>&1); [ $? -ne 0 ] && [ "$(look "$V3A")" = 200 ] \
@@ -255,7 +255,7 @@ out=$(gocli "$V3" revocation publish "$V3A" 2>&1) && revoked_line "$out" "$V3A" 
   && ok "the Go client revokes its mailbox, and its status says so" || bad "Go revoke: $out"
 out=$(recipe "$V4" "dr_recv" 2>&1); [ $? -eq 0 ] && grep -q '"code":"sender_revoked"' <<< "$out" && ! grep -q '"body"' <<< "$out" && [ -s "$V4/peers/$V3A/revoke.sig" ] \
   && ok "the recipe refuses messages from the mailbox the Go client revoked, and keeps the revocation it checked" || bad "recipe recv from a revoked mailbox: $out"
-out=$(recipe "$V4" "dr_send $V3L '$work/body7'" 2>&1); [ $? -ne 0 ] && erred "$out" && ok "the recipe sends nothing to it: an error" || bad "recipe send to a revoked mailbox: $out"
+out=$(recipe "$V4" "dr_send $V3L '$work/body7'" 2>&1); [ $? -ne 0 ] && erred "$out" && [ -s "$V4/peers/$V3A/revoke.sig" ] && ok "the recipe sends nothing to it: an error, the revocation kept" || bad "recipe send to a revoked mailbox: $out"
 # A record made in advance revokes with no mailbox and no key, by either client or by curl; what is not one is refused.
 gocli "$V5" revocation make > "$work/v5.json" 2> /dev/null && [ "$(look "$V5A")" = 200 ] && ok "a record is made, and nothing is published" || bad "Go revocation"
 jq -c --arg s "$(printf 'revoke it' | base64)" '.revocation_signature = $s' "$work/v5.json" > "$work/v5-junk.json"
@@ -324,7 +324,7 @@ mkdir -p -m 700 "$X3" && ssh-keygen -q -t ed25519 -N '' -C '' -f "$X3/identity" 
 [ "$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'Content-Type: application/json' --data-binary "@$work/x3.json" "$DR_SERVER_URL/v1/$X3A/revocation")" = 201 ] \
   && [ "$(look "$X3A")" = 410 ] && cmp -s <(curl -s "$DR_SERVER_URL/v1/$X3A" | jq -S .record) <(jq -S . "$work/x3.json") && cmp -s <(curl -s "$DR_SERVER_URL/v1/$X3A/revocation" | jq -S .) <(jq -S . "$work/x3.json") \
   && ok "a server with no mailbox at an address keeps a revocation of it, and serves the record, in the read of the address (410) and in the read of its revocations" || bad "a revocation of an address with no mailbox"
-out=$(gocli "$X3" init 2>&1); [ $? -ne 0 ] && grep -qi 'revoked' <<< "$out" && [ "$(look "$X3A")" = 410 ] \
+out=$(gocli "$X3" init 2>&1); [ $? -ne 0 ] && erred "$out" && [ "$(look "$X3A")" = 410 ] \
   && ok "and refuses that address's registration: it is revoked here, mailbox or none" || bad "a registration of an address revoked with no mailbox: $out"
 printf 'to an address its owner ended\n' > "$work/body9"
 out=$(gocli "$X6" send "$X3L" < "$work/body9" 2>&1); [ $? -ne 0 ] && erred "$out" && holds "$X6" "$X3A" && ls "$X6"/outbox/failed/"$X3A".*.P > /dev/null 2>&1 \
