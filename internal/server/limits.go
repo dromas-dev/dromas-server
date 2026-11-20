@@ -93,10 +93,14 @@ type Limits struct {
 	// How long a body may take: BodyTimeout, and one second more for each
 	// BodyMinRate bytes its handler reads, as Apache's RequestReadTimeout
 	// counts; each write of a response the same, for the bytes of it already
-	// written. A body that stops coming is cut off after BodyTimeout. What the
-	// server drains of a body after its handler has what the handler's reads
-	// left, and the answer's time runs from the end of the drain (paced). It
-	// is also the longest a send waits for the one large read.
+	// written. A body that stops coming is cut off after BodyTimeout. A body
+	// its handler leaves unread is drained by net/http, with BodyTimeout from
+	// the head and what the handler's reads earned, uncounted when it is cut,
+	// and the answer's time runs from the end of the drain (paced). One whose
+	// request waits for 100 Continue, or asks to close with a chunked body, is
+	// answered at once; the drain then holds its connection at most until the
+	// read deadline, BodyTimeout from the head. It is also the longest a send
+	// waits for the one large read.
 	BodyTimeout time.Duration // [tunable]
 	BodyMinRate int           // bytes a second [tunable]
 

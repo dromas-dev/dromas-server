@@ -83,7 +83,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		largeRead: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "large_reads_total",
 			Help: "Sends past the free size, by how their wait for the one large read ended: taken, timed_out, or gone (the caller left)."}, []string{"outcome"}),
 		cut: prometheus.NewCounter(prometheus.CounterOpts{Namespace: ns, Name: "bodies_cut_total",
-			Help: "Request bodies cut off at their deadline (body_timeout, body_min_rate)."}),
+			Help: "Request bodies a handler reads cut off at their deadline (body_timeout, body_min_rate); a cut of net/http's drain behind an answer written first is not counted."}),
 		misroutes: prometheus.NewCounter(prometheus.CounterOpts{Namespace: ns, Name: "misrouted_total",
 			Help: "Calls for a mailbox outside this process's shard (--shard), answered 503: the reverse proxy in front sent them to the wrong process."}),
 		conns: prometheus.NewGauge(prometheus.GaugeOpts{Namespace: ns, Name: "connections_open",

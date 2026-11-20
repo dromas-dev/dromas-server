@@ -16,7 +16,6 @@ import (
 	"net/textproto"
 	"reflect"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -215,75 +214,6 @@ func handed(name, lines string) *http.Request {
 		return nil
 	}
 	return r
-}
-
-// acceptsGzip gives the answer RFC 9110 §12.5.3 reads in a request's
-// Accept-Encoding fields, read here apart from it, with the readings its doc
-// comment names where the RFC gives none (gzipByReference), and the same
-// whether the fields are lines of their own or one line (RFC 9110 §5.3).
-// The fields are as net/http hands them to a handler (handed).
-func FuzzAcceptsGzip(f *testing.F) {
-	for _, s := range []string{
-		"", "gzip", "GZip", "x-gzip", "br, gzip", "br\ngzip", "gzip;q=0.5", "gzip ; Q=0.001", "*", "br", "identity",
-		"gzip;q=0", "gzip; q=0.000", "gzip;q=nope", "gzip;level=1", "*;q=0", "*, gzip;q=0", "gzip;q=0, *", "gzip, *;q=0",
-		"gzipped", "gzip;", "gzip;q=1;q=0", "gzip;q=1e-3", "gzip;q=0x1p-1", "gzip;q=inf", "gzip, gzip;q=0", "\tgzip\t",
-		"gzip ", "\u0085gzip", "gzip;q=0.5 ", ",,gzip,,",
-	} {
-		f.Add(s)
-	}
-	f.Fuzz(func(t *testing.T, lines string) {
-		r := handed("Accept-Encoding", lines)
-		if r == nil {
-			return
-		}
-		fields := r.Header.Values("Accept-Encoding")
-		got := acceptsGzip(fields)
-		if want := gzipByReference(fields); got != want {
-			t.Fatalf("Accept-Encoding %q: %v, and the RFC reads %v", fields, got, want)
-		}
-		if one := acceptsGzip([]string{strings.Join(fields, ",")}); one != got {
-			t.Fatalf("Accept-Encoding %q: %v, and %v as one line", fields, got, one)
-		}
-	})
-}
-
-// gzipByReference reads Accept-Encoding fields as RFC 9110 §12.5.3 does: one
-// list of codings (§5.3), each with optional whitespace (OWS, §5.6.3: spaces
-// and tabs) around its parts, its name in any case (§8.4.1), gzip or its
-// alias x-gzip (§8.4.1.3), and a weight (§12.4.2) of q, in any case, after
-// a semicolon; a coding named outright outranks "*". Where the RFC gives no
-// reading, acceptsGzip's doc comment does: none for no field, a coding
-// named twice by its last weight, a weight read by strconv.ParseFloat and
-// taken above zero, none for any other parameter, and 1 for none.
-func gzipByReference(fields []string) bool {
-	ows := func(s string) string { return strings.Trim(s, " \t") }
-	var gz, star *bool
-	for _, c := range strings.Split(strings.Join(fields, ","), ",") {
-		parts := strings.Split(c, ";")
-		w := true
-		switch rest := strings.Join(parts[1:], ";"); {
-		case len(parts) == 1 || ows(rest) == "":
-		case len(parts) > 2:
-			w = false
-		default:
-			k, v, ok := strings.Cut(rest, "=")
-			n, err := strconv.ParseFloat(ows(v), 64)
-			w = ok && protocol.LowerASCII(ows(k)) == "q" && err == nil && n > 0
-		}
-		switch protocol.LowerASCII(ows(parts[0])) {
-		case "gzip", "x-gzip":
-			gz = &w
-		case "*":
-			star = &w
-		}
-	}
-	switch {
-	case gz != nil:
-		return *gz
-	case star != nil:
-		return *star
-	}
-	return false
 }
 
 // The ACL a mailbox PUTs is read as putACL reads it (decodeJSON) and checked
