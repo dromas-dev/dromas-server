@@ -48,9 +48,8 @@ type Backend interface {
 	// mailbox's load counts (Memory.readMailbox).
 	ReadLive(ctx context.Context, mailbox protocol.Address) ([]Header, error)
 	// List returns up to limit live headers, oldest first by (ReceivedAt,
-	// ID), after the given key (nil: from the start); strongly consistent
-	// where consistent is set.
-	List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error)
+	// ID), after the given key (nil: from the start), strongly consistent.
+	List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int) ([]Header, error)
 	// Message returns a live message and its body, from byte from on where
 	// from is inside it, above 0 and below its Size, and otherwise whole; or
 	// ErrNotFound; or errNoBody, with the header, for a live row whose body
@@ -163,6 +162,5 @@ type Change struct {
 	Mailbox     *Mailbox     // RecordChange
 	Revocations *Revocations // RevocationsChange
 	Header      *Header      // MessageChange: of a row deleted, its ID alone
-	Live        bool         // MessageChange: in the list
 	Account     *Account     // AccountChange
 }

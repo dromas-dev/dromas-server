@@ -3,11 +3,11 @@ package server
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/dromas-dev/dromas-client/protocol"
@@ -33,8 +33,9 @@ const hintDocument = "the identity document is \"dromas-v1\", LF, one SSH public
 // that would change nothing; dromas-dev/dromas-client#410), but for one that found nothing
 // at its read and meets a mailbox at its write (ErrExists), one an identical
 // registration made meanwhile among them: it kept its counts before its
-// signatures, and is answered as registered with them spent (registered's
-// bounded; dromas-dev/dromas-client#443). Memory answers with
+// signatures, and is answered as registered (registered's bounded). An
+// identical one, answered 200, then gives its counts back (refund), as
+// Boulder's NewAccount refunds the loser of the same race. Memory answers with
 // nothing counted. A read is counted once, as what it turns out to be: the
 // registrations it would spend, the address's and its /48's, are reserved
 // before it, given back if it finds a mailbox or a revocation, and kept if it
@@ -176,7 +177,11 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) error {
 	case rerr != nil:
 		return rerr
 	case settled(read):
-		return s.registered(w, r, id, read, &req, true)
+		answer := s.registered(w, r, id, read, &req, true)
+		if answer == nil && exists { // the identical registration another request made: this one made nothing
+			g.refund(s.now())
+		}
+		return answer
 	case revoked:
 		return statementRevoked()
 	case !exists:
@@ -214,7 +219,8 @@ func settled(b *Mailbox) bool { return b.open() || b != nil && b.State == Revoke
 // another request meanwhile or by its own write whose outcome is unknown:
 // its registrations counts were taken, and they bound the pass's check
 // (checkPassBounded), which its own statement's pass has passed already
-// where the mailbox is the one it sent.
+// where the mailbox is the one it sent; register gives them back where
+// another request made it.
 func (s *Server) registered(w http.ResponseWriter, r *http.Request, id *protocol.Identity, cur *Mailbox, req *protocol.RegisterRequest, bounded bool) error {
 	switch {
 	case cur.State == Revoked:
@@ -254,29 +260,15 @@ func (s *Server) registered(w http.ResponseWriter, r *http.Request, id *protocol
 }
 
 // take makes p, signed by signer, mailbox b's current prekey statement
-// (PROTOCOL.md §11.9): a key the mailbox published before, its current one or
-// a live retired one, is refused; the statement it replaces retires while it
-// is live, and only the newest retired are kept. The record's expiry is
-// raised to when nothing of the new statement is valid, if that is later
-// (keep).
-func (s *Server) take(b *Mailbox, id *protocol.Identity, statement, sig []byte, p *protocol.Prekey, signer *protocol.Signer, senders []string, now time.Time) error {
-	keyHash := sha256.Sum256([]byte(p.Key))
-	retired := slices.DeleteFunc(b.Retired, func(x Retired) bool { return !now.Before(x.NotAfter) })
-	if keyHash == sha256.Sum256([]byte(b.Prekey.Key)) || slices.ContainsFunc(retired, func(x Retired) bool { return x.KeyHash == keyHash }) {
-		return fail(protocol.CodePrekeyAlreadyUsed, "every prekey must be a NEW key: dromas prekey renew makes one", "this key was already published")
-	}
-	if now.Before(b.Prekey.NotAfter) {
-		retired = append(retired, Retired{Type: b.Prekey.Type(), NotAfter: b.Prekey.NotAfter, KeyHash: sha256.Sum256([]byte(b.Prekey.Key))})
-	}
-	if n := s.limits().RetiredKept; n > 0 && len(retired) > n {
-		retired = retired[len(retired)-n:]
-	}
-	b.Retired = retired
+// (PROTOCOL.md §11.9), in place of the one before, whatever its key: a new
+// key each renewal is the client's rule (PROTOCOL.md §12.4). The record's
+// expiry is raised to when nothing of the new statement is valid, if that is
+// later (keep).
+func take(b *Mailbox, id *protocol.Identity, statement, sig []byte, p *protocol.Prekey, signer *protocol.Signer, senders []string) {
 	b.Statement, b.Signature, b.Prekey = statement, sig, p
 	b.Rank, b.Signer = signer.Rank(), signerHash(id, signer)
 	b.SenderKeyTypes = protocol.Declaration(senders) // the declaration that comes with this prekey, in place of the one before
 	b.Expires = keep(b.Expires, p, signer)
-	return nil
 }
 
 // checkPrekey verifies a prekey statement of the identity id's mailbox,
@@ -475,7 +467,6 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 	if err := precondition(r, targetState{exists: true, hint: hintConditions}); err != nil {
 		return err
 	}
-	now := s.now()
 	var counted *reservation // nil, so kept and given back as nothing, when the renewal is not counted
 	if len(count) > 0 {
 		var ok bool
@@ -492,9 +483,7 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 			counted.release(s.now())
 		}
 	}()
-	if err := s.take(b, id, req.Prekey, req.PrekeySignature, p, signer, req.SenderKeyTypes, now); err != nil {
-		return err
-	}
+	take(b, id, req.Prekey, req.PrekeySignature, p, signer, req.SenderKeyTypes)
 	if err := s.store.UpdateMailbox(detached(r.Context()), b); err != nil {
 		stored = mayHaveApplied(err)
 		if errors.Is(err, ErrStale) {
@@ -516,9 +505,8 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 // with no mailbox is 404, whatever its identity revoked of its certificates.
 // It takes no pass: it is public, and the gate counts it by the address it
 // comes from, whatever Authorization it carries, which nothing here reads
-// (PROTOCOL.md §11.8, §11.5; dromas-dev/dromas-client#352). It is the one
-// answer of the API that is gzipped, to a request that takes it, and carries
-// a weak ETag, lookupTag: a lookup whose If-None-Match names it is 304, which
+// (PROTOCOL.md §11.8, §11.5; dromas-dev/dromas-client#352). It carries a
+// weak ETag, lookupTag: a lookup whose If-None-Match names it is 304, which
 // the gate has counted as any lookup (dromas-dev/dromas-client#894).
 func (s *Server) getMailbox(w http.ResponseWriter, r *http.Request) error {
 	h, err := pathAddr(r)
@@ -542,18 +530,22 @@ func (s *Server) getMailbox(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	tag := lookupTag(body)
-	if err := precondition(r, targetState{exists: true, tag: tag, hint: hintConditions, also: []string{"Vary", "Accept-Encoding"}}); err != nil {
+	if err := precondition(r, targetState{exists: true, tag: tag, hint: hintConditions}); err != nil {
 		return err
 	}
-	w.Header().Set("ETag", tag)
-	writeJSONCompressed(w, r, body)
+	hdr := w.Header()
+	hdr.Set("ETag", tag)
+	hdr.Set("Content-Type", "application/json")
+	hdr.Set("Content-Length", strconv.Itoa(len(body)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
 	return nil
 }
 
-// lookupTag is a lookup's ETag: weak, since one tag names the answer gzipped
-// and not (RFC 9110 §8.8.1), and otherwise entityTag of the JSON before any
-// coding, so it changes whenever the answer's content does, needs nothing
-// stored, and every process makes the same one (PROTOCOL.md §11.8).
+// lookupTag is a lookup's ETag: weak, as PROTOCOL.md §11.8 has it (RFC 9110
+// §8.8.1), and otherwise entityTag of the JSON, so it changes whenever the
+// answer's content does, needs nothing stored, and every process makes the
+// same one.
 func lookupTag(body []byte) string { return "W/" + entityTag(body) }
 
 // getRevocations is GET /v1/<address>/revocation (PROTOCOL.md §11.15): the
@@ -776,7 +768,8 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) error {
 // loads nothing and changes nothing, and what is left waits for its expiry,
 // served to nobody (ARCHITECTURE.md § Startup). The record stays there too:
 // a load reads an address's messages only while its record is left, so deleting
-// it would leave the messages where no process looks for them.
+// it would leave the messages where no process looks for them; the sweep
+// deletes it only once no message row is left (sweepRevoked).
 func (s *Server) deleteHeld(ctx context.Context, b *Mailbox) error {
 	if _, held := s.store.Held(b.Addr); !held {
 		return nil

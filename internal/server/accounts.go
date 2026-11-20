@@ -143,8 +143,9 @@ func (s *Server) leave(w http.ResponseWriter, r *http.Request) error {
 
 // limitsFor returns the limits a mailbox gets: the server's, unless it is in an
 // unmetered account, whose mailboxes have no daily limit, the largest cap, no
-// budget of calls or of messages drained, and new messages at ReceiveCeiling. A mailbox
-// whose account is gone has the server's. These are the volume levers
+// budget of calls or of messages drained, and new messages at
+// AccountReceiveRefill (liftedReceives). A mailbox whose account is gone has
+// the server's. These are the volume levers
 // (LIMITS.md): what an account may lift.
 func (s *Server) limitsFor(ctx context.Context, b *Mailbox) (Limits, error) {
 	l := s.limits()

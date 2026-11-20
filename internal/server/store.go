@@ -58,11 +58,8 @@ type Mailbox struct {
 	// this build verifies (protocol.Declaration). A sender of a type §4.1
 	// defines needs no declaration.
 	SenderKeyTypes []string
-	// Retired holds the newest retired prekeys (Limits.RetiredKept), each
-	// until its not_after: its key may not come back.
-	Retired []Retired
-	Rev     uint64 // the record's revision, 0 with no record; a write must name the one it read
-	Created time.Time
+	Rev            uint64 // the record's revision, 0 with no record; a write must name the one it read
+	Created        time.Time
 	// Expires is when the record may go: the sweep deletes it some time
 	// after (PROTOCOL.md §13). Every registration and renewal raises it to
 	// when nothing the mailbox has published is valid any more, and nothing
@@ -315,7 +312,7 @@ func listNames(statement []byte, serial uint64) (bool, error) {
 // from prepaid credit, for its mailboxes' sends past the free limits and for
 // size over the cap; with no credit they have the free limits. An unmetered
 // account's mailboxes have no daily limit, the largest cap and new messages at
-// ReceiveCeiling, and are never charged: the echo account. Credit is not built yet, so a metered account's
+// Limits.AccountReceiveRefill, and are never charged: the echo account. Credit is not built yet, so a metered account's
 // mailboxes have the free limits.
 type Account struct {
 	ID        string
@@ -334,13 +331,6 @@ type AdoptKey struct {
 
 // good reports whether the key has a use left and has not expired.
 func (k *AdoptKey) good(now time.Time) bool { return k.Uses >= 1 && now.Before(k.Expires) }
-
-// Retired is what is kept of a retired prekey while it is live.
-type Retired struct {
-	Type     protocol.KeyType
-	NotAfter time.Time
-	KeyHash  [32]byte // SHA-256 of the age recipient
-}
 
 // Header is one message's metadata: everything but its body.
 type Header struct {
@@ -556,7 +546,6 @@ var ttlMs = uint64(protocol.Retention / time.Millisecond)
 
 func cloneMailbox(b *Mailbox) *Mailbox {
 	c := *b
-	c.Retired = slices.Clone(b.Retired)
 	c.SenderKeyTypes = slices.Clone(b.SenderKeyTypes)
 	c.RevokedCerts, c.RevokedCertsSig = slices.Clone(b.RevokedCerts), slices.Clone(b.RevokedCertsSig)
 	c.ACL = cloneACL(b.ACL)
@@ -604,12 +593,6 @@ type Store interface {
 	// a write of this process or one the feed brings: what a long poll
 	// waits on (PROTOCOL.md §11.11). It reads nothing.
 	Changed(a protocol.Address) <-chan struct{}
-	// NextExpiry returns when the first of mailbox a's messages in memory
-	// expires, by the store's clock, with no read: past, for one that
-	// expired since the mailbox was last read; zero for a mailbox with none, or one
-	// memory has not loaded. An expiry is no change memory applies, so a
-	// long poll waits until it, and no longer (PROTOCOL.md §11.11).
-	NextExpiry(a protocol.Address) time.Time
 	// Mailbox returns what is held of an address (view): its mailbox's record and
 	// its identity's revocations, or ErrNotFound if neither.
 	Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error)
@@ -657,16 +640,15 @@ type Store interface {
 	// instead.
 	PutMessage(ctx context.Context, mailbox protocol.Address, h *Header, body []byte) (*Header, error)
 	// List returns up to limit live headers, oldest first by (ReceivedAt,
-	// ID), after the given key (nil: from the start). Consistent reads them
-	// strongly consistent: every write applied to memory before the read is
-	// in the page.
-	List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int, consistent bool) ([]Header, error)
+	// ID), after the given key (nil: from the start), strongly consistent:
+	// every write applied to memory before the read is in the page.
+	List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int) ([]Header, error)
 	// Message returns a live message and its body, or ErrNotFound: the body
 	// from byte from on where from is inside it, above 0 and below its Size,
 	// and otherwise whole, as a fetch answers a range (PROTOCOL.md §11.12).
 	// So a fetch that resumes reads only the rest from where a body is kept.
 	Message(ctx context.Context, mailbox protocol.Address, id [32]byte, from int64) (*Header, []byte, error)
-	// DeleteMessage acks a message: its body goes, then its row, and
+	// DeleteMessage acks a message: its row goes, then its body, and
 	// nothing of it is kept (PROTOCOL.md §13). ErrNotFound if it is not
 	// live.
 	DeleteMessage(ctx context.Context, mailbox protocol.Address, id [32]byte) error
@@ -701,8 +683,9 @@ type Store interface {
 	// from memory as Count does: what a list from that cursor would return.
 	After(ctx context.Context, mailbox protocol.Address, c *Cursor) (int, error)
 	// Holds reports whether a mailbox holds a live message with this id, from
-	// memory as Count does. False is certain; true may be another message
-	// whose id starts alike, so the caller still reads it.
+	// memory as Count does, by the id's tag, a keyed hash of it (markTag).
+	// False is certain; true may be another message whose tag is the same,
+	// so the caller still reads it.
 	Holds(ctx context.Context, mailbox protocol.Address, id [32]byte) (bool, error)
 	// Fetched is Holds for a fetch: it also reports whether this process has
 	// served the message before, and counts this serving. The count lives

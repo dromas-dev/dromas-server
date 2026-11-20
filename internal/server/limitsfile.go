@@ -21,7 +21,13 @@ import (
 // member left out is the default it is laid over. The limits reload while the
 // server runs, but for the ones http.Server fixes at start (startupOnly), which
 // are serve's flags, as Prometheus keeps its flags for what cannot change
-// while it runs and its configuration file for what can.
+// while it runs and its configuration file for what can. A member that is no
+// limit is refused, but for the ones of ignoredMembers.
+
+// ignoredMembers are members a limits file may hold that set nothing:
+// retired_kept, which the release before this one reads, so a file written
+// for it loads here too.
+var ignoredMembers = map[string]bool{"retired_kept": true}
 
 // startupOnly are the Limits fields http.Server fixes when it starts
 // (HTTPServer): serve's --max-header-bytes and --header-timeout, never a
@@ -88,6 +94,9 @@ func ParseLimits(b []byte, base Limits) (Limits, error) {
 	v := reflect.ValueOf(&l).Elem()
 	for m, raw := range members {
 		field, ok := byMember[m]
+		if !ok && ignoredMembers[m] {
+			continue
+		}
 		if !ok {
 			return Limits{}, fmt.Errorf("its member %q is no limit", m)
 		}
@@ -160,7 +169,8 @@ func ReadLimits(path string, base Limits) (Limits, []byte, error) {
 
 // Check refuses limits the server cannot run under, naming the limits file's
 // member: a cap on a ciphertext the protocol does not allow, a budget of new
-// messages past ReceiveCeiling, a number a day whose bucket holds nothing, a
+// messages that is negative or has a burst with no refill or a refill with
+// no burst, a number a day whose bucket holds nothing, a
 // longest certificate that signs no message or that no reader takes, and a
 // bound on an ACL that is off or past the protocol's.
 func (l Limits) Check() error {
@@ -178,10 +188,14 @@ func (l Limits) Check() error {
 		}
 	}
 	switch {
-	case l.ReceiveBurst <= 0:
-		return fmt.Errorf("receive_burst: %d is no budget, and no mailbox takes new messages faster than one each %v (ReceiveCeiling)", l.ReceiveBurst, ReceiveCeiling)
-	case l.ReceiveRefill < ReceiveCeiling:
-		return fmt.Errorf("receive_refill: %v is shorter than %v, the fastest any mailbox takes new messages (ReceiveCeiling)", l.ReceiveRefill, ReceiveCeiling)
+	case l.ReceiveBurst < 0:
+		return fmt.Errorf("receive_burst: %d is not a number of messages", l.ReceiveBurst)
+	case l.ReceiveRefill < 0:
+		return fmt.Errorf("receive_refill: %v is not a refill", l.ReceiveRefill)
+	case l.AccountReceiveRefill < 0:
+		return fmt.Errorf("account_receive_refill: %v is not a refill", l.AccountReceiveRefill)
+	case (l.ReceiveBurst == 0) != (l.ReceiveRefill == 0):
+		return fmt.Errorf("receive_burst: %d with receive_refill %v: a budget that is on takes both, and one that is off neither", l.ReceiveBurst, l.ReceiveRefill)
 	}
 	for _, b := range []struct {
 		name          string
