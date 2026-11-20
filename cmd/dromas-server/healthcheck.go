@@ -14,8 +14,8 @@ import (
 // with no shell or curl in it, as Traefik's own healthcheck command is: it
 // asks the API for the server's document, GET /v1/, which a process answers
 // 503 until its feed is synced, and while it is unsynced, and reports
-// success on a 200 alone. The request is counted at the gate as any request from its address
-// is, a few each minute against a budget sized for floods.
+// success on a 200 alone. The request is counted at the gate as any request
+// from its address is, a few each minute against a budget sized for floods.
 func healthcheck(args []string) error {
 	fs := flag.NewFlagSet("healthcheck", flag.ContinueOnError)
 	url := fs.String("url", "http://127.0.0.1:8080/v1/", "the server's document on one of serve's --listen addresses")
