@@ -17,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/dromas-dev/dromas-client/api/apitest"
@@ -31,80 +32,82 @@ import (
 // again, as its own.
 func TestPostsOfTheSameBytesInFlightAreOneCall(t *testing.T) {
 	t.Parallel()
-	for _, c := range []struct {
-		name string
-		set  func(*Limits)
-	}{
-		{"sends a day", func(l *Limits) { l.SendsPerDay, l.SendsBurst = 2, 2 }},
-		{"the mailbox cap", func(l *Limits) { l.MailboxCap = 2 }},
-		{"the mailbox's new messages", func(l *Limits) { l.ReceiveBurst, l.ReceiveRefill = 2, time.Hour }},
-	} {
-		l := relaxed()
-		l.MailboxCap = 0
-		c.set(&l)
-		e := newEnv(t, l, func(cfg *Config) { cfg.Store = slowPut{cfg.Store, 40 * time.Millisecond} })
-		for i := range 5 {
-			to, from := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
-			e.want(e.sendTo(to, 1, from, 1), http.StatusCreated, "") // one of each budget spent
-			// The second post is from the same sender, and on odd trials
-			// from another.
-			second := from
-			if i%2 == 1 {
-				second = e.raw().register(protocol.MaxPrekeyLifetime)
-			}
-			ct := sealFor(t, to, 1)
-			var r1, r2 reply
-			var wg sync.WaitGroup
-			wg.Add(2)
-			go func() { defer wg.Done(); r1 = e.do("POST", to.path("/messages"), to.sealed(1, ct), from.pass(1)) }()
-			time.Sleep(5 * time.Millisecond)
-			go func() { defer wg.Done(); r2 = e.do("POST", to.path("/messages"), to.sealed(1, ct), second.pass(1)) }()
-			wg.Wait()
-			if got := fmt.Sprint(r1.status, " ", r2.status); got != "201 200" && got != "200 201" {
-				t.Errorf("%s, trial %d: the same bytes posted twice at once answered %s %s, %s %s; want 201 and 200, whichever won", c.name, i, got, r1.code(), r2.code(), r2.body)
+	synctest.Test(t, func(t *testing.T) {
+		for _, c := range []struct {
+			name string
+			set  func(*Limits)
+		}{
+			{"sends a day", func(l *Limits) { l.SendsPerDay, l.SendsBurst = 2, 2 }},
+			{"the mailbox cap", func(l *Limits) { l.MailboxCap = 2 }},
+			{"the mailbox's new messages", func(l *Limits) { l.ReceiveBurst, l.ReceiveRefill = 2, time.Hour }},
+		} {
+			l := relaxed()
+			l.MailboxCap = 0
+			c.set(&l)
+			e := bubbleEnv(t, l, func(cfg *Config) { cfg.Store = slowPut{cfg.Store, 40 * time.Millisecond} })
+			for i := range 5 {
+				to, from := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
+				e.want(e.sendTo(to, 1, from, 1), http.StatusCreated, "") // one of each budget spent
+				// The second post is from the same sender, and on odd trials
+				// from another.
+				second := from
+				if i%2 == 1 {
+					second = e.raw().register(protocol.MaxPrekeyLifetime)
+				}
+				ct := sealFor(t, to, 1)
+				var r1, r2 reply
+				var wg sync.WaitGroup
+				wg.Add(2)
+				go func() { defer wg.Done(); r1 = e.do("POST", to.path("/messages"), to.sealed(1, ct), from.pass(1)) }()
+				synctest.Wait() // the first post is in its write
+				go func() { defer wg.Done(); r2 = e.do("POST", to.path("/messages"), to.sealed(1, ct), second.pass(1)) }()
+				wg.Wait()
+				if got := fmt.Sprint(r1.status, " ", r2.status); got != "201 200" && got != "200 201" {
+					t.Errorf("%s, trial %d: the same bytes posted twice at once answered %s %s, %s %s; want 201 and 200, whichever won", c.name, i, got, r1.code(), r2.code(), r2.body)
+				}
 			}
 		}
-	}
 
-	e := newEnv(t, relaxed(), func(cfg *Config) { cfg.Store = slowPut{cfg.Store, 40 * time.Millisecond} })
-	to, a, b := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
-	ct := sealFor(t, to, 1)
-	var ra, rb reply
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() { defer wg.Done(); ra = e.do("POST", to.path("/messages"), to.sealed(1, ct), a.pass(1)) }()
-	time.Sleep(5 * time.Millisecond)
-	go func() { defer wg.Done(); rb = e.do("POST", to.path("/messages"), to.sealed(1, ct), b.pass(1)) }()
-	wg.Wait()
-	if got := fmt.Sprint(ra.status, " ", rb.status); got != "201 200" && got != "200 201" {
-		t.Errorf("the same bytes from two senders at once answered %s; want 201 and 200, whichever won", got)
-	}
+		e := bubbleEnv(t, relaxed(), func(cfg *Config) { cfg.Store = slowPut{cfg.Store, 40 * time.Millisecond} })
+		to, a, b := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
+		ct := sealFor(t, to, 1)
+		var ra, rb reply
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); ra = e.do("POST", to.path("/messages"), to.sealed(1, ct), a.pass(1)) }()
+		synctest.Wait() // the first post is in its write
+		go func() { defer wg.Done(); rb = e.do("POST", to.path("/messages"), to.sealed(1, ct), b.pass(1)) }()
+		wg.Wait()
+		if got := fmt.Sprint(ra.status, " ", rb.status); got != "201 200" && got != "200 201" {
+			t.Errorf("the same bytes from two senders at once answered %s; want 201 and 200, whichever won", got)
+		}
 
-	// A sender at its sends a day and one with sends left post the same
-	// bytes at once: the second is never handed the first one's refusal.
-	// The first leads, held at its dedupe until the second's begins, and
-	// reads before it (leadDedupe), so the second comes while the first is
-	// in flight, and is stored after the first has read.
-	l := relaxed()
-	l.SendsPerDay, l.SendsBurst = 1, 1
-	lead := &armedDedupe{leadDedupe: &leadDedupe{wait: time.Second, entered: make(chan struct{}), second: make(chan struct{}), read: make(chan struct{})}}
-	e = newEnv(t, l, func(cfg *Config) { lead.Store, cfg.Store = cfg.Store, lead })
-	to, spent, fresh := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
-	e.want(e.sendTo(to, 1, spent, 1), http.StatusCreated, "")
-	lead.on.Store(true)
-	ct = sealFor(t, to, 1)
-	led := make(chan reply, 1)
-	go func() { led <- e.do("POST", to.path("/messages"), to.sealed(1, ct), spent.pass(1)) }()
-	select {
-	case <-lead.entered:
-	case r := <-led:
-		t.Fatalf("the post at its limit was answered before its dedupe: %d %s", r.status, r.code())
-	}
-	rb = e.do("POST", to.path("/messages"), to.sealed(1, ct), fresh.pass(1))
-	ra = <-led
-	if ra.status != http.StatusTooManyRequests || rb.status != http.StatusCreated {
-		t.Errorf("a sender at its limit and one with sends left posting the same bytes at once: %d %s and %d %s; want 429 and 201", ra.status, ra.code(), rb.status, rb.code())
-	}
+		// A sender at its sends a day and one with sends left post the same
+		// bytes at once: the second is never handed the first one's refusal.
+		// The first leads, held at its dedupe until the second's begins, and
+		// reads before it (leadDedupe), so the second comes while the first is
+		// in flight, and is stored after the first has read.
+		l := relaxed()
+		l.SendsPerDay, l.SendsBurst = 1, 1
+		lead := &armedDedupe{leadDedupe: &leadDedupe{wait: time.Second, entered: make(chan struct{}), second: make(chan struct{}), read: make(chan struct{})}}
+		e = bubbleEnv(t, l, func(cfg *Config) { lead.Store, cfg.Store = cfg.Store, lead })
+		to, spent, fresh := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
+		e.want(e.sendTo(to, 1, spent, 1), http.StatusCreated, "")
+		lead.on.Store(true)
+		ct = sealFor(t, to, 1)
+		led := make(chan reply, 1)
+		go func() { led <- e.do("POST", to.path("/messages"), to.sealed(1, ct), spent.pass(1)) }()
+		select {
+		case <-lead.entered:
+		case r := <-led:
+			t.Fatalf("the post at its limit was answered before its dedupe: %d %s", r.status, r.code())
+		}
+		rb = e.do("POST", to.path("/messages"), to.sealed(1, ct), fresh.pass(1))
+		ra = <-led
+		if ra.status != http.StatusTooManyRequests || rb.status != http.StatusCreated {
+			t.Errorf("a sender at its limit and one with sends left posting the same bytes at once: %d %s and %d %s; want 429 and 201", ra.status, ra.code(), rb.status, rb.code())
+		}
+	})
 }
 
 // revokedBetween revokes mailbox a, once, just before the first read of its
@@ -166,36 +169,38 @@ func (s *heldDeletes) DeleteMessages(ctx context.Context, a protocol.Address) er
 // its delete's result.
 func TestPUTsDuringARevocationsDeleteStartNoOther(t *testing.T) {
 	t.Parallel()
-	hs := &heldDeletes{started: make(chan struct{}), release: make(chan struct{})}
-	e := newEnv(t, relaxed(), func(c *Config) { hs.Store, c.Store = c.Store, hs })
-	a, b := e.mailbox(), e.mailbox()
-	send(t, b, a, "waiting in A's mailbox when it is revoked")
-	rec := record(t, a)
-	path := revocationPath(a.Address())
-	junk := protocol.Revocations{Identity: rec.Identity, Revocation: []byte("not a signature")}
+	synctest.Test(t, func(t *testing.T) {
+		hs := &heldDeletes{started: make(chan struct{}), release: make(chan struct{})}
+		e := bubbleEnv(t, relaxed(), func(c *Config) { hs.Store, c.Store = c.Store, hs })
+		a, b := e.mailbox(), e.mailbox()
+		send(t, b, a, "waiting in A's mailbox when it is revoked")
+		rec := record(t, a)
+		path := revocationPath(a.Address())
+		junk := protocol.Revocations{Identity: rec.Identity, Revocation: []byte("not a signature")}
 
-	owner := make(chan reply, 1)
-	go func() { owner <- e.do("PUT", path, rec, "") }()
-	<-hs.started // the owner's delete is under way, and memory still shows the messages
-	const k = 8
-	codes := make(chan string, k)
-	for range k {
-		go func() {
-			r := e.do("PUT", path, junk, "")
-			codes <- fmt.Sprint(r.status, " ", r.code())
-		}()
-	}
-	time.Sleep(300 * time.Millisecond) // for the PUTs to reach a delete of their own, if they would
-	close(hs.release)
-	for range k {
-		if got := <-codes; got != "410 mailbox_revoked" {
-			t.Errorf("a PUT during the delete: %s", got)
+		owner := make(chan reply, 1)
+		go func() { owner <- e.do("PUT", path, rec, "") }()
+		<-hs.started // the owner's delete is under way, and memory still shows the messages
+		const k = 8
+		codes := make(chan string, k)
+		for range k {
+			go func() {
+				r := e.do("PUT", path, junk, "")
+				codes <- fmt.Sprint(r.status, " ", r.code())
+			}()
 		}
-	}
-	e.want(<-owner, http.StatusCreated, "")
-	if n := hs.n.Load(); n != 1 {
-		t.Errorf("%d PUTs during one delete drew %d deletes of the mailbox's messages; want 1", k, n)
-	}
+		synctest.Wait() // every PUT has gone as far as it goes while the delete is held: to a delete of its own, if it would
+		close(hs.release)
+		for range k {
+			if got := <-codes; got != "410 mailbox_revoked" {
+				t.Errorf("a PUT during the delete: %s", got)
+			}
+		}
+		e.want(<-owner, http.StatusCreated, "")
+		if n := hs.n.Load(); n != 1 {
+			t.Errorf("%d PUTs during one delete drew %d deletes of the mailbox's messages; want 1", k, n)
+		}
+	})
 }
 
 // On PostgreSQL: a write of an id whose message was acked is a new message,
@@ -244,54 +249,57 @@ func (s slowRead) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, er
 // refusal of another caller's address (lookup).
 func TestALookupIsNeverRefusedForAnotherCallersMisses(t *testing.T) {
 	t.Parallel()
-	l := relaxed()
-	l.MissesPerMinute = 1
-	var x, y protocol.Address
-	x[0], y[0] = 9, 10
-	e := newEnv(t, l, func(c *Config) { c.Store, c.TrustedProxies = slowRead{c.Store, x}, loopback })
-	from := func(ip string, a protocol.Address) chan int {
-		got := make(chan int, 1)
-		go func() {
-			req, _ := http.NewRequest(http.MethodGet, e.srv.URL+"/v1/"+a.String(), nil)
-			req.Header.Set("X-Forwarded-For", ip)
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				got <- 0
-				return
-			}
-			_ = resp.Body.Close()
-			got <- resp.StatusCode
-		}()
-		return got
-	}
-	first := from("192.0.2.1", x) // holds the caller's one miss while its read is slow
-	time.Sleep(50 * time.Millisecond)
-	refused := from("192.0.2.1", y) // waits for that miss to settle, then is refused
-	time.Sleep(50 * time.Millisecond)
-	other := from("192.0.2.2", y) // joins that read of y
-	if got := <-first; got != http.StatusNotFound {
-		t.Fatalf("the first lookup: %d", got)
-	}
-	if got := <-refused; got != http.StatusTooManyRequests {
-		t.Fatalf("the lookup past its address's misses: %d; the test wants it refused", got)
-	}
-	if got := <-other; got != http.StatusNotFound {
-		t.Errorf("a lookup from another address, joined to a read whose caller was refused: %d, want 404", got)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		l := relaxed()
+		l.MissesPerMinute = 1
+		var x, y protocol.Address
+		x[0], y[0] = 9, 10
+		e := bubbleEnv(t, l, func(c *Config) { c.Store, c.TrustedProxies = slowRead{c.Store, x}, everyPeer })
+		from := func(ip string, a protocol.Address) chan int {
+			got := make(chan int, 1)
+			go func() {
+				req, _ := http.NewRequest(http.MethodGet, e.srv.URL+"/v1/"+a.String(), nil)
+				req.Header.Set("X-Forwarded-For", ip)
+				resp, err := e.httpClient().Do(req)
+				if err != nil {
+					got <- 0
+					return
+				}
+				_ = resp.Body.Close()
+				got <- resp.StatusCode
+			}()
+			return got
+		}
+		first := from("192.0.2.1", x) // holds the caller's one miss while its read is slow
+		synctest.Wait()
+		refused := from("192.0.2.1", y) // waits for that miss to settle, then is refused
+		synctest.Wait()
+		other := from("192.0.2.2", y) // joins that read of y
+		if got := <-first; got != http.StatusNotFound {
+			t.Fatalf("the first lookup: %d", got)
+		}
+		if got := <-refused; got != http.StatusTooManyRequests {
+			t.Fatalf("the lookup past its address's misses: %d; the test wants it refused", got)
+		}
+		if got := <-other; got != http.StatusNotFound {
+			t.Errorf("a lookup from another address, joined to a read whose caller was refused: %d, want 404", got)
+		}
+	})
 }
 
 // alwaysRead holds nothing in memory, so every lookup reads, and holds each
-// read until two have begun.
+// read until release is closed; reads counts the reads begun.
 type alwaysRead struct {
 	Store
-	begun chan struct{}
+	release chan struct{}
+	reads   *atomic.Int32
 }
 
 func (s alwaysRead) Known(protocol.Address) (*Mailbox, bool) { return nil, false }
 
 func (s alwaysRead) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, error) {
-	s.begun <- struct{}{}
-	time.Sleep(100 * time.Millisecond)
+	s.reads.Add(1)
+	<-s.release
 	return s.Store.Mailbox(ctx, a)
 }
 
@@ -299,26 +307,32 @@ func (s alwaysRead) Mailbox(ctx context.Context, a protocol.Address) (*Mailbox, 
 // a caller may change the one it has (a renewal does).
 func TestLookupsThatShareAReadGetCopiesOfTheirOwn(t *testing.T) {
 	t.Parallel()
-	e := newEnv(t, relaxed())
-	b := e.raw().register(protocol.MaxPrekeyLifetime)
-	s := New(Config{Store: alwaysRead{e.store, make(chan struct{}, 2)}, Limits: relaxed(), Now: e.clock.Now})
-	req := httptest.NewRequest(http.MethodGet, b.path(""), nil)
-	var got [2]*Mailbox
-	var wg sync.WaitGroup
-	for i := range got {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			var err error
-			if got[i], err = s.lookup(req, b.id.Address()); err != nil {
-				t.Error(err)
-			}
-		}()
-	}
-	wg.Wait()
-	if got[0] == nil || got[0] == got[1] {
-		t.Errorf("two lookups that shared a read got %p and %p; want two copies", got[0], got[1])
-	}
+	synctest.Test(t, func(t *testing.T) {
+		e := bubbleEnv(t, relaxed())
+		b := e.raw().register(protocol.MaxPrekeyLifetime)
+		held := alwaysRead{e.store, make(chan struct{}), new(atomic.Int32)}
+		s := New(Config{Store: held, Limits: relaxed(), Now: e.clock.Now})
+		req := httptest.NewRequest(http.MethodGet, b.path(""), nil)
+		var got [2]*Mailbox
+		var wg sync.WaitGroup
+		for i := range got {
+			wg.Go(func() {
+				var err error
+				if got[i], err = s.lookup(req, b.id.Address()); err != nil {
+					t.Error(err)
+				}
+			})
+			synctest.Wait() // the first lookup's read is held; the second waits on it
+		}
+		close(held.release)
+		wg.Wait()
+		if n := held.reads.Load(); n != 1 {
+			t.Fatalf("control: two lookups of one address, the second while the first's read was held, made %d reads; want them to share 1", n)
+		}
+		if got[0] == nil || got[0] == got[1] {
+			t.Errorf("two lookups that shared a read got %p and %p; want two copies", got[0], got[1])
+		}
+	})
 }
 
 // rawAnswer is one call's answer, or the error that ended it.
@@ -337,7 +351,7 @@ func (a rawAnswer) String() string {
 
 // plainCall makes one call, for goroutines: it never stops the test, and a call
 // cut off (a panic in its handler) is an answer with err set.
-func plainCall(method, url string, body []byte, ctype, pass string) rawAnswer {
+func plainCall(c *http.Client, method, url string, body []byte, ctype, pass string) rawAnswer {
 	var rd io.Reader
 	if body != nil {
 		rd = bytes.NewReader(body)
@@ -349,7 +363,7 @@ func plainCall(method, url string, body []byte, ctype, pass string) rawAnswer {
 	if pass != "" {
 		req.Header.Set("Authorization", pass)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.Do(req)
 	if err != nil {
 		return rawAnswer{err: err}
 	}
@@ -364,7 +378,9 @@ func plainCall(method, url string, body []byte, ctype, pass string) rawAnswer {
 func rawPost(e *env, to *raw, ct, statement []byte, pass string) func() rawAnswer {
 	q := protocol.SendQuery{Statement: protocol.StatementHash(statement)}
 	url := e.srv.URL + to.path("/messages") + "?" + q.Encode()
-	return func() rawAnswer { return plainCall(http.MethodPost, url, ct, protocol.CiphertextContentType, pass) }
+	return func() rawAnswer {
+		return plainCall(e.httpClient(), http.MethodPost, url, ct, protocol.CiphertextContentType, pass)
+	}
 }
 
 // allAtOnce runs each call on a goroutine of its own, all released at once,
@@ -557,7 +573,9 @@ func TestAPanicInEachSingleFlightEndsOnlyItsCalls(t *testing.T) {
 
 	post := rawPost(api, to, sealFor(t, to, 1), to.stmt[1], api.passFor(from.by[1], from.id.Address(), api.name()))
 	run("posts", &p.put, post)
-	run("lookups", &p.read, func() rawAnswer { return plainCall(http.MethodGet, srv.URL+victim.path(""), nil, "", "") })
+	run("lookups", &p.read, func() rawAnswer {
+		return plainCall(http.DefaultClient, http.MethodGet, srv.URL+victim.path(""), nil, "", "")
+	})
 
 	mailbox := api.raw().register(protocol.MaxPrekeyLifetime)
 	api.want(api.sendTo(mailbox, 1, from, 1), http.StatusCreated, "")
@@ -570,7 +588,7 @@ func TestAPanicInEachSingleFlightEndsOnlyItsCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	run("purges", &p.del, func() rawAnswer {
-		return plainCall(http.MethodPut, srv.URL+mailbox.path("/revocation"), rec, "application/json", "")
+		return plainCall(http.DefaultClient, http.MethodPut, srv.URL+mailbox.path("/revocation"), rec, "application/json", "")
 	})
 	if n, _ := p.Store.Count(context.Background(), mailbox.id.Address()); n != 0 {
 		t.Errorf("after the purge's panic and the next PUT: %d messages left", n)

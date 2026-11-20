@@ -219,6 +219,14 @@ func metered(t *testing.T, l Limits) (*env, *Metrics, *prometheus.Registry) {
 	return newEnv(t, l, func(c *Config) { c.Metrics = m }), m, reg
 }
 
+// meteredBubble is metered on a bubbleEnv, inside a testing/synctest bubble.
+func meteredBubble(t *testing.T, l Limits) (*env, *Metrics, *prometheus.Registry) {
+	t.Helper()
+	reg := prometheus.NewRegistry()
+	m := NewMetrics(reg)
+	return bubbleEnv(t, l, func(c *Config) { c.Metrics = m }), m, reg
+}
+
 // fault is what the injector makes of a write: its outcome, as Backend
 // names them.
 type fault int
