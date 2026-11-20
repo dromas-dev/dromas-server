@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,8 +48,11 @@ type env struct {
 	store  Store
 	server *Server
 	srv    *httptest.Server
-	mu     sync.Mutex
-	middle func(w http.ResponseWriter, r *http.Request, next http.Handler)
+	// inMemory is the client of a bubbleEnv's server, which the clients
+	// and every call use; nil on a real network.
+	inMemory *http.Client
+	mu       sync.Mutex
+	middle   func(w http.ResponseWriter, r *http.Request, next http.Handler)
 }
 
 func relaxed() Limits {
@@ -67,13 +71,42 @@ func newEnv(t *testing.T, l Limits, with ...func(*Config)) *env {
 	e := &env{t: t, clock: &clock{t: time.Now().UTC().Truncate(time.Second)}}
 	var ready func() bool
 	e.store, ready = newTestStore(t, e.clock.Now)
+	return e.serve(l, ready, httptest.NewServer, with...)
+}
+
+// bubbleEnv is newEnv for a test inside a testing/synctest bubble, from which
+// it is called: the in-memory store, reached over httptest's in-memory
+// network, so each goroutine of a call blocks durably, and synctest.Wait
+// returns once every call has gone as far as it can go. A test on real time
+// and a real network orders its goroutines by sleeping, and a sleep too short
+// for a busy runner lets the test pass with the code under test removed.
+func bubbleEnv(t *testing.T, l Limits, with ...func(*Config)) *env {
+	t.Helper()
+	e := &env{t: t, clock: &clock{t: time.Now().UTC().Truncate(time.Second)}}
+	e.store = NewMemStore(e.clock.Now)
+	e.serve(l, nil, func(h http.Handler) *httptest.Server { return httptest.NewTestServer(t, h) }, with...)
+	// The in-memory network takes a request to any address, and a client
+	// calls a server over plain HTTP only on a loopback one.
+	e.inMemory = e.srv.Client()
+	e.srv.URL = "http://127.0.0.1"
+	return e
+}
+
+// everyPeer trusts every peer's X-Forwarded-For: on a bubbleEnv's in-memory
+// network, the peer is the test's own client, at whatever address the
+// network gives it.
+var everyPeer = []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0")}
+
+// serve starts e's server on e's store, listening by listen.
+func (e *env) serve(l Limits, ready func() bool, listen func(http.Handler) *httptest.Server, with ...func(*Config)) *env {
+	t := e.t
 	c := Config{Store: e.store, Limits: l, Now: e.clock.Now, Ready: ready}
 	for _, f := range with {
 		f(&c)
 	}
 	e.server = New(c)
 	h := apitest.Handler(t, e.server.Handler())
-	e.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	e.srv = listen(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		e.mu.Lock()
 		m := e.middle
 		e.mu.Unlock()
@@ -94,7 +127,7 @@ func (e *env) setMiddle(m func(w http.ResponseWriter, r *http.Request, next http
 }
 
 func (e *env) opts() client.Options {
-	return client.Options{Base: e.srv.URL, Now: e.clock.Now}
+	return client.Options{Base: e.srv.URL, Now: e.clock.Now, HTTPClient: e.inMemory}
 }
 
 // mailbox makes and registers a mailbox.

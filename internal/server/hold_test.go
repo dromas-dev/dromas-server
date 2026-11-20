@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/dromas-dev/dromas-client/api/apitest"
@@ -50,39 +51,43 @@ func longPoll(e *env, to *raw, tag, query string) <-chan struct {
 // by this process (PROTOCOL.md §11.11).
 func TestALongPollIsAnsweredWhenAMessageArrives(t *testing.T) {
 	t.Parallel()
-	e := newEnv(t, relaxed())
-	from, to, tag := emptyTag(e)
-	c := longPoll(e, to, tag, "wait=60")
-	time.Sleep(300 * time.Millisecond)
-	select {
-	case got := <-c:
-		t.Fatalf("the long poll was answered %d before anything changed", got.r.status)
-	default:
-	}
-	e.want(e.do("POST", to.path("/messages"), to.sealed(1, ciphertextTo(t, to)), from.pass(1)), http.StatusCreated, "")
-	got := <-c
-	e.want(got.r, http.StatusOK, "")
-	if got.took > 10*time.Second || got.r.header.Get("ETag") == tag {
-		t.Fatalf("the long poll took %v, tag %q", got.took, got.r.header.Get("ETag"))
-	}
+	synctest.Test(t, func(t *testing.T) {
+		e := bubbleEnv(t, relaxed())
+		from, to, tag := emptyTag(e)
+		c := longPoll(e, to, tag, "wait=60")
+		synctest.Wait() // the long poll is held
+		select {
+		case got := <-c:
+			t.Fatalf("the long poll was answered %d before anything changed", got.r.status)
+		default:
+		}
+		e.want(e.do("POST", to.path("/messages"), to.sealed(1, ciphertextTo(t, to)), from.pass(1)), http.StatusCreated, "")
+		got := <-c
+		e.want(got.r, http.StatusOK, "")
+		if got.took != 0 || got.r.header.Get("ETag") == tag {
+			t.Fatalf("the long poll took %v of fake time, tag %q; want it answered at the send", got.took, got.r.header.Get("ETag"))
+		}
+	})
 }
 
 // A long poll's answer is dated when it is made, by the clock its checks at
 // the wake read, not when the request arrived (PROTOCOL.md §11.2).
 func TestALongPollsAnswerIsDatedWhenItIsMade(t *testing.T) {
 	t.Parallel()
-	e := newEnv(t, relaxed())
-	from, to, tag := emptyTag(e)
-	arrived := e.clock.Now().UTC().Format(http.TimeFormat)
-	c := longPoll(e, to, tag, "wait=60")
-	time.Sleep(300 * time.Millisecond)
-	e.clock.Add(3 * time.Minute)
-	e.want(e.do("POST", to.path("/messages"), to.sealed(1, ciphertextTo(t, to)), from.pass(1)), http.StatusCreated, "")
-	got := <-c
-	e.want(got.r, http.StatusOK, "")
-	if d := got.r.header.Get("Date"); d != e.clock.Now().UTC().Format(http.TimeFormat) || d == arrived {
-		t.Fatalf("the long poll's answer is dated %q: the request arrived at %q, and it was answered at %q", d, arrived, e.clock.Now().UTC().Format(http.TimeFormat))
-	}
+	synctest.Test(t, func(t *testing.T) {
+		e := bubbleEnv(t, relaxed())
+		from, to, tag := emptyTag(e)
+		arrived := e.clock.Now().UTC().Format(http.TimeFormat)
+		c := longPoll(e, to, tag, "wait=60")
+		synctest.Wait() // the long poll is held
+		e.clock.Add(3 * time.Minute)
+		e.want(e.do("POST", to.path("/messages"), to.sealed(1, ciphertextTo(t, to)), from.pass(1)), http.StatusCreated, "")
+		got := <-c
+		e.want(got.r, http.StatusOK, "")
+		if d := got.r.header.Get("Date"); d != e.clock.Now().UTC().Format(http.TimeFormat) || d == arrived {
+			t.Fatalf("the long poll's answer is dated %q: the request arrived at %q, and it was answered at %q", d, arrived, e.clock.Now().UTC().Format(http.TimeFormat))
+		}
+	})
 }
 
 // With nothing new, a long poll is answered 304 once max_wait passes,
@@ -160,37 +165,45 @@ func TestALaterLongPollOfTheSameMailboxTakesThePlaceOfTheEarlier(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	l.MaxLongPolls = 1
-	e, m, _ := metered(t, l)
-	_, to, tag := emptyTag(e)
-	first := longPoll(e, to, tag, "wait=60")
-	holdingNow(t, e.server, 1)
-	second := longPoll(e, to, tag, "wait=60")
-	var got struct {
-		r    reply
-		took time.Duration
-	}
-	select {
-	case got = <-first:
-	case <-time.After(10 * time.Second):
+	synctest.Test(t, func(t *testing.T) {
+		e, m, _ := meteredBubble(t, l)
+		_, to, tag := emptyTag(e)
+		first := longPoll(e, to, tag, "wait=60")
+		synctest.Wait() // the earlier list is held
+		second := longPoll(e, to, tag, "wait=60")
+		synctest.Wait() // the later list is held, and the earlier answered
+		var got struct {
+			r    reply
+			took time.Duration
+		}
+		select {
+		case got = <-first:
+		default:
+			e.server.StopHolds()
+			t.Fatal("the earlier list is still held once a later one of its mailbox is")
+		}
+		e.want(got.r, http.StatusNotModified, "")
+		if got.r.header.Get("ETag") != tag {
+			t.Fatalf("the earlier list was answered tag %q, want %q", got.r.header.Get("ETag"), tag)
+		}
+		if n := testutil.ToFloat64(m.held.WithLabelValues("replaced")); n != 1 {
+			t.Errorf("%v holds recorded replaced, want 1", n)
+		}
+		if n := e.server.holding.Load(); n != 1 {
+			t.Errorf("%d lists counted held, want 1", n)
+		}
+		select {
+		case got := <-second:
+			t.Fatalf("the later list was answered %d before anything changed", got.r.status)
+		default:
+		}
 		e.server.StopHolds()
-		t.Fatal("the earlier list was still held 10 s after a later one of its mailbox")
-	}
-	e.want(got.r, http.StatusNotModified, "")
-	if got.r.header.Get("ETag") != tag {
-		t.Fatalf("the earlier list was answered tag %q, want %q", got.r.header.Get("ETag"), tag)
-	}
-	if n := testutil.ToFloat64(m.held.WithLabelValues("replaced")); n != 1 {
-		t.Errorf("%v holds recorded replaced, want 1", n)
-	}
-	holdingNow(t, e.server, 1)
-	select {
-	case got := <-second:
-		t.Fatalf("the later list was answered %d before anything changed", got.r.status)
-	case <-time.After(300 * time.Millisecond):
-	}
-	e.server.StopHolds()
-	e.want((<-second).r, http.StatusNotModified, "")
-	holdingNow(t, e.server, 0)
+		e.want((<-second).r, http.StatusNotModified, "")
+		synctest.Wait()
+		if n := e.server.holding.Load(); n != 0 {
+			t.Errorf("%d lists still counted held", n)
+		}
+	})
 }
 
 // Past max_long_polls_per_range, a list from that range that asks to wait is
@@ -304,19 +317,24 @@ func TestALongPollsRangeIsItsIPv4AddressOrIPv6Slash48(t *testing.T) {
 // When the server stops, every long poll is answered 304 at once.
 func TestStoppingAnswersEveryLongPoll(t *testing.T) {
 	t.Parallel()
-	e := newEnv(t, relaxed())
-	_, to, tag := emptyTag(e)
-	c := longPoll(e, to, tag, "wait=60")
-	time.Sleep(300 * time.Millisecond)
-	e.server.StopHolds()
-	got := <-c
-	e.want(got.r, http.StatusNotModified, "")
-	if got.took > 5*time.Second {
-		t.Fatalf("a long poll took %v to answer once the server stopped", got.took)
-	}
-	if n := e.server.holding.Load(); n != 0 {
-		t.Fatalf("%d lists still counted held", n)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		e := bubbleEnv(t, relaxed())
+		_, to, tag := emptyTag(e)
+		c := longPoll(e, to, tag, "wait=60")
+		synctest.Wait() // the long poll is held
+		if n := e.server.holding.Load(); n != 1 {
+			t.Fatalf("control: %d lists counted held, want 1", n)
+		}
+		e.server.StopHolds()
+		got := <-c
+		e.want(got.r, http.StatusNotModified, "")
+		if got.took != 0 {
+			t.Fatalf("a long poll took %v of fake time to answer once the server stopped", got.took)
+		}
+		if n := e.server.holding.Load(); n != 0 {
+			t.Fatalf("%d lists still counted held", n)
+		}
+	})
 }
 
 // holdingNow waits until s holds n lists, or fails.
@@ -371,28 +389,35 @@ func TestALongPollWokenToTheSamePageIsOnePollAndOneHold(t *testing.T) {
 	l := relaxed()
 	l.MaxWait = 2 * time.Second
 	l.PollBurst, l.PollRefill = 100, time.Hour
-	e, m, _ := metered(t, l)
-	_, to, tag := emptyTag(e)
-	before := debts(e.server, e.clock.Now())
-	c := longPoll(e, to, tag, "wait=60")
-	holdingNow(t, e.server, 1)
-	mem := e.store.(*Memory)
-	for range 3 {
-		mem.idx.setRevocations(to.id.Address(), false, 0) // a change that moves nothing in the page
-		time.Sleep(100 * time.Millisecond)
-	}
-	got := <-c
-	e.want(got.r, http.StatusNotModified, "")
-	if p := debts(e.server, e.clock.Now())[string(protocol.QuotaPolls)] - before[string(protocol.QuotaPolls)]; p != 1 {
-		t.Errorf("a long poll woken three times spent %d polls, want 1", p)
-	}
-	changed, waited := testutil.ToFloat64(m.held.WithLabelValues("changed")), testutil.ToFloat64(m.held.WithLabelValues("waited"))
-	if changed != 0 || waited != 1 {
-		t.Errorf("one long poll, woken three times to the same page: long_polls_total changed=%v waited=%v, want waited=1 alone", changed, waited)
-	}
-	if n := e.server.holding.Load(); n != 0 {
-		t.Errorf("%d lists still counted held", n)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		e, m, _ := meteredBubble(t, l)
+		_, to, tag := emptyTag(e)
+		before := debts(e.server, e.clock.Now())
+		c := longPoll(e, to, tag, "wait=60")
+		synctest.Wait() // the long poll is held
+		mem := e.store.(*Memory)
+		for range 3 {
+			mem.idx.setRevocations(to.id.Address(), false, 0) // a change that moves nothing in the page
+			synctest.Wait()                                   // the long poll has read the page again, and is held again
+			select {
+			case got := <-c:
+				t.Fatalf("a long poll woken to the same page was answered %d before max_wait", got.r.status)
+			default:
+			}
+		}
+		got := <-c
+		e.want(got.r, http.StatusNotModified, "")
+		if p := debts(e.server, e.clock.Now())[string(protocol.QuotaPolls)] - before[string(protocol.QuotaPolls)]; p != 1 {
+			t.Errorf("a long poll woken three times spent %d polls, want 1", p)
+		}
+		changed, waited := testutil.ToFloat64(m.held.WithLabelValues("changed")), testutil.ToFloat64(m.held.WithLabelValues("waited"))
+		if changed != 0 || waited != 1 {
+			t.Errorf("one long poll, woken three times to the same page: long_polls_total changed=%v waited=%v, want waited=1 alone", changed, waited)
+		}
+		if n := e.server.holding.Load(); n != 0 {
+			t.Errorf("%d lists still counted held", n)
+		}
+	})
 }
 
 // A caller that leaves a long poll is no longer counted held, and is

@@ -41,9 +41,12 @@ var (
 	testBodies     string
 )
 
-// testDatabase is this run's schema and bodies directory, made on first use.
+// testDatabase is this run's schema and bodies directory, made on first use;
+// t may be nil.
 func testDatabase(t testing.TB) (string, string) {
-	t.Helper()
+	if t != nil {
+		t.Helper()
+	}
 	testSchemaOnce.Do(func() {
 		testSchema = "t_" + randomHex(6)
 		dir, err := os.MkdirTemp("", "dromas-bodies-")
@@ -65,6 +68,17 @@ func newTestStore(t *testing.T, now func() time.Time) (Store, func() bool) {
 }
 
 func TestMain(m *testing.M) {
+	if onPostgres() {
+		// The run's schema is made and migrated before any test starts a
+		// store, so no migration of it is open while a store's feed makes its
+		// slot or decodes: a feed decodes every table's changes, the other
+		// stores' DDL among them.
+		schema, _ := testDatabase(nil)
+		if err := migrate(schema); err != nil {
+			fmt.Fprintf(os.Stderr, "migrating the run's schema %s: %v\n", schema, err)
+			os.Exit(1)
+		}
+	}
 	code := m.Run()
 	if onPostgres() {
 		schemasMu.Lock()
@@ -138,6 +152,15 @@ var migrated sync.Map // schema → func() error
 // the default privileges README.md names.
 func pgURL(t testing.TB, schema string) string {
 	t.Helper()
+	if err := migrate(schema); err != nil {
+		t.Fatal(err)
+	}
+	return "user=" + appRole.name + " password=" + appRole.password
+}
+
+// migrate makes the run's runtime role, once, then makes schema and
+// migrates it, once.
+func migrate(schema string) error {
 	appRole.once.Do(func() {
 		appRole.name, appRole.password = "t_"+randomHex(6)+"_app", randomHex(16)
 		appRole.err = asTestRole(func(ctx context.Context, conn *pgx.Conn) error {
@@ -146,7 +169,7 @@ func pgURL(t testing.TB, schema string) string {
 		})
 	})
 	if appRole.err != nil {
-		t.Fatalf("the runtime role: %v", appRole.err)
+		return fmt.Errorf("the runtime role: %w", appRole.err)
 	}
 	once, _ := migrated.LoadOrStore(schema, sync.OnceValue(func() error {
 		err := asTestRole(func(ctx context.Context, conn *pgx.Conn) error {
@@ -170,9 +193,9 @@ func pgURL(t testing.TB, schema string) string {
 		return err
 	}))
 	if err := once.(func() error)(); err != nil {
-		t.Fatalf("migrating %s: %v", schema, err)
+		return fmt.Errorf("migrating %s: %w", schema, err)
 	}
-	return "user=" + appRole.name + " password=" + appRole.password
+	return nil
 }
 
 // asTestRole runs f on a connection as the role libpq's environment names.

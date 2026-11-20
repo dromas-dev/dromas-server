@@ -152,7 +152,7 @@ func (e *env) doAs(host, method, path string, body any, pass string, headers ...
 	for i := 0; i+1 < len(headers); i += 2 {
 		req.Header.Add(headers[i], headers[i+1])
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := e.httpClient().Do(req)
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -195,6 +195,14 @@ func (e *env) wantNotCurrent(r reply, n uint64) {
 }
 
 // name is the name the tests call the server by: the host of its URL.
+// httpClient is the client that reaches e's server.
+func (e *env) httpClient() *http.Client {
+	if e.inMemory != nil {
+		return e.inMemory
+	}
+	return http.DefaultClient
+}
+
 func (e *env) name() string { return strings.TrimPrefix(e.srv.URL, "http://") }
 
 // passFor is a pass of mailbox a for the server called name, signed at the
