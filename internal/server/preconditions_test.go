@@ -439,9 +439,9 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 	none := map[string]int{}
 	live := func(e *env) *raw { return e.raw().register(protocol.MaxPrekeyLifetime) }
 	states := map[string][]reach{
-		// The server's document answers the same to every caller, and the
-		// client repo's api/openapi.yaml gives it no 304 and no 412.
-		"GET /v1/{$}": nil,
+		"GET /v1/{$}": {{"the server's document", true, none, func(*env) (call, string) {
+			return call{"GET", protocol.DocumentPath, nil, ""}, ""
+		}}},
 		"GET /v1/{address}": {{"a live mailbox", true, none, func(e *env) (call, string) {
 			return call{"GET", live(e).path(""), nil, ""}, ""
 		}}},

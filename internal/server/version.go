@@ -123,8 +123,12 @@ func retiredVersion(floor string) *problem {
 // document answers GET /v1/, the server's document: its version policy, the
 // capabilities it serves and the longest certificate it takes, the same to
 // every caller (PROTOCOL.md §11.18). It reads nothing but the document in
-// force.
-func (s *Server) document(w http.ResponseWriter, _ *http.Request) error {
+// force. The document exists for every caller and carries no tag, so its
+// preconditions are those of such a target (precondition; PROTOCOL.md §11.2).
+func (s *Server) document(w http.ResponseWriter, r *http.Request) error {
+	if err := precondition(r, targetState{exists: true, hint: hintConditions}); err != nil {
+		return err
+	}
 	writeJSON(w, http.StatusOK, s.policy.Load())
 	return nil
 }
