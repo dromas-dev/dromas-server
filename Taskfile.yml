@@ -33,7 +33,7 @@ tasks:
     prompt: "This signs {{.NEXT}} on {{.COMMIT}} and pushes it, which publishes the release. Continue?"
     preconditions:
       - sh: '[ "{{.BUMP}}" = patch ] || [ "{{.BUMP}}" = minor ]'
-        msg: "BUMP is patch or minor: the major is the protocol's, shared with the client, and v1 is the protocol freeze's"
+        msg: "BUMP is patch or minor: the major is the protocol's, shared with the client, and v1 is the maintainer's decision"
       - sh: '[ -z "{{.VERSION}}" ] || { echo "{{.VERSION}}" | grep -Eq "^v0\.[0-9]+\.[0-9]+$" && [ -z "$(git tag -l "{{.VERSION}}")" ]; }'
         msg: "VERSION is a v0.<minor>.<patch> no tag has"
       - sh: '[ "$(git symbolic-ref --short HEAD)" = main ]'
