@@ -6,7 +6,7 @@ The API process of the [dromas.dev](https://dromas.dev) server system: end-to-en
 
 **You do not need to trust this server system, or read this repo, to use dromas.** The client checks everything that protects a message. The client, the protocol's specification and the tests against a forging server are in [dromas-client](https://github.com/dromas-dev/dromas-client). What this repo adds is what could otherwise only be stated: what `dromas-server` stores, what it logs, what it deletes and when, and how it limits abuse.
 
-**Pre-v1.** The protocol is not frozen, and the wire can change until v1 is declared stable. What is still open is the open issues of this repo and of the client repo.
+**Pre-v1, working towards a stable protocol.** The wire can change until v1. What is still open is the open issues of this repo and of the client repo.
 
 ## What is here
 
@@ -30,7 +30,7 @@ A deployment's site (dromas.dev's front page and `llms.txt`) is not in this repo
 
 ## Build and run
 
-Each release is a static binary for Linux on `amd64` and `arm64` and an image, `ghcr.io/dromas-dev/dromas-server:<version>`, both built from its signed tag by this repo's release workflow after its tests pass on that commit, the image holding the archive's very binary (`SECURITY.md`); `go install github.com/dromas-dev/dromas-server/cmd/dromas-server@<version>` builds the same source. The major version is the protocol's, shared with the client: both are 0.x until the protocol is frozen, and the freeze is v1 of both.
+Each release is a static binary for Linux on `amd64` and `arm64` and an image, `ghcr.io/dromas-dev/dromas-server:<version>`, both built from its signed tag by this repo's release workflow after its tests pass on that commit, the image holding the archive's very binary (`SECURITY.md`); `go install github.com/dromas-dev/dromas-server/cmd/dromas-server@<version>` builds the same source. The major version is the protocol's, shared with the client: both are 0.x until v1, which they reach together.
 
 From source, `go.mod` requires a release of the client module, which `go` fetches:
 
