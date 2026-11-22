@@ -141,17 +141,16 @@ jobs:
 
   vale:
     # The pages people read, against the Google developer documentation
-    # style guide (.vale.ini): an error fails the job, and a warning or a
-    # suggestion is advice. Not on a tag's run (release.yml), where
-    # reviewdog's github-check fails to post to its own check run (404): the
-    # hand-run of release.yml that a release requires has run this job on
-    # the commit the tag names.
-    if: github.ref_type != 'tag'
+    # style guide (.vale.ini): an error fails the job, as GitLab's pipelines
+    # enforce Vale's error-level rules (its "Vale documentation tests" page),
+    # and the job reports errors alone; a warning or a suggestion is advice,
+    # which `vale .` shows on any box. reviewdog writes them as the run's
+    # annotations (github-annotations), with no call to the checks API,
+    # whose check-run update by github-check answered 404 at random.
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read
-      checks: write # the github-check reporter writes the alerts as a check run
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -159,14 +158,9 @@ jobs:
       - uses: vale-cli/vale-action@518a9136acc6e6668ce7c00d367051e0941e87ff # v3.0.0
         with:
           version: 3.28.1
-          reporter: github-check
+          reporter: github-annotations
           filter_mode: nofilter
           fail_on_error: true
-          # Errors alone, as GitLab's pipelines report Vale (its "Vale
-          # documentation tests" page): a warning or a suggestion is advice,
-          # which `vale .` shows on any box. Posting every finding sent the
-          # checks API thousands of annotations, and reviewdog's PATCH of
-          # its check run answered 404.
           vale_flags: "--minAlertLevel=error"
 
   fuzz-targets:
