@@ -162,6 +162,12 @@ jobs:
           reporter: github-check
           filter_mode: nofilter
           fail_on_error: true
+          # Errors alone, as GitLab's pipelines report Vale (its "Vale
+          # documentation tests" page): a warning or a suggestion is advice,
+          # which `vale .` shows on any box. Posting every finding sent the
+          # checks API thousands of annotations, and reviewdog's PATCH of
+          # its check run answered 404.
+          vale_flags: "--minAlertLevel=error"
 
   fuzz-targets:
     # The fuzz targets, listed from the code, as dromas-client's job lists
