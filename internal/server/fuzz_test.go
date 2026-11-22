@@ -501,6 +501,10 @@ func readFuzzVectors(f *testing.F) fuzzVectors {
 		{"HEAD", path("a", ""), "", at(""), nil},
 		{"GET", path("c", ""), "", at("If-None-Match: *"), nil},
 		{"GET", "/v1/d_", "", at(""), nil},
+		// A route the description lacks, of a retired version: 410 before
+		// routing (PROTOCOL.md §11.4 rule 0), the method included.
+		{"GET", "/v1/x/y/z", "", "", nil},
+		{"0", "/v1/0", "", "", []byte("0")},
 		{"PUT", path("a", "/prekey"), pass("a"), at(""), js(protocol.PrekeyRequest{Prekey: read("a/prekey-2.txt"), PrekeySignature: read("a/prekey-2.txt.sig")})},
 		{"PUT", path("a", "/revocation"), "", at(""), js(protocol.Revocations{Identity: read("a/identity.doc"), RevokedCertificates: read("a/revoked-certs.txt"), RevokedCertificatesSignature: read("a/revoked-certs.sig")})},
 		{"PUT", path("a", "/revocation"), "", at(""), js(protocol.Revocations{Identity: read("a/identity.doc"), Revocation: read("a/revoke.sig")})},
