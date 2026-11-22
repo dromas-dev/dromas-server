@@ -1,4 +1,4 @@
-# bench/ — the measurements behind the microsecond figures
+# bench/: the measurements behind the microsecond figures
 
 Measured 2026-10-10 unless dated otherwise: 2× Neoverse-V2, Go 1.26.6, standard library only, a single core where noted. **They are evidence for design decisions, not a test suite.**
 
@@ -32,6 +32,6 @@ A pass lasts ten minutes, so the whole run fits in one. `poll-cli N` alone polls
 
 - **Five of these measure designs the server does not use, kept as measurements:** `crypto/tag_test.go` times a check of an `ssh-ed25519` recipient's tag, for one SSH key that both signs and receives; `crypto/token_test.go` times the HMAC check of an owner token, where the server checks a pass the mailbox signs; `poll/srv` checks such a token and answers an empty list as `[]`, where the server checks a pass and answers an object; and `crypto/base64_test.go` and the de-armor benchmark are for a ciphertext carried as base64 inside JSON, where a send and a fetch carry it as the body itself, raw.
 - **SSHSIG is EMULATED** in `crypto/`: SHA-512 of the message plus an Ed25519 verify over the small signed blob, with no SSHSIG parser. A real parser adds negligible cost.
-- **Stop the server by ITS pid, and run it by an absolute path.** Wrapped in `timeout` with an environment prefix, one `timeout` implementation fails to start it, and killing the wrapper orphans the server. Started with an environment prefix and `&`, `$!` can name a process that is not the server: find the pid with `pgrep`.
+- **Stop the server by ITS PID, and run it by an absolute path.** Wrapped in `timeout` with an environment prefix, one `timeout` implementation fails to start it, and killing the wrapper orphans the server. Started with an environment prefix and `&`, `$!` can name a process that is not the server: find the PID with `pgrep`.
 - Never wrap a Go command in `ulimit -v`: the runtime reserves a large virtual arena and dies misleadingly.
 - What stands in front of the server (a proxy, a tunnel, TLS termination) is not measured here, and costs more per poll than the server does.

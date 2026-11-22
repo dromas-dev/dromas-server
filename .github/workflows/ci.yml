@@ -139,6 +139,30 @@ jobs:
           cache: false
       - run: scripts/check.sh vuln
 
+  vale:
+    # The pages people read, against the Google developer documentation
+    # style guide (.vale.ini): an error fails the job, and a warning or a
+    # suggestion is advice. Not on a tag's run (release.yml), where
+    # reviewdog's github-check fails to post to its own check run (404): the
+    # hand-run of release.yml that a release requires has run this job on
+    # the commit the tag names.
+    if: github.ref_type != 'tag'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      checks: write # the github-check reporter writes the alerts as a check run
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: vale-cli/vale-action@518a9136acc6e6668ce7c00d367051e0941e87ff # v3.0.0
+        with:
+          version: 3.28.1
+          reporter: github-check
+          filter_mode: nofilter
+          fail_on_error: true
+
   fuzz-targets:
     # The fuzz targets, listed from the code, as dromas-client's job lists
     # its own: the weekly run alone, never on a push, a pull request, a merge
