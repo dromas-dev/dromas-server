@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,27 @@ import (
 
 // These tests cover the limits on calls that reach storage, and on maps
 // that would otherwise grow without bound.
+
+// A bucket set resized while it is taken from, as a reload of the limits
+// file does, reads its size under the lock the resize writes it under: the
+// race detector (go test -race) sees any read outside it.
+func TestABucketResizedWhileItIsTakenFrom(t *testing.T) {
+	t.Parallel()
+	bs := newBuckets("test", 10, time.Millisecond)
+	now := time.Unix(1_700_000_000, 0)
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for i := range 2000 {
+			bs.resize(10+i%2, time.Millisecond)
+		}
+	})
+	wg.Go(func() {
+		for range 2000 {
+			bs.take("k", now)
+		}
+	})
+	wg.Wait()
+}
 
 // A key whose bucket is full again is dropped; one still in use is kept.
 func TestBucketsDropKeysFullAgain(t *testing.T) {
