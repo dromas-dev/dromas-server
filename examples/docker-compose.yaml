@@ -47,7 +47,7 @@ services:
         condition: service_healthy
 
   postgres:
-    image: postgres:18.7@sha256:2ea8630df176ad090ec92136dee850397c5af8781e4bcf2e4162593691c61bbc
+    image: postgres:18.7@sha256:eb63372c1e05c755f55fa30cbd07aecc443676fc6c0fa90b9002d01537841e1a
     # dromas-server follows the database by logical replication.
     command: postgres -c wal_level=logical -c max_slot_wal_keep_size=1GB
     restart: unless-stopped
