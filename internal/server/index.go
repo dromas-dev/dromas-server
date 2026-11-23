@@ -52,7 +52,7 @@ type indexShard struct {
 type mark struct {
 	tag uint64 // markTag of the message id: what the mark is known by
 	id  uint64 // first 8 bytes of the message id, for the list's order within a millisecond only
-	exp uint64 // expiry in unix ms: received_at + TTL
+	exp uint64 // received_at + TTL in unix ms: the list's order, and, to the second before it, the expiry (expiry)
 }
 
 // mailboxMem is one mailbox in memory.
@@ -224,11 +224,15 @@ func (sh *indexShard) held(a protocol.Address) *mailboxMem {
 }
 
 // prune drops marks and tombs that have expired at now (unix ms): a message
-// is live while now < its expiry.
+// is live while now is before its expiry.
 func (m *mailboxMem) prune(now uint64) {
-	m.marks = slices.DeleteFunc(m.marks, func(k mark) bool { return k.exp <= now })
-	m.tombs = slices.DeleteFunc(m.tombs, func(k mark) bool { return k.exp <= now })
+	m.marks = slices.DeleteFunc(m.marks, func(k mark) bool { return k.expired(now) })
+	m.tombs = slices.DeleteFunc(m.tombs, func(k mark) bool { return k.expired(now) })
 }
+
+// expired reports whether k's message has expired at now (unix ms): at the
+// second before received_at + TTL (expiry).
+func (k mark) expired(now uint64) bool { return wholeSecond(k.exp) <= now }
 
 func same(a, b mark) bool { return a.tag == b.tag && a.exp == b.exp }
 
@@ -243,7 +247,7 @@ func same(a, b mark) bool { return a.tag == b.tag && a.exp == b.exp }
 // the feed has brought the removal's echo and then the later one's insert.
 func (x *index) insert(mailbox protocol.Address, k mark, now uint64) {
 	x.apply(mailbox, func(m *mailboxMem) {
-		if k.exp <= now || !m.exists {
+		if k.expired(now) || !m.exists {
 			return
 		}
 		m.prune(now)
@@ -262,7 +266,7 @@ func (x *index) remove(mailbox protocol.Address, tag, exp, now uint64) {
 		m.prune(now)
 		k := mark{tag: tag, exp: exp}
 		m.marks = slices.DeleteFunc(m.marks, func(t mark) bool { return same(t, k) })
-		if exp > now && !slices.ContainsFunc(m.tombs, func(t mark) bool { return same(t, k) }) {
+		if !k.expired(now) && !slices.ContainsFunc(m.tombs, func(t mark) bool { return same(t, k) }) {
 			m.tombs = append(m.tombs, k)
 		}
 	})

@@ -515,6 +515,42 @@ func TestExpiredHeadersAreNotListed(t *testing.T) {
 	}
 }
 
+// A message expires at the second its expires_at states, though it was
+// received within a second (expiry): a millisecond before, it is counted,
+// listed and fetched beside one still live; from that second on, it is in no
+// count and on no page, and a fetch or an ack of it is answered as for no
+// message. On PostgreSQL, a page's own cutoff leaves it out.
+func TestAPageListsNoMessagePastItsExpiry(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, relaxed())
+	a, b := e.mailbox(), e.mailbox()
+	messages := "/v1/" + b.Address().String() + "/messages"
+	e.clock.Add(500 * time.Millisecond)
+	first := send(t, a, b, "expires first")
+	e.clock.Add(30 * time.Minute)
+	live := send(t, a, b, "still live")
+	expires, err := protocol.ParseTime(first.ExpiresAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.clock.Add(expires.Sub(e.clock.Now()) - time.Millisecond)
+	if l := listOf(t, e.do(http.MethodGet, messages, nil, e.pass(b))); l.Count != 2 || len(l.Messages) != 2 {
+		t.Errorf("a millisecond before the first's expires_at: count %d, listed %d, want 2", l.Count, len(l.Messages))
+	}
+	if r := e.do(http.MethodGet, messages+"/"+first.ID, nil, e.pass(b)); r.status != http.StatusOK {
+		t.Errorf("a fetch a millisecond before its expires_at: %d %s", r.status, r.body)
+	}
+	e.clock.Add(time.Millisecond)
+	if l := listOf(t, e.do(http.MethodGet, messages, nil, e.pass(b))); l.Count != 1 || len(l.Messages) != 1 || l.Messages[0].ID != live.ID {
+		t.Errorf("at the first's expires_at: count %d, listed %+v, want the live one alone", l.Count, l.Messages)
+	}
+	for _, m := range []string{http.MethodGet, http.MethodDelete} {
+		if r := e.do(m, messages+"/"+first.ID, nil, e.pass(b)); r.code() != protocol.CodeMessageNotFound {
+			t.Errorf("%s at its expires_at: %d %s", m, r.status, r.body)
+		}
+	}
+}
+
 // The dedupe spans an unacked message's life, the TTL less the hour
 // (protocol.Retention): the same bytes sent again inside it get the receipt
 // held. Past it, while the prekey they name lasts, nothing of the message is

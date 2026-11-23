@@ -45,8 +45,8 @@ func TestIndex(t *testing.T) {
 	var mailbox protocol.Address
 	mailbox[0] = 7
 	const now = 1_000_000
-	k1 := mark{tag: 1, id: 1, exp: now + 500}
-	k2 := mark{tag: 2, id: 2, exp: now + 900}
+	k1 := mark{tag: 1, id: 1, exp: now + 5000}
+	k2 := mark{tag: 2, id: 2, exp: now + 9000}
 
 	t.Run("a set: inserts twice count once", func(t *testing.T) {
 		x := loaded(t, mailbox, mailboxRead{exists: true})
@@ -108,6 +108,20 @@ func TestIndex(t *testing.T) {
 		}
 	})
 
+	t.Run("expiry, at the second before received_at + TTL", func(t *testing.T) {
+		// The expires_at a message states is written to the second
+		// (expiry): one received within a second expires at that second.
+		x := loaded(t, mailbox, mailboxRead{exists: true})
+		k := mark{tag: 4, id: 4, exp: now + 5500}
+		x.insert(mailbox, k, now)
+		if n := x.count(mailbox, now+4999); n != 1 {
+			t.Fatalf("a millisecond before its second: %d", n)
+		}
+		if n := x.count(mailbox, now+5000); n != 0 {
+			t.Fatalf("at its second: %d", n)
+		}
+	})
+
 	t.Run("a removal names the message, not just its id", func(t *testing.T) {
 		// The same ciphertext, resent after the first expired: the late
 		// removal of the first must not remove the second.
@@ -126,7 +140,7 @@ func TestIndex(t *testing.T) {
 		// this process acked it (a tomb) or the feed brought it (a mark),
 		// and leaves the second, which this process stored before the
 		// deletion's echo.
-		again := mark{tag: k1.tag, id: k1.id, exp: k1.exp + 100}
+		again := mark{tag: k1.tag, id: k1.id, exp: k1.exp + 1000}
 		for _, ours := range []bool{true, false} {
 			x := loaded(t, mailbox, mailboxRead{exists: true})
 			x.insert(mailbox, k1, now)
@@ -225,8 +239,8 @@ func TestIndexLoad(t *testing.T) {
 	var mailbox protocol.Address
 	mailbox[0] = 7
 	const now = 1_000_000
-	k1 := mark{tag: 1, id: 1, exp: now + 500}
-	k2 := mark{tag: 2, id: 2, exp: now + 900}
+	k1 := mark{tag: 1, id: 1, exp: now + 5000}
+	k2 := mark{tag: 2, id: 2, exp: now + 9000}
 	ctx := context.Background()
 
 	t.Run("a change to a mailbox memory does not hold is dropped", func(t *testing.T) {
@@ -399,7 +413,7 @@ func TestEveryChangeToAMailboxWakesItsLongPolls(t *testing.T) {
 	mailbox[0], other[0] = 7, 7 // one shard
 	other[1] = 1
 	const now = 1_000_000
-	k := mark{tag: 1, id: 1, exp: now + 500}
+	k := mark{tag: 1, id: 1, exp: now + 5000}
 	woken := func(c <-chan struct{}) bool {
 		select {
 		case <-c:
