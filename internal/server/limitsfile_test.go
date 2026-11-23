@@ -202,8 +202,9 @@ func TestAnACLBoundOffOrOverTheProtocolsIsRefused(t *testing.T) {
 }
 
 // A poll interval under a second is refused, naming its member: every
-// list's Retry-After and a full mailbox's carry it, and a Retry-After of 0 or
-// less is never written. Control: one second and the default pass.
+// list's Retry-After and a full mailbox's carry it, and a problem answer
+// writes no Retry-After of 0 or less. Control: one second and the default
+// pass.
 func TestAPollIntervalUnderASecondIsRefused(t *testing.T) {
 	t.Parallel()
 	for _, n := range []int{0, -5} {

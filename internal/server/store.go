@@ -545,9 +545,9 @@ func fromMs(v uint64) (time.Time, error) {
 var ttlMs = uint64(protocol.Retention / time.Millisecond)
 
 // expiry is when a message received at recv expires, both in unix ms: ttlMs
-// after it, to the second before, since its expires_at is written to the
-// second (protocol.TimeLayout) and no message is served at or past the time
-// it states.
+// after it, cut to the whole second at or before (wholeSecond). Its
+// expires_at is written to the second (protocol.TimeLayout), and no message
+// is served at or past the time it states.
 func expiry(recv uint64) uint64 { return wholeSecond(recv + ttlMs) }
 
 // wholeSecond is t, in unix ms, to the second at or before it.

@@ -52,7 +52,7 @@ type indexShard struct {
 type mark struct {
 	tag uint64 // markTag of the message id: what the mark is known by
 	id  uint64 // first 8 bytes of the message id, for the list's order within a millisecond only
-	exp uint64 // received_at + TTL in unix ms: the list's order, and, to the second before it, the expiry (expiry)
+	exp uint64 // received_at + TTL in unix ms: the list's order; cut to the whole second at or before it, the expiry (expiry)
 }
 
 // mailboxMem is one mailbox in memory.
@@ -230,8 +230,8 @@ func (m *mailboxMem) prune(now uint64) {
 	m.tombs = slices.DeleteFunc(m.tombs, func(k mark) bool { return k.expired(now) })
 }
 
-// expired reports whether k's message has expired at now (unix ms): at the
-// second before received_at + TTL (expiry).
+// expired reports whether k's message has expired at now (unix ms): at
+// received_at + TTL cut to the whole second at or before it (expiry).
 func (k mark) expired(now uint64) bool { return wholeSecond(k.exp) <= now }
 
 func same(a, b mark) bool { return a.tag == b.tag && a.exp == b.exp }

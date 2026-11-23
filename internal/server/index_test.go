@@ -108,7 +108,7 @@ func TestIndex(t *testing.T) {
 		}
 	})
 
-	t.Run("expiry, at the second before received_at + TTL", func(t *testing.T) {
+	t.Run("expiry, at received_at + TTL cut to the whole second", func(t *testing.T) {
 		// The expires_at a message states is written to the second
 		// (expiry): one received within a second expires at that second.
 		x := loaded(t, mailbox, mailboxRead{exists: true})
