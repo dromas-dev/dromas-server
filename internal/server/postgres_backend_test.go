@@ -833,7 +833,7 @@ func TestTheSnapshotReaderIsMadeAgain(t *testing.T) {
 	t.Parallel()
 	e, s := sharedEnv(t)
 	pid := s.pg().snapPID.Load()
-	err := asTestRole(func(ctx context.Context, conn *pgx.Conn) error {
+	err := asTestRole(s.pg().schema, func(ctx context.Context, conn *pgx.Conn) error {
 		var ok bool
 		if err := conn.QueryRow(ctx, `SELECT pg_terminate_backend($1)`, int32(pid)).Scan(&ok); err != nil || !ok {
 			return fmt.Errorf("pg_terminate_backend(%d): %v, %w", pid, ok, err)

@@ -2,6 +2,10 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -12,6 +16,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // serveArgs, set in a test binary's environment, makes it dromas-server
@@ -32,7 +39,53 @@ func TestMain(m *testing.M) {
 		main() // log.Fatal, exit 1, on serve's error
 		os.Exit(0)
 	}
-	os.Exit(m.Run())
+	if os.Getenv("DROMAS_TEST_POSTGRES") == "" {
+		os.Exit(m.Run())
+	}
+	// This package's tests run on a database of their own, made from
+	// PGDATABASE's and named in its place, so that the migration and the
+	// feeds of their serves never meet another package's tests, which go
+	// test runs at once: a feed decodes its database's DDL alone, and one
+	// that cannot map a change to its relation loses its place
+	// (dromas-dev/dromas-server#271).
+	base := os.Getenv("PGDATABASE")
+	b := make([]byte, 6)
+	_, _ = rand.Read(b)
+	db := "t_" + hex.EncodeToString(b)
+	if err := onTestServer("CREATE DATABASE " + db); err != nil {
+		fmt.Fprintf(os.Stderr, "making the run's database: %v\n", err)
+		os.Exit(1)
+	}
+	_ = os.Setenv("PGDATABASE", db)
+	code := m.Run()
+	_ = os.Setenv("PGDATABASE", base)
+	// A temporary slot goes with its walsender's session, which may end a
+	// moment after the serve that held it exited (55006, object in use).
+	for start := time.Now(); ; time.Sleep(100 * time.Millisecond) {
+		err := onTestServer("DROP DATABASE IF EXISTS " + db + " WITH (FORCE)")
+		if pe, ok := errors.AsType[*pgconn.PgError](err); ok && pe.Code == "55006" && time.Since(start) < 30*time.Second {
+			continue
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "dropping the run's database %s: %v\n", db, err)
+			code = max(code, 1)
+		}
+		break
+	}
+	os.Exit(code)
+}
+
+// onTestServer runs q on the database libpq's environment names.
+func onTestServer(q string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, "")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close(context.Background()) }()
+	_, err = conn.Exec(ctx, q)
+	return err
 }
 
 // serveProcess is a dromas-server serve of the test's own, in a process.

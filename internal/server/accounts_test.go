@@ -439,7 +439,7 @@ func TestAccountChangesReachMemory(t *testing.T) {
 	// The operator's hand edit, as the owner: the role serve runs as writes
 	// no account (migrations 00004, 00007).
 	byHand := func(q string) error {
-		return asTestRole(func(ctx context.Context, conn *pgx.Conn) error {
+		return asTestRole(s.pg().schema, func(ctx context.Context, conn *pgx.Conn) error {
 			if _, err := conn.Exec(ctx, "SET search_path = "+quotedSchema(s.pg().schema)); err != nil {
 				return err
 			}
