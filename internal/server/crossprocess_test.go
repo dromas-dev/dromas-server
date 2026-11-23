@@ -363,6 +363,72 @@ func TestADuplicateAcrossARenewalElsewhereGetsItsReceipt(t *testing.T) {
 }
 
 // After the identity revokes certificates through 2 on A, B, behind, takes
+// the pass of certificate 2 for no list, fetch, message's HEAD, ack or ACL,
+// and deletes nothing (PROTOCOL.md §10.2): each call is held to the
+// database's revocations (passHeldSQL), whatever B's memory holds. Each is
+// B's first after the revocation, on a pair of processes of its own.
+func TestAProcessBehindTakesNothingUnderACertificateRevokedElsewhere(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		call func(x *twoProcesses, to *raw, id [32]byte, old string) (int, protocol.Code)
+	}{
+		{"a list", func(x *twoProcesses, to *raw, _ [32]byte, old string) (int, protocol.Code) {
+			r := x.onB("GET", to.path("/messages"), nil, old)
+			return r.status, r.code()
+		}},
+		{"a fetch", func(x *twoProcesses, to *raw, id [32]byte, old string) (int, protocol.Code) {
+			r := x.onB("GET", to.path("/messages/"+hexID(id)), nil, old)
+			return r.status, r.code()
+		}},
+		{"a message's HEAD", func(x *twoProcesses, to *raw, id [32]byte, old string) (int, protocol.Code) {
+			return x.headOnB(to.path("/messages/"+hexID(id)), old), protocol.CodeCertificateRevoked // a HEAD has no body to name its code
+		}},
+		{"an ack", func(x *twoProcesses, to *raw, id [32]byte, old string) (int, protocol.Code) {
+			r := x.onB("DELETE", to.path("/messages/"+hexID(id)), nil, old)
+			return r.status, r.code()
+		}},
+		{"an ACL", func(x *twoProcesses, to *raw, _ [32]byte, old string) (int, protocol.Code) {
+			r := x.onB("PUT", to.path("/acl"), aclOf([]string{"*"}, nil), old)
+			if r.status == http.StatusConflict { // B found itself behind: the call again is the fresh call
+				r = x.onB("PUT", to.path("/acl"), aclOf([]string{"*"}, nil), old)
+			}
+			return r.status, r.code()
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			x := newTwoProcesses(t)
+			a := x.a
+			from := a.raw().register(protocol.MaxPrekeyLifetime)
+			to := a.raw()
+			to.registerCertified(protocol.MaxPrekeyLifetime)
+			ct := sealFor(t, to, 2)
+			id := sha256.Sum256(ct)
+			a.want(x.onB("POST", to.path("/messages"), to.sealed(2, ct), from.pass(1)), http.StatusCreated, "")
+			fed(t, x.follower)
+			old := to.pass(2)
+			a.want(x.onB("GET", to.path("/messages"), nil, old), http.StatusOK, "")
+			x.hold(true)
+			if r := a.do("PUT", revocationPath(to.id.Address()), to.certs(2), ""); r.status != http.StatusOK && r.status != http.StatusCreated {
+				t.Fatalf("the revocation of certificates: %d %s", r.status, r.body)
+			}
+			if st, ok := x.follower.Held(to.id.Address()); !ok || st.State != Active || st.Listed {
+				t.Fatal("B does not hold the mailbox as active, its certificate unrevoked: the test would show nothing")
+			}
+			if status, code := c.call(x, to, id, old); status != http.StatusUnauthorized || code != protocol.CodeCertificateRevoked {
+				t.Errorf("%s on B, behind, under the certificate revoked on A: %d %s; want 401 certificate_revoked", c.name, status, code)
+			}
+			if n := messagesOf(x, to.id.Address()); n != 1 {
+				t.Errorf("%d messages held; want 1", n)
+			}
+			x.hold(false)
+		})
+	}
+}
+
+// After the identity revokes certificates through 2 on A, B, behind, takes
 // no statement under certificate 2 (PROTOCOL.md §10.2, §12.6;
 // dromas-dev/dromas-server#248): the revocation raised the record's rev,
 // which B's write is held to.
