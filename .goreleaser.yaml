@@ -125,5 +125,5 @@ release:
 
     ```sh
     cosign verify-blob --certificate-identity https://github.com/dromas-dev/dromas-server/.github/workflows/release.yml@refs/tags/{{ .Tag }} --certificate-oidc-issuer https://token.actions.githubusercontent.com --bundle checksums.txt.sigstore.json checksums.txt
-    sha256sum --ignore-missing -c checksums.txt
+    sha256sum --ignore-missing -c checksums.txt   # must print <file>: OK
     ```
