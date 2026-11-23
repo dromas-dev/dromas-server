@@ -18,17 +18,42 @@ import (
 	"filippo.io/age"
 	"github.com/dromas-dev/dromas-client/client"
 	"github.com/dromas-dev/dromas-client/protocol"
+	"github.com/dromas-dev/dromas-client/protocol/sktest"
 	"golang.org/x/crypto/ssh"
 )
 
-// rawP256 is a raw mailbox whose identity is a P-256 key.
-func (e *env) rawP256() *raw {
+// rawOf is a raw mailbox whose identity is a key of the type typ, one of
+// protocol.IdentityTypes. A security key's is protocol/sktest's, a security
+// key in software, which claims a user was present until its Flags say
+// otherwise.
+func (e *env) rawOf(typ string) *raw {
 	e.t.Helper()
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		e.t.Fatal(err)
+	var (
+		s   ssh.Signer
+		err error
+	)
+	switch typ {
+	case protocol.IdentityEd25519:
+		return e.raw()
+	case protocol.IdentityP256, protocol.IdentitySKP256:
+		priv, gerr := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if gerr != nil {
+			e.t.Fatal(gerr)
+		}
+		if typ == protocol.IdentityP256 {
+			s, err = ssh.NewSignerFromKey(priv)
+		} else {
+			s, err = sktest.New(priv, sktest.Application)
+		}
+	case protocol.IdentitySKEd25519:
+		_, priv, gerr := ed25519.GenerateKey(rand.Reader)
+		if gerr != nil {
+			e.t.Fatal(gerr)
+		}
+		s, err = sktest.New(priv, sktest.Application)
+	default:
+		e.t.Fatalf("no raw mailbox of the identity key type %s", typ)
 	}
-	s, err := ssh.NewSignerFromKey(priv)
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -40,57 +65,98 @@ func (e *env) rawP256() *raw {
 		by: map[uint64]ssh.Signer{}, work: map[uint64]ssh.Signer{}}
 }
 
-// A mailbox whose identity is a P-256 key registers, proves itself with
-// a pass, and moves to a certificate, as a mailbox on an
-// Ed25519 key does: the server checks the identity's signature when a
-// certificate is put on record, and a pass against that certificate after.
-func TestAMailboxWhoseIdentityIsP256(t *testing.T) {
+// A mailbox whose identity is of each key type but Ed25519 registers, proves
+// itself with a pass, and moves to a certificate, as a mailbox on an Ed25519
+// key does: the server checks the identity's signature when a certificate is
+// put on record, and a pass against that certificate after. A security key's
+// signature that claims no user was present is refused, on a pass and on a
+// certificate alike (PROTOCOL.md §3.2).
+func TestAMailboxOfEachIdentityType(t *testing.T) {
 	t.Parallel()
-	e := newEnv(t, relaxed())
-	now := e.clock.Now()
-	p := e.rawP256().register(protocol.MaxPrekeyLifetime)
-	if p.id.Type() != protocol.IdentityP256 {
-		t.Fatalf("the mailbox's identity is a %s key", p.id.Type())
-	}
-	e.want(e.do("GET", p.path("/messages"), nil, p.pass(1)), 200, "")
-	e.want(e.do("GET", p.path("/messages"), nil, ""), 401, protocol.CodeInvalidPass)
+	for _, typ := range protocol.IdentityTypes() {
+		if typ == protocol.IdentityEd25519 {
+			continue // every other test's
+		}
+		t.Run(typ, func(t *testing.T) {
+			t.Parallel()
+			e := newEnv(t, relaxed())
+			now := e.clock.Now()
+			p := e.rawOf(typ).register(protocol.MaxPrekeyLifetime)
+			if p.id.Type() != typ {
+				t.Fatalf("the mailbox's identity is a %s key", p.id.Type())
+			}
+			e.want(e.do("GET", p.path("/messages"), nil, p.pass(1)), 200, "")
+			e.want(e.do("GET", p.path("/messages"), nil, ""), 401, protocol.CodeInvalidPass)
 
-	// Another P-256 mailbox's pass is not this one's, and neither is a pass an
-	// Ed25519 mailbox signs for this address.
-	q, ed := e.rawP256().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
-	e.want(e.do("GET", p.path("/messages"), nil, q.pass(1)), 401, protocol.CodeInvalidPass)
-	e.want(e.do("GET", p.path("/messages"), nil, e.passFor(ed.by[1], p.id.Address(), e.name())), 401, protocol.CodeCertificateSuperseded)
+			// Another mailbox of the type's pass is not this one's, and neither
+			// is a pass an Ed25519 mailbox signs for this address.
+			q, ed := e.rawOf(typ).register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
+			e.want(e.do("GET", p.path("/messages"), nil, q.pass(1)), 401, protocol.CodeInvalidPass)
+			e.want(e.do("GET", p.path("/messages"), nil, e.passFor(ed.by[1], p.id.Address(), e.name())), 401, protocol.CodeCertificateSuperseded)
 
-	// A certificate, by a prekey published under it: its passes are taken,
-	// and the identity's still are.
-	p.certified()
-	p.prekey(2, now.Add(protocol.MaxPrekeyLifetime), nil)
-	e.want(e.do("PUT", p.path("/prekey"), p.upload(2), p.pass(2)), 200, "")
-	e.want(e.do("GET", p.path("/messages"), nil, p.pass(1)), 200, "")
-	e.want(e.do("GET", p.path("/messages"), nil, p.pass(2)), 200, "")
+			// A security key's pass that claims no user was present is no pass.
+			if sk, ok := p.signer.(*sktest.Signer); ok {
+				sk.Flags = 0
+				e.clock.Add(time.Second) // not a pass the server has seen
+				e.want(e.do("GET", p.path("/messages"), nil, p.pass(1)), 401, protocol.CodeInvalidPass)
+				sk.Flags = sktest.UserPresent
+				e.want(e.do("GET", p.path("/messages"), nil, p.pass(1)), 200, "")
+			}
 
-	// A certificate another P-256 key signed for this address is no
-	// certificate of this mailbox: a prekey under it is refused.
-	_, wpriv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
+			// A certificate, by a prekey published under it: its passes are
+			// taken, and the identity's still are.
+			p.certified()
+			p.prekey(2, now.Add(protocol.MaxPrekeyLifetime), nil)
+			e.want(e.do("PUT", p.path("/prekey"), p.upload(2), p.pass(2)), 200, "")
+			e.want(e.do("GET", p.path("/messages"), nil, p.pass(1)), 200, "")
+			e.want(e.do("GET", p.path("/messages"), nil, p.pass(2)), 200, "")
+
+			// A certificate for this address that another key of the type
+			// signed is no certificate of this mailbox, and neither is one its
+			// own security key signed claiming no user was present: a prekey
+			// under either is refused.
+			signers := map[string]ssh.Signer{"another key": q.signer}
+			if sk, ok := p.signer.(*sktest.Signer); ok {
+				absent := *sk
+				absent.Flags = 0
+				signers["its own key, no user present"] = &absent
+			}
+			signers["its own key"] = p.signer // the control: taken
+			serial := uint64(3)
+			for name, by := range signers {
+				_, wpriv, err := ed25519.GenerateKey(rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				work, err := ssh.NewSignerFromKey(wpriv)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// In every other rule a certificate of this mailbox, running the
+				// server's maximum.
+				after := uint64(now.Unix()) - 60 //nolint:gosec // a test clock
+				c := &ssh.Certificate{Key: work.PublicKey(), Serial: serial, CertType: ssh.UserCert, KeyId: protocol.CertificateKeyID,
+					ValidPrincipals: []string{p.id.Address().String()}, ValidAfter: after,
+					ValidBefore: after + uint64(DefaultLimits().MaxCertificateLifetime/time.Second)}
+				if err := c.SignCert(rand.Reader, by); err != nil {
+					t.Fatal(err)
+				}
+				under, err := ssh.NewCertSigner(c, work)
+				if err != nil {
+					t.Fatal(err)
+				}
+				p.prekeyUnder(under, serial, now.Add(protocol.MaxPrekeyLifetime), nil)
+				r := e.do("PUT", p.path("/prekey"), p.upload(serial), e.passFor(under, p.id.Address(), e.name()))
+				switch {
+				case name == "its own key" && r.status != 200:
+					t.Errorf("a certificate signed by %s: %d %s, want 200", name, r.status, r.body)
+				case name != "its own key" && (r.status != 400 || r.code() != protocol.CodeInvalidKey):
+					t.Errorf("a certificate signed by %s: %d %s, want 400 %s", name, r.status, r.body, protocol.CodeInvalidKey)
+				}
+				serial++
+			}
+		})
 	}
-	work, err := ssh.NewSignerFromKey(wpriv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	unix := uint64(now.Unix()) //nolint:gosec // a test clock
-	c := &ssh.Certificate{Key: work.PublicKey(), Serial: 3, CertType: ssh.UserCert, KeyId: protocol.CertificateKeyID,
-		ValidPrincipals: []string{p.id.Address().String()}, ValidAfter: unix - 60, ValidBefore: unix + 65*86400}
-	if err := c.SignCert(rand.Reader, q.signer); err != nil {
-		t.Fatal(err)
-	}
-	under, err := ssh.NewCertSigner(c, work)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p.prekeyUnder(under, 3, now.Add(protocol.MaxPrekeyLifetime), nil)
-	e.want(e.do("PUT", p.path("/prekey"), p.upload(3), e.passFor(under, p.id.Address(), e.name())), 400, protocol.CodeInvalidKey)
 }
 
 // A pass's signature does not cover the key it names, and a mailbox's signing
@@ -101,15 +167,9 @@ func TestAMailboxWhoseIdentityIsP256(t *testing.T) {
 func TestAPassThatCarriesAnotherMailboxsCertificate(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
-	for name, victim := range map[string]*raw{"ssh-ed25519": e.raw(), "ecdsa-sha2-nistp256": e.rawP256()} {
+	for _, name := range protocol.IdentityTypes() {
 		for _, working := range []bool{false, true} {
-			victim := victim
-			if working {
-				victim = e.raw()
-				if name != "ssh-ed25519" {
-					victim = e.rawP256()
-				}
-			}
+			victim := e.rawOf(name)
 			serial := uint64(1)
 			if working {
 				serial = victim.registerCertified(protocol.MaxPrekeyLifetime)
@@ -140,7 +200,8 @@ func TestACertificateOnRecordThatTheIdentityDidNotSign(t *testing.T) {
 	e := newEnv(t, relaxed())
 	ctx := context.Background()
 	now := e.clock.Now()
-	for name, victim := range map[string]*raw{"ssh-ed25519": e.raw(), "ecdsa-sha2-nistp256": e.rawP256()} {
+	for _, name := range protocol.IdentityTypes() {
+		victim := e.rawOf(name)
 		serial := victim.registerCertified(protocol.MaxPrekeyLifetime)
 		a := victim.id.Address()
 		// A certificate for this address, in every rule, that another key signed.
@@ -298,7 +359,7 @@ func TestAnIdentityTypeTheServerDoesNotRegister(t *testing.T) {
 
 	// A type the protocol defines and this server's list leaves out.
 	e.server.identityTypes = []string{protocol.IdentityEd25519}
-	p := e.rawP256()
+	p := e.rawOf(protocol.IdentityP256)
 	p.prekey(1, now.Add(protocol.MaxPrekeyLifetime), nil)
 	e.want(e.do("PUT", p.path(""), p.registration(1), p.pass(1)), 400, protocol.CodeUnsupportedKeyType)
 	e.want(e.do("PUT", ed.path(""), ed.registration(1), ed.pass(1)), 201, "")
@@ -338,8 +399,11 @@ func TestTheSenderKeyTypesAMailboxDeclared(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	now := e.clock.Now()
-	p256, ed := e.rawP256().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
-	every := []string{protocol.IdentityEd25519, protocol.IdentityP256, "any", "no-such-key-type@dromas.invalid"}
+	var senders []*raw // a mailbox of every type §4.1 defines
+	for _, typ := range protocol.IdentityTypes() {
+		senders = append(senders, e.rawOf(typ).register(protocol.MaxPrekeyLifetime))
+	}
+	every := append(protocol.IdentityTypes(), "any", "no-such-key-type@dromas.invalid")
 	declaring := func(types []string) *raw {
 		t.Helper()
 		r := e.raw()
@@ -377,9 +441,9 @@ func TestTheSenderKeyTypesAMailboxDeclared(t *testing.T) {
 			t.Errorf("a mailbox is served as declaring %v", got)
 		}
 	}
-	// A sender of either type is taken by every mailbox.
-	for _, from := range []*raw{p256, ed} {
-		for _, to := range []*raw{nothing, named, p256, ed} {
+	// A sender of every type is taken by every mailbox.
+	for _, from := range senders {
+		for _, to := range append([]*raw{nothing, named}, senders...) {
 			e.want(sendTo(from, to, 1), 201, "")
 		}
 	}
@@ -391,7 +455,9 @@ func TestTheSenderKeyTypesAMailboxDeclared(t *testing.T) {
 	if got := served(nothing); got != nil {
 		t.Errorf("after a new prekey, the mailbox is served as declaring %v", got)
 	}
-	e.want(sendTo(p256, nothing, 2), 201, "")
+	for _, from := range senders {
+		e.want(sendTo(from, nothing, 2), 201, "")
+	}
 
 	// A declaration that is not a list of strings is no request.
 	bad := e.raw()
