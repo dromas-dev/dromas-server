@@ -363,8 +363,8 @@ func TestANewPassSpendsItsAddresssFloodBudget(t *testing.T) {
 // other, a space or a CR in its armor, text after its END line, its base64 on
 // one line, SSHSIG version 0, a NUL after its namespace or a byte in its
 // reserved field, is no pass of the mailbox's, however OpenSSH reads it; a
-// signature that differs in a bit is refused too. A P-256 signature's other
-// s, n − s, is a signature ECDSA takes, and the same pass to the server:
+// signature that differs in a bit is refused too. An ECDSA signature's other
+// s, n − s, a P-256 key's or a security key's, is a signature ECDSA takes, and the same pass to the server:
 // remembered by protocol.Pass.Authorization, which writes s low, it is
 // answered from memory, with no second check of its signature.
 func TestAPassHasOneFormAndBothValuesOfS(t *testing.T) {
@@ -432,28 +432,32 @@ func TestAPassHasOneFormAndBothValuesOfS(t *testing.T) {
 		}
 	}
 
-	// A P-256 identity's pass with its other s: one pass, from memory.
-	p := e.rawP256().register(protocol.MaxPrekeyLifetime)
-	first := p.pass(1)
-	e.want(poll(p.id.Address(), first), http.StatusOK, "")
-	before := testutil.ToFloat64(checked)
-	other := with(first, otherS(t, first))
-	if other == first {
-		t.Fatal("the other s wrote the same pass")
-	}
-	e.want(poll(p.id.Address(), other), http.StatusOK, "")
-	if n := testutil.ToFloat64(checked) - before; n != 0 {
-		t.Errorf("a P-256 pass with its other s: checked %v times more, want none", n)
-	}
-	if a, err := protocol.ParsePass(first); err != nil {
-		t.Fatal(err)
-	} else if o, err := protocol.ParsePass(other); err != nil || o.Authorization() != a.Authorization() {
-		t.Errorf("a P-256 pass and the same pass with its other s are two in memory: %v", err)
+	// An ECDSA identity's pass with its other s, a P-256 key's or a security
+	// key's: one pass, from memory.
+	for _, typ := range []string{protocol.IdentityP256, protocol.IdentitySKP256} {
+		p := e.rawOf(typ).register(protocol.MaxPrekeyLifetime)
+		first := p.pass(1)
+		e.want(poll(p.id.Address(), first), http.StatusOK, "")
+		before := testutil.ToFloat64(checked)
+		other := with(first, otherS(t, first))
+		if other == first {
+			t.Fatalf("%s: the other s wrote the same pass", typ)
+		}
+		e.want(poll(p.id.Address(), other), http.StatusOK, "")
+		if n := testutil.ToFloat64(checked) - before; n != 0 {
+			t.Errorf("a %s pass with its other s: checked %v times more, want none", typ, n)
+		}
+		if a, err := protocol.ParsePass(first); err != nil {
+			t.Fatal(err)
+		} else if o, err := protocol.ParsePass(other); err != nil || o.Authorization() != a.Authorization() {
+			t.Errorf("a %s pass and the same pass with its other s are two in memory: %v", typ, err)
+		}
 	}
 }
 
-// otherS is the armored signature of a P-256 pass with (r, n − s) in place of
-// its (r, s): the other signature ECDSA takes of the same message.
+// otherS is the armored signature of an ECDSA pass with (r, n − s) in place
+// of its (r, s): the other signature ECDSA takes of the same message. A
+// security key's flags and counter stay as they were.
 func otherS(t *testing.T, pass string) []byte {
 	t.Helper()
 	armored, err := base64.StdEncoding.DecodeString(passSignature.FindStringSubmatch(pass)[1])

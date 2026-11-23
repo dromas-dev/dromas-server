@@ -265,10 +265,11 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, sign
 		}
 	}
 	// A pass is remembered by protocol.Pass.Authorization, which writes its
-	// header in the one form a client does and a P-256 signature's s as the
-	// lower of s and n − s: so the same pass in another header a server reads
-	// (PROTOCOL.md §8), or with its signature's other s, which ECDSA takes
-	// (§3.2), is answered from memory too, for one check
+	// header in the one form a client does and an ECDSA signature's s, a P-256
+	// key's or a security key's, as the lower of s and n − s: so the same pass
+	// in another header a server reads (PROTOCOL.md §8), or with its
+	// signature's other s, which ECDSA takes (§3.2), is answered from memory
+	// too, for one check
 	// (dromas-dev/dromas-server#69).
 	raw := sum
 	if one := sha256.Sum256([]byte(p.Authorization())); one != sum {
