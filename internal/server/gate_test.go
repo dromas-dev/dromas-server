@@ -269,9 +269,11 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 	}
 }
 
-// A server that is not ready yet answers 503 only to a call it has counted:
-// from an address past its flood budget, every route is refused 429
-// requests, before its 503 (dromas-dev/dromas-server#75's note).
+// A server that is not ready yet answers 503 to a call that is not a
+// mailbox's only once it has counted it: from an address past its flood
+// budget, every route is refused 429 requests, before its 503
+// (dromas-dev/dromas-server#75's note). A call that is its mailbox's is
+// answered 503 with nothing spent (LIMITS.md, rule 1).
 func TestAServerNotReadyCountsFirst(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
