@@ -13,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -589,6 +590,124 @@ func TestFailedPassesAreCountedPerCaller(t *testing.T) {
 	e.want(e.do(http.MethodGet, list, nil, good), http.StatusOK, "")
 	e.clock.Add(31 * time.Second)
 	e.want(e.do(http.MethodGet, list, nil, e.pass(b)), http.StatusOK, "")
+}
+
+// mailboxSpent names each of s's buckets that holds less than full for key
+// at now: every *buckets the Server holds, read from its fields, so a bucket
+// added is held too.
+func mailboxSpent(s *Server, key string, now time.Time) []string {
+	var spent []string
+	v := reflect.ValueOf(s).Elem()
+	for i := range v.NumField() {
+		f := v.Field(i)
+		if f.Type() != reflect.TypeFor[*buckets]() || f.IsNil() {
+			continue
+		}
+		bs := (*buckets)(f.UnsafePointer())
+		bs.mu.Lock()
+		full, ok := bs.full[key]
+		bs.mu.Unlock()
+		if ok && full.After(now) {
+			spent = append(spent, v.Type().Field(i).Name)
+		}
+	}
+	return spent
+}
+
+// A call about mailbox b that b's pass did not make spends none of b's
+// budgets (LIMITS.md, rule 5): on every route of routes() that names a
+// mailbox, every GET's HEAD too, with each query a route refuses or takes,
+// with no pass, one that is no pass, a forged pass of b's, b's pass for
+// another server and another mailbox's checked pass; and a send to b that
+// fails a check. Every budget is on, and each is read from the server's
+// buckets, whatever its size.
+func TestFailedCallsSpendNothingOfTheMailbox(t *testing.T) {
+	t.Parallel()
+	l := DefaultLimits()
+	l.RequestBurst, l.RangeRequestBurst, l.MissesPerMinute, l.RangeMissesPerMinute = 0, 0, 0, 0
+	l.RegistrationsPerHour, l.RangeRegistrationsPerHour, l.SendsPerMinutePerIP, l.RangeSendsPerMinute = 0, 0, 0, 0
+	l.MaxBodiesBeforePass, l.MaxBodiesBeforePassPerRange = 0, 0
+	e := newEnv(t, l)
+	a, b := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
+	// b denies a, which spends b's calls; then every budget of b's is full again.
+	e.want(e.do("PUT", b.path("/acl"), protocol.ACLDocument{Allow: []string{protocol.AnyAddress}, Deny: []string{a.id.Address().String()}}, b.pass(1)), http.StatusOK, "")
+	e.clock.Add(2 * day)
+	key := b.id.Address().String()
+	full := func(after string) {
+		t.Helper()
+		if spent := mailboxSpent(e.server, key, e.clock.Now()); len(spent) > 0 {
+			t.Errorf("after %s, b's %v are spent", after, spent)
+		}
+	}
+	full("nothing")
+	call := func(method, path string, body []byte, pass, ifMatch string) reply {
+		t.Helper()
+		req := httptest.NewRequest(method, path, bytes.NewReader(body))
+		req.Host, req.RemoteAddr = e.name(), "10.4.0.2:40000"
+		if ifMatch != "" {
+			req.Header.Set("If-Match", ifMatch)
+		}
+		if pass != "" {
+			req.Header.Set("Authorization", pass)
+		}
+		w := httptest.NewRecorder()
+		e.server.Handler().ServeHTTP(w, req)
+		return reply{status: w.Code, header: w.Header(), body: w.Body.Bytes()}
+	}
+	aPass := a.pass(1)
+	e.want(e.do("GET", a.path("/messages"), nil, aPass), http.StatusOK, "") // a's pass, checked
+	_, forged := forgedFromPublic(t, e, b.id.Address())
+	elsewhere := e.passFor(b.signer, b.id.Address(), "elsewhere.example")
+	n := 0
+	for _, r := range e.server.routes() {
+		method, pattern, _ := strings.Cut(r.pattern, " ")
+		if !strings.Contains(pattern, "{address}") {
+			continue
+		}
+		methods := []string{method}
+		if method == http.MethodGet {
+			methods = append(methods, http.MethodHead)
+		}
+		paths := []string{strings.NewReplacer("{address}", key, "{id}", strings.Repeat("0", 64)).Replace(pattern)}
+		if strings.Contains(pattern, "{id}") {
+			paths = append(paths, strings.NewReplacer("{address}", key, "{id}", "zz").Replace(pattern))
+		}
+		for _, m := range methods {
+			for _, path := range paths {
+				for _, query := range []string{"", "?nope=1", "?wait=5", "?cursor=x"} {
+					for _, pass := range []string{"", "dromas-pass nonsense", forged, elsewhere, aPass} {
+						for _, ifMatch := range []string{"", `"nope"`} {
+							call(m, path+query, []byte(`{"x":"y"}`), pass, ifMatch)
+							n++
+						}
+					}
+				}
+			}
+		}
+	}
+	full(fmt.Sprintf("%d calls about b that b did not make", n))
+	good := b.sealed(1, sealFor(t, b, 1))
+	post := func(q protocol.SendQuery, body []byte, pass string) reply {
+		t.Helper()
+		return call(http.MethodPost, b.path("/messages")+"?"+q.Encode(), body, pass, "")
+	}
+	for _, c := range []struct {
+		name string
+		send func() reply
+	}{
+		{"no pass", func() reply { return post(good.SendQuery, good.ciphertext, "") }},
+		{"a forged pass", func() reply { return post(good.SendQuery, good.ciphertext, forged) }},
+		{"no age file", func() reply { return post(good.SendQuery, []byte("not age"), a.pass(1)) }},
+		{"another statement", func() reply {
+			return post(protocol.SendQuery{Statement: protocol.StatementHash([]byte("x"))}, good.ciphertext, a.pass(1))
+		}},
+		{"a sender b's ACL denies", func() reply { return post(good.SendQuery, good.ciphertext, a.pass(1)) }},
+	} {
+		if r := c.send(); r.status < 400 {
+			t.Errorf("a send with %s: %d", c.name, r.status)
+		}
+		full("a send with " + c.name)
+	}
 }
 
 // forgedFromPublic is a pass for mailbox a made from what GET /v1/<a> serves
