@@ -201,6 +201,23 @@ func TestAnACLBoundOffOrOverTheProtocolsIsRefused(t *testing.T) {
 	}
 }
 
+// A poll interval under a second is refused, naming its member: every
+// list's Retry-After and a full mailbox's carry it, and a Retry-After of 0 or
+// less is never written. Control: one second and the default pass.
+func TestAPollIntervalUnderASecondIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, n := range []int{0, -5} {
+		if err := refusedFile("poll_after", n); err == nil || !strings.HasPrefix(err.Error(), "poll_after:") {
+			t.Errorf("poll_after %d: %v, want a refusal naming the member", n, err)
+		}
+	}
+	for _, n := range []int{1, DefaultLimits().PollAfter} {
+		if err := refusedFile("poll_after", n); err != nil {
+			t.Errorf("poll_after %d: %v", n, err)
+		}
+	}
+}
+
 // A longest certificate that is not above the message TTL and the hour
 // together signs no message (PROTOCOL.md §11.18), and one above the
 // protocol's maximum no verifier takes (§5.2): each is refused, naming its

@@ -50,7 +50,7 @@ Every limit `dromas-server` enforces, what it protects, who pays for it, when it
 
 Every `429 rate_limited` names its limit in `quota_id`, the name in the last column above, and whom it counted the call against in `subject`, `mailbox` or `ip` (`PROTOCOL.md` §11.5). Where a mailbox's own count in memory refuses a call, `dromas-server` also reads the mailbox's other counts the same call would spend, taking nothing from them, and answers with the longest wait, under that count's name, as RFC 8555 §6.6 asks: a renewal's calls and its renewals or certificates a day, and a registration's two counts. A count behind work (a read of storage, a signature check, the recipient's counts, and a send's sends a day, which only the dedupe shows a send would spend: a retry spends none) is not read ahead of it, so a caller can meet it once the first wait is over; the reason is the client repo's `PRECEDENTS.md`.
 
-**`poll_after` is the wait `dromas-server` names where no budget gives one:** the `Retry-After` of every list, of a long poll refused because the pool is full (`503`), and of a send to a mailbox at its `mailbox_cap` (`mailbox_full`).
+**`poll_after` is the wait `dromas-server` names where no budget gives one:** the `Retry-After` of every list, of a long poll refused because the pool is full (`503`), and of a send to a mailbox at its `mailbox_cap` (`mailbox_full`). It is 1 second or more, or the limits file is refused.
 
 ## Accounts: where a mailbox's limits are read
 

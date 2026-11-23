@@ -163,8 +163,9 @@ func ReadLimits(path string, base Limits) (Limits, []byte, error) {
 // member: a cap on a ciphertext the protocol does not allow, a budget of new
 // messages that is negative or has a burst with no refill or a refill with
 // no burst, a number a day whose bucket holds nothing, a
-// longest certificate that signs no message or that no reader takes, and a
-// bound on an ACL that is off or past the protocol's.
+// longest certificate that signs no message or that no reader takes, a
+// bound on an ACL that is off or past the protocol's, and a poll interval
+// under a second, which a Retry-After could not carry.
 func (l Limits) Check() error {
 	for _, c := range []struct {
 		member string
@@ -212,6 +213,9 @@ func (l Limits) Check() error {
 	}
 	if l.ACLEntries <= 0 || l.ACLEntries > protocol.MaxACLEntries {
 		return fmt.Errorf("acl_entries: %d is not from 1 to %d, the most entries the protocol lets an ACL hold (PROTOCOL.md §11.14)", l.ACLEntries, protocol.MaxACLEntries)
+	}
+	if l.PollAfter < 1 {
+		return fmt.Errorf("poll_after: %d is not a wait of 1 second or more, which every list's Retry-After and a full mailbox's carry (PROTOCOL.md §11.3)", l.PollAfter)
 	}
 	return nil
 }
