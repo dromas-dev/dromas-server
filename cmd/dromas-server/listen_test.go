@@ -1,10 +1,10 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"net"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -50,25 +50,38 @@ func TestOneServerAnswersOnEveryListenAddress(t *testing.T) {
 	}
 	defer held.Close() //nolint:errcheck // the test is ending
 	// The address before the one in use is free, then listened on again: a
-	// listenAll that left it open fails that every time, where another test's
-	// listener taking the port between the close and the listen (the tests
-	// run in parallel, children of serve among them) fails it once.
+	// listenAll that left it open fails that every time. The tests run in
+	// parallel, children of serve among them, so another test's listener can
+	// take the freed port first: before listenAll listens on it (its error
+	// then names the freed address, not the one in use), or between listenAll
+	// and the listen again. Either is a try that proves nothing, and the next
+	// try takes a new port (dromas-dev/dromas-server#368).
+	heldAddr := held.Addr().String()
 	var left error
-	for range 3 {
+	checked := false
+	for range 10 {
 		free, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatal(err)
 		}
 		freeAddr := free.Addr().String()
 		_ = free.Close()
-		if _, err := listenAll(freeAddr + "," + held.Addr().String()); err == nil || !strings.Contains(err.Error(), held.Addr().String()) {
-			t.Fatalf("a list with an address in use: %v, want an error naming it", err)
+		_, err = listenAll(freeAddr + "," + heldAddr)
+		switch named := listenedOn(err); {
+		case named == freeAddr:
+			continue
+		case named != heldAddr:
+			t.Fatalf("a list with an address in use: %v, want an error naming %s", err, heldAddr)
 		}
+		checked = true
 		again, err := net.Listen("tcp", freeAddr)
 		if left = err; err == nil {
 			_ = again.Close()
 			break
 		}
+	}
+	if !checked {
+		t.Fatal("another test took every freed port before listenAll listened on it")
 	}
 	if left != nil {
 		t.Fatalf("the address before the one in use was left open: %v", left)
@@ -76,4 +89,12 @@ func TestOneServerAnswersOnEveryListenAddress(t *testing.T) {
 	if _, err := listenAll(" , "); err == nil {
 		t.Fatal("an empty list was taken")
 	}
+}
+
+// listenedOn is the address a listen error names, or "" for none.
+func listenedOn(err error) string {
+	if op, ok := errors.AsType[*net.OpError](err); ok && op.Addr != nil {
+		return op.Addr.String()
+	}
+	return ""
 }
