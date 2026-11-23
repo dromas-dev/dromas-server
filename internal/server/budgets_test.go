@@ -618,17 +618,21 @@ func mailboxSpent(s *Server, key string, now time.Time) []string {
 // budgets (LIMITS.md, rule 5): on every route of routes() that names a
 // mailbox, every GET's HEAD too, with each query a route refuses or takes,
 // with no pass, one that is no pass, a forged pass of b's, b's pass for
-// another server and another mailbox's checked pass; and a send to b that
-// fails a check. Every budget is on, and each is read from the server's
-// buckets, whatever its size.
+// another server and another mailbox's checked pass; a send to b that
+// fails a check; and a send that passes every check and that the store
+// refuses, storing nothing (errNotStored), after b's receive is reserved.
+// Every budget is on, and each is read from the server's buckets, whatever
+// its size.
 func TestFailedCallsSpendNothingOfTheMailbox(t *testing.T) {
 	t.Parallel()
 	l := DefaultLimits()
 	l.RequestBurst, l.RangeRequestBurst, l.MissesPerMinute, l.RangeMissesPerMinute = 0, 0, 0, 0
 	l.RegistrationsPerHour, l.RangeRegistrationsPerHour, l.SendsPerMinutePerIP, l.RangeSendsPerMinute = 0, 0, 0, 0
 	l.MaxBodiesBeforePass, l.MaxBodiesBeforePassPerRange = 0, 0
-	e := newEnv(t, l)
+	refusing := &failPut{}
+	e := newEnv(t, l, func(c *Config) { refusing.Store = c.Store; c.Store = refusing })
 	a, b := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
+	c := e.raw().register(protocol.MaxPrekeyLifetime)
 	// b denies a, which spends b's calls; then every budget of b's is full again.
 	e.want(e.do("PUT", b.path("/acl"), protocol.ACLDocument{Allow: []string{protocol.AnyAddress}, Deny: []string{a.id.Address().String()}}, b.pass(1)), http.StatusOK, "")
 	e.clock.Add(2 * day)
@@ -702,6 +706,17 @@ func TestFailedCallsSpendNothingOfTheMailbox(t *testing.T) {
 			return post(protocol.SendQuery{Statement: protocol.StatementHash([]byte("x"))}, good.ciphertext, a.pass(1))
 		}},
 		{"a sender b's ACL denies", func() reply { return post(good.SendQuery, good.ciphertext, a.pass(1)) }},
+		{"a write the store refuses", func() reply {
+			refusing.mu.Lock()
+			refusing.err = fmt.Errorf("%w: injected", errNotStored)
+			refusing.mu.Unlock()
+			defer func() {
+				refusing.mu.Lock()
+				refusing.err = nil
+				refusing.mu.Unlock()
+			}()
+			return post(good.SendQuery, good.ciphertext, c.pass(1))
+		}},
 	} {
 		if r := c.send(); r.status < 400 {
 			t.Errorf("a send with %s: %d", c.name, r.status)
