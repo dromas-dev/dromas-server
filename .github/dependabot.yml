@@ -34,7 +34,9 @@ updates:
       prefix: ci
 
   # The test database CI starts (test/postgres/compose.yaml), pinned the same
-  # way.
+  # way. Its PostgreSQL stays at the oldest major version this backend runs
+  # on (minServerVersion), so a new major version does not come as a pull
+  # request.
   - package-ecosystem: docker-compose
     directory: /test/postgres
     schedule:
@@ -42,6 +44,9 @@ updates:
       day: monday
       time: "06:00"
       timezone: Etc/UTC
+    ignore:
+      - dependency-name: postgres
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: test
 
