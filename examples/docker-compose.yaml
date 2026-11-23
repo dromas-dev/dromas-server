@@ -13,7 +13,7 @@ services:
     depends_on: [dromas-server]
 
   dromas-server:
-    image: ghcr.io/dromas-dev/dromas-server:0.6.8@sha256:70aa0925c265e3fdfa103720dc28dc86f338b80db6723987068dd03a4058ab85
+    image: ghcr.io/dromas-dev/dromas-server:0.6.10@sha256:d6743d06c06e2fa62ffb8756ba0c8c2d49d97771835c276e17554ec1e866a6aa
     restart: unless-stopped
     environment:
       PGHOST: postgres
@@ -35,7 +35,7 @@ services:
   # Brings the schema up to date as its owner, then exits, before
   # dromas-server starts as dromas_app, which owns nothing.
   dromas-migrate:
-    image: ghcr.io/dromas-dev/dromas-server:0.6.8@sha256:70aa0925c265e3fdfa103720dc28dc86f338b80db6723987068dd03a4058ab85
+    image: ghcr.io/dromas-dev/dromas-server:0.6.10@sha256:d6743d06c06e2fa62ffb8756ba0c8c2d49d97771835c276e17554ec1e866a6aa
     entrypoint: ["/dromas-server", "migrate"]
     environment:
       PGHOST: postgres
