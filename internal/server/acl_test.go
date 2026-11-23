@@ -57,8 +57,18 @@ func TestACLRoute(t *testing.T) {
 			t.Errorf("%s: %d %s, want 400 %s: %s", name, r.status, r.code(), protocol.CodeInvalidRequest, r.body)
 		}
 	}
-	if r := e.do("PUT", path, []byte(`{"version":1,"allow":["*"]}`), pass); r.problem().Member != "version" {
-		t.Errorf("a document with a version names no member version: %s", r.body)
+	// Each refusal of a document that is no ACL names the member that breaks
+	// it (PROTOCOL.md §11.3).
+	for body, member := range map[string]string{
+		`{"version":1,"allow":["*"]}`:               "version",
+		`{"deny":[]}`:                               "allow",
+		`{"allow":null}`:                            "allow",
+		`{"allow":["` + strings.ToUpper(y) + `"]}`:  "allow",
+		`{"allow":["*"],"deny":["*` + y[1:] + `"]}`: "deny",
+	} {
+		if r := e.do("PUT", path, []byte(body), pass); r.problem().Member != member {
+			t.Errorf("%s names member %q, want %q: %s", body, r.problem().Member, member, r.body)
+		}
 	}
 	// Over the entries, and over the body's bound drawn from them, which is
 	// refused before it is parsed: the limit is the entries either way
