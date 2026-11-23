@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # scripts/check.sh: the checks a change must pass, one definition for a laptop
-# and for CI (.github/workflows/ci.yml runs `full` and `vuln`; dromas-client's
+# and for CI (.github/workflows/ci.yml runs `full`, `vuln` and, daily, `race`; dromas-client's
 # CI runs `full` here against its own commit, through a go.work).
 #
 #   scripts/check.sh         quick: gofmt, vet and the tests -short keeps, while working
 #   scripts/check.sh full    CI's test job: gofmt, vet, every test (in memory, then on PostgreSQL), the skip check, test/interop.sh
 #   scripts/check.sh push    full, then golangci-lint, squawk (where installed) and govulncheck: before a push
 #   scripts/check.sh vuln    govulncheck alone, at the version go.mod requires for its tool line
+#   scripts/check.sh race    every test on the in-memory store under the race detector: CI's daily run
 #
 # The tests build with -tags dromas_nofsync, so the client they drive flushes
 # no write to the disk (dromas-client's client/fsync.go). -short skips the
@@ -91,5 +92,6 @@ case ${1:-quick} in
     go tool govulncheck ./...
     ;;
   vuln) go tool govulncheck ./... ;;
-  *) sed -n '6,9p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+  race) DROMAS_TEST_POSTGRES='' DROMAS_TEST_VALKEY='' go test -race -tags "$tags" -count=1 ./... ;;
+  *) sed -n '6,10p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
 esac
