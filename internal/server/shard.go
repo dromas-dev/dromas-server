@@ -59,7 +59,9 @@ func (s Shard) owns(addr string) bool {
 // owned answers 503 to a call for a mailbox outside this process's shard,
 // which the reverse proxy in front should have sent to another process: a
 // misroute fails at once, and no mailbox is answered for by two processes.
-// It runs behind the gate, so the call is counted first, as whenReady's are.
+// It runs behind the gate, as whenReady does: a call that is not its
+// mailbox's is counted first, and one that is spends nothing (LIMITS.md,
+// rule 1).
 func (s *Server) owned(h http.Handler) http.Handler {
 	if s.shard.N <= 1 {
 		return h

@@ -391,11 +391,11 @@ func (bs *buckets) resize(n int, every time.Duration) {
 // long until one is. A bucket set with n == 0, or no interval, never
 // limits.
 func (bs *buckets) take(key string, now time.Time) (ok bool, wait time.Duration) {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
 	if bs.n == 0 || bs.every <= 0 {
 		return true, 0
 	}
-	bs.mu.Lock()
-	defer bs.mu.Unlock()
 	bs.prune(now)
 	next, over := bs.next(key, now)
 	if over > 0 {

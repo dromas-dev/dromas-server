@@ -354,7 +354,7 @@ func (s *Server) deliver(ctx context.Context, p *post) (delivered, error) {
 		ID:         msgID,
 		Size:       len(p.ciphertext),
 		ReceivedAt: now.UTC().Truncate(time.Millisecond),
-		ExpiresAt:  now.UTC().Truncate(time.Millisecond).Add(protocol.Retention), // the TTL less the hour and a post's own time (PROTOCOL.md §3.4, §13)
+		ExpiresAt:  time.UnixMilli(toInt(expiry(ms(now)))).UTC(), // the TTL less the hour and a post's own time (PROTOCOL.md §3.4, §13), to the second
 	}
 	// The write is held to the recipient's record as steps 5 to 8 read it,
 	// and to the sender's pass: from the second process on, either can have

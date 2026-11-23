@@ -60,7 +60,7 @@ func (s *Server) putACL(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	if err := precondition(r, targetState{exists: true, tag: held.tag, hint: "GET the same path for the ACL held and its ETag, or PUT without If-Match: " + hintACL}); err != nil {
+	if err := precondition(r, targetState{exists: true, tag: held.tag, hint: "GET the same path for the ACL held and its ETag, or PUT with neither If-Match nor If-None-Match: " + hintACL}); err != nil {
 		return err
 	}
 	var doc protocol.ACLDocument

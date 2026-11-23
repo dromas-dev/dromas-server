@@ -244,10 +244,12 @@ func (s *pgBackend) logf(format string, args ...any) {
 
 func (s *pgBackend) nowMs() uint64 { return ms(s.now()) }
 
-// liveFrom is the earliest received_at a live message has at now: one
-// received at or before now − Retention has expired, though the sweep may
-// not have deleted it yet (ttlMs, protocol.Retention).
-func (s *pgBackend) liveFrom() time.Time { return time.UnixMilli(toInt(s.nowMs() - ttlMs + 1)).UTC() }
+// liveFrom is the earliest received_at a live message has at now, one whose
+// expiry is after now: one received earlier has expired, though the sweep may
+// not have deleted it yet (expiry, protocol.Retention).
+func (s *pgBackend) liveFrom() time.Time {
+	return time.UnixMilli(toInt(wholeSecond(s.nowMs()) + 1000 - ttlMs)).UTC()
+}
 
 // msTime is t as the tables keep a time: to the millisecond, as memory
 // compares it (ms).
@@ -971,7 +973,7 @@ func header(id [32]byte, size int, recv uint64) (*Header, error) {
 	if err != nil {
 		return nil, err
 	}
-	expires, err := fromMs(recv + ttlMs)
+	expires, err := fromMs(expiry(recv))
 	if err != nil {
 		return nil, err
 	}
