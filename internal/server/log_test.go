@@ -303,7 +303,7 @@ func TestAFollowersPanicIsLoggedRedactedAndEndsTheProcess(t *testing.T) {
 	if !onPostgres() {
 		t.Skip("needs PostgreSQL: DROMAS_TEST_POSTGRES")
 	}
-	schema, bodies := newSchema(), t.TempDir()
+	schema, bodies := newSchema(t), t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	var mu sync.Mutex

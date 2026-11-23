@@ -20,7 +20,7 @@ func TestMigrateAppliesEachMigrationOnce(t *testing.T) {
 	if !onPostgres() {
 		t.Skip("needs PostgreSQL: DROMAS_TEST_POSTGRES")
 	}
-	schema := newSchema()
+	schema := newSchema(t)
 	want, err := migrationVersions()
 	if err != nil {
 		t.Fatal(err)
@@ -32,7 +32,7 @@ func TestMigrateAppliesEachMigrationOnce(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 4 {
 		wg.Go(func() {
-			got, version, err := Migrate(ctx, "", schema, nil)
+			got, version, err := Migrate(ctx, connString(schema), schema, nil)
 			mu.Lock()
 			defer mu.Unlock()
 			applied = append(applied, got...)
@@ -60,13 +60,13 @@ func TestAStoreStartsOnlyOnAMigratedSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	last := versions[len(versions)-1]
-	schema := newSchema()
+	schema := newSchema(t)
 	var logged bytes.Buffer
 	var mu sync.Mutex
 	open := func() error {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		_, err := NewPostgresStore(ctx, PostgresConfig{Schema: schema, Log: log.New(lockedWriter{&mu, &logged}, "", 0)})
+		_, err := NewPostgresStore(ctx, PostgresConfig{URL: connString(schema), Schema: schema, Log: log.New(lockedWriter{&mu, &logged}, "", 0)})
 		return err
 	}
 	if err := open(); !errors.Is(err, errNotMigrated) {
@@ -83,7 +83,7 @@ func TestAStoreStartsOnlyOnAMigratedSchema(t *testing.T) {
 	}
 	set := func(q string, args ...any) {
 		t.Helper()
-		err := asTestRole(func(ctx context.Context, conn *pgx.Conn) error {
+		err := asTestRole(schema, func(ctx context.Context, conn *pgx.Conn) error {
 			if _, err := conn.Exec(ctx, "SET search_path = "+schema); err != nil {
 				return err
 			}
@@ -118,7 +118,7 @@ func TestTheRuntimeRoleOnlyReadsTheVersions(t *testing.T) {
 	if !onPostgres() {
 		t.Skip("needs PostgreSQL: DROMAS_TEST_POSTGRES")
 	}
-	schema := newSchema()
+	schema := newSchema(t)
 	url := pgURL(t, schema)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -163,7 +163,7 @@ func TestTheRuntimeRoleCannotTakeARevocationBack(t *testing.T) {
 	if !onPostgres() {
 		t.Skip("needs PostgreSQL: DROMAS_TEST_POSTGRES")
 	}
-	schema := newSchema()
+	schema := newSchema(t)
 	url := pgURL(t, schema)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -214,7 +214,7 @@ func TestTheRuntimeRoleCannotTakeARevocationBack(t *testing.T) {
 	// Nor may the owner, whatever the grants: the triggers hold for every
 	// role (migration 00006) until the owner changes them.
 	for _, q := range []string{`DELETE FROM ` + schema + `.revocations`, `TRUNCATE ` + schema + `.revocations`} {
-		err := asTestRole(func(ctx context.Context, conn *pgx.Conn) error {
+		err := asTestRole(schema, func(ctx context.Context, conn *pgx.Conn) error {
 			_, err := conn.Exec(ctx, q)
 			return err
 		})
@@ -232,7 +232,7 @@ func TestTheRuntimeRoleCannotTakeARevocationBack(t *testing.T) {
 // asOwnerIn runs q in schema as the role libpq's environment names, which
 // migrated the schema and so owns it.
 func asOwnerIn(schema, q string) error {
-	return asTestRole(func(ctx context.Context, conn *pgx.Conn) error {
+	return asTestRole(schema, func(ctx context.Context, conn *pgx.Conn) error {
 		if _, err := conn.Exec(ctx, "SET search_path = "+schema); err != nil {
 			return err
 		}
@@ -253,7 +253,7 @@ func TestTheRuntimeRoleWritesNoAccountAndMakesNoAdoptKey(t *testing.T) {
 	if !onPostgres() {
 		t.Skip("needs PostgreSQL: DROMAS_TEST_POSTGRES")
 	}
-	schema := newSchema()
+	schema := newSchema(t)
 	url := pgURL(t, schema)
 	for _, q := range []string{
 		`INSERT INTO accounts (id, unmetered, rev) VALUES ('a', false, 1)`,

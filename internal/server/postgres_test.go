@@ -18,20 +18,22 @@ import (
 
 // The suite runs against the in-memory store, or, with DROMAS_TEST_POSTGRES
 // set, against PostgreSQL: every test, plus the ones that need a shared store
-// with a feed, in a schema of the run's own, bodies in a directory of the
-// run's own. The database is the one libpq's environment names (PGHOST,
-// PGPORT, PGUSER, PGPASSWORD, PGDATABASE, PGSSLMODE), as dromas-server serve
-// finds its own. Name a database kept for tests, never one a running
-// dromas-server uses: it needs wal_level = logical, a role with REPLICATION,
-// and a replication slot and WAL sender for each store the tests run at once.
+// with a feed, in a schema of the run's own, in a database of the run's own,
+// bodies in a directory of the run's own. The server is the one libpq's
+// environment names (PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE,
+// PGSSLMODE), as dromas-server serve finds its own; TestMain makes the run's
+// database from PGDATABASE's and names it in PGDATABASE in its place. Name a
+// server kept for tests, never one a running dromas-server uses: it needs
+// wal_level = logical, a role with REPLICATION and CREATEDB, and a
+// replication slot and WAL sender for each store the tests run at once.
 // Each schema is migrated by that role (Migrate), as dromas-server migrate
 // does as the schema's owner, and every store runs as a role of the run's
 // own that owns nothing, as serve does: REPLICATION, and the grants
 // README.md names (pgURL), so a privilege the store needs and the
 // grants lack fails every test; an account and an adopt key are made as
 // the owner, as dromas-server account makes them (operator). The environment's role needs CREATEROLE.
-// TestMain drops the run's schemas and their publications, and the role,
-// and removes its bodies directory, once every test has run.
+// TestMain drops the run's databases and the role, and removes its bodies
+// directory, once every test has run.
 
 func onPostgres() bool { return os.Getenv("DROMAS_TEST_POSTGRES") != "" }
 
@@ -68,11 +70,18 @@ func newTestStore(t *testing.T, now func() time.Time) (Store, func() bool) {
 }
 
 func TestMain(m *testing.M) {
+	base := os.Getenv("PGDATABASE")
 	if onPostgres() {
-		// The run's schema is made and migrated before any test starts a
-		// store, so no migration of it is open while a store's feed makes its
-		// slot or decodes: a feed decodes every table's changes, the other
-		// stores' DDL among them.
+		// The run's schema is made and migrated in the run's database before
+		// any test starts a store, so the feeds there decode no DDL: every
+		// other schema is in a database of its own (ownDatabase).
+		db, err := newDatabase("")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "making the run's database: %v\n", err)
+			os.Exit(1)
+		}
+		runDatabase = db
+		_ = os.Setenv("PGDATABASE", db)
 		schema, _ := testDatabase(nil)
 		if err := migrate(schema); err != nil {
 			fmt.Fprintf(os.Stderr, "migrating the run's schema %s: %v\n", schema, err)
@@ -81,15 +90,13 @@ func TestMain(m *testing.M) {
 	}
 	code := m.Run()
 	if onPostgres() {
+		_ = os.Setenv("PGDATABASE", base)
 		schemasMu.Lock()
-		all := schemas
-		if testSchema != "" {
-			all = append(all, testSchema)
-		}
+		all := append(databases, runDatabase)
 		schemasMu.Unlock()
-		for _, schema := range all {
-			if err := dropSchema(schema); err != nil {
-				fmt.Fprintf(os.Stderr, "dropping the schema %s: %v\n", schema, err)
+		for _, db := range all {
+			if err := dropDatabase(db); err != nil {
+				fmt.Fprintf(os.Stderr, "dropping the database %s: %v\n", db, err)
 				code = max(code, 1)
 			}
 		}
@@ -102,38 +109,81 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// A schema a test makes for itself is dropped when the run ends, never
-// while other tests' feeds run: a feed decoding a change to a table dropped
-// meanwhile loses its place ("could not map filenumber").
+// A schema a test makes for itself is in a database of its own, dropped when
+// the run ends, so no other test's feed decodes its DDL: logical decoding
+// reads only its slot's database (decode.c drops another database's records
+// before it maps a change to its relation), and a feed decoding a change it
+// cannot map to a relation loses its place ("could not map filenumber",
+// dromas-dev/dromas-server#271). The run's own schema is migrated before any
+// test starts (TestMain), so the run's database carries no DDL while its
+// feeds decode.
 var (
-	schemasMu sync.Mutex
-	schemas   []string
+	schemasMu   sync.Mutex
+	ownDatabase = map[string]string{} // a test's schema → its database
+	databases   []string              // every database the run made but its own
+	runDatabase string
 )
 
-// newSchema is a schema of a test's own, dropped when the run ends.
-func newSchema() string {
+// newSchema is a schema of the test's own, in a database of its own,
+// dropped when the run ends.
+func newSchema(t testing.TB) string {
+	t.Helper()
 	schema := "t_" + randomHex(6)
-	schemasMu.Lock()
-	schemas = append(schemas, schema)
-	schemasMu.Unlock()
+	inItsOwnDatabase(t, schema)
 	return schema
 }
 
-// dropSchema drops a schema the tests made, its tables and its feed's
-// publication.
-func dropSchema(schema string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	conn, err := pgx.Connect(ctx, "")
+// inItsOwnDatabase makes a database for schema, which every connection
+// to schema then names (connString).
+func inItsOwnDatabase(t testing.TB, schema string) {
+	t.Helper()
+	db, err := newDatabase(schema)
 	if err != nil {
-		return err
+		t.Fatalf("a database for the schema %s: %v", schema, err)
 	}
-	defer func() { _ = conn.Close(context.Background()) }()
-	if _, err := conn.Exec(ctx, "DROP PUBLICATION IF EXISTS dromas_"+schema+", "+publicationName(schema)); err != nil {
+	schemasMu.Lock()
+	ownDatabase[schema] = db
+	databases = append(databases, db)
+	schemasMu.Unlock()
+}
+
+// newDatabase makes a database of the run's own, for schema.
+func newDatabase(schema string) (string, error) {
+	db := "t_" + randomHex(6)
+	err := asTestRole("", func(ctx context.Context, conn *pgx.Conn) error {
+		_, err := conn.Exec(ctx, "CREATE DATABASE "+db)
 		return err
+	})
+	if err != nil {
+		return "", fmt.Errorf("CREATE DATABASE %s for %q: %w", db, schema, err)
 	}
-	_, err = conn.Exec(ctx, "DROP SCHEMA IF EXISTS "+quotedSchema(schema)+" CASCADE")
-	return err
+	return db, nil
+}
+
+// connString is the connection string of schema's database: libpq's
+// environment's, the run's, or a test's own.
+func connString(schema string) string {
+	schemasMu.Lock()
+	defer schemasMu.Unlock()
+	if db, ok := ownDatabase[schema]; ok {
+		return "dbname=" + db
+	}
+	return ""
+}
+
+// dropDatabase drops a database the run made, once the stores on it are
+// gone: a temporary slot goes with its walsender's session, which may end
+// a moment after the store that held it closed (55006, object in use).
+func dropDatabase(db string) error {
+	for start := time.Now(); ; time.Sleep(100 * time.Millisecond) {
+		err := asTestRole("", func(ctx context.Context, conn *pgx.Conn) error {
+			_, err := conn.Exec(ctx, "DROP DATABASE IF EXISTS "+db+" WITH (FORCE)")
+			return err
+		})
+		if !isPgCode(err, "55006") || time.Since(start) > 30*time.Second {
+			return err
+		}
+	}
 }
 
 // The run's runtime role, made on first use.
@@ -155,7 +205,7 @@ func pgURL(t testing.TB, schema string) string {
 	if err := migrate(schema); err != nil {
 		t.Fatal(err)
 	}
-	return "user=" + appRole.name + " password=" + appRole.password
+	return strings.TrimSpace("user=" + appRole.name + " password=" + appRole.password + " " + connString(schema))
 }
 
 // migrate makes the run's runtime role, once, then makes schema and
@@ -163,7 +213,7 @@ func pgURL(t testing.TB, schema string) string {
 func migrate(schema string) error {
 	appRole.once.Do(func() {
 		appRole.name, appRole.password = "t_"+randomHex(6)+"_app", randomHex(16)
-		appRole.err = asTestRole(func(ctx context.Context, conn *pgx.Conn) error {
+		appRole.err = asTestRole("", func(ctx context.Context, conn *pgx.Conn) error {
 			_, err := conn.Exec(ctx, "CREATE ROLE "+appRole.name+" LOGIN REPLICATION PASSWORD '"+appRole.password+"'")
 			return err
 		})
@@ -172,7 +222,7 @@ func migrate(schema string) error {
 		return fmt.Errorf("the runtime role: %w", appRole.err)
 	}
 	once, _ := migrated.LoadOrStore(schema, sync.OnceValue(func() error {
-		err := asTestRole(func(ctx context.Context, conn *pgx.Conn) error {
+		err := asTestRole(schema, func(ctx context.Context, conn *pgx.Conn) error {
 			for _, q := range []string{
 				"CREATE SCHEMA IF NOT EXISTS " + quotedSchema(schema),
 				"GRANT USAGE ON SCHEMA " + quotedSchema(schema) + " TO " + appRole.name,
@@ -189,7 +239,7 @@ func migrate(schema string) error {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		_, _, err = Migrate(ctx, "", schema, nil)
+		_, _, err = Migrate(ctx, connString(schema), schema, nil)
 		return err
 	}))
 	if err := once.(func() error)(); err != nil {
@@ -198,11 +248,12 @@ func migrate(schema string) error {
 	return nil
 }
 
-// asTestRole runs f on a connection as the role libpq's environment names.
-func asTestRole(f func(context.Context, *pgx.Conn) error) error {
+// asTestRole runs f on a connection to schema's database as the role
+// libpq's environment names.
+func asTestRole(schema string, f func(context.Context, *pgx.Conn) error) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	conn, err := pgx.Connect(ctx, "")
+	conn, err := pgx.Connect(ctx, connString(schema))
 	if err != nil {
 		return err
 	}
@@ -216,7 +267,7 @@ func dropRuntimeRole() error {
 	if appRole.name == "" || appRole.err != nil {
 		return nil
 	}
-	return asTestRole(func(ctx context.Context, conn *pgx.Conn) error {
+	return asTestRole("", func(ctx context.Context, conn *pgx.Conn) error {
 		if _, err := conn.Exec(ctx, "DROP OWNED BY "+appRole.name); err != nil {
 			return err
 		}
@@ -237,7 +288,7 @@ func startPostgres(t testing.TB, now func() time.Time) *Memory {
 // dropped when it ends, for a test that must know every row there.
 func freshDatabase(t *testing.T) (string, string) {
 	t.Helper()
-	return newSchema(), t.TempDir()
+	return newSchema(t), t.TempDir()
 }
 
 // startPostgresIn is a store on schema, its bodies under the directory
@@ -383,7 +434,7 @@ func operator(t testing.TB, st Store) Store {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	s, err := NewPostgresStore(ctx, PostgresConfig{Schema: p.schema, Now: m.now, MaxConns: 1})
+	s, err := NewPostgresStore(ctx, PostgresConfig{URL: connString(p.schema), Schema: p.schema, Now: m.now, MaxConns: 1})
 	if err != nil {
 		t.Fatalf("the operator's store: %v", err)
 	}
@@ -529,24 +580,8 @@ func TestASchemaNamedByAReservedWordIsServed(t *testing.T) {
 	}
 	const schema = "order"
 	ctx := context.Background()
-	// The name is a word, not a run's own: one run of this test at a time on
-	// the database, from a schema dropped first.
-	lock, err := pgx.Connect(ctx, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = lock.Close(context.Background()) })
-	if _, err := lock.Exec(ctx, "SELECT pg_advisory_lock(hashtext('dromas test schema order'))"); err != nil {
-		t.Fatal(err)
-	}
-	if err := dropSchema(schema); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := dropSchema(schema); err != nil {
-			t.Error(err)
-		}
-	})
+	// The name is a word, not a run's own, so its database is.
+	inItsOwnDatabase(t, schema)
 	s := startPostgresIn(t, schema, t.TempDir(), nil, nil)
 	var n int
 	if err := s.pool().QueryRow(ctx, "SELECT count(*)::int FROM mailboxes").Scan(&n); err != nil || n != 0 {
