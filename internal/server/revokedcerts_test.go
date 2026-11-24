@@ -286,24 +286,6 @@ func TestAMailboxIsReadWithTheRevocationOfItsCertificates(t *testing.T) {
 	}
 }
 
-// A body that is not a revocation of certificates costs the server a
-// signature check that nothing has paid for, as one that is not a revocation
-// of the address does.
-func TestJunkRevocationsOfCertificatesAreLimited(t *testing.T) {
-	t.Parallel()
-	l := relaxed()
-	l.MissesPerMinute = 2
-	e := newEnv(t, l)
-	r := e.raw().register(protocol.MaxPrekeyLifetime)
-	junk := protocol.Revocations{Identity: r.id.Document(), RevokedCertificates: []byte("every certificate\n"), RevokedCertificatesSignature: []byte("revoke them")}
-	path := r.path("/revocation")
-	e.want(e.do("PUT", path, junk, ""), 400, protocol.CodeInvalidRevocation)
-	e.want(e.do("PUT", path, junk, ""), 400, protocol.CodeInvalidRevocation)
-	e.want(e.do("PUT", path, junk, ""), 429, protocol.CodeRateLimited)
-	e.clock.Add(protocol.MaxSkew) // long past the limit's minute
-	e.want(e.do("PUT", path, r.certs(1), ""), 200, "")
-}
-
 // The Go client against this server: a mailbox under a certificate renews and
 // revokes every certificate before its new one. A message it sent under the old one is refused
 // by its reader, who is shown the revocation and checks it; a message under the new one

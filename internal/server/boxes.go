@@ -213,8 +213,8 @@ func settled(b *Mailbox) bool { return b.open() || b != nil && b.State == Revoke
 //
 // A registration answered from what is kept of its address, held in memory
 // or read, spends no registrations count, so the retry is a renewal's
-// identical retry in all but its route: a miss is reserved before its pass
-// (checkPass), and the mailbox's calls are spent once it passes. bounded is true
+// identical retry in all but its route: its pass is checked as any call's
+// is (checkPass), and the mailbox's calls are spent once it passes. bounded is true
 // for the one registration that meets a mailbox at its write, registered by
 // another request meanwhile or by its own write whose outcome is unknown:
 // its registrations counts were taken, and they bound the pass's check
@@ -420,20 +420,13 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 	if o.Rank == b.Rank && o.Serial <= b.Prekey.Serial {
 		return fail(protocol.CodeSerialTooLow, "a newer prekey is already published: dromas prekey renew takes the next serial", "under the mailbox's current signer the serial must be above %d", prekeySerialValue(b.Prekey.Serial))
 	}
-	m, err := s.miss(r)
-	if err != nil {
-		return err
-	}
-	defer func() { m.release(s.now()) }() // settled below, but for a panic
 	p, signer, err := s.checkPrekey(id, req.Prekey, req.PrekeySignature, b.Signer)
 	if err == nil && (signer.Rank() != o.Rank || signerHash(id, signer) != o.Signer || p.Serial != o.Serial) {
 		err = fail(protocol.CodeInvalidKey, "sign a new prekey statement: dromas prekey renew", "the statement does not read the same verified as unverified")
 	}
 	if err != nil {
-		m.keep()
 		return err
 	}
-	m.release(s.now())
 	if err := s.checkPass(r, h, key, signerHash(id, signer), signer.Rank(), false, nil); err != nil {
 		return err
 	}
@@ -612,8 +605,8 @@ const (
 // revoked, and a revocation of certificates through a serial no higher than
 // the one held. Both kinds of statement are public, and more than one set of
 // bytes verifies for each, so one sent back must cost no signature check.
-// Everything else in the body is checked before anything is changed, and a
-// check that fails counts against the caller's address (s.miss).
+// Everything else in the body is checked before anything is changed; the
+// flood budget the call spent at the gate bounds those checks (gate).
 func (s *Server) revoke(w http.ResponseWriter, r *http.Request) error {
 	h, err := pathAddr(r)
 	if err != nil {
@@ -693,17 +686,11 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 	}
-	m, err := s.miss(r)
-	if err != nil {
-		return err
-	}
-	defer func() { m.release(s.now()) }() // settled below, but for a panic
 	// The revocation of the address first: one that does not verify refuses
 	// the body, a revocation of certificates beside it included, and one that
 	// verifies is kept whatever is beside it (PROTOCOL.md §11.15).
 	if req.Revocation != nil {
 		if _, err := protocol.VerifyRevocation(h, req.Identity, req.Revocation); err != nil {
-			m.keep()
 			return fail(protocol.CodeInvalidRevocation, hintRevocation, "this is not a revocation of this address")
 		}
 	}
@@ -711,13 +698,11 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) error {
 	if hasCerts {
 		if certs, err = protocol.VerifyRevokedCertificates(h, req.Identity, req.RevokedCertificates, req.RevokedCertificatesSignature); err != nil {
 			if req.Revocation == nil {
-				m.keep()
 				return fail(protocol.CodeInvalidRevocation, hintRevokedCerts, "this is not a revocation of this address's certificates")
 			}
 			certs = nil // beside a revocation of the address that verifies, it counts for nothing
 		}
 	}
-	m.release(s.now())
 	rv := &Revocations{Identity: req.Identity}
 	status, raised := http.StatusOK, false
 	if certs != nil && (held == nil || certs.Through > held.Through) {

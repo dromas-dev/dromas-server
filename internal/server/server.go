@@ -1045,11 +1045,12 @@ type notRead struct{ err error }
 func (n notRead) Error() string { return n.err.Error() }
 
 // miss reserves a count of the caller's address under Limits.MissesPerMinute
-// and Limits.RangeMissesPerMinute, before work that a caller who named no
-// mailbox, or brought nothing that verifies, makes the server do: a read
-// that may find no mailbox, or a signature check that may fail. It is kept
-// if the work comes to nothing and released if not, so a caller is counted
-// for what failed and never for what passed.
+// and Limits.RangeMissesPerMinute, before a read that a caller who named no
+// mailbox makes the server do: a lookup's, or a send's second read of its
+// sender, either of which may find no mailbox. It is kept if the read comes
+// to nothing and released if not, so a caller is counted for what failed and
+// never for what passed. A pass's signature checks reserve none: the flood
+// budget the call spent at the gate bounds them (gate).
 func (s *Server) miss(r *http.Request) (addressCount, error) {
 	return s.misses.reserve(r.Context(), s.clientIP(r), s.now, " that named no mailbox or carried nothing that verified")
 }

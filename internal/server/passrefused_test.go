@@ -339,15 +339,12 @@ func TestARevokedCurrentCertificateIsAnsweredBeforeThePass(t *testing.T) {
 }
 
 // While a mailbox's current certificate is revoked, a pass that names any key
-// but the identity's is certificate_revoked whatever its date or signature, and
-// spends no miss, with the misses spent too (PROTOCOL.md §8, §11.4 rule 1). The
-// identity's pass is judged as any pass is, which is the control: one run out
-// is pass_expired, and spends the miss these do not.
-func TestARevokedCertificateAnswersEveryOtherPassForNoMiss(t *testing.T) {
+// but the identity's is certificate_revoked whatever its date or signature
+// (PROTOCOL.md §8, §11.4 rule 1). The identity's pass is judged as any pass
+// is, which is the control: one run out is pass_expired.
+func TestARevokedCertificateAnswersEveryOtherPassFirst(t *testing.T) {
 	t.Parallel()
-	l := relaxed()
-	l.MissesPerMinute = 1
-	e := newEnv(t, l)
+	e := newEnv(t, relaxed())
 	r := at3(e)
 	e.want(e.do("PUT", r.path("/revocation"), r.certs(3), ""), http.StatusOK, "")
 	a, now := r.id.Address(), e.clock.Now()
@@ -377,7 +374,6 @@ func TestARevokedCertificateAnswersEveryOtherPassForNoMiss(t *testing.T) {
 	revoked()
 	runOut := at(r.signer, now.Add(-time.Hour))
 	e.want(e.do("GET", r.path("/messages"), nil, runOut), http.StatusUnauthorized, protocol.CodePassExpired)
-	e.limited(e.do("GET", r.path("/messages"), nil, runOut), protocol.QuotaMisses)
 	revoked()
 }
 
@@ -488,11 +484,11 @@ func TestASendUnderARenewalMemoryHasNotSeenIsTaken(t *testing.T) {
 // The sender's second read is counted as a miss, given back where it finds the
 // pass's key and kept where it does not (Server.reread): a send memory was
 // behind on costs its caller no miss, and a pass under a certificate the sender
-// never put on record costs two, the read's and the pass's.
+// never put on record costs one, the read's (the pass's check reserves none).
 func TestASendersSecondReadIsCountedAsAMiss(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
-	l.MissesPerMinute = 2
+	l.MissesPerMinute = 1
 	e := newEnv(t, l)
 	m, ok := e.store.(*Memory)
 	if !ok {
