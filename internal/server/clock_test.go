@@ -11,10 +11,17 @@ import (
 )
 
 // Every check is exact at the clock of whoever makes it, and whoever makes a
-// time-limited thing leaves an hour of room (PROTOCOL.md §3.4). These tests
+// time-limited thing leaves room for a clock that is off (PROTOCOL.md §3.4):
+// protocol.MaxSkew, and for a pass protocol.MaxPassLifetime less
+// protocol.PassLifetime (passRoom). These tests
 // give a mailbox a clock of its own, set apart from the server's: every other
 // test here shares one clock between the two, and so cannot see a check that
 // only a second of difference fails.
+
+// passRoom is how far ahead of the server's clock a mailbox's clock may be
+// and its pass still be taken: the room a server leaves past the
+// protocol.PassLifetime a client signs a pass for.
+const passRoom = protocol.MaxPassLifetime - protocol.PassLifetime
 
 // skewed returns the options of a mailbox whose clock is *off from the server's.
 func (e *env) skewed(off *time.Duration) client.Options {
@@ -24,13 +31,13 @@ func (e *env) skewed(off *time.Duration) client.Options {
 }
 
 // A mailbox whose clock is less than protocol.PassLifetime behind the server's,
-// or up to protocol.MaxPassLifetime less protocol.PassLifetime ahead, works
+// or up to passRoom ahead, works
 // in full: it registers, a message under a certificate made that moment reaches
 // it and is delivered, its own message is delivered, and it renews.
 func TestAMailboxWhoseClockIsOffByLessThanThePassAllows(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	for _, off := range []time.Duration{-9 * time.Minute, -2 * time.Minute, -time.Second, time.Second, 2 * time.Second, 30 * time.Second, 3 * time.Minute, 49 * time.Minute, 50 * time.Minute} {
+	for _, off := range []time.Duration{-9 * time.Minute, -2 * time.Minute, -time.Second, time.Second, 2 * time.Second, 30 * time.Second, passRoom / 2, passRoom - time.Minute, passRoom} {
 		e := newEnv(t, relaxed())
 		b, err := client.Init(ctx, t.TempDir(), landAll(e.skewed(&off)))
 		if err != nil {
@@ -56,13 +63,14 @@ func TestAMailboxWhoseClockIsOffByLessThanThePassAllows(t *testing.T) {
 	}
 }
 
-// The two mailboxes at the far edges of what the server takes, 49 minutes fast
-// and 9 slow, exchange messages under certificates made that moment.
+// The two mailboxes at the far edges of what the server takes, a minute less
+// than passRoom fast and 9 minutes slow, exchange messages under
+// certificates made that moment.
 func TestTheTwoClocksFurthestApart(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	e := newEnv(t, relaxed())
-	fast, slow := 49*time.Minute, -9*time.Minute
+	fast, slow := passRoom-time.Minute, -9*time.Minute
 	f, err := client.Init(ctx, t.TempDir(), landAll(e.skewed(&fast)))
 	if err != nil {
 		t.Fatal(err)
@@ -81,10 +89,11 @@ func TestTheTwoClocksFurthestApart(t *testing.T) {
 }
 
 // Further off, the mailbox is refused, each check exact at the server's
-// clock: more than 50 minutes ahead, for its pass, which a client makes for
-// ten minutes and a server takes up to an hour ahead; more than an hour
-// ahead, for its statement, which ends past the hour a server takes beyond
-// protocol.PrekeyLifetime, before its pass is read. The date on every answer is how the
+// clock: more than passRoom ahead, for its pass, which a client makes for
+// protocol.PassLifetime and a server takes up to protocol.MaxPassLifetime
+// ahead; more than protocol.MaxSkew ahead, for its statement, which ends
+// past the protocol.MaxSkew a server takes beyond protocol.PrekeyLifetime,
+// before its pass is read. The date on every answer is how the
 // server says what its clock reads (the client's words for it are the
 // client's to test, and the server's are not shown: PROTOCOL.md §11.3).
 // A mailbox that cannot register leaves nothing in the way of registering once
@@ -96,9 +105,9 @@ func TestAMailboxWhoseClockIsTooFarOffIsRefusedAndTold(t *testing.T) {
 		off  time.Duration
 		code protocol.Code
 	}{
-		{-11 * time.Minute, protocol.CodePassExpired},
-		{51 * time.Minute, protocol.CodePassExpired},
-		{61 * time.Minute, protocol.CodeInvalidValidityPeriod},
+		{-(protocol.PassLifetime + time.Minute), protocol.CodePassExpired},
+		{passRoom + time.Minute, protocol.CodePassExpired},
+		{protocol.MaxSkew + time.Minute, protocol.CodeInvalidValidityPeriod},
 	} {
 		e := newEnv(t, relaxed())
 		off, dir := c.off, t.TempDir()
@@ -121,8 +130,9 @@ func TestAMailboxWhoseClockIsTooFarOffIsRefusedAndTold(t *testing.T) {
 
 // A mailbox holds a pass the server still takes, and its clock then goes back.
 // A message waits for it under a certificate that has not begun by the clock as
-// it now reads: its sender's clock is 49 minutes fast, which the server
-// takes, so that certificate starts 11 minutes back. A mailbox that fetched that
+// it now reads: its sender's clock is a minute less than passRoom fast,
+// which the server takes, and the reader's goes back far enough that the
+// sender's is more than protocol.MaxSkew ahead of it. A mailbox that fetched that
 // message would refuse it and ack it. It does not fetch: it does not use a kept
 // pass that has more left than it was signed for, and the server refuses the
 // one it signs instead, which has run out by the server's clock. The message is
@@ -139,17 +149,17 @@ func TestAMailboxWhoseClockGoesBackFetchesNothing(t *testing.T) {
 	if res := receive(t, b); len(res.Delivered) != 0 { // the pass is in the mailbox now, and the server remembers it
 		t.Fatal(res)
 	}
-	fast := 49 * time.Minute
+	fast := passRoom - time.Minute
 	sender, err := client.Init(ctx, t.TempDir(), landAll(e.skewed(&fast)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	send(t, sender, b, "under a certificate that starts 11 minutes back")
+	send(t, sender, b, "under a certificate that begins ahead of the reader's clock")
 
-	off = -12 * time.Minute
+	off = fast - protocol.MaxSkew - time.Minute
 	res, err := b.Receive(ctx)
 	if codeOf(err) != protocol.CodePassExpired || clockGap(err) != off || (res != nil && len(res.Delivered)+len(res.Refused) != 0) {
-		t.Fatalf("its clock set back 12 minutes: %+v, %v", res, err)
+		t.Fatalf("its clock set back %v: %+v, %v", -off, res, err)
 	}
 	// Control: at that clock the message would be refused, so the stop above is
 	// what kept it: it is dated more than MaxSkew ahead of the reader's clock,

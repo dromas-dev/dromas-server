@@ -210,9 +210,13 @@ recipe "$R" "dr_send $GPL '$work/body5'" && out=$(gocli "$GP" recv 2> "$work/err
 
 # --- 5. a mailbox whose clock is off from the server's (PROTOCOL.md §15.7) ---
 # The recipe reads one clock, dr_now, which is set apart here; the server and the Go mailboxes keep the real one. Every check is
-# exact at the server's clock: a pass is taken up to an hour ahead, and a statement up to an hour past the longest a client signs one for.
+# exact at the server's clock: a pass is taken up to protocol.MaxPassLifetime ahead, its room past the protocol.PassLifetime a client
+# signs one for, and a statement up to protocol.MaxSkew past the longest a client signs one for. The room is read from the client module.
 clock(){ echo "dr_now(){ echo \$((\$(date -u +%s) + ($1))); }"; }   # <seconds> → the recipe's clock, that far from the real one
-for c in "-540 9 minutes slow" "2940 49 minutes fast"; do
+mkdir -p "$work/room" && printf '%s\n' 'package main' 'import ("fmt"; "github.com/dromas-dev/dromas-client/protocol")' \
+  'func main() { fmt.Println(int64((protocol.MaxPassLifetime - protocol.PassLifetime).Seconds())) }' > "$work/room/main.go" \
+  && room=$(cd "$repo" && go run "$work/room/main.go") || { echo "no pass room"; exit 1; }
+for c in "-540 9 minutes slow" "$((room - 60)) a minute short of a pass's room fast"; do
   off=${c%% *}; name=${c#* }; d="$work/clock$off"; gf="$work/gf$off"
   L=$(recipe "$d" "$(clock "$off"); dr_init" 2> "$work/err" | linkof) && A=${L##*/} && dr_isaddr "$A" && GFL=$(gocli "$gf" init | linkof) && GFA=${GFL##*/} \
     && printf 'to the mailbox whose clock is off\n' | gocli "$gf" send "$L" > /dev/null \

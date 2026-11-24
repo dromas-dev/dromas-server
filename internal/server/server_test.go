@@ -895,7 +895,8 @@ func TestOwnerCalls(t *testing.T) {
 	e.want(e.do("GET", r.path("/messages"), nil, pass), 401, protocol.CodePassExpired)
 	pass = r.pass(1)
 	e.want(e.do("GET", r.path("/messages"), nil, pass), 200, "")
-	// One that runs out more than an hour ahead is refused as one run out is.
+	// One that runs out more than protocol.MaxPassLifetime ahead is refused
+	// as one run out is.
 	e.clock.Add(protocol.MaxPassLifetime - protocol.PassLifetime + time.Second)
 	ahead := r.pass(1)
 	e.clock.Add(-(protocol.MaxPassLifetime - protocol.PassLifetime + time.Second))
