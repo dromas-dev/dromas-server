@@ -217,7 +217,7 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 	for _, tg := range targets {
 		values := []struct{ name, auth string }{
 			{"no pass", ""},
-			{"5,600 bytes of commas", "dromas-pass " + strings.Repeat(",", protocol.MaxPassAuthorization-len("dromas-pass "))},
+			{"commas to the longest a pass may be", "dromas-pass " + strings.Repeat(",", protocol.MaxPassAuthorization-len("dromas-pass "))},
 			{"a new pass of a live mailbox", live.pass(1)},
 			{"a live mailbox's checked pass, respelled", respelled(t, livePass)},
 			{"a live mailbox's checked pass", livePass},
