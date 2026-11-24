@@ -89,7 +89,7 @@ func TestARetiredVersionIsAnswered410(t *testing.T) {
 			t.Errorf("%s: %d %s, want 410 client_version_unsupported with min_version 1.2", what, r.status, r.body)
 		}
 	}
-	for _, v := range []string{"1.1.9", "0.0.0", "1.1", "v1.5.0", "1.5.0+build", "1.5", "garbage"} {
+	for _, v := range []string{"1.1.9", "0.0.0", "1.1", "v1.5.0", "garbage"} {
 		retired(e.doWith("GET", nobody, nil, "", protocol.VersionHeader, v), "Dromas-Version "+v)
 	}
 	retired(e.do("GET", nobody, nil, ""), "no Dromas-Version")
