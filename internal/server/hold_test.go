@@ -16,7 +16,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
-// emptyTag registers a mailbox and returns it with its empty first page's tag.
+// emptyTag registers a mailbox and returns it with its empty page's tag.
 func emptyTag(e *env) (*raw, *raw, string) {
 	e.t.Helper()
 	from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
@@ -25,7 +25,7 @@ func emptyTag(e *env) (*raw, *raw, string) {
 	return from, to, r.header.Get("ETag")
 }
 
-// longPoll lists to's first page asking to wait, in a goroutine: its reply
+// longPoll lists to asking to wait, in a goroutine: its reply
 // and how long it took come on the channel.
 func longPoll(e *env, to *raw, tag, query string) <-chan struct {
 	r    reply
