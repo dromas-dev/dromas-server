@@ -125,14 +125,14 @@ func TestASunsetIsPassedByTheServersClock(t *testing.T) {
 		name string
 		off  time.Duration // the mailbox's clock from the server's
 	}{
-		{"a mailbox whose clock is past the sunset", 49 * time.Minute}, // near as far ahead as a pass lets it be
+		{"a mailbox whose clock is past the sunset", passRoom - time.Minute}, // near as far ahead as a pass lets it be
 		{"a mailbox whose clock is before the sunset", -5 * time.Minute},
 	} {
 		off := c.off
 		e, _ := versionsEnv(t, relaxed())
 		o := e.skewed(&off)
 		o.HTTPClient = &http.Client{Transport: namesVersion("1.3.7")} // sunset at the server's start plus an hour
-		e.clock.Add(15 * time.Minute)
+		e.clock.Add(time.Hour - passRoom/2)                           // the server's clock before the sunset, the fast mailbox's past it
 		b, err := client.Init(ctx, t.TempDir(), o)
 		if err != nil {
 			t.Fatalf("%s: init before the sunset by the server's clock: %v", c.name, err)
@@ -144,7 +144,7 @@ func TestASunsetIsPassedByTheServersClock(t *testing.T) {
 			}
 			continue
 		}
-		e.clock.Add(45 * time.Minute) // the server's clock at the sunset; the mailbox's five minutes before it
+		e.clock.Add(passRoom / 2) // the server's clock at the sunset; the mailbox's five minutes before it
 		if _, err := b.Receive(ctx); codeOf(err) != protocol.CodeClientVersionUnsupported {
 			t.Errorf("%s: a call at the sunset by the server's clock: %v, want client_version_unsupported", c.name, err)
 		}

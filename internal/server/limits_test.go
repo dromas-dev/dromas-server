@@ -314,7 +314,7 @@ func TestPassesAreRememberedUntilTheyRunOut(t *testing.T) {
 	}
 	// A mailbox's next pass replaces its last.
 	next := [32]byte{3}
-	ps.keep(a1, seenPass{sum: next, signer: cert, until: now.Add(2 * protocol.PassLifetime)}, now)
+	ps.keep(a1, seenPass{sum: next, signer: cert, until: now.Add(protocol.MaxPassLifetime)}, now) // as far ahead as a pass may run
 	if ps.has(a1, sum, cert, now) || !ps.has(a1, next, cert, now) || len(ps.seen) != 1 {
 		t.Fatalf("after a second pass: %d held", len(ps.seen))
 	}

@@ -557,8 +557,9 @@ func apiHeaders(h http.Header) {
 // read. A client whose pass or statement is refused for its time compares
 // that date with its own clock (PROTOCOL.md §12.1): it is how a refusal for a
 // time says what this clock reads. Every check here is exact at this clock,
-// and a client makes what it sends with an hour of room, so a refusal for a
-// time is nearly always a clock that is off.
+// and a client makes what it sends with room for a clock that is off
+// (PROTOCOL.md §3.4), so a refusal for a time is nearly always a clock that
+// is off by more.
 func (s *Server) dated(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.date(w)

@@ -62,9 +62,9 @@ func TestAMessageIsTakenWhileTheServerServesIt(t *testing.T) {
 		sender, reader time.Duration
 		before         time.Duration // read this long before the receipt's expires_at
 	}{
-		{"sender 9m slow, reader 49m fast, read 30m before expires_at", -9 * time.Minute, 49 * time.Minute, 30 * time.Minute},
-		{"sender 9m slow, reader 49m fast, read a minute before expires_at", -9 * time.Minute, 49 * time.Minute, time.Minute},
-		{"sender 49m fast, reader 9m slow, read a minute before expires_at", 49 * time.Minute, -9 * time.Minute, time.Minute},
+		{"sender 9m slow, reader fast, read 30m before expires_at", -9 * time.Minute, passRoom - time.Minute, 30 * time.Minute},
+		{"sender 9m slow, reader fast, read a minute before expires_at", -9 * time.Minute, passRoom - time.Minute, time.Minute},
+		{"sender fast, reader 9m slow, read a minute before expires_at", passRoom - time.Minute, -9 * time.Minute, time.Minute},
 		{"control: both right", 0, 0, time.Minute},
 	} {
 		t.Run(c.name, func(t *testing.T) {
