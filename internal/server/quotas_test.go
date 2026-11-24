@@ -322,7 +322,8 @@ func TestARequestIsCountedOnceWhateverItsPathEscapes(t *testing.T) {
 	}{
 		{"GET", "/v1/%2e%2e/x", "", http.StatusNotFound, 1},                         // the router's 404, under /v1/
 		{"CONNECT", "/v1/x/../y", "", http.StatusNotFound, 1},                       // the one method whose path the router leaves as sent
-		{"GET", "/v1/%2e", "", http.StatusBadRequest, 1},                            // the read of a mailbox, with no pass: a route
+		{"GET", "/v1/%2e", "", http.StatusNotFound, 1},                              // the read of a mailbox's route, naming no address: its plain 404
+		{"GET", "/v1/x_%2e", "", http.StatusBadRequest, 1},                          // the read of a mailbox, with no pass: a route
 		{"GET", "/to/%2e", "", http.StatusNotFound, 1},                              // the link page: a route
 		{"GET", b.path("/messages/%2e%2e"), b.pass(1), http.StatusNotFound, 0},      // a route that takes a pass
 		{"GET", b.path("/messages/.."), b.pass(1), http.StatusTemporaryRedirect, 1}, // the router's redirect

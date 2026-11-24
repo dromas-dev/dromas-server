@@ -26,7 +26,8 @@ func TestEveryAPIAnswerTellsABrowserItIsNoPage(t *testing.T) {
 		"a mailbox's read":    read,
 		"a list":              list,
 		"a list with no pass": e.do("GET", to.path("/messages"), nil, ""),
-		"not an address":      e.do("GET", "/v1/nope", nil, ""),
+		"not an address":      e.do("GET", "/v1/x_nope", nil, ""),
+		"no route":            e.do("GET", "/v1/nope", nil, ""),
 	}
 	want := map[string]string{
 		"Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
