@@ -328,6 +328,12 @@ func (s *Server) mount(mux *http.ServeMux, pattern string, pass passRule, h http
 	mux.Handle(pattern, registered{h})
 }
 
+// namesAddress reports whether a first segment under /v1/ names an address:
+// it begins with an ASCII letter and "_" (PROTOCOL.md §11.2).
+func namesAddress(seg string) bool {
+	return len(seg) >= 2 && seg[1] == '_' && ('a' <= seg[0] && seg[0] <= 'z' || 'A' <= seg[0] && seg[0] <= 'Z')
+}
+
 // addressed answers a request under /v1/ whose first segment is no address's,
 // ahead of the gate, as the router answers a request no route matches:
 // counted (spendRequest), then the plain 404. A segment that begins with a
@@ -335,7 +341,7 @@ func (s *Server) mount(mux *http.ServeMux, pattern string, pass passRule, h http
 // d_ is the one form); any other is an unknown route.
 func (s *Server) addressed(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if a := r.PathValue("address"); len(a) < 2 || a[1] != '_' || !('a' <= a[0] && a[0] <= 'z' || 'A' <= a[0] && a[0] <= 'Z') {
+		if !namesAddress(r.PathValue("address")) {
 			if p := s.spendRequest(r); p != nil {
 				writeProblem(w, p)
 				return
