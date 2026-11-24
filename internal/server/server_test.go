@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -858,7 +857,7 @@ func TestOwnerCalls(t *testing.T) {
 
 	empty := e.do("GET", r.path("/messages"), nil, pass)
 	e.want(empty, 200, "")
-	if string(bytes.TrimSpace(empty.body)) != `{"total_count":0,"messages":[],"next_cursor":null}` || empty.header.Get("Retry-After") != "60" {
+	if want, _ := jsonBytes(protocol.MessageList{Messages: []protocol.MessageInfo{}}); !bytes.Equal(empty.body, want) || empty.header.Get("Retry-After") != "60" {
 		t.Fatalf("empty list %s", empty.body)
 	}
 	e.want(e.do("GET", r.path("/messages?cursor=zzz"), nil, pass), 400, protocol.CodeInvalidRequest)
@@ -922,8 +921,8 @@ func TestAnAddressInAPathIsInItsOneForm(t *testing.T) {
 
 // A query parameter a call does not take, and one given twice, is refused
 // as a member a body should not hold is: 400 invalid_request, naming it in
-// member (PROTOCOL.md §11.2). A cursor not of a cursor's form is named too.
-// The send's own parameters are TestSendPipeline's.
+// member (PROTOCOL.md §11.2): a list's cursor among them, which a list does
+// not take. The send's own parameters are TestSendPipeline's.
 func TestAQueryHoldsOnlyTheCallsParameters(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
@@ -936,12 +935,8 @@ func TestAQueryHoldsOnlyTheCallsParameters(t *testing.T) {
 		pass, member string
 	}{
 		{"GET", r.path("/messages?limit=5"), nil, pass, "limit"},
-		{"GET", r.path("/messages?cursor=x&limit=5"), nil, pass, "limit"},
-		{"GET", r.path("/messages?cursor=zzz&cursor=zzz"), nil, pass, "cursor"},
-		{"GET", r.path("/messages?cursor=zzz"), nil, pass, "cursor"},
-		{"GET", r.path("/messages?cursor="), nil, pass, "cursor"},
-		{"GET", r.path("/messages?cursor=" + url.QueryEscape(strings.Repeat("A", 52)+"/a")), nil, pass, "cursor"},
-		{"GET", r.path("/messages?Cursor=x"), nil, pass, "Cursor"},
+		{"GET", r.path("/messages?cursor=x"), nil, pass, "cursor"},
+		{"GET", r.path("/messages?wait=5&wait=5"), nil, pass, "wait"},
 		{"GET", r.path("?x=1"), nil, "", "x"},
 		{"GET", r.path("?prekey_serial=1"), nil, pass, "prekey_serial"},
 		{"PUT", r.path("/prekey?x"), r.upload(1), pass, "x"},
@@ -961,18 +956,18 @@ func TestAQueryHoldsOnlyTheCallsParameters(t *testing.T) {
 	e.want(e.do("GET", r.path("/messages"), nil, pass), 200, "")
 }
 
-// A list's query is read before its pass, the cursor's decode included
-// (PROTOCOL.md §11.11): a cursor that is empty, not of a cursor's form, or not
-// one this server could have made is 400 naming cursor, with a pass or none.
-func TestACursorIsReadBeforeThePass(t *testing.T) {
+// A list's query is read before its pass (PROTOCOL.md §11.11): a parameter
+// it does not take, a cursor among them, is 400 naming it, with a pass or
+// none.
+func TestAListsQueryIsReadBeforeThePass(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
-	for _, q := range []string{"?cursor=", "?cursor=a%2Fb", "?cursor=zzz"} {
+	for _, q := range []string{"cursor", "limit"} {
 		for _, pass := range []string{"", r.pass(1)} {
-			got := e.do("GET", r.path("/messages"+q), nil, pass)
-			if got.status != 400 || got.code() != protocol.CodeInvalidRequest || got.problem().Member != "cursor" {
-				t.Errorf("%s, pass %v: %d %s, member %q; want 400 invalid_request naming cursor", q, pass != "", got.status, got.code(), got.problem().Member)
+			got := e.do("GET", r.path("/messages?"+q+"=x"), nil, pass)
+			if got.status != 400 || got.code() != protocol.CodeInvalidRequest || got.problem().Member != q {
+				t.Errorf("%s, pass %v: %d %s, member %q; want 400 invalid_request naming %s", q, pass != "", got.status, got.code(), got.problem().Member, q)
 			}
 		}
 	}

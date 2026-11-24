@@ -3,8 +3,6 @@ package server
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -21,91 +19,38 @@ import (
 const pageSize = 50
 
 // list is GET /v1/<address>/messages (PROTOCOL.md §11.11): metadata only,
-// oldest first, pages of 50. Every answer is a page with the count, and
-// carries the poll interval in Retry-After; a first page carries its ETag
-// too, and a poll that sends it back is 304 while the page is unchanged
-// (listTag). The poll rate applies to every poll, empty ones and 304s
-// included, and is taken before a 304 or a 412 is answered: a mailbox that
-// polls too often is told 429, never 304. A page after the first is a
-// continuation, not a poll, with an allowance of its own
-// (Limits.continuations), where it is a GET whose preconditions hold and
-// that presents the cursor the mailbox was handed last; a cursor with nothing
-// after it continues nothing, so it is a poll. Only a GET's 200 spends the
-// cursor and hands out the next (the client repo's #412 item 2): a HEAD, a
-// false precondition or a refusal leaves the mailbox holding the one it was
-// handed. Only a list with something to return reads storage.
+// the oldest page, of 50, with the count. Every answer carries the poll
+// interval in Retry-After and its ETag, and a poll that sends it back is 304
+// while the page is unchanged (listTag). The poll rate applies to every
+// list, empty ones and 304s included, and is taken before a 304 or a 412 is
+// answered: a mailbox that polls too often is told 429, never 304. Only a
+// list with something to return reads storage.
 func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
-	// The path and the query first, the cursor's decode among them, before
-	// the pass (PROTOCOL.md §11.11).
-	if _, err := pathAddr(r, cursorParam, waitParam); err != nil {
+	// The path and the query first, before the pass (PROTOCOL.md §11.11).
+	if _, err := pathAddr(r, waitParam); err != nil {
 		return s.refusedForm(r, err)
 	}
-	cursor, hasCursor := r.URL.Query()[cursorParam]
-	wait, err := listWait(r, hasCursor)
+	wait, err := listWait(r)
 	if err != nil {
 		return s.refusedForm(r, err)
 	}
-	var after *Cursor
-	if hasCursor {
-		var err error
-		if after, err = parseCursor(cursor[0]); err != nil {
-			return s.refusedForm(r, err)
-		}
-	}
-	mailbox, ctx, err := s.owner(r, cursorParam, waitParam)
+	mailbox, ctx, err := s.owner(r, waitParam)
 	if err != nil {
 		return err
 	}
 	poll := strconv.Itoa(s.limits().PollAfter)
-	// A page after the first exists and carries no tag, so its
-	// preconditions are known before its page is read, and before its
-	// cursor is looked at: a false one is a poll like any other (PROTOCOL.md
-	// §11.11), which takes no cursor.
-	if hasCursor {
-		if err := precondition(r, targetState{exists: true, hint: hintList, also: []string{"Retry-After", poll}, spend: func() error { return s.spendPoll(mailbox) }}); err != nil {
-			return err
-		}
+	if err := s.spendPoll(mailbox); err != nil {
+		return err
 	}
-	more := 0 // live messages past the cursor
-	// The cursor this process handed the mailbox last, a GET's, is taken for
-	// the call and given back unless the call is answered 200: so of the
-	// calls in flight at once that present it, one continues the drain.
-	held := false
-	if hasCursor {
-		if more, err = s.store.After(r.Context(), mailbox, after); err != nil {
-			return err
-		}
-		held = r.Method == http.MethodGet && s.drains.take(mailbox, cursor[0])
-	}
-	answered := false
-	defer func() {
-		if held && !answered {
-			s.drains.giveBack(mailbox, cursor[0])
-		}
-	}()
-	// A page after the first is a continuation only when it presents the
-	// cursor of the page served last: a made-up, replayed or retried cursor
-	// is answered all the same, and charged as a poll
-	// (dromas-dev/dromas-server#5).
-	if more == 0 || !held {
-		if err := s.spendPoll(mailbox); err != nil {
-			return err
-		}
-	} else if ok, wait := s.pages.take(mailbox.String(), s.now()); !ok {
-		return rateLimited(protocol.QuotaPages, wait, "too many list pages at once")
-	} else {
-		s.metrics.list(true)
-	}
-	// A first page asked to wait is held while the If-None-Match names it
+	// A list asked to wait is held while the If-None-Match names it
 	// (PROTOCOL.md §11.11): read, held until the mailbox changes, the wait
 	// passes or the server stops, and read again; then answered as any list.
 	// An expiry is no change memory applies, so it ends no hold: the page at
 	// the hold's end is the page as it then stands. The mailbox's change is
 	// taken before each read, so none is missed between, and the page holds
 	// every change memory applied before the read (Store.List).
-	asked := wait > 0 && !hasCursor
 	var until time.Time
-	if asked {
+	if wait > 0 {
 		until = time.Now().Add(min(wait, s.limits().MaxWait))
 	}
 	// A long poll is counted once, by how its hold ended, however often it
@@ -128,24 +73,19 @@ again:
 		return err
 	}
 	resp := protocol.MessageList{Count: int64(n), Messages: []protocol.MessageInfo{}}
-	if n > 0 && (after == nil || more > 0) {
-		page, err := s.store.List(ctx, mailbox, after, pageSize+1)
+	if n > 0 {
+		page, err := s.store.List(ctx, mailbox, pageSize)
 		if errors.Is(err, ErrStale) {
-			if ctx, err = s.recheck(r, cursorParam, waitParam); err != nil {
+			if ctx, err = s.recheck(r, waitParam); err != nil {
 				return err
 			}
-			page, err = s.store.List(ctx, mailbox, after, pageSize+1)
+			page, err = s.store.List(ctx, mailbox, pageSize)
 		}
 		if errors.Is(err, ErrStale) {
 			return changedDuring()
 		}
 		if err != nil {
 			return err
-		}
-		if len(page) > pageSize {
-			page = page[:pageSize]
-			next := formatCursor(page[pageSize-1])
-			resp.NextCursor = &next
 		}
 		for _, h := range page {
 			resp.Messages = append(resp.Messages, protocol.MessageInfo{
@@ -160,68 +100,60 @@ again:
 	if err != nil {
 		return err
 	}
-	// A first page's tag is that of its body, so its preconditions are
-	// evaluated once the page is read: an If-Match first, compared strongly,
-	// and a false one is 412 (dromas-dev/dromas-server#71); then an
-	// If-None-Match that names the tag, compared weakly, or is "*", is 304
-	// with no body, its ETag, its Retry-After and the headers every answer
-	// carries (RFC 9110 §15.4.5). A page after the first, which has none,
-	// matches no tag but "*".
-	var tag string
-	if !hasCursor {
-		tag = listTag(body)
-		if !until.IsZero() && time.Now().Before(until) && protocol.IfMatch(r.Header.Values("If-Match"), tag) && protocol.IfNoneMatch(r.Header.Values("If-None-Match"), tag) {
-			if !holding {
-				var refused string
-				if replaced, refused = s.hold(mailbox, longPollRange(s.clientIP(r))); refused != "" {
-					s.metrics.heldEnded(refused)
-					why := "this server holds as many long polls as it may"
-					if refused == refusedRange {
-						why = "this server holds as many long polls from this address as it may"
-					}
-					p := fail(protocol.CodeUnavailable, "retry later", why)
-					p.retryAfter = time.Duration(s.limits().PollAfter) * time.Second
-					return p
+	// A page's tag is that of its body, so its preconditions are evaluated
+	// once the page is read: an If-Match first, compared strongly, and a
+	// false one is 412 (dromas-dev/dromas-server#71); then an If-None-Match
+	// that names the tag, compared weakly, or is "*", is 304 with no body,
+	// its ETag, its Retry-After and the headers every answer carries (RFC
+	// 9110 §15.4.5).
+	tag := listTag(body)
+	if !until.IsZero() && time.Now().Before(until) && protocol.IfMatch(r.Header.Values("If-Match"), tag) && protocol.IfNoneMatch(r.Header.Values("If-None-Match"), tag) {
+		if !holding {
+			var refused string
+			if replaced, refused = s.hold(mailbox, longPollRange(s.clientIP(r))); refused != "" {
+				s.metrics.heldEnded(refused)
+				why := "this server holds as many long polls as it may"
+				if refused == refusedRange {
+					why = "this server holds as many long polls from this address as it may"
 				}
-				holding = true
+				p := fail(protocol.CodeUnavailable, "retry later", why)
+				p.retryAfter = time.Duration(s.limits().PollAfter) * time.Second
+				return p
 			}
-			t := time.NewTimer(time.Until(until))
-			select {
-			case <-changed:
-				ended = "changed"
-			case <-t.C:
-				ended, until = "waited", time.Time{}
-			case <-s.stopping:
-				ended, until = "stopped", time.Time{}
-			case <-replaced:
-				ended, until = "replaced", time.Time{}
-			case <-r.Context().Done():
-				t.Stop()
-				ended = "gone"
-				return r.Context().Err()
-			}
-			t.Stop()
-			s.date(w) // what is answered now is checked now
-			// The pass is checked again at each wake, a lookup in memory, so
-			// a hold answers nothing a fresh call with its pass would not be
-			// answered: a renewal, a revocation or the pass's end since it
-			// began ends it as that call's refusal. A change another process
-			// made reaches memory by the feed before any change it woke for
-			// that came after it (dromas-dev/dromas-server#226).
-			if ctx, err = s.recheck(r, cursorParam, waitParam); err != nil {
-				ended = "standing"
-				return err
-			}
-			goto again
+			holding = true
 		}
-		if err := precondition(r, targetState{exists: true, tag: tag, hint: hintList, also: []string{"Retry-After", poll}}); err != nil {
+		t := time.NewTimer(time.Until(until))
+		select {
+		case <-changed:
+			ended = "changed"
+		case <-t.C:
+			ended, until = "waited", time.Time{}
+		case <-s.stopping:
+			ended, until = "stopped", time.Time{}
+		case <-replaced:
+			ended, until = "replaced", time.Time{}
+		case <-r.Context().Done():
+			t.Stop()
+			ended = "gone"
+			return r.Context().Err()
+		}
+		t.Stop()
+		s.date(w) // what is answered now is checked now
+		// The pass is checked again at each wake, a lookup in memory, so
+		// a hold answers nothing a fresh call with its pass would not be
+		// answered: a renewal, a revocation or the pass's end since it
+		// began ends it as that call's refusal. A change another process
+		// made reaches memory by the feed before any change it woke for
+		// that came after it (dromas-dev/dromas-server#226).
+		if ctx, err = s.recheck(r, waitParam); err != nil {
+			ended = "standing"
 			return err
 		}
+		goto again
 	}
-	if r.Method == http.MethodGet && resp.NextCursor != nil {
-		s.drains.put(mailbox, *resp.NextCursor)
+	if err := precondition(r, targetState{exists: true, tag: tag, hint: hintList, also: []string{"Retry-After", poll}}); err != nil {
+		return err
 	}
-	answered = true
 	writeList(w, body, tag, poll)
 	return nil
 }
@@ -230,15 +162,15 @@ again:
 const waitParam = "wait"
 
 // listWait reads a list's wait: zero for none, and a refusal for one that
-// is not delay-seconds or that comes with a cursor (PROTOCOL.md §11.11).
-func listWait(r *http.Request, hasCursor bool) (time.Duration, error) {
+// is not delay-seconds (PROTOCOL.md §11.11).
+func listWait(r *http.Request) (time.Duration, error) {
 	v, ok := r.URL.Query()[waitParam]
 	if !ok {
 		return 0, nil
 	}
 	n, err := protocol.Wait(v[0])
-	if err != nil || hasCursor {
-		return 0, fail(protocol.CodeInvalidRequest, "send the wait as whole seconds, on a list without a cursor", "the query parameter %s is not delay-seconds on a first page", memberValue(waitParam))
+	if err != nil {
+		return 0, fail(protocol.CodeInvalidRequest, "send the wait as whole seconds", "the query parameter %s is not delay-seconds", memberValue(waitParam))
 	}
 	if n >= uint64(waitReadBound/time.Second) {
 		return waitReadBound, nil
@@ -343,113 +275,39 @@ func (h *holds) release(rng string) {
 // Shutdown waits for none of them.
 func (s *Server) StopHolds() { s.stopOnce.Do(func() { close(s.stopping) }) }
 
-// spendPoll spends one of mailbox a's polls (Limits.PollBurst): every list that
-// does not continue a drain, a 304 among them.
+// spendPoll spends one of mailbox a's polls (Limits.PollBurst): every list, a
+// 304 among them.
 func (s *Server) spendPoll(a protocol.Address) error {
 	if ok, wait := s.polls.take(a.String(), s.now()); !ok {
 		return rateLimited(protocol.QuotaPolls, wait, "this mailbox has polled as often as it may for now: poll again after Retry-After")
 	}
-	s.metrics.list(false)
+	s.metrics.list()
 	return nil
 }
 
 // hintList is a list's 412's hint.
 const hintList = "list again without If-Match: dromas recv does"
 
-// listTag is a first page's ETag: the first 16 bytes of the SHA-256 of its
+// listTag is a page's ETag: the first 16 bytes of the SHA-256 of its
 // body, in hex. It is a strong validator that every process computes alike
 // with no key, and it changes with any message that enters or leaves the
 // page or the count. A page that holds messages cannot be made to share an
 // empty mailbox's tag, the one a client keeps: that is a second preimage of 128
-// bits. A page after the first has none.
+// bits.
 func listTag(body []byte) string {
 	sum := sha256.Sum256(body)
 	return `"` + hex.EncodeToString(sum[:16]) + `"`
 }
 
 // writeList writes a list answer, body, with the poll interval in
-// Retry-After, as RFC 9773 §4.3 uses the field, and a first page's tag.
+// Retry-After, as RFC 9773 §4.3 uses the field, and its tag.
 func writeList(w http.ResponseWriter, body []byte, tag, poll string) {
 	h := w.Header()
 	h.Set("Retry-After", poll)
-	if tag != "" {
-		h.Set("ETag", tag)
-	}
+	h.Set("ETag", tag)
 	h.Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
-}
-
-// drains remembers, for each mailbox with a drain open, the one next_cursor this
-// process last handed it. Serving that cursor's page replaces it with the
-// next, and the last page of a drain clears it. It is this process's alone,
-// as every count is: a page that lands on another process is charged as a
-// poll there.
-type drains struct {
-	mu   sync.Mutex
-	next map[protocol.Address]string
-}
-
-// take reports whether cursor is the one mailbox a was handed last, and takes it
-// for the call: it is spent unless the call gives it back (giveBack).
-func (d *drains) take(a protocol.Address, cursor string) bool {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	ok := d.next[a] == cursor
-	if ok {
-		delete(d.next, a)
-	}
-	return ok
-}
-
-// giveBack gives mailbox a the cursor a call took and did not spend, unless the
-// mailbox was handed another meanwhile.
-func (d *drains) giveBack(a protocol.Address, cursor string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if _, ok := d.next[a]; !ok {
-		if d.next == nil {
-			d.next = map[protocol.Address]string{}
-		}
-		d.next[a] = cursor
-	}
-}
-
-// put remembers the cursor just handed to mailbox a.
-func (d *drains) put(a protocol.Address, cursor string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.next == nil {
-		d.next = map[protocol.Address]string{}
-	}
-	d.next[a] = cursor
-}
-
-// cursorParam is the list's one query parameter: the next_cursor of the
-// page before.
-const cursorParam = "cursor"
-
-// A cursor is the last key listed, opaque to clients: base64url of the
-// receipt time in milliseconds (u64, big endian) and the id, unpadded, so
-// one or more of [A-Za-z0-9_-] as a cursor is (protocol.CheckCursor).
-func formatCursor(h Header) string {
-	b := binary.BigEndian.AppendUint64(nil, uint64(h.ReceivedAt.UnixMilli())) //nolint:gosec // receipt times are after 1970
-	return base64.RawURLEncoding.EncodeToString(append(b, h.ID[:]...))
-}
-
-// parseCursor accepts only a string that formatCursor writes. Base64
-// decoding skips CR and LF, Strict mode included (encoding/base64), so the
-// decoded cursor is written again and compared with s.
-func parseCursor(s string) (*Cursor, error) {
-	b, err := base64.RawURLEncoding.Strict().DecodeString(s)
-	if err == nil && len(b) == 8+32 {
-		c := &Cursor{ReceivedAt: time.UnixMilli(int64(binary.BigEndian.Uint64(b))).UTC()} //nolint:gosec // decoded from our own cursor
-		copy(c.ID[:], b[8:])
-		if formatCursor(Header{ReceivedAt: c.ReceivedAt, ID: c.ID}) == s {
-			return c, nil
-		}
-	}
-	return nil, fail(protocol.CodeInvalidRequest, "pass next_cursor exactly as received", "the query parameter %s is not a cursor this server handed out", memberValue(cursorParam))
 }
 
 // gone is the answer for a message the mailbox does not hold.

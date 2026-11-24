@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"crypto/sha512"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,46 +33,6 @@ import (
 // time:
 //
 //	go test -tags dromas_nofsync -run '^$' -fuzz '^FuzzHandler$' -fuzztime 2m -parallel 1 ./internal/server
-
-// parseCursor takes only a cursor (protocol.CheckCursor) that is strict
-// unpadded base64url of 40 bytes, and what it takes formatCursor writes back
-// as the same string; a refusal is invalid_request, with no cursor beside it.
-func FuzzParseCursor(f *testing.F) {
-	for _, h := range []Header{
-		{},
-		{ReceivedAt: fuzzNow(f), ID: sha256.Sum256([]byte("a message"))},
-		{ReceivedAt: time.UnixMilli(-1)},
-	} {
-		f.Add(formatCursor(h))
-	}
-	one := formatCursor(Header{ReceivedAt: fuzzNow(f)})
-	for _, s := range []string{"", "AAAA", one + "=", one[:len(one)-1], one + "A", strings.Repeat("A", 53) + "B", strings.ReplaceAll(one, "A", "+"), one[:42] + "\r" + one[42:], one[:42] + "\n" + one[42:]} {
-		f.Add(s)
-	}
-	f.Fuzz(func(t *testing.T, s string) {
-		c, err := parseCursor(s)
-		b, derr := base64.RawURLEncoding.Strict().DecodeString(s)
-		cursor := derr == nil && len(b) == 8+32 && protocol.CheckCursor(s) == nil
-		if err != nil {
-			if c != nil {
-				t.Fatal("refused, with a cursor beside it")
-			}
-			if p, ok := errors.AsType[*problem](err); !ok || p.code != protocol.CodeInvalidRequest {
-				t.Fatalf("refused as %v", err)
-			}
-			if cursor {
-				t.Fatalf("refused %q, a cursor of 40 bytes in strict base64url", s)
-			}
-			return
-		}
-		if !cursor {
-			t.Fatalf("took %q, which is no cursor of 40 bytes in strict base64url", s)
-		}
-		if again := formatCursor(Header{ReceivedAt: c.ReceivedAt, ID: c.ID}); again != s {
-			t.Fatalf("took %q, which formatCursor writes as %q", s, again)
-		}
-	})
-}
 
 // fuzzProxies are the trusted proxies of the clientIP and FuzzHandler
 // servers: the peers whose X-Forwarded-For is read.
@@ -515,7 +474,6 @@ func readFuzzVectors(f *testing.F) fuzzVectors {
 		{"DELETE", path("b", "/account"), pass("b"), at(""), nil},
 		{"GET", path("b", "/messages"), pass("b"), at("Accept-Encoding: gzip"), nil},
 		{"GET", path("b", "/messages?wait=30"), pass("b"), at("If-None-Match: *"), nil},
-		{"GET", path("b", "/messages?cursor="+formatCursor(Header{ReceivedAt: fuzzNow(f)})), pass("b"), at(""), nil},
 		{"GET", msg, pass("b"), at(""), nil},
 		{"DELETE", msg, pass("b"), at(""), nil},
 		{"GET", msg, pass("a"), at("X-Forwarded-For: 2001:db8::1%eth0"), nil},

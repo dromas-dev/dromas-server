@@ -292,7 +292,7 @@ func less(a, b Header) int {
 }
 
 // List implements Backend: every read of the maps is consistent.
-func (s *memBackend) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int) ([]Header, error) {
+func (s *memBackend) List(ctx context.Context, mailbox protocol.Address, limit int) ([]Header, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.held(ctx) {
@@ -300,9 +300,6 @@ func (s *memBackend) List(ctx context.Context, mailbox protocol.Address, after *
 	}
 	var all []Header
 	for _, m := range s.live(mailbox) {
-		if after != nil && less(m.h, Header{ReceivedAt: after.ReceivedAt, ID: after.ID}) <= 0 {
-			continue
-		}
 		all = append(all, m.h)
 	}
 	slices.SortFunc(all, less)

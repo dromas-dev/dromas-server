@@ -10,7 +10,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.116.0
 	github.com/aws/smithy-go v1.28.9
 	github.com/dchest/siphash v1.2.3
-	github.com/dromas-dev/dromas-client v0.6.12-0.20261123222806-98c70951bed4
+	github.com/dromas-dev/dromas-client v0.6.12-0.20261124051400-f5b5d2166564
 	github.com/jackc/pglogrepl v0.0.0-20261003132456-662581bb6bb6
 	github.com/jackc/pgx/v5 v5.13.0
 	github.com/pressly/goose/v3 v3.30.1

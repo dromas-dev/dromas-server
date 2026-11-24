@@ -247,7 +247,6 @@ var retryRoles = map[string]string{
 	string(protocol.QuotaMisses):                 "the bound of a read that may find no mailbox, reserved before it",
 	string(protocol.QuotaMissesRange):            "the bound of a read that may find no mailbox, reserved before it",
 	string(protocol.QuotaPolls):                  "a list's",
-	string(protocol.QuotaPages):                  "a list's",
 	string(protocol.CodeFetchRateLimited):        "a fetch's",
 }
 
