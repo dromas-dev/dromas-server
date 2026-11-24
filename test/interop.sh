@@ -21,7 +21,8 @@
 #  11. on PostgreSQL, two shards (ARCHITECTURE.md § Routing by address): no call misrouted, and each shard stored messages.
 # The recipe runs a mailbox of its own: the two clients meet over the wire, never in one mailbox directory.
 # Every script step runs in a FRESH shell (agents run each command in a new one). Every mailbox is post-quantum: where the
-# local age is older than 1.3, the client module's own (its go.mod's tool, built by go tool) goes first in PATH.
+# local age is older than 1.3, or no age-inspect is found, the client module's own age, age-keygen and age-inspect (its go.mod's
+# tools, built by go tool; age-inspect where its go.mod names it) go first in PATH.
 # Needs: go, bash ≥ 4, ssh-keygen, curl, jq, sha256sum, sha384sum, openssl, base64, od, GNU date (passof's date -d). Run from anywhere:
 #   test/interop.sh            SCRIPT=<path> overrides the dromas.sh it sources.
 # With DROMAS_TEST_POSTGRES set, dromas-server runs on PostgreSQL instead of --dev, the database libpq's environment names (PGHOST,
@@ -50,7 +51,8 @@ echo "stock client: $SCRIPT ($(grep -c '^dr_[a-z_]*()' "$SCRIPT") functions)"
 
 # The client module's modules, its tools' among them, came with its build
 # above (go mod download), so go tool builds age here without a fetch.
-age-keygen -pq > /dev/null 2>&1 || PATH=$(cd "$client" && dirname "$(go tool -n age)"):$(cd "$client" && dirname "$(go tool -n age-keygen)"):$PATH
+tooldirs(){ (cd "$client" && for t in "$@"; do d=$(go tool -n "$t" 2> /dev/null) && printf '%s:' "${d%/*}"; done); }   # <tool>… → the directory of each the client's go.mod names, each with a colon after it
+{ age-keygen -pq && command -v age-inspect; } > /dev/null 2>&1 || PATH=$(tooldirs age age-keygen age-inspect)$PATH
 age-keygen -pq > /dev/null 2>&1 || { echo "no age that makes post-quantum keys"; exit 1; }
 echo "age: $(age --version)"
 port=$((20000 + RANDOM % 12760))   # with the next four, below Linux's ephemeral ports (32768 up: ip_local_port_range), which an outgoing connection may hold
