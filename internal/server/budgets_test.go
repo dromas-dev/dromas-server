@@ -464,13 +464,11 @@ func TestIdenticalRegistrationsAtOnceSpendOneRegistration(t *testing.T) {
 
 // A revocation of certificates through a serial no higher than the one held
 // changes nothing, and is answered so before its signature is checked: the
-// same serial 200, a lower one 409, whatever the signature. Nothing is
-// counted against the caller for either.
+// same serial 200, a lower one 409, whatever the signature; a higher one's
+// signature is checked.
 func TestAFloorNoHigherIsAnsweredWithoutACheck(t *testing.T) {
 	t.Parallel()
-	l := relaxed()
-	l.MissesPerMinute = 1
-	e := newEnv(t, l)
+	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	e.want(e.do("PUT", r.path("/revocation"), r.certs(7), ""), http.StatusOK, "")
 	same, lower := r.certs(7), r.certs(5)
@@ -479,8 +477,7 @@ func TestAFloorNoHigherIsAnsweredWithoutACheck(t *testing.T) {
 	e.want(e.do("PUT", r.path("/revocation"), lower, ""), http.StatusConflict, protocol.CodeSerialTooLow)
 	higher := r.certs(9)
 	higher.RevokedCertificatesSignature = []byte("junk")
-	e.want(e.do("PUT", r.path("/revocation"), higher, ""), http.StatusBadRequest, protocol.CodeInvalidRevocation) // checked, and the address's one miss spent
-	e.want(e.do("PUT", r.path("/revocation"), higher, ""), http.StatusTooManyRequests, protocol.CodeRateLimited)
+	e.want(e.do("PUT", r.path("/revocation"), higher, ""), http.StatusBadRequest, protocol.CodeInvalidRevocation) // checked
 }
 
 // The identity's acts are counted per mailbox, each kind on its own, so neither
@@ -568,28 +565,51 @@ func TestATakerCannotHoldTheRemedyBack(t *testing.T) {
 	e.limited(e.do("GET", r.path("/acl"), nil, r.pass(2000)), protocol.QuotaCalls)
 }
 
-// A pass that fails costs signature checks that nothing paid for, so it is
-// counted against its caller's address (Limits.MissesPerMinute), reserved
-// before the check: past the count a new pass is refused before it is
-// checked. A pass the process remembers is answered from memory whatever
-// the count.
-func TestFailedPassesAreCountedPerCaller(t *testing.T) {
+// A new pass, a renewal and a revocation reserve no miss
+// (Limits.MissesPerMinute): what their signature checks cost is bounded by
+// the address's flood budget, which a call spends at the gate before its
+// pass is checked (TestANewPassSpendsItsAddresssFloodBudget). So, from one
+// address, lookups that find no mailbox past its misses, then passes that
+// fail (another server's, one run out), a renewal its checks refuse and a
+// revocation that does not verify, leave an honest new pass, renewal and
+// revocation taken, while the next lookup that finds nothing is refused.
+func TestANewPassReservesNoMiss(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	l.MissesPerMinute = 2
 	e := newEnv(t, l)
-	b := e.mailbox()
-	list := "/v1/" + b.Address().String() + "/messages"
-	good := e.pass(b)
-	e.want(e.do(http.MethodGet, list, nil, good), http.StatusOK, "")
-	wrongServer := e.passFor(worker(t, b), b.Address(), "elsewhere.example")
+	r, other := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
+	list := r.path("/messages")
 	for range 2 {
-		e.want(e.do(http.MethodGet, list, nil, wrongServer), http.StatusUnauthorized, protocol.CodeInvalidPass)
+		e.want(e.do(http.MethodGet, e.raw().path(""), nil, ""), http.StatusNotFound, protocol.CodeMailboxNotFound)
 	}
-	e.want(e.do(http.MethodGet, list, nil, wrongServer), http.StatusTooManyRequests, protocol.CodeRateLimited)
-	e.want(e.do(http.MethodGet, list, nil, good), http.StatusOK, "")
-	e.clock.Add(31 * time.Second)
-	e.want(e.do(http.MethodGet, list, nil, e.pass(b)), http.StatusOK, "")
+	e.limited(e.do(http.MethodGet, e.raw().path(""), nil, ""), protocol.QuotaMisses)
+	wrongServer := e.passFor(r.signer, r.id.Address(), "elsewhere.example")
+	e.clock.Add(-time.Hour)
+	runOut := r.pass(1)
+	e.clock.Add(time.Hour)
+	r.prekey(2, e.clock.Now().Add(2*protocol.MaxPrekeyLifetime), nil) // past what the server takes
+	sig, err := protocol.SignRevocation(other.signer, r.id.Address())
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged := protocol.Revocations{Identity: r.id.Document(), Revocation: sig}
+	for range 3 {
+		e.want(e.do(http.MethodGet, list, nil, wrongServer), http.StatusUnauthorized, protocol.CodeInvalidPass)
+		e.want(e.do(http.MethodGet, list, nil, runOut), http.StatusUnauthorized, protocol.CodePassExpired)
+		e.want(e.do("PUT", r.path("/prekey"), r.upload(2), r.pass(1)), http.StatusBadRequest, "")
+		e.want(e.do("PUT", r.path("/revocation"), forged, ""), http.StatusBadRequest, protocol.CodeInvalidRevocation)
+	}
+	e.clock.Add(time.Second)
+	e.want(e.do(http.MethodGet, list, nil, r.pass(1)), http.StatusOK, "")
+	r.prekey(3, e.clock.Now().Add(protocol.MaxPrekeyLifetime), nil)
+	e.want(e.do("PUT", r.path("/prekey"), r.upload(3), r.pass(1)), http.StatusOK, "")
+	sig, err = protocol.SignRevocation(r.signer, r.id.Address())
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.want(e.do("PUT", r.path("/revocation"), protocol.Revocations{Identity: r.id.Document(), Revocation: sig}, ""), http.StatusCreated, "")
+	e.limited(e.do(http.MethodGet, e.raw().path(""), nil, ""), protocol.QuotaMisses)
 }
 
 // mailboxSpent names each of s's buckets that holds less than full for key
@@ -756,29 +776,25 @@ var retryFinds = map[string]struct {
 
 // A registration of a registered mailbox is answered from its record, before the
 // registrations count, whether this process holds the mailbox or reads it, so its
-// pass is checked as any call's is: one the process has not seen reserves a
-// miss of its caller's address, kept when it fails
-// (dromas-dev/dromas-server#40). Past the misses it is refused before it
-// is checked, as on any other route. A mailbox read where its address's
-// registrations are spent is read by a lookup, and its pass checked the
-// same (dromas-dev/dromas-client#450 item 2).
-func TestAnIdenticalRetrysPassIsCounted(t *testing.T) {
+// pass is checked as any call's is (dromas-dev/dromas-server#40): a forged one
+// is invalid_pass, each time, as on any other route. A mailbox read where its
+// address's registrations are spent is read by a lookup, and its pass checked
+// the same (dromas-dev/dromas-client#450 item 2).
+func TestAnIdenticalRetrysPassIsChecked(t *testing.T) {
 	t.Parallel()
 	for name, c := range retryFinds {
 		t.Run(name, func(t *testing.T) {
 			l := relaxed()
-			l.MissesPerMinute = 2
 			if c.spent {
 				l.RegistrationsPerHour = 1
 			}
 			e := newEnv(t, l, c.with...)
 			r := e.raw().register(protocol.MaxPrekeyLifetime)
 			reg, forged := forgedFromPublic(t, e, r.id.Address())
-			for range 2 {
+			for range 3 {
 				e.want(e.do("PUT", r.path(""), reg, forged), http.StatusUnauthorized, protocol.CodeInvalidPass)
+				e.want(e.do("GET", r.path("/acl"), nil, forged), http.StatusUnauthorized, protocol.CodeInvalidPass)
 			}
-			e.limited(e.do("PUT", r.path(""), reg, forged), protocol.QuotaMisses)
-			e.limited(e.do("GET", r.path("/acl"), nil, forged), protocol.QuotaMisses)
 		})
 	}
 }

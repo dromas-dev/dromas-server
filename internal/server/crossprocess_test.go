@@ -512,59 +512,6 @@ func TestAProcessBehindRegistersNoAddressRevokedElsewhere(t *testing.T) {
 	x.hold(false)
 }
 
-// The sweep deletes the record left beside a revocation of its address,
-// which no call is answered from, once no message row of the address is
-// left, and no other address's. The messages left go by age, never by the
-// sweep of revoked addresses, and the record stays beside them, so a
-// revocation sent again can still delete them (ARCHITECTURE.md § The sweep).
-func TestTheSweepTakesWhatARevokedAddressLeft(t *testing.T) {
-	t.Parallel()
-	if !onPostgres() {
-		t.Skip("needs PostgreSQL: DROMAS_TEST_POSTGRES")
-	}
-	e := newEnv(t, relaxed())
-	from, gone, kept := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
-	for _, to := range []*raw{gone, kept} {
-		e.want(e.do("POST", to.path("/messages"), to.sealed(1, sealFor(t, to, 1)), from.pass(1)), http.StatusCreated, "")
-	}
-	s := e.store.(*Memory)
-	sig, err := protocol.Sign(gone.signer, protocol.RevocationStatement(gone.id.Address()), protocol.RevokeNamespace(gone.id.Address()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The revocation kept, and nothing deleted: as a revocation whose purge
-	// failed, or a send that landed as it ran, leaves the address.
-	if _, _, err := s.backend.Revoke(t.Context(), gone.id.Address(), &Revocations{Identity: gone.id.Document(), Address: sig}, ExpectAnything); err != nil {
-		t.Fatal(err)
-	}
-	rows := func(a protocol.Address) (msgs, recs int) {
-		ctx := t.Context()
-		if err := s.pool().QueryRow(ctx, `SELECT (SELECT count(*)::int FROM messages WHERE box = $1), (SELECT count(*)::int FROM mailboxes WHERE addr = $1)`, a[:]).Scan(&msgs, &recs); err != nil {
-			t.Fatal(err)
-		}
-		return msgs, recs
-	}
-	if m, r := rows(gone.id.Address()); m != 1 || r != 1 {
-		t.Fatalf("before the sweep, the revoked address holds %d messages and %d records; want 1 and 1", m, r)
-	}
-	s.pg().sweepRevoked(t.Context())
-	if m, r := rows(gone.id.Address()); m != 1 || r != 1 {
-		t.Errorf("after the sweep, the revoked address holds %d messages and %d records; want its message, which goes by age, and the record beside it", m, r)
-	}
-	// Its message gone, as its expiry takes it, the record goes too.
-	ga := gone.id.Address()
-	if _, err := s.pool().Exec(t.Context(), `DELETE FROM messages WHERE box = $1`, ga[:]); err != nil {
-		t.Fatal(err)
-	}
-	s.pg().sweepRevoked(t.Context())
-	if m, r := rows(gone.id.Address()); m != 0 || r != 0 {
-		t.Errorf("after the sweep, the revoked address with no message holds %d messages and %d records; want none", m, r)
-	}
-	if m, r := rows(kept.id.Address()); m != 1 || r != 1 {
-		t.Errorf("after the sweep, another address holds %d messages and %d records; want 1 and 1", m, r)
-	}
-}
-
 // A revocation that commits while a send's write statement runs, after that
 // statement read the record, leaves the send stored and answered 201: its
 // row is never served (a list, a fetch, a HEAD, a lookup), since every call

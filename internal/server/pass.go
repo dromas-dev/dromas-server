@@ -206,9 +206,9 @@ const (
 // is one.
 //
 // A pass this process does not remember costs signature checks, and anyone
-// can bring one: so its caller's address reserves a count under
-// Limits.MissesPerMinute first, kept if the pass fails and given back if it
-// passes (s.miss). One the process remembers is a lookup in memory.
+// can bring one: the flood budget its call spent at the gate, before the
+// pass is checked, bounds them (gate). One the process remembers is a
+// lookup in memory.
 func (s *Server) checkPass(r *http.Request, a protocol.Address, key string, signer [32]byte, rank uint64, listed bool, p *protocol.Pass) error {
 	_, err := s.passCheck(r, a, key, signer, rank, listed, p, true)
 	return err
@@ -286,19 +286,6 @@ func (s *Server) passCheck(r *http.Request, a protocol.Address, key string, sign
 	// the identity's key goes on, and is judged as any pass is.
 	if listed && (p.Address != a || !p.CarriesKey(identity)) {
 		return passBy{}, listedCertificate()
-	}
-	if count {
-		var m addressCount
-		if m, err = s.miss(r); err != nil {
-			return passBy{}, err
-		}
-		defer func() {
-			if err != nil {
-				m.keep()
-			} else {
-				m.release(s.now())
-			}
-		}()
 	}
 	if p.Address != a {
 		return passBy{}, invalidPass(hintPass, "the pass is another mailbox's")

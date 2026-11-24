@@ -421,30 +421,6 @@ func TestTheRevocationsOfAnyAddressAreServed(t *testing.T) {
 	}
 }
 
-// A body that is not a revocation costs the server a signature check that
-// nothing has paid for, so it counts as a lookup of a mailbox that does not
-// exist does, and a revocation that verifies is refused, 429, while the
-// caller's address has none left.
-func TestJunkRevocationsAreLimited(t *testing.T) {
-	t.Parallel()
-	l := relaxed()
-	l.MissesPerMinute = 2
-	e := newEnv(t, l)
-	a := e.mailbox()
-	junk := protocol.Revocations{Identity: a.Identity().Document(), Revocation: []byte("revoke it")}
-	path := revocationPath(a.Address())
-	e.want(e.do("PUT", path, junk, ""), 400, protocol.CodeInvalidRevocation)
-	e.want(e.do("PUT", path, junk, ""), 400, protocol.CodeInvalidRevocation)
-	limited := e.do("PUT", path, junk, "")
-	e.want(limited, 429, protocol.CodeRateLimited)
-	if limited.header.Get("Retry-After") == "" {
-		t.Error("a limited revocation carries no Retry-After")
-	}
-	e.want(e.do("GET", mailboxPath(a.Address()), nil, ""), 200, "")
-	e.clock.Add(protocol.MaxSkew) // long past the limit's minute
-	e.want(e.do("PUT", path, record(t, a), ""), 201, "")
-}
-
 // No cache may keep an answer of the API: a mailbox's prekey changes daily and a
 // mailbox can be revoked at any moment, and a 410 is cacheable unless it says
 // otherwise. The page a link opens is the one answer that may be kept.

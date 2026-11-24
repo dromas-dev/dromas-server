@@ -257,8 +257,8 @@ func TestMissesPerIP(t *testing.T) {
 		e2.want(read(b.Address()), http.StatusOK, "") // a live mailbox, held in memory: not a miss
 	}
 	// A pass the process remembers is answered from memory, whatever its
-	// address has spent; a new one costs signature checks, and an address
-	// past its count is refused before them.
+	// address has spent, and a new one, of a mailbox memory holds, reserves
+	// no miss (TestANewPassReservesNoMiss).
 	if r := e2.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages", nil, pass); r.status != http.StatusOK {
 		t.Fatalf("the owner's poll with its pass remembered: %d %s", r.status, r.body)
 	}
@@ -275,7 +275,7 @@ func TestMissesPerIP(t *testing.T) {
 		}
 	}
 	e.clock.Add(time.Second)
-	e2.want(e2.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages", nil, e2.pass(b)), http.StatusTooManyRequests, protocol.CodeRateLimited)
+	e2.want(e2.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages", nil, e2.pass(b)), http.StatusOK, "")
 	e.clock.Add(-time.Second)
 	e.clock.Add(30 * time.Second) // one back
 	e2.want(read(nobody(4)), http.StatusNotFound, protocol.CodeMailboxNotFound)
