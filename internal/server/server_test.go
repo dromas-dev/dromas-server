@@ -158,7 +158,7 @@ func (e *env) doAs(host, method, path string, body any, pass string, headers ...
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	r := reply{status: resp.StatusCode, header: resp.Header, body: b}
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode >= 400 && !r.noRoute() {
 		var p protocol.Problem
 		if err := json.Unmarshal(b, &p); err != nil || resp.Header.Get("Content-Type") != protocol.ProblemContentType ||
 			p.Status != int64(resp.StatusCode) || p.Type != p.Code.TypeURI() || p.Code.Status() != resp.StatusCode {
@@ -176,6 +176,21 @@ func (e *env) want(r reply, status int, code protocol.Code) {
 	if r.status != status || (code != "" && r.code() != code) {
 		e.t.Fatalf("got %d %s, want %d %s: %s", r.status, r.code(), status, code, r.body)
 	}
+}
+
+// wantNoRoute is want of the router's plain 404: no route answers the
+// request.
+func (e *env) wantNoRoute(r reply) {
+	e.t.Helper()
+	if r.status != http.StatusNotFound || !r.noRoute() {
+		e.t.Fatalf("got %d %s, want the router's plain 404: %s", r.status, r.header.Get("Content-Type"), r.body)
+	}
+}
+
+// noRoute reports whether r is the router's own plain 404 or 405, which is
+// no problem+json.
+func (r reply) noRoute() bool {
+	return (r.status == http.StatusNotFound || r.status == http.StatusMethodNotAllowed) && strings.HasPrefix(r.header.Get("Content-Type"), "text/plain")
 }
 
 // wantNotCurrent is want of a pass refused as under another certificate than
@@ -562,7 +577,7 @@ func TestRegistration(t *testing.T) {
 	r.prekey(1, now.Add(protocol.MaxPrekeyLifetime), nil)
 	reg, pass := r.registration(1), r.pass(1)
 
-	e.want(e.do("PUT", "/v1/nope", reg, pass), 400, protocol.CodeInvalidAddress)
+	e.wantNoRoute(e.do("PUT", "/v1/nope", reg, pass))
 	e.want(e.do("PUT", r.path(""), []byte(`{"identity":"","prekey":"","prekey_signature":"","extra":1}`), pass), 400, protocol.CodeInvalidRequest)
 	e.want(e.do("PUT", r.path(""), []byte(`{"identity":"","prekey":""}`), pass), 400, protocol.CodeInvalidRequest)
 	e.want(e.do("PUT", r.path(""), []byte(`{"identity":"","prekey":"","prekey_signature":null}`), pass), 400, protocol.CodeInvalidRequest)
@@ -890,29 +905,36 @@ func TestOwnerCalls(t *testing.T) {
 }
 
 // An address in a path is "d_" and 64 characters of base64url, so a mailbox
-// has one URL: any other form is no address, on every route that names one,
-// whoever calls, and the address with a letter in the other case is another
-// address (PROTOCOL.md §4.2).
+// has one URL: a first segment that begins with a letter and "_" names an
+// address, and any other form of one is no address, on every route that
+// names one, whoever calls; the address with a letter in the other case is
+// another address (PROTOCOL.md §4.2). A first segment that does not begin
+// with a letter and "_" names no route: the plain 404, whoever calls.
 func TestAnAddressInAPathIsInItsOneForm(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	r := e.raw().register(protocol.MaxPrekeyLifetime)
 	pass := r.pass(1)
 	own := r.id.Address().String()
-	bare := "/v1/" + own[2:]
-	for _, path := range []string{bare, "/v1/e_" + own[2:], "/v1/D_" + own[2:], "/v1/" + own[:10] + "+" + own[11:], "/v1/" + own + "="} {
+	other := "/v1/D_" + own[2:]
+	for _, path := range []string{"/v1/e_" + own[2:], other, "/v1/" + own[:10] + "+" + own[11:], "/v1/" + own + "="} {
 		e.want(e.do("GET", path, nil, ""), 400, protocol.CodeInvalidAddress)
 	}
 	for _, c := range []struct{ method, path, pass string }{
-		{"GET", bare + "/messages", pass},
-		{"GET", bare + "/messages/" + strings.Repeat("a", 64), pass},
-		{"DELETE", bare + "/messages/" + strings.Repeat("a", 64), pass},
-		{"GET", bare + "/acl", pass},
-		{"DELETE", bare + "/account", pass},
+		{"GET", other + "/messages", pass},
+		{"GET", other + "/messages/" + strings.Repeat("a", 64), pass},
+		{"DELETE", other + "/messages/" + strings.Repeat("a", 64), pass},
+		{"GET", other + "/acl", pass},
+		{"DELETE", other + "/account", pass},
 	} {
 		e.want(e.do(c.method, c.path, nil, c.pass), 400, protocol.CodeInvalidAddress)
 	}
-	e.want(e.do("PUT", bare+"/prekey", r.upload(1), pass), 400, protocol.CodeInvalidAddress)
+	e.want(e.do("PUT", other+"/prekey", r.upload(1), pass), 400, protocol.CodeInvalidAddress)
+	for _, path := range []string{"/v1/" + own[1:], "/v1/0" + own[1:], "/v1/dd" + own[2:], "/v1/d"} {
+		e.wantNoRoute(e.do("GET", path, nil, ""))
+		e.wantNoRoute(e.do("GET", path+"/messages", nil, pass))
+		e.wantNoRoute(e.do("PUT", path+"/prekey", r.upload(1), pass))
+	}
 	i := 2 + strings.IndexAny(own[2:], "abcdefghijklmnopqrstuvwxyz") // one letter in the other case
 	e.want(e.do("GET", "/v1/"+own[:i]+strings.ToUpper(own[i:i+1])+own[i+1:], nil, ""), 404, protocol.CodeMailboxNotFound)
 	e.want(e.do("GET", r.path(""), nil, ""), 200, "")
@@ -1277,13 +1299,13 @@ func TestSendPipeline(t *testing.T) {
 	// its query and its address included.
 	e.want(e.do("POST", to+"/messages", ok, ""), 401, protocol.CodeInvalidPass)
 	e.want(e.do("POST", to+"/messages?prekey_sha256=0", ok.ciphertext, ""), 401, protocol.CodeInvalidPass)
-	e.want(e.do("POST", "/v1/nope/messages", ok, ""), 401, protocol.CodeInvalidPass)
+	e.wantNoRoute(e.do("POST", "/v1/nope/messages", ok, ""))
 
 	// Then the address, then the query: the statement's hash, once, 64
 	// lowercase hex digits, and nothing else. What is wrong is named in
 	// member. The sender is the mailbox the pass names, so the query names
 	// none.
-	e.want(e.do("POST", "/v1/nope/messages?x=1", ok.ciphertext, pass), 400, protocol.CodeInvalidAddress)
+	e.wantNoRoute(e.do("POST", "/v1/nope/messages?x=1", ok.ciphertext, pass))
 	e.want(e.do("POST", "/v1/"+strings.ToUpper(b.Address().String())+"/messages", ok, pass), 400, protocol.CodeInvalidAddress)
 	serials := ok.Encode()
 	hash := ok.Statement
@@ -1358,7 +1380,7 @@ func TestSendPipeline(t *testing.T) {
 		}
 	}
 	small.want(small.do("POST", sto+"?x=1", make([]byte, 101), spass), 400, protocol.CodeInvalidRequest)
-	small.want(small.do("POST", "/v1/nope/messages?"+serials, make([]byte, 101), spass), 400, protocol.CodeInvalidAddress)
+	small.want(small.do("POST", "/v1/x_nope/messages?"+serials, make([]byte, 101), spass), 400, protocol.CodeInvalidAddress)
 	tooLarge(small.do("POST", sto+"?"+serials, make([]byte, 101), spass))
 	small.want(small.do("POST", sto+"?"+serials, make([]byte, 100), spass), 400, protocol.CodeInvalidRequest)
 	// A body of no known length goes chunked, with no Content-Length.

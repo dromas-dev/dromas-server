@@ -173,6 +173,7 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 		{"forgotten", forgotten.id.Address().String(), forgottenPass},
 		{"its certificate revoked", listed.id.Address().String(), listedPass},
 		{"held by nobody", nobody, ""},
+		{"naming no address", "nope", ""}, // no route: the plain 404, whatever pass it carries
 	}
 	// The passes of a live mailbox, which make a call its mailbox's where the
 	// route takes them.
@@ -193,10 +194,14 @@ func TestEveryRequestIsCountedBeforeAnythingIsDone(t *testing.T) {
 			if st.name == "live" { // and with a query its route refuses, before it spends anything
 				paths = append(paths, p+"?nope=1", p+"?wait=x", p+"?cursor=x")
 			}
+			pass := r.pass
+			if st.addr == "nope" {
+				pass = passNone
+			}
 			for _, p := range paths {
-				targets = append(targets, target{method, p, r.pass, st.addr, st.pass, false})
+				targets = append(targets, target{method, p, pass, st.addr, st.pass, false})
 				if method == http.MethodGet { // a pattern of GET matches HEAD too (http.ServeMux)
-					targets = append(targets, target{http.MethodHead, p, r.pass, st.addr, st.pass, false})
+					targets = append(targets, target{http.MethodHead, p, pass, st.addr, st.pass, false})
 				}
 			}
 		}

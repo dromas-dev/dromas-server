@@ -321,7 +321,36 @@ func (s *Server) Handler() http.Handler {
 // unrouted takes a request as routed only to a handler mount or subtree put
 // there.
 func (s *Server) mount(mux *http.ServeMux, pattern string, pass passRule, h http.Handler) {
-	mux.Handle(pattern, registered{s.gate(pass, h)})
+	h = s.gate(pass, h)
+	if strings.Contains(pattern, " "+protocol.DocumentPath+"{address}") {
+		h = s.addressed(h)
+	}
+	mux.Handle(pattern, registered{h})
+}
+
+// namesAddress reports whether a first segment under /v1/ names an address:
+// it begins with an ASCII letter and "_" (PROTOCOL.md §11.2).
+func namesAddress(seg string) bool {
+	return len(seg) >= 2 && seg[1] == '_' && ('a' <= seg[0] && seg[0] <= 'z' || 'A' <= seg[0] && seg[0] <= 'Z')
+}
+
+// addressed answers a request under /v1/ whose first segment is no address's,
+// ahead of the gate, as the router answers a request no route matches:
+// counted (spendRequest), then the plain 404. A segment that begins with a
+// letter and "_" names an address, and its route judges its form (pathAddr:
+// d_ is the one form); any other is an unknown route.
+func (s *Server) addressed(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !namesAddress(r.PathValue("address")) {
+			if p := s.spendRequest(r); p != nil {
+				writeProblem(w, p)
+				return
+			}
+			http.NotFound(w, r)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
 }
 
 // subtree puts the router inner on mux at prefix, wrapped by wrap: its

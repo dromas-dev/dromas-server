@@ -183,7 +183,8 @@ func TestEveryOtherRequestIsTheSites(t *testing.T) {
 		{"GET", "/v1/" + "d_" + strings.Repeat("a", 64), http.StatusNotFound, protocol.CodeMailboxNotFound},
 		{"GET", "/v1", http.StatusTemporaryRedirect, ""},
 		{"PUT", "/to", http.StatusTemporaryRedirect, ""},
-		{"GET", "/v1/nope", http.StatusBadRequest, protocol.CodeInvalidAddress},
+		{"GET", "/v1/nope", http.StatusNotFound, ""},
+		{"GET", "/v1/x_nope", http.StatusBadRequest, protocol.CodeInvalidAddress},
 		{"POST", "/v1/", http.StatusMethodNotAllowed, ""}, // the server's document is GET
 		{"GET", protocol.LinkPath + addr, http.StatusOK, ""},
 		{"POST", protocol.LinkPath + addr, http.StatusMethodNotAllowed, ""},
