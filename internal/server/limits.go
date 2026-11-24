@@ -181,28 +181,6 @@ func (l Limits) liftedReceives() time.Duration {
 	return min(l.ReceiveRefill, l.AccountReceiveRefill)
 }
 
-// uncappedPages is how many list pages a mailbox is taken to hold when no mailbox
-// cap bounds it.
-const uncappedPages = 1000
-
-// continuations is the size of the allowance for list pages after the first,
-// per mailbox, a burst and an interval. A
-// page after the first is not a poll (PROTOCOL.md §11.11), so it has its own:
-// two full mailboxes' worth of pages at once, and a full mailbox's worth back each
-// poll interval. A drain's pages are never refused (its fetches may be paced:
-// Limits.DrainBurst), and a cursor is no way around the poll rate. With no
-// poll limit there is none.
-func (l Limits) continuations() (n int, every time.Duration) {
-	if l.PollBurst == 0 || l.PollRefill <= 0 {
-		return 0, 0
-	}
-	pages := (l.MailboxCap + pageSize - 1) / pageSize
-	if l.MailboxCap == 0 {
-		pages = uncappedPages
-	}
-	return 2 * pages, l.PollRefill / time.Duration(pages)
-}
-
 // buckets is a set of token buckets by key: n tokens, one back each
 // interval. A key's bucket starts full, on its first use and after a
 // restart. Each is kept as the time it is full again (the GCRA form of a

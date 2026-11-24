@@ -67,122 +67,34 @@ func TestBucketsDropKeysFullAgain(t *testing.T) {
 	}
 }
 
-// The allowance for list pages after the first follows the mailbox cap and the
-// poll rate: two full mailboxes' worth at once, a full mailbox's worth each poll
-// interval.
-func TestContinuationAllowance(t *testing.T) {
-	t.Parallel()
-	l := DefaultLimits()
-	pages := (l.MailboxCap + pageSize - 1) / pageSize
-	if n, every := l.continuations(); n != 2*pages || every != l.PollRefill/time.Duration(pages) {
-		t.Fatalf("%d pages, one each %s", n, every)
-	}
-	l.MailboxCap = 0
-	if n, _ := l.continuations(); n != 2*uncappedPages {
-		t.Fatalf("no mailbox cap: %d pages", n)
-	}
-	l.PollBurst = 0
-	if n, _ := l.continuations(); n != 0 {
-		t.Fatal("no poll limit, and a page limit")
-	}
-}
-
-// A cursor is no way around the poll rate: with nothing after it, a list is
-// a poll, answered from memory; with something after it, it is a
-// continuation, which has its own allowance.
-func TestCursorIsNoWayAroundThePollRate(t *testing.T) {
-	t.Parallel()
-	l := relaxed()
-	l.MailboxCap = pageSize // a mailbox of one page: two continuations at once, one back each poll interval
-	l.PollBurst, l.PollRefill = 3, 50*time.Second
-	e := newEnv(t, l)
-	a, b := e.mailbox(), e.mailbox()
-	steady(t, e.store, b.Address())
-	e2, cs := counted(t, e, l)
-	tok := e2.pass(b)
-	list := func(c Cursor) reply {
-		return e2.do(http.MethodGet, "/v1/"+b.Address().String()+"/messages?cursor="+formatCursor(Header{ReceivedAt: c.ReceivedAt, ID: c.ID}), nil, tok)
-	}
-	start := Cursor{ReceivedAt: time.UnixMilli(0)}
-	end := Cursor{ReceivedAt: e.clock.Now().Add(time.Hour)}
-
-	// An empty mailbox: every list with a cursor is a poll.
-	for i := range 3 {
-		if r := list(start); r.status != http.StatusOK || listOf(t, r).Count != 0 {
-			t.Fatalf("poll %d with a cursor: %d %s", i, r.status, r.body)
-		}
-	}
-	e2.want(list(start), http.StatusTooManyRequests, protocol.CodeRateLimited)
-	if n := cs.calls.Load(); n != 0 {
-		t.Fatalf("%d storage calls for lists of an empty mailbox", n)
-	}
-
-	// Messages after the cursor, and a cursor this process never handed out: a
-	// poll, answered with the page all the same.
-	for _, body := range []string{"1", "2", "3"} {
-		send(t, a, b, body)
-	}
-	e.clock.Add(3 * l.PollRefill)
-	for i := range 3 {
-		r := list(start)
-		if got := listOf(t, r); r.status != http.StatusOK || got.Count != 3 || len(got.Messages) != 3 {
-			t.Fatalf("made-up cursor %d: %d %s", i, r.status, r.body)
-		}
-	}
-	r := list(start)
-	e2.want(r, http.StatusTooManyRequests, protocol.CodeRateLimited)
-	if q, _ := r.quota(); q != protocol.QuotaPolls {
-		t.Fatalf("a made-up cursor past the polls: %s", r.body)
-	}
-
-	// Nothing after the cursor: a poll too, read from memory.
-	e.clock.Add(l.PollRefill)
-	before := cs.calls.Load()
-	r = list(end)
-	if got := listOf(t, r); r.status != http.StatusOK || got.Count != 3 || len(got.Messages) != 0 || got.NextCursor != nil {
-		t.Fatalf("a cursor past the last message: %d %s", r.status, r.body)
-	}
-	e2.want(list(end), http.StatusTooManyRequests, protocol.CodeRateLimited)
-	if n := cs.calls.Load(); n != before {
-		t.Fatalf("%d storage calls: a list with nothing to return read storage", n-before)
-	}
-}
-
-// A page after the first is a continuation only with the cursor this process
-// handed the mailbox last (dromas-dev/dromas-server#5): a drain's pages come
-// from the page allowance, and the same cursor again is a poll.
-func TestAContinuationIsTheCursorHandedOutLast(t *testing.T) {
+// A list is the mailbox's oldest page and its count, with no cursor
+// (PROTOCOL.md §11.11): past a page, the page is the oldest pageSize
+// messages, oldest first, and each list is a poll.
+func TestAListIsTheOldestPage(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	l.MailboxCap = 0
 	l.PollBurst, l.PollRefill = 2, 50*time.Second
 	e := newEnv(t, l)
 	from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
+	var newest string
 	for range pageSize + 1 {
+		newest = formatTime(e.clock.Now())
 		e.want(e.sendTo(to, 1, from, 1), http.StatusCreated, "")
+		e.clock.Add(time.Second)
 	}
 	pass := to.pass(1)
-	page := func(cursor string) reply {
-		path := to.path("/messages")
-		if cursor != "" {
-			path += "?cursor=" + cursor
+	page := listOf(t, e.do(http.MethodGet, to.path("/messages"), nil, pass))
+	if page.Count != pageSize+1 || len(page.Messages) != pageSize {
+		t.Fatalf("a list of %d messages: count %d, a page of %d", pageSize+1, page.Count, len(page.Messages))
+	}
+	for i, m := range page.Messages {
+		if m.ReceivedAt >= newest || i > 0 && m.ReceivedAt < page.Messages[i-1].ReceivedAt {
+			t.Fatalf("the page is not the oldest, oldest first: %+v", page.Messages)
 		}
-		return e.do(http.MethodGet, path, nil, pass)
 	}
-	first := listOf(t, page(""))
-	if len(first.Messages) != pageSize || first.NextCursor == nil {
-		t.Fatalf("the first page: %d messages, next %v", len(first.Messages), first.NextCursor)
-	}
-	c := *first.NextCursor
-	if second := listOf(t, page(c)); len(second.Messages) != 1 || second.NextCursor != nil {
-		t.Fatalf("the continuation: %d messages, next %v", len(second.Messages), second.NextCursor)
-	}
-	e.want(page(c), http.StatusOK, "") // the same cursor again: the mailbox's second poll
-	r := page(c)
-	e.want(r, http.StatusTooManyRequests, protocol.CodeRateLimited)
-	if q, _ := r.quota(); q != protocol.QuotaPolls {
-		t.Fatalf("a replayed cursor past the polls: %s", r.body)
-	}
+	e.want(e.do(http.MethodGet, to.path("/messages"), nil, pass), http.StatusOK, "")
+	e.limited(e.do(http.MethodGet, to.path("/messages"), nil, pass), protocol.QuotaPolls)
 }
 
 // A fetch or an ack of an id the mailbox does not hold is answered from

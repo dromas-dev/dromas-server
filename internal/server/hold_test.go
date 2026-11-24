@@ -124,12 +124,12 @@ func TestAWaitWithNothingToWaitForIsAnsweredAtOnce(t *testing.T) {
 	}
 }
 
-// A wait that is not delay-seconds, or comes with a cursor, is refused.
+// A wait that is not delay-seconds is refused.
 func TestAWaitOfAnotherFormIsRefused(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, relaxed())
 	_, to, _ := emptyTag(e)
-	for _, q := range []string{"wait=", "wait=-1", "wait=1.5", "wait=1&wait=2", "wait=5&cursor=abc"} {
+	for _, q := range []string{"wait=", "wait=-1", "wait=1.5", "wait=1&wait=2"} {
 		r := e.do("GET", to.path("/messages?"+q), nil, to.pass(1))
 		e.want(r, http.StatusBadRequest, protocol.CodeInvalidRequest)
 	}

@@ -320,25 +320,6 @@ func (x *index) count(mailbox protocol.Address, now uint64) int {
 	return len(m.marks)
 }
 
-// after returns how many live messages a mailbox holds past a list position: the
-// list is oldest first, by receipt time (so by expiry) and then id.
-func (x *index) after(mailbox protocol.Address, exp, id, now uint64) (n int) {
-	sh := x.shard(mailbox)
-	sh.mu.Lock()
-	defer sh.mu.Unlock()
-	m := sh.held(mailbox)
-	if m == nil {
-		return 0
-	}
-	m.prune(now)
-	for _, k := range m.marks {
-		if k.exp > exp || (k.exp == exp && k.id > id) {
-			n++
-		}
-	}
-	return n
-}
-
 // holds reports whether a mailbox holds a live message of this tag.
 func (x *index) holds(mailbox protocol.Address, tag, now uint64) bool {
 	sh := x.shard(mailbox)

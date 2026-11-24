@@ -64,7 +64,7 @@ func TestMetricsCountWhatTheServerDoes(t *testing.T) {
 		{"polls allowed", m.limits.WithLabelValues("polls", "mailbox", "allowed"), 1},
 		{"polls denied", m.limits.WithLabelValues("polls", "mailbox", "denied"), 1},
 		{"new messages taken", m.limits.WithLabelValues("mailbox_rate_limited", "mailbox", "allowed"), 1},
-		{"polls", m.lists.WithLabelValues("poll"), 1},
+		{"lists", m.lists, 1},
 		{"fetches", m.fetches, 2},
 		{"a value that is no pass", m.passes.WithLabelValues("refused", string(protocol.CodeInvalidPass)), 1},
 	} {

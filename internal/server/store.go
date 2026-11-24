@@ -649,9 +649,9 @@ type Store interface {
 	// instead.
 	PutMessage(ctx context.Context, mailbox protocol.Address, h *Header, body []byte) (*Header, error)
 	// List returns up to limit live headers, oldest first by (ReceivedAt,
-	// ID), after the given key (nil: from the start), strongly consistent:
-	// every write applied to memory before the read is in the page.
-	List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int) ([]Header, error)
+	// ID), strongly consistent: every write applied to memory before the
+	// read is in the page.
+	List(ctx context.Context, mailbox protocol.Address, limit int) ([]Header, error)
 	// Message returns a live message and its body, or ErrNotFound: the body
 	// from byte from on where from is inside it, above 0 and below its Size,
 	// and otherwise whole, as a fetch answers a range (PROTOCOL.md §11.12).
@@ -688,9 +688,6 @@ type Store interface {
 	// Count returns the number of live messages in a mailbox, from memory: the
 	// mailbox is loaded on its first use, and answered from memory after that.
 	Count(ctx context.Context, mailbox protocol.Address) (n int, err error)
-	// After returns how many live messages a mailbox holds past a list position,
-	// from memory as Count does: what a list from that cursor would return.
-	After(ctx context.Context, mailbox protocol.Address, c *Cursor) (int, error)
 	// Holds reports whether a mailbox holds a live message with this id, from
 	// memory as Count does, by the id's tag, a keyed hash of it (markTag).
 	// False is certain; true may be another message whose tag is the same,
@@ -698,7 +695,8 @@ type Store interface {
 	Holds(ctx context.Context, mailbox protocol.Address, id [32]byte) (bool, error)
 }
 
-// Cursor is a position in a mailbox's list: the last key returned.
+// Cursor is a position in a mailbox's messages, oldest first: the last key
+// a load's page read (pgBackend.ReadLive).
 type Cursor struct {
 	ReceivedAt time.Time
 	ID         [32]byte

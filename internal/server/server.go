@@ -107,7 +107,6 @@ type Server struct {
 	policy        atomic.Pointer[protocol.ServerDocument] // swapped whole by its Reloader
 
 	polls    *buckets     // per mailbox
-	pages    *buckets     // per mailbox: list pages after the first
 	regs     addressLimit // registrations
 	sendIPs  addressLimit // sends, before their pass
 	misses   addressLimit // reads of the mailboxes table that found no mailbox, and checks that failed
@@ -124,8 +123,6 @@ type Server struct {
 	// inFlight counts the sends let past the mailbox cap and not yet stored, by
 	// the recipient's first byte (reserveCaps).
 	inFlight [256]inFlight
-	// drains is the cursor each mailbox was handed last (list).
-	drains drains
 	// holds is the list each mailbox has held, holding counts them (list),
 	// and stopping is closed once it stops (StopHolds), which answers every
 	// one.
@@ -168,7 +165,6 @@ func New(c Config) *Server {
 		identityTypes: c.IdentityTypes,
 		metrics:       c.Metrics,
 		polls:         newBuckets(string(protocol.QuotaPolls), 0, 0),
-		pages:         newBuckets(string(protocol.QuotaPages), 0, 0),
 		regs:          newAddressLimit(protocol.QuotaRegistrations, protocol.QuotaRegistrationsRange, "registrations"),
 		sendIPs:       newAddressLimit(protocol.QuotaSendsBeforePass, protocol.QuotaSendsBeforePassRange, "sends"),
 		misses:        newAddressLimit(protocol.QuotaMisses, protocol.QuotaMissesRange, "calls"),
@@ -230,7 +226,6 @@ func (s *Server) setLimits(l Limits, policy *protocol.ServerDocument) {
 	} {
 		b.bs.resize(b.n, b.every)
 	}
-	s.pages.resize(l.continuations())
 	s.requests.resize(l.RequestBurst, l.RequestRefill, l.RangeRequestBurst, l.RangeRequestRefill)
 	s.regs.resize(perPeriods(l.RegistrationsPerHour, l.RangeRegistrationsPerHour, time.Hour))
 	s.sendIPs.resize(perPeriods(l.SendsPerMinutePerIP, l.RangeSendsPerMinute, time.Minute))
@@ -421,8 +416,8 @@ func gateMailbox(r *http.Request) (protocol.Address, bool) {
 }
 
 // refusedForm answers a call its route refuses for its path or its query,
-// before the route has spent anything for it (pathAddr, and a list's wait
-// and cursor). A call the gate took as its mailbox's spent nothing there, so
+// before the route has spent anything for it (pathAddr, and a list's wait).
+// A call the gate took as its mailbox's spent nothing there, so
 // it spends one of the mailbox's calls first, and past them is refused for
 // that instead (LIMITS.md, rule 1); any other was counted at the gate.
 func (s *Server) refusedForm(r *http.Request, err error) error {

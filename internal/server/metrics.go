@@ -23,8 +23,8 @@ import (
 // failure beside its attempts. They are served on a listener of their own
 // (dromas-server serve --metrics-listen), never the API's.
 //
-// No label is a value a caller chooses: no address, IP, mailbox, message id,
-// cursor or path as sent, each of which would be a series per caller and is
+// No label is a value a caller chooses: no address, IP, mailbox, message id
+// or path as sent, each of which would be a series per caller and is
 // what the logs leave out. Every label is from a set this code defines: a
 // route is the router's pattern, a code the protocol's, a limit the name a
 // refusal gives it. A nil *Metrics counts nothing.
@@ -35,7 +35,7 @@ type Metrics struct {
 	limits     *prometheus.CounterVec
 	passes     *prometheus.CounterVec
 	fetches    prometheus.Counter
-	lists      *prometheus.CounterVec
+	lists      prometheus.Counter
 	store      *prometheus.CounterVec
 	storeTime  *prometheus.HistogramVec
 	caches     *prometheus.CounterVec
@@ -72,8 +72,8 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Help: "Passes, by outcome: remembered (taken from memory), checked (verified), refused (with its code)."}, []string{"outcome", "code"}),
 		fetches: prometheus.NewCounter(prometheus.CounterOpts{Namespace: ns, Name: "fetches_total",
 			Help: "Messages served."}),
-		lists: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "lists_total",
-			Help: "Lists taken, by kind: a poll, or a page after the first of a drain."}, []string{"kind"}),
+		lists: prometheus.NewCounter(prometheus.CounterOpts{Namespace: ns, Name: "lists_total",
+			Help: "Lists taken."}),
 		store: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: ns, Name: "store_calls_total",
 			Help: "Calls to S3, where messages' bodies are kept in a bucket, retries included, and to Valkey, the shared store of per-sender budgets (--valkey), by service (S3 or Valkey), operation (the S3 operation: PutObject, GetObject, DeleteObjects; Valkey's: take, give, read, clear) and outcome: ok, not_found, throttled, timeout (Valkey, past its deadline) or error."}, []string{"service", "operation", "outcome"}),
 		storeTime: prometheus.NewHistogramVec(prometheus.HistogramOpts{Namespace: ns, Name: "store_call_duration_seconds",
@@ -237,16 +237,12 @@ func (m *Metrics) fetch() {
 	m.fetches.Inc()
 }
 
-// list counts a list taken, a page after the first when continues.
-func (m *Metrics) list(continues bool) {
+// list counts a list taken.
+func (m *Metrics) list() {
 	if m == nil {
 		return
 	}
-	kind := "poll"
-	if continues {
-		kind = "page"
-	}
-	m.lists.WithLabelValues(kind).Inc()
+	m.lists.Inc()
 }
 
 // holding counts a long poll (n 1) or no longer held (n -1).

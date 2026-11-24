@@ -459,11 +459,11 @@ func TestRecoveryWithIdentityAlone(t *testing.T) {
 	}
 }
 
+// A drain of more than a page lists again once it has taken the oldest page
+// (PROTOCOL.md §11.11): every message is delivered, oldest first.
 func TestPagination(t *testing.T) {
 	t.Parallel()
-	l := relaxed()
-	l.PollBurst = 1 // a drain of two pages is one poll, and a continuation
-	e := newEnv(t, l)
+	e := newEnv(t, relaxed())
 	a, b := e.mailbox(), e.mailbox()
 	const n = pageSize + 5
 	for i := range n {

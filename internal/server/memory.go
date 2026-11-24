@@ -527,8 +527,8 @@ func (s *Memory) PutMessage(ctx context.Context, mailbox protocol.Address, h *He
 }
 
 // List implements Store: the backend's page.
-func (s *Memory) List(ctx context.Context, mailbox protocol.Address, after *Cursor, limit int) ([]Header, error) {
-	hs, err := s.backend.List(ctx, mailbox, after, limit)
+func (s *Memory) List(ctx context.Context, mailbox protocol.Address, limit int) ([]Header, error) {
+	hs, err := s.backend.List(ctx, mailbox, limit)
 	if errors.Is(err, ErrStale) {
 		s.forget(mailbox) // the call's pass no longer holds: memory is behind
 	}
@@ -594,14 +594,6 @@ func (s *Memory) Count(ctx context.Context, mailbox protocol.Address) (int, erro
 		return 0, err
 	}
 	return s.idx.count(mailbox, s.nowMs()), nil
-}
-
-// After implements Store: from memory, after the mailbox's load on its first use.
-func (s *Memory) After(ctx context.Context, mailbox protocol.Address, c *Cursor) (int, error) {
-	if err := s.ensure(ctx, mailbox); err != nil {
-		return 0, err
-	}
-	return s.idx.after(mailbox, ms(c.ReceivedAt)+ttlMs, prefix8(c.ID[:]), s.nowMs()), nil
 }
 
 // Holds implements Store: from memory, after the mailbox's load on its first use.

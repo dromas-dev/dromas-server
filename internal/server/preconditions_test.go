@@ -47,53 +47,6 @@ func TestAFalsePreconditionOnAHeldMessageSpendsOneOfTheMailboxsCalls(t *testing.
 	}
 }
 
-// A page after the first whose precondition is false takes no cursor and
-// puts none (the client repo's #412 item 2): the mailbox still holds the cursor
-// it was handed, and the page it names, asked for next, is a continuation.
-func TestAListWhosePreconditionIsFalseTakesNoCursor(t *testing.T) {
-	t.Parallel()
-	for _, c := range []struct{ name, field, value string }{
-		{"If-None-Match: *", "If-None-Match", "*"},
-		{`If-Match: "x"`, "If-Match", `"x"`},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			l := relaxed()
-			l.PollBurst, l.PollRefill = 2, time.Hour
-			e := newEnv(t, l)
-			from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
-			for range pageSize + 1 {
-				e.want(e.do("POST", to.path("/messages"), to.sealed(1, ciphertextTo(t, to)), from.pass(1)), http.StatusCreated, "")
-			}
-			pass := to.pass(1)
-			first := e.do("GET", to.path("/messages"), nil, pass)
-			e.want(first, http.StatusOK, "")
-			var page protocol.MessageList
-			if err := json.Unmarshal(first.body, &page); err != nil || page.NextCursor == nil {
-				t.Fatalf("the first page: %v %s", err, first.body)
-			}
-			next := to.path("/messages?cursor=" + *page.NextCursor)
-			handed := e.server.drains.held(to.id.Address())
-			if r := e.doWith("GET", next, nil, pass, c.field, c.value); r.status != http.StatusNotModified && r.status != http.StatusPreconditionFailed {
-				t.Fatalf("the page after the first, with %s: %d %s", c.name, r.status, r.body)
-			}
-			if got := e.server.drains.held(to.id.Address()); got != handed {
-				t.Errorf("after a page with %s, the mailbox holds the cursor %q, not the one it was handed, %q", c.name, got, handed)
-			}
-			if r := e.do("GET", next, nil, pass); r.status != http.StatusOK {
-				q, _ := r.quota()
-				t.Errorf("the page the mailbox was handed, after one with %s: %d %s %s, want 200", c.name, r.status, r.code(), q)
-			}
-		})
-	}
-}
-
-// held is the cursor mailbox a was handed last, "" for none.
-func (d *drains) held(a protocol.Address) string {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.next[a]
-}
-
 // revokeRace runs then just before the first Revoke through serial through
 // reaches the store beneath.
 type revokeRace struct {
@@ -367,13 +320,6 @@ func debts(s *Server, now time.Time) map[string]int {
 	return d
 }
 
-// cursors is the cursor each mailbox was handed last.
-func (d *drains) cursors() map[protocol.Address]string {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return maps.Clone(d.next)
-}
-
 // marked is the expiry of each live message memory holds, by its mailbox
 // and tag: every mark memory keeps.
 func (x *index) marked() map[string]uint64 {
@@ -417,7 +363,7 @@ type reach struct {
 // HEAD, in each state that reaches its preconditions, a false If-Match, and
 // an If-None-Match that matches, are answered 412, or 304 to a GET or a
 // HEAD; and the call spends the call's own budget and nothing else (every
-// limit of the server, read from limitsByName), takes and puts no cursor,
+// limit of the server, read from limitsByName),
 // marks no message fetched and makes no write of the store. A state refused
 // before its preconditions, a revocation of certificates through a serial
 // lower than the one held, is answered so whatever they are (PROTOCOL.md
@@ -563,32 +509,15 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 			}},
 		},
 		"GET /v1/{address}/messages": {
-			{"a first page of a mailbox with none", true, map[string]int{string(protocol.QuotaPolls): 1}, func(e *env) (call, string) {
+			{"a list of a mailbox with none", true, map[string]int{string(protocol.QuotaPolls): 1}, func(e *env) (call, string) {
 				r := live(e)
 				warmed(e, r, r.pass(1))
 				return call{"GET", r.path("/messages"), nil, r.pass(1)}, e.do("GET", r.path("/messages"), nil, r.pass(1)).header.Get("ETag")
 			}},
-			{"a first page with messages", true, map[string]int{string(protocol.QuotaPolls): 1}, func(e *env) (call, string) {
+			{"a list with messages", true, map[string]int{string(protocol.QuotaPolls): 1}, func(e *env) (call, string) {
 				r, _ := holding(e)
 				warmed(e, r, r.pass(1))
 				return call{"GET", r.path("/messages"), nil, r.pass(1)}, e.do("GET", r.path("/messages"), nil, r.pass(1)).header.Get("ETag")
-			}},
-			{"a page after the first, at the cursor the mailbox was handed", true, map[string]int{string(protocol.QuotaPolls): 1}, func(e *env) (call, string) {
-				from, to := live(e), live(e)
-				for range pageSize + 1 {
-					e.want(e.do("POST", to.path("/messages"), to.sealed(1, ciphertextTo(e.t, to)), from.pass(1)), http.StatusCreated, "")
-				}
-				warmed(e, to, to.pass(1))
-				var page protocol.MessageList
-				if err := json.Unmarshal(e.do("GET", to.path("/messages"), nil, to.pass(1)).body, &page); err != nil || page.NextCursor == nil {
-					e.t.Fatalf("the first page: %v", err)
-				}
-				return call{"GET", to.path("/messages?cursor=" + *page.NextCursor), nil, to.pass(1)}, ""
-			}},
-			{"a page after the first, at a cursor the mailbox was not handed", true, map[string]int{string(protocol.QuotaPolls): 1}, func(e *env) (call, string) {
-				to, _ := holding(e)
-				warmed(e, to, to.pass(1))
-				return call{"GET", to.path("/messages?cursor=" + formatCursor(Header{ReceivedAt: e.clock.Now()})), nil, to.pass(1)}, ""
 			}},
 		},
 		"GET /v1/{address}/messages/{id}": {
@@ -671,7 +600,7 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 							spends[string(protocol.QuotaRequests)]++
 						}
 						mem := e.store.(*Memory)
-						before, cursors, marks, wrote := debts(e.server, e.clock.Now()), e.server.drains.cursors(), mem.idx.marked(), inj.wrote.Load()
+						before, marks, wrote := debts(e.server, e.clock.Now()), mem.idx.marked(), inj.wrote.Load()
 						var status int
 						if rt.method == http.MethodHead {
 							status = e.head(q.path, q.pass, f.field, value).StatusCode
@@ -701,9 +630,6 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 								t.Errorf("%s: %d spent, want %d", name, got, spends[name])
 							}
 						}
-						if got := e.server.drains.cursors(); !maps.Equal(got, cursors) {
-							t.Errorf("the cursors handed out went from %v to %v", cursors, got)
-						}
 						if got := mem.idx.marked(); !maps.Equal(got, marks) {
 							t.Errorf("the messages' marks went from %v to %v", marks, got)
 						}
@@ -714,90 +640,5 @@ func TestAFalsePreconditionIsACallThatDoesNothingElse(t *testing.T) {
 				}
 			})
 		}
-	}
-}
-
-// drained is a mailbox holding n messages, more than a page, its first page,
-// and the cursor that page handed it, as the server holds it.
-func drained(e *env, n int) (*raw, protocol.MessageList, string) {
-	e.t.Helper()
-	from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
-	for range n {
-		e.want(e.do("POST", to.path("/messages"), to.sealed(1, ciphertextTo(e.t, to)), from.pass(1)), http.StatusCreated, "")
-	}
-	var page protocol.MessageList
-	if err := json.Unmarshal(e.do("GET", to.path("/messages"), nil, to.pass(1)).body, &page); err != nil || page.NextCursor == nil {
-		e.t.Fatalf("the first page: %v", err)
-	}
-	if got := e.server.drains.held(to.id.Address()); got != *page.NextCursor {
-		e.t.Fatalf("the mailbox holds the cursor %q, its first page handed it %q", got, *page.NextCursor)
-	}
-	return to, page, *page.NextCursor
-}
-
-// A list's HEAD is a poll whatever its cursor, and moves none (PROTOCOL.md
-// §11.11, §11.2; the client repo's #412 item 4): one of a first page whose next
-// cursor is not the one the mailbox was handed hands out none, and one that
-// names the cursor the mailbox was handed is 200, takes from the poll rate, and
-// leaves the mailbox holding that cursor, whose GET then continues the drain.
-func TestAListsHeadMovesNoCursor(t *testing.T) {
-	t.Parallel()
-	l := relaxed()
-	l.PollBurst, l.PollRefill = 100, time.Hour
-	e := newEnv(t, l)
-	to, first, cursor := drained(e, pageSize+2)
-	e.want(e.do("DELETE", to.path("/messages/"+first.Messages[0].ID), nil, to.pass(1)), http.StatusNoContent, "")
-	// The first page now runs one message later: a GET's would hand out
-	// another cursor.
-	if h := e.head(to.path("/messages"), to.pass(1)); h.StatusCode != http.StatusOK {
-		t.Fatalf("HEAD of the first page: %d", h.StatusCode)
-	}
-	if got := e.server.drains.held(to.id.Address()); got != cursor {
-		t.Errorf("after a HEAD of the first page, the mailbox holds the cursor %q, not the one it was handed, %q", got, cursor)
-	}
-	next := to.path("/messages?cursor=" + cursor)
-	before := debts(e.server, e.clock.Now())
-	if h := e.head(next, to.pass(1)); h.StatusCode != http.StatusOK {
-		t.Fatalf("HEAD of the page the mailbox was handed: %d", h.StatusCode)
-	}
-	after := debts(e.server, e.clock.Now())
-	if p, pages := after[string(protocol.QuotaPolls)]-before[string(protocol.QuotaPolls)], after[string(protocol.QuotaPages)]-before[string(protocol.QuotaPages)]; p != 1 || pages != 0 {
-		t.Errorf("a list's HEAD spent %d polls and %d pages, want a poll", p, pages)
-	}
-	if got := e.server.drains.held(to.id.Address()); got != cursor {
-		t.Errorf("after a HEAD, the mailbox holds the cursor %q, not the one it was handed, %q", got, cursor)
-	}
-	e.want(e.do("GET", next, nil, to.pass(1)), http.StatusOK, "")
-	if got := debts(e.server, e.clock.Now())[string(protocol.QuotaPages)] - after[string(protocol.QuotaPages)]; got != 1 {
-		t.Errorf("the GET after it spent %d pages, want 1: no continuation", got)
-	}
-}
-
-// A page refused for the page allowance leaves the mailbox holding its cursor
-// (PROTOCOL.md §11.11: only a GET's 200 spends it; the client repo's #412
-// item 2): once a page is due again, the same page continues the drain,
-// spending a page and no poll.
-func TestARefusedPageLeavesTheMailboxItsCursor(t *testing.T) {
-	t.Parallel()
-	l := relaxed()
-	l.MailboxCap = pageSize + 1 // two pages to a full mailbox: an allowance of four at once
-	l.PollBurst, l.PollRefill = 100, time.Hour
-	e := newEnv(t, l)
-	to, _, cursor := drained(e, pageSize+1)
-	next := to.path("/messages?cursor=" + cursor)
-	for range 4 {
-		e.want(e.do("GET", next, nil, to.pass(1)), http.StatusOK, "")
-		e.want(e.do("GET", to.path("/messages"), nil, to.pass(1)), http.StatusOK, "") // hands out the cursor again
-	}
-	e.limited(e.do("GET", next, nil, to.pass(1)), protocol.QuotaPages)
-	if got := e.server.drains.held(to.id.Address()); got != cursor {
-		t.Fatalf("after a refused page, the mailbox holds the cursor %q, not the one it was handed, %q", got, cursor)
-	}
-	e.clock.Add(l.PollRefill / 2)
-	before := debts(e.server, e.clock.Now())
-	e.want(e.do("GET", next, nil, to.pass(1)), http.StatusOK, "")
-	after := debts(e.server, e.clock.Now())
-	if p, pages := after[string(protocol.QuotaPolls)]-before[string(protocol.QuotaPolls)], after[string(protocol.QuotaPages)]-before[string(protocol.QuotaPages)]; p != 0 || pages != 1 {
-		t.Errorf("the page after its refusal spent %d polls and %d pages, want a page", p, pages)
 	}
 }

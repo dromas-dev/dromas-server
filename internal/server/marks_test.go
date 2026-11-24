@@ -21,24 +21,23 @@ import (
 	"github.com/dromas-dev/dromas-client/protocol"
 )
 
-// A first page carries an ETag, the first 16 bytes of the SHA-256 of its
-// body, and a poll that sends it back is 304 while the page is unchanged
+// A list carries an ETag, the first 16 bytes of the SHA-256 of its body,
+// and a poll that sends it back is 304 while the page is unchanged
 // (PROTOCOL.md §11.11). The tag is the page's own: every process computes it
 // alike, with no key, and an empty mailbox's is the same on every server. A tag
 // of the page before, the "<count>-<version>" form among them, is not
-// the page's. Weak comparison: W/ is read past, and * names any page. A page
-// after the first carries none, so no tag names it, and only * makes it 304
+// the page's. Weak comparison: W/ is read past, and * names any page
 // (dromas-dev/dromas-server#86). Every answer carries the poll interval
 // in Retry-After, a 304's too.
-func TestAFirstPageIsNotModifiedWhileUnchanged(t *testing.T) {
+func TestAListIsNotModifiedWhileUnchanged(t *testing.T) {
 	t.Parallel()
 	l := relaxed()
 	l.MailboxCap = 0
 	e := newEnv(t, l)
 	from, to := e.raw().register(protocol.MaxPrekeyLifetime), e.raw().register(protocol.MaxPrekeyLifetime)
-	poll := func(query, ifNoneMatch string) (*http.Response, []byte) {
+	poll := func(ifNoneMatch string) (*http.Response, []byte) {
 		t.Helper()
-		req, _ := http.NewRequest(http.MethodGet, e.srv.URL+to.path("/messages")+query, nil)
+		req, _ := http.NewRequest(http.MethodGet, e.srv.URL+to.path("/messages"), nil)
 		req.Header.Set("Authorization", to.pass(1))
 		if ifNoneMatch != "" {
 			req.Header.Set("If-None-Match", ifNoneMatch)
@@ -54,15 +53,19 @@ func TestAFirstPageIsNotModifiedWhileUnchanged(t *testing.T) {
 		}
 		return resp, body
 	}
-	const emptyPage = `{"total_count":0,"messages":[],"next_cursor":null}` + "\n"
-	sum := sha256.Sum256([]byte(emptyPage))
+	empty, err := jsonBytes(protocol.MessageList{Messages: []protocol.MessageInfo{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyPage := string(empty)
+	sum := sha256.Sum256(empty)
 	emptyTag := `"` + hex.EncodeToString(sum[:16]) + `"`
-	resp, body := poll("", "")
+	resp, body := poll("")
 	if resp.StatusCode != http.StatusOK || string(body) != emptyPage || resp.Header.Get("ETag") != emptyTag {
 		t.Fatalf("an empty mailbox: %d %q, ETag %q, want 200 %q with the page's hash, %s", resp.StatusCode, body, resp.Header.Get("ETag"), emptyPage, emptyTag)
 	}
 	for _, tag := range []string{emptyTag, "W/" + emptyTag, `"other", ` + emptyTag, "*"} {
-		if resp, body := poll("", tag); resp.StatusCode != http.StatusNotModified || len(body) != 0 || resp.Header.Get("ETag") != emptyTag {
+		if resp, body := poll(tag); resp.StatusCode != http.StatusNotModified || len(body) != 0 || resp.Header.Get("ETag") != emptyTag {
 			t.Errorf("an empty mailbox, If-None-Match %q: %d %q, ETag %q, want 304 with no body", tag, resp.StatusCode, body, resp.Header.Get("ETag"))
 		}
 	}
@@ -70,7 +73,7 @@ func TestAFirstPageIsNotModifiedWhileUnchanged(t *testing.T) {
 	// that holds them is one tag, and so is "*" among tags no page's.
 	planted := []string{`",*,"`, `"x,*,y"`, `W/"a,W/*,b"`, emptyTag[:len(emptyTag)-1] + `,x"`, emptyTag + `, *`, emptyTag + ` junk`}
 	for _, tag := range append([]string{`"0-0000000000000000"`, `"` + strings.Repeat("0", 32) + `"`, emptyTag[1 : len(emptyTag)-1]}, planted...) {
-		if resp, _ := poll("", tag); resp.StatusCode != http.StatusOK {
+		if resp, _ := poll(tag); resp.StatusCode != http.StatusOK {
 			t.Errorf("an empty mailbox, If-None-Match %q: %d, want 200", tag, resp.StatusCode)
 		}
 	}
@@ -82,7 +85,7 @@ func TestAFirstPageIsNotModifiedWhileUnchanged(t *testing.T) {
 		_ = w.Close()
 		e.want(e.do(http.MethodPost, to.path("/messages"), to.sealed(1, ct.Bytes()), from.pass(1)), http.StatusCreated, "")
 	}
-	resp, body = poll("", emptyTag)
+	resp, body = poll(emptyTag)
 	var list protocol.MessageList
 	if resp.StatusCode != http.StatusOK || json.Unmarshal(body, &list) != nil || list.Count != n || len(list.Messages) != n {
 		t.Fatalf("a mailbox holding %d, sent the empty mailbox's tag: %d %s, want 200 with the messages", n, resp.StatusCode, body)
@@ -91,23 +94,14 @@ func TestAFirstPageIsNotModifiedWhileUnchanged(t *testing.T) {
 	if sum := sha256.Sum256(body); held != `"`+hex.EncodeToString(sum[:16])+`"` || held == emptyTag {
 		t.Fatalf("a mailbox holding %d: ETag %q, want its page's hash", n, held)
 	}
-	if resp, _ := poll("", held); resp.StatusCode != http.StatusNotModified {
+	if resp, _ := poll(held); resp.StatusCode != http.StatusNotModified {
 		t.Errorf("a mailbox holding %d, sent its own page's tag: %d, want 304", n, resp.StatusCode)
-	}
-	// A cursor after every message: a poll, answered with an empty page that
-	// is not the first, so untagged, and 304 only to *, which names any page.
-	last := formatCursor(Header{ReceivedAt: e.clock.Now().Add(time.Hour)})
-	for tag, status := range map[string]int{"": http.StatusOK, "*": http.StatusNotModified, held: http.StatusOK} {
-		if resp, _ := poll("?cursor="+last, tag); resp.StatusCode != status || resp.Header.Get("ETag") != "" {
-			t.Errorf("a page after the first, If-None-Match %q: %d, ETag %q, want %d and none", tag, resp.StatusCode, resp.Header.Get("ETag"), status)
-		}
 	}
 }
 
 // A poll's If-Match is evaluated first, as RFC 9110 §13.1.1 and §13.2.2 have
 // an origin server evaluate one, and compared strongly: a false one is 412
-// precondition_failed, before If-None-Match is read, and a page after the
-// first, which carries no tag, matches none but "*"
+// precondition_failed, before If-None-Match is read
 // (dromas-dev/dromas-server#71). It comes after the poll's count, as
 // If-None-Match does: a mailbox past its poll rate is refused 429 whatever it
 // sends.
@@ -147,7 +141,6 @@ func TestAPollsIfMatchIsEvaluatedFirst(t *testing.T) {
 	}
 	_ = resp.Body.Close()
 	tag := resp.Header.Get("ETag")
-	last := formatCursor(Header{ReceivedAt: e.clock.Now().Add(time.Hour)})
 	for _, c := range []struct {
 		query   string
 		headers []string
@@ -161,8 +154,6 @@ func TestAPollsIfMatchIsEvaluatedFirst(t *testing.T) {
 		{"", []string{"If-Match", "junk"}, http.StatusPreconditionFailed},
 		{"", []string{"If-Match", tag, "If-None-Match", tag}, http.StatusNotModified},
 		{"", []string{"If-Match", `"other"`, "If-None-Match", tag}, http.StatusPreconditionFailed},
-		{"?cursor=" + last, []string{"If-Match", tag}, http.StatusPreconditionFailed},
-		{"?cursor=" + last, []string{"If-Match", "*"}, http.StatusOK},
 	} {
 		status, code := poll(e, c.query, c.headers...)
 		if status != c.status || status == http.StatusPreconditionFailed && code != string(protocol.CodePreconditionFailed) {
