@@ -30,7 +30,7 @@ A deployment's site (dromas.dev's front page and `llms.txt`) is not in this repo
 
 ## Build and run
 
-Each release is a static binary for Linux on `amd64` and `arm64` and an image, `ghcr.io/dromas-dev/dromas-server:<version>`, both built from its signed tag by this repo's release workflow after its tests pass on that commit, the image holding the archive's very binary (`SECURITY.md`); `go install github.com/dromas-dev/dromas-server/cmd/dromas-server@<version>` builds the same source. The major version is the protocol's, shared with the client: both are 0.x until v1, which they reach together.
+Each release is a static binary for Linux on `amd64` and `arm64` and an image, `ghcr.io/dromas-dev/dromas-server:<version>`, both built from its signed tag by this repo's release workflow after its tests pass on that commit, the image holding the archive's very binary (`SECURITY.md`); `go install github.com/dromas-dev/dromas-server/cmd/dromas-server@<version>` builds the same source. The major version is the protocol's, shared with the client: both are 0.x until v1, which they reach together. Run the latest release: a server accepts older clients by its version policy, and a client release may need the server release made before it (`PROTOCOL.md` §14).
 
 From source, `go.mod` requires a release of the client module, which `go` fetches:
 
