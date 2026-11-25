@@ -179,7 +179,7 @@ const bodySpan = time.Hour
 // temporary file, flushed, renamed into place and its directory flushed, so
 // a body is whole or absent. A delete takes the directories it leaves empty
 // with it, up to its hour's; collect removes an hour whole, once all of it
-// is past its cutoff (PRECEDENTS.md Part 3, in the client repo).
+// is past its cutoff (PRECEDENTS.md § Bodies on disk, in the client repo).
 type dirBodies struct{ root *os.Root }
 
 // newDirBodies is the bodies kept under dir, made if it is not there.

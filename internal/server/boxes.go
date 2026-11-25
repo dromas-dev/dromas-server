@@ -443,7 +443,7 @@ func (s *Server) prekey(w http.ResponseWriter, r *http.Request) error {
 	// of the mailbox's counts: it replaces what the identity revoked, each raise
 	// of which is counted (revoke). The gate counted it against its address's
 	// flood budget, as every renewal is. Let's Encrypt exempts more renewals
-	// than this, from every limit: why ours differs is PRECEDENTS.md in the
+	// than this, from every limit: why ours differs is PRECEDENTS.md § Limits in the
 	// client repo.
 	var count []perDay
 	if signer.Rank() == b.Rank {
