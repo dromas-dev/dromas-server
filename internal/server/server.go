@@ -106,7 +106,8 @@ type Server struct {
 	metrics       *Metrics
 	policy        atomic.Pointer[protocol.ServerDocument] // swapped whole by its Reloader
 
-	polls    *buckets     // per mailbox
+	polls    *buckets     // per mailbox: every list
+	polled   *buckets     // per mailbox whose account lifts its polls: at AccountPollRefill
 	regs     addressLimit // registrations
 	sendIPs  addressLimit // sends, before their pass
 	misses   addressLimit // reads of the mailboxes table that found no mailbox, and checks that failed
@@ -165,6 +166,7 @@ func New(c Config) *Server {
 		identityTypes: c.IdentityTypes,
 		metrics:       c.Metrics,
 		polls:         newBuckets(string(protocol.QuotaPolls), 0, 0),
+		polled:        newBuckets(string(protocol.QuotaPolls), 0, 0),
 		regs:          newAddressLimit(protocol.QuotaRegistrations, protocol.QuotaRegistrationsRange, "registrations"),
 		sendIPs:       newAddressLimit(protocol.QuotaSendsBeforePass, protocol.QuotaSendsBeforePassRange, "sends"),
 		misses:        newAddressLimit(protocol.QuotaMisses, protocol.QuotaMissesRange, "calls"),
@@ -219,6 +221,7 @@ func (s *Server) setLimits(l Limits, policy *protocol.ServerDocument) {
 		every time.Duration
 	}{
 		{s.polls, l.PollBurst, l.PollRefill},
+		{s.polled, l.PollBurst, l.liftedPolls()},
 		{s.calls, l.CallBurst, l.CallRefill},
 		{s.receives, l.ReceiveBurst, l.ReceiveRefill},
 		{s.lifted, l.ReceiveBurst, l.liftedReceives()},

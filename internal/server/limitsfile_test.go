@@ -184,6 +184,25 @@ func TestTheReceiveBudgetIsATunable(t *testing.T) {
 	}
 }
 
+// The lifted refill of polls is a tunable: a negative is refused, naming its
+// member, and a file that leaves it out holds the default. Control: one off
+// and one of a millisecond pass.
+func TestTheLiftedPollRefillIsATunable(t *testing.T) {
+	t.Parallel()
+	if err := refusedFile("account_poll_refill", -time.Second); err == nil || !strings.HasPrefix(err.Error(), "account_poll_refill:") || !strings.Contains(err.Error(), "not a refill") {
+		t.Errorf("account_poll_refill -1s: %v, want a refusal naming account_poll_refill", err)
+	}
+	for _, file := range []string{`{"account_poll_refill": "0s"}`, `{"account_poll_refill": "1ms"}`} {
+		if _, err := ParseLimits([]byte(file), DefaultLimits()); err != nil {
+			t.Errorf("%s: %v", file, err)
+		}
+	}
+	l, err := ParseLimits([]byte(`{"poll_refill": "50s"}`), DefaultLimits())
+	if err != nil || l.AccountPollRefill != DefaultLimits().AccountPollRefill {
+		t.Errorf("a file without account_poll_refill: %v, %v, want the default", l.AccountPollRefill, err)
+	}
+}
+
 // An ACL bound that is off or over the protocol's (PROTOCOL.md §11.14) is
 // refused, naming its member. Control: one, the protocol's bound and the
 // default pass.

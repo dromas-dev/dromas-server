@@ -41,10 +41,10 @@ func (s *Server) addressLimits() []addressLimit {
 
 // limitsByName are the server's limits, each by its name: the quota a
 // rate_limited names, or the code its refusal has of its own. A limit with a
-// refill an account lifts to has the buckets of each (receivesAt).
+// refill an account lifts to has the buckets of each (pollsAt, receivesAt).
 func (s *Server) limitsByName() map[string][]*buckets {
 	m := map[string][]*buckets{}
-	sets := []*buckets{s.polls, s.calls, s.receives, s.lifted, s.drained, s.sends, s.renewals, s.certs, s.raises}
+	sets := []*buckets{s.polls, s.polled, s.calls, s.receives, s.lifted, s.drained, s.sends, s.renewals, s.certs, s.raises}
 	for _, l := range s.addressLimits() {
 		sets = append(sets, l.ip, l.rng)
 	}

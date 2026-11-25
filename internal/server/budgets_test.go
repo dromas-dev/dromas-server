@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -140,6 +141,90 @@ func TestTheReceiveBudget(t *testing.T) {
 	if rs, err := s3.Flush(ctx); err != nil || len(rs) != 1 {
 		t.Fatalf("the waiting message after one lifted refill: %v, %v", rs, err)
 	}
+}
+
+// liftedPolls are the limits of the tests of the lifted polls: a burst of
+// two, refilled once a minute, which an unmetered account lifts to one each
+// ten seconds.
+func liftedPolls() Limits {
+	l := relaxed()
+	l.PollBurst, l.PollRefill, l.AccountPollRefill = 2, time.Minute, 10*time.Second
+	return l
+}
+
+// polls lists b's messages n times at once, each answered 200, then once
+// more, which is refused polls after wait.
+func (e *env) polls(b *client.Mailbox, n int, wait time.Duration) {
+	e.t.Helper()
+	path := "/v1/" + b.Address().String() + "/messages"
+	for range n {
+		e.want(e.do(http.MethodGet, path, nil, e.pass(b)), http.StatusOK, "")
+	}
+	r := e.do(http.MethodGet, path, nil, e.pass(b))
+	e.limited(r, protocol.QuotaPolls)
+	if got := r.header.Get("Retry-After"); got != strconv.Itoa(retrySeconds(wait)) {
+		e.t.Fatalf("a poll past the burst: Retry-After %q, want %v", got, wait)
+	}
+}
+
+// An unmetered account lifts its mailboxes' polls to Limits.AccountPollRefill
+// (LIMITS.md § Accounts): the same burst, then one each AccountPollRefill,
+// and the operator's top of polls lists such a mailbox.
+func TestAnUnmeteredAccountLiftsItsMailboxesPolls(t *testing.T) {
+	t.Parallel()
+	l := liftedPolls()
+	e := newEnv(t, l)
+	_, key := accountEnv(t, e, true, 1)
+	echo := e.mailbox()
+	adopt(t, echo, key)
+	e.polls(echo, l.PollBurst, l.AccountPollRefill)
+	e.clock.Add(l.AccountPollRefill)
+	e.polls(echo, 1, l.AccountPollRefill)
+	if top, ok := e.server.Top(string(protocol.QuotaPolls), 10); !ok || !slices.ContainsFunc(top, func(d Indebted) bool { return d.Key == echo.Address().String() }) {
+		t.Errorf("the operator's top of polls, %v, does not list the unmetered mailbox", top)
+	}
+}
+
+// A mailbox outside an unmetered account, in no account or in a metered one,
+// polls at Limits.PollRefill, whatever AccountPollRefill is.
+func TestAMailboxOutsideAnUnmeteredAccountPollsAtPollRefill(t *testing.T) {
+	t.Parallel()
+	l := liftedPolls()
+	e := newEnv(t, l)
+	_, key := accountEnv(t, e, false, 1)
+	metered := e.mailbox()
+	adopt(t, metered, key)
+	outside := []*client.Mailbox{e.mailbox(), metered}
+	for _, b := range outside {
+		e.polls(b, l.PollBurst, l.PollRefill)
+	}
+	e.clock.Add(l.AccountPollRefill)
+	for _, b := range outside {
+		e.polls(b, 0, l.PollRefill-l.AccountPollRefill)
+	}
+	e.clock.Add(l.PollRefill - l.AccountPollRefill)
+	for _, b := range outside {
+		e.polls(b, 1, l.PollRefill)
+	}
+}
+
+// The lifted polls are counted in buckets of their own (LIMITS.md
+// § Accounts): a mailbox that has spent its polls at Limits.PollRefill and
+// then joins an unmetered account has the whole burst at once, and a mailbox
+// outside the account that polls with it keeps its own refill.
+func TestTheLiftedPollsHaveBucketsOfTheirOwn(t *testing.T) {
+	t.Parallel()
+	l := liftedPolls()
+	e := newEnv(t, l)
+	_, key := accountEnv(t, e, true, 1)
+	joins, free := e.mailbox(), e.mailbox()
+	e.polls(joins, l.PollBurst, l.PollRefill)
+	e.polls(free, l.PollBurst, l.PollRefill)
+	adopt(t, joins, key)
+	e.polls(joins, l.PollBurst, l.AccountPollRefill)
+	e.clock.Add(l.AccountPollRefill)
+	e.polls(joins, 1, l.AccountPollRefill)
+	e.polls(free, 0, l.PollRefill-l.AccountPollRefill)
 }
 
 func errorsAs(err error, ae **client.APIError) bool {

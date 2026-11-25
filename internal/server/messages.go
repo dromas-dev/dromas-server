@@ -39,7 +39,11 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	poll := strconv.Itoa(s.limits().PollAfter)
-	if err := s.spendPoll(mailbox); err != nil {
+	lim, err := s.limitsOf(r.Context(), mailbox)
+	if err != nil {
+		return err
+	}
+	if err := s.spendPoll(mailbox, lim); err != nil {
 		return err
 	}
 	// A list asked to wait is held while the If-None-Match names it
@@ -275,10 +279,11 @@ func (h *holds) release(rng string) {
 // Shutdown waits for none of them.
 func (s *Server) StopHolds() { s.stopOnce.Do(func() { close(s.stopping) }) }
 
-// spendPoll spends one of mailbox a's polls (Limits.PollBurst): every list, a
-// 304 among them.
-func (s *Server) spendPoll(a protocol.Address) error {
-	if ok, wait := s.polls.take(a.String(), s.now()); !ok {
+// spendPoll spends one of mailbox a's polls (Limits.PollBurst), from the
+// buckets of the refill its limits l give it (pollsAt): every list, a 304
+// among them.
+func (s *Server) spendPoll(a protocol.Address, l Limits) error {
+	if ok, wait := s.pollsAt(l).take(a.String(), s.now()); !ok {
 		return rateLimited(protocol.QuotaPolls, wait, "this mailbox has polled as often as it may for now: poll again after Retry-After")
 	}
 	s.metrics.list()
