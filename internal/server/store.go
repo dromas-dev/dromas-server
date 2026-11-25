@@ -311,8 +311,9 @@ func listNames(statement []byte, serial uint64) (bool, error) {
 // Account is an account's record (PROTOCOL.md §11.16). An account pays,
 // from prepaid credit, for its mailboxes' sends past the free limits and for
 // size over the cap; with no credit they have the free limits. An unmetered
-// account's mailboxes have no daily limit, the largest cap and new messages at
-// Limits.AccountReceiveRefill, and are never charged: the echo account. Credit is not built yet, so a metered account's
+// account's mailboxes have no daily limit, the largest cap, polls at
+// Limits.AccountPollRefill and new messages at Limits.AccountReceiveRefill,
+// and are never charged: the echo account. Credit is not built yet, so a metered account's
 // mailboxes have the free limits.
 type Account struct {
 	ID        string

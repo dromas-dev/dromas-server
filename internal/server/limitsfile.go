@@ -162,7 +162,7 @@ func ReadLimits(path string, base Limits) (Limits, []byte, error) {
 // Check refuses limits the server cannot run under, naming the limits file's
 // member: a cap on a ciphertext the protocol does not allow, a budget of new
 // messages that is negative or has a burst with no refill or a refill with
-// no burst, a number a day whose bucket holds nothing, a
+// no burst, a lifted refill that is negative, a number a day whose bucket holds nothing, a
 // longest certificate that signs no message or that no reader takes, a
 // bound on an ACL that is off or past the protocol's, and a poll interval
 // under a second, which a Retry-After could not carry.
@@ -187,6 +187,8 @@ func (l Limits) Check() error {
 		return fmt.Errorf("receive_refill: %v is not a refill", l.ReceiveRefill)
 	case l.AccountReceiveRefill < 0:
 		return fmt.Errorf("account_receive_refill: %v is not a refill", l.AccountReceiveRefill)
+	case l.AccountPollRefill < 0:
+		return fmt.Errorf("account_poll_refill: %v is not a refill", l.AccountPollRefill)
 	case (l.ReceiveBurst == 0) != (l.ReceiveRefill == 0):
 		return fmt.Errorf("receive_burst: %d with receive_refill %v: a budget that is on takes both, and one that is off neither", l.ReceiveBurst, l.ReceiveRefill)
 	}

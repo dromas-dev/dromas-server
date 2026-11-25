@@ -18,7 +18,7 @@ func account(cmd string, args []string) error {
 	switch cmd {
 	case "create":
 		id := fs.String("id", "", "the account's id: a name of ours (echo), or none to mint one")
-		unmetered := fs.Bool("unmetered", false, "its mailboxes have no daily limit, the largest cap and new messages at the fastest any mailbox takes them, never charged (the echo account)")
+		unmetered := fs.Bool("unmetered", false, "its mailboxes have no daily limit, the largest cap, polls at account_poll_refill and new messages at account_receive_refill, never charged (the echo account)")
 		run = func(ctx context.Context, s *server.Memory) error {
 			if *id == "" {
 				var err error

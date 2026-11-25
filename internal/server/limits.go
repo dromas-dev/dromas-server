@@ -13,18 +13,19 @@ import (
 // field says otherwise. Each one's default, decided or a tunable's, is
 // DefaultLimits', with the reason for its value beside it.
 type Limits struct {
-	MaxSize        int           // the cap on a ciphertext, in bytes, and what a send reads of its body; nothing may depend on its value
-	MailboxCap     int           // total per mailbox, a storage ceiling
-	SendsPerDay    int           // per sender, a number a day: one back each day divided by it, into a bucket of SendsBurst
-	SendsBurst     int           // per sender: the sends it may make at once, the bucket SendsPerDay refills
-	PollBurst      int           // polls a mailbox may make at once; also the fetches of messages already fetched
-	PollRefill     time.Duration // one more poll each; also one more such fetch
-	PollAfter      int           // seconds, told to clients
-	MaxWait        time.Duration // the longest a list is held, whatever its wait asks (PROTOCOL.md §11.11)
-	MaxLongPolls   int           // long polls this process holds at once, one a mailbox; past it a long poll of a mailbox that holds none is answered 503 (0: none held)
-	AccountMaxSize int           // the most an account lifts MaxSize to, so what a send reads first; up to MaxSize, nothing
-	RenewalsPerDay int           // prekey renewals per mailbox, a number a day as SendsPerDay
-	RenewalsBurst  int           // per mailbox: the renewals it may make at once, the bucket RenewalsPerDay refills
+	MaxSize           int           // the cap on a ciphertext, in bytes, and what a send reads of its body; nothing may depend on its value
+	MailboxCap        int           // total per mailbox, a storage ceiling
+	SendsPerDay       int           // per sender, a number a day: one back each day divided by it, into a bucket of SendsBurst
+	SendsBurst        int           // per sender: the sends it may make at once, the bucket SendsPerDay refills
+	PollBurst         int           // polls a mailbox may make at once: every list
+	PollRefill        time.Duration // one more poll each
+	AccountPollRefill time.Duration // the refill an unmetered account lifts its mailboxes' polls to, with PollBurst's burst, never slower than PollRefill
+	PollAfter         int           // seconds, told to clients
+	MaxWait           time.Duration // the longest a list is held, whatever its wait asks (PROTOCOL.md §11.11)
+	MaxLongPolls      int           // long polls this process holds at once, one a mailbox; past it a long poll of a mailbox that holds none is answered 503 (0: none held)
+	AccountMaxSize    int           // the most an account lifts MaxSize to, so what a send reads first; up to MaxSize, nothing
+	RenewalsPerDay    int           // prekey renewals per mailbox, a number a day as SendsPerDay
+	RenewalsBurst     int           // per mailbox: the renewals it may make at once, the bucket RenewalsPerDay refills
 
 	RegistrationsPerHour      int // per IPv4 address or IPv6 /64, at once and an hour: a spike limit, which honest use meets once a mailbox
 	RangeRegistrationsPerHour int // per IPv6 /48, beside the /64's
@@ -126,6 +127,7 @@ func DefaultLimits() Limits {
 		SendsBurst:                   60,                              // decided
 		PollBurst:                    10,                              // decided
 		PollRefill:                   50 * time.Second,                // decided: once a minute is stated
+		AccountPollRefill:            10 * time.Second,                // decided: a poll each ten seconds, the echo mailbox's
 		PollAfter:                    60,                              // decided
 		MaxWait:                      5 * time.Minute,                 // tunable
 		MaxLongPolls:                 50_000,                          // tunable
@@ -170,6 +172,16 @@ func (l Limits) maxCertificate() uint64 {
 
 // ceiling is the largest ciphertext any sender may send.
 func (l Limits) ceiling() int { return max(l.MaxSize, l.AccountMaxSize) }
+
+// liftedPolls is the refill of polls an account lifts a mailbox's to:
+// AccountPollRefill, never slower than the server's own, and off (0) where
+// either is.
+func (l Limits) liftedPolls() time.Duration {
+	if l.PollRefill == 0 || l.AccountPollRefill == 0 {
+		return 0
+	}
+	return min(l.PollRefill, l.AccountPollRefill)
+}
 
 // liftedReceives is the refill of new messages an account lifts a mailbox's
 // to: AccountReceiveRefill, never slower than the server's own, and off (0)

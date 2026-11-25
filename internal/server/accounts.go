@@ -143,9 +143,9 @@ func (s *Server) leave(w http.ResponseWriter, r *http.Request) error {
 
 // limitsFor returns the limits a mailbox gets: the server's, unless it is in an
 // unmetered account, whose mailboxes have no daily limit, the largest cap, no
-// budget of calls or of messages drained, and new messages at
-// AccountReceiveRefill (liftedReceives). A mailbox whose account is gone has
-// the server's. These are the volume levers
+// budget of calls or of messages drained, polls at AccountPollRefill
+// (liftedPolls) and new messages at AccountReceiveRefill (liftedReceives). A
+// mailbox whose account is gone has the server's. These are the volume levers
 // (LIMITS.md): what an account may lift.
 func (s *Server) limitsFor(ctx context.Context, b *Mailbox) (Limits, error) {
 	l := s.limits()
@@ -161,9 +161,19 @@ func (s *Server) limitsFor(ctx context.Context, b *Mailbox) (Limits, error) {
 	}
 	if acc.Unmetered {
 		l.SendsPerDay, l.MaxSize, l.CallBurst, l.DrainBurst = 0, l.ceiling(), 0, 0
-		l.ReceiveRefill = l.liftedReceives()
+		l.PollRefill, l.ReceiveRefill = l.liftedPolls(), l.liftedReceives()
 	}
 	return l, nil
+}
+
+// pollsAt is the budget of polls of a mailbox with limits l: the server's, or
+// the one an account lifts it to. Each refill has buckets of its own
+// (LIMITS.md § Accounts).
+func (s *Server) pollsAt(l Limits) *buckets {
+	if l.PollRefill == s.limits().PollRefill {
+		return s.polls
+	}
+	return s.polled
 }
 
 // receivesAt is the budget of new messages of a mailbox with limits l: the server's,
