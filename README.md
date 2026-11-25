@@ -23,14 +23,51 @@ The API process of the [dromas.dev](https://dromas.dev) server system: end-to-en
 | `test/working-key-openssh.sh` | A measurement, not a test: what stock `ssh-keygen` does with each form of signer, the identity's own signature and a certificate an identity signs for a working key, and with the certificates the protocol refuses whatever OpenSSH says (the client repo's issues #30 and #579) |
 | `Dockerfile` | `dromas-server`'s image: the static binary GoReleaser builds, copied onto distroless static (CA bundle, user `nonroot`, UID 65532); nothing is compiled in it. The echo mailbox's image is the client repo's |
 | `.github/workflows/docker-publish.yml` | The image from `main`, on every push, tagged `main`: GoReleaser's snapshot binaries into that `Dockerfile`, for `linux/amd64` and `linux/arm64`, published as `ghcr.io/dromas-dev/dromas-server` with an attestation of the build and an attested SPDX SBOM (`gh attestation verify oci://ghcr.io/dromas-dev/dromas-server@<digest> -R dromas-dev/dromas-server --signer-workflow dromas-dev/dromas-server/.github/workflows/docker-publish.yml --source-ref refs/heads/main --deny-self-hosted-runners`). A release's image is `release.yml`'s |
-| `Taskfile.yml`, `.github/workflows/release.yml`, `.goreleaser.yaml` | `dromas-server`'s releases: `task release` signs the tag and pushes it, and the workflow checks it against `.github/allowed_signers`, runs CI on its commit, and publishes the image (GoReleaser's `dockers_v2`, the binary of the archives in it, with an attested SPDX SBOM) and archives for Linux on `amd64` and `arm64`, with an SBOM of each, every file attested, and `checksums.txt`, signed with cosign by the workflow; then it checks the release and the image as published and builds the release again to compare. The release's notes have the commands that check each |
+| `Taskfile.yml`, `.github/workflows/release.yml`, `.goreleaser.yaml` | `dromas-server`'s releases: `task release` signs the tag and pushes it, and the workflow checks it against `.github/allowed_signers`, runs CI on its commit, and publishes the image (GoReleaser's `dockers_v2`, the binary of the archives in it, with an attested SPDX SBOM) and archives for Linux on `amd64` and `arm64`, with an SBOM of each, every file attested, and `checksums.txt`, signed with cosign by the workflow; then it checks the release and the image as published and builds the release again to compare. § Verify a release, and each release's notes, have the commands that check each |
 | `bench/` | The measurements behind the microsecond figures |
 
 A deployment's site (dromas.dev's front page and `llms.txt`) is not in this repo. `serve --site-backend <URL>` passes every request outside `/v1/` and `/to/` to the deployment's own web server, as a reverse proxy passes it, with `X-Forwarded-For` naming the client the limits see, and its answer back as that server sent it, a 404 among them; under `/v1/` and `/to/` every answer is `dromas-server`'s.
 
-## Build and run
+## Install
 
-Each release is a static binary for Linux on `amd64` and `arm64` and an image, `ghcr.io/dromas-dev/dromas-server:<version>`, both built from its signed tag by this repo's release workflow after its tests pass on that commit, the image holding the archive's very binary (`SECURITY.md`); `go install github.com/dromas-dev/dromas-server/cmd/dromas-server@<version>` builds the same source. The major version is the protocol's, shared with the client: both are 0.x until v1, which they reach together. Run the latest release: a server accepts older clients by its version policy, and a client release may need the server release made before it (`PROTOCOL.md` §14).
+Each release is built from its signed tag by this repo's release workflow, after its tests pass on that commit, and holds the following:
+
+- An archive of the static `dromas-server` binary for Linux on `amd64` and on `arm64`, `dromas-server_<version>_linux_<arch>.tar.gz`, each with an SPDX SBOM.
+- An image, `ghcr.io/dromas-dev/dromas-server:<version>`, for `linux/amd64` and `linux/arm64`, which holds the archives' very binary.
+- A build attestation for each file and for the image, and an attested SPDX SBOM for the image.
+- `checksums.txt`, which the workflow signs with cosign.
+
+`<version>` is the tag without its `v`. Each release is immutable, and its tag can't move. `go install github.com/dromas-dev/dromas-server/cmd/dromas-server@<tag>` builds the same source; the Go checksum database verifies the module, so it needs none of the checks below.
+
+The major version is the protocol's, shared with the client: both are 0.x until v1, which they reach together. Run the latest release: a server accepts older clients by its version policy, and a client release may need the server release made before it (`PROTOCOL.md` §14).
+
+### Verify a release
+
+In these commands, replace `<tag>` with the release's tag, such as `v0.6.11`, `<version>` with the tag without its `v`, and `dromas-server_*_linux_amd64.tar.gz` with the file you downloaded. The workflow runs each of them on the release as published.
+
+With `gh` 2.102.0 or later, check a file against the release, and check that this repo's release workflow built it from the tag on a GitHub-hosted runner. Keep `--source-ref`: without it, an attestation the workflow made on any branch passes.
+
+```sh
+gh release verify-asset <tag> dromas-server_*_linux_amd64.tar.gz -R dromas-dev/dromas-server
+gh attestation verify dromas-server_*_linux_amd64.tar.gz -R dromas-dev/dromas-server --signer-workflow dromas-dev/dromas-server/.github/workflows/release.yml --source-ref refs/tags/<tag> --deny-self-hosted-runners
+```
+
+Without the attestations, check the signed checksums with cosign, and then the file against them:
+
+```sh
+gh release download <tag> -R dromas-dev/dromas-server -p checksums.txt -p checksums.txt.sigstore.json
+cosign verify-blob --certificate-identity https://github.com/dromas-dev/dromas-server/.github/workflows/release.yml@refs/tags/<tag> --certificate-oidc-issuer https://token.actions.githubusercontent.com --bundle checksums.txt.sigstore.json checksums.txt
+sha256sum --ignore-missing -c checksums.txt   # must print dromas-server_*_linux_amd64.tar.gz: OK
+```
+
+Check the image's build attestation, and then its SBOM's:
+
+```sh
+gh attestation verify oci://ghcr.io/dromas-dev/dromas-server:<version> -R dromas-dev/dromas-server --signer-workflow dromas-dev/dromas-server/.github/workflows/release.yml --source-ref refs/tags/<tag> --deny-self-hosted-runners
+gh attestation verify oci://ghcr.io/dromas-dev/dromas-server:<version> -R dromas-dev/dromas-server --signer-workflow dromas-dev/dromas-server/.github/workflows/release.yml --source-ref refs/tags/<tag> --deny-self-hosted-runners --predicate-type https://spdx.dev/Document/v2.3
+```
+
+## Build and run
 
 From source, `go.mod` requires a release of the client module, which `go` fetches:
 
