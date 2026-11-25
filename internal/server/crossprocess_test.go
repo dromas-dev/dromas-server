@@ -518,8 +518,7 @@ func TestAProcessBehindRegistersNoAddressRevokedElsewhere(t *testing.T) {
 // naming the address answers 410, and goes by age (ARCHITECTURE.md § The
 // sweep). The statement is held at its insert by a row of the same id that
 // another transaction holds uncommitted, which rolls back once the
-// revocation has committed. Control: a send that reads its recipient again
-// after its write deletes the row and answers 410.
+// revocation has committed.
 func TestARevocationCommittedDuringASendsWriteLeavesARowNeverServed(t *testing.T) {
 	t.Parallel()
 	e, s := sharedEnv(t)
