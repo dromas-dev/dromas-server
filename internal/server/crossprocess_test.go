@@ -543,9 +543,16 @@ func TestARevocationCommittedDuringASendsWriteLeavesARowNeverServed(t *testing.T
 	sent := make(chan reply, 1)
 	go func() { sent <- e.do("POST", to.path("/messages"), to.sealed(1, ct), from.pass(1)) }()
 	// The send's statement has read the record, and waits on the row held.
+	// That wait is told by the statement's text, not by the holder blocking
+	// a session alone: a replication slot being made anywhere on the
+	// database server waits for every transaction running (PostgreSQL's docs,
+	// Logical Decoding Concepts, read 2026-11-24), the holder's among them,
+	// as a parallel test's feed does as it starts. A send whose statement
+	// begins after the revocation has committed stores nothing and is
+	// answered 410 (TestAProcessBehindStoresNothingForAnAddressRevokedElsewhere).
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
 		var n int
-		if err := s.pool().QueryRow(ctx, `SELECT count(*)::int FROM pg_stat_activity WHERE $1::int = ANY (pg_blocking_pids(pid))`, pid).Scan(&n); err != nil {
+		if err := s.pool().QueryRow(ctx, `SELECT count(*)::int FROM pg_stat_activity WHERE $1::int = ANY (pg_blocking_pids(pid)) AND query LIKE 'INSERT INTO messages%'`, pid).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
 		if n > 0 {
