@@ -108,8 +108,8 @@ release:
     `ghcr.io/dromas-dev/dromas-server:{{ .Version }}`, for `linux/amd64` and `linux/arm64`, holding the very `dromas-server` of the archives below, made by this repository's release workflow from this tag, with an attestation of the build and an attested SPDX SBOM (the second command):
 
     ```sh
-    gh attestation verify oci://ghcr.io/dromas-dev/dromas-server:{{ .Version }} -R dromas-dev/dromas-server --signer-workflow dromas-dev/dromas-server/.github/workflows/release.yml --source-ref refs/tags/{{ .Tag }}
-    gh attestation verify oci://ghcr.io/dromas-dev/dromas-server:{{ .Version }} -R dromas-dev/dromas-server --signer-workflow dromas-dev/dromas-server/.github/workflows/release.yml --source-ref refs/tags/{{ .Tag }} --predicate-type https://spdx.dev/Document/v2.3
+    gh attestation verify oci://ghcr.io/dromas-dev/dromas-server:{{ .Version }} -R dromas-dev/dromas-server --signer-workflow dromas-dev/dromas-server/.github/workflows/release.yml --source-ref refs/tags/{{ .Tag }} --deny-self-hosted-runners
+    gh attestation verify oci://ghcr.io/dromas-dev/dromas-server:{{ .Version }} -R dromas-dev/dromas-server --signer-workflow dromas-dev/dromas-server/.github/workflows/release.yml --source-ref refs/tags/{{ .Tag }} --deny-self-hosted-runners --predicate-type https://spdx.dev/Document/v2.3
     ```
 
     ## Verify
@@ -118,7 +118,7 @@ release:
 
     ```sh
     gh release verify-asset {{ .Tag }} <file> -R dromas-dev/dromas-server
-    gh attestation verify <file> -R dromas-dev/dromas-server --signer-workflow dromas-dev/dromas-server/.github/workflows/release.yml --source-ref refs/tags/{{ .Tag }}
+    gh attestation verify <file> -R dromas-dev/dromas-server --signer-workflow dromas-dev/dromas-server/.github/workflows/release.yml --source-ref refs/tags/{{ .Tag }} --deny-self-hosted-runners
     ```
 
     Or with cosign, checking `checksums.txt` against the workflow that signed it, then each file against `checksums.txt`:
