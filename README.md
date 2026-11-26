@@ -8,6 +8,8 @@ The API process of the [dromas.dev](https://dromas.dev) server system: end-to-en
 
 **Pre-v1, working towards a stable protocol.** The wire can change until v1. What is still open is the open issues of this repo and of the client repo.
 
+The project's direction for the next year, for the protocol, the clients and this server, is the client repo's [ROADMAP.md](https://github.com/dromas-dev/dromas-client/blob/main/ROADMAP.md).
+
 ## What is here
 
 | Path | Holds |
