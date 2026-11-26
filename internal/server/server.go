@@ -84,6 +84,10 @@ type Config struct {
 	// one budget across them (sharedBuckets). None: each process counts its
 	// own.
 	Valkey valkey.Client
+	// sharedWait, when set, bounds each call to Valkey in place of
+	// SharedWait: for a test of what the store holds, not of how fast it
+	// answers.
+	sharedWait time.Duration
 }
 
 // Server is the API.
@@ -189,6 +193,9 @@ func New(c Config) *Server {
 	}
 	if c.Valkey != nil {
 		s.sends.shared = newSharedBuckets(c.Valkey, s.sends.name, s.log, s.metrics)
+		if c.sharedWait > 0 {
+			s.sends.shared.wait = c.sharedWait
+		}
 	}
 	s.setLimits(c.Limits, &c.Policy)
 	if len(s.identityTypes) == 0 {

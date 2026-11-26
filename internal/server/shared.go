@@ -40,6 +40,8 @@ type sharedBuckets struct {
 	prefix string
 	log    *log.Logger
 	m      *Metrics
+	// wait bounds each call: SharedWait.
+	wait time.Duration
 	// down is set while the store has not answered since it failed.
 	down atomic.Bool
 }
@@ -80,7 +82,7 @@ func OpenValkey(url, password string) (valkey.Client, error) {
 }
 
 func newSharedBuckets(c valkey.Client, name string, l *log.Logger, m *Metrics) *sharedBuckets {
-	return &sharedBuckets{c: c, prefix: "dromas:" + name + ":", log: l, m: m}
+	return &sharedBuckets{c: c, prefix: "dromas:" + name + ":", log: l, m: m, wait: SharedWait}
 }
 
 // takeScript takes a token for KEYS[1] at ARGV[1], a bucket of ARGV[3]
@@ -140,7 +142,7 @@ func microsOf(d time.Duration) string { return strconv.FormatInt(d.Microseconds(
 // interval, as buckets.next does: ok, or how long until a token is due.
 func (sh *sharedBuckets) take(ctx context.Context, key string, n int, every time.Duration, now time.Time) (ok bool, over time.Duration, err error) {
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(ctx, SharedWait)
+	ctx, cancel := context.WithTimeout(ctx, sh.wait)
 	defer cancel()
 	res, err := takeScript.Exec(ctx, sh.c, []string{sh.prefix + key}, []string{micros(now), microsOf(every), strconv.Itoa(n)}).AsIntSlice()
 	if err == nil && len(res) != 2 {
@@ -159,7 +161,7 @@ func (sh *sharedBuckets) give(key string, every time.Duration, now time.Time) {
 		return
 	}
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), SharedWait)
+	ctx, cancel := context.WithTimeout(context.Background(), sh.wait)
 	defer cancel()
 	err := giveScript.Exec(ctx, sh.c, []string{sh.prefix + key}, []string{micros(now), microsOf(every)}).Error()
 	_ = sh.done("give", start, err)
@@ -172,7 +174,7 @@ func (sh *sharedBuckets) full(key string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), SharedWait)
+	ctx, cancel := context.WithTimeout(context.Background(), sh.wait)
 	defer cancel()
 	v, err := sh.c.Do(ctx, sh.c.B().Get().Key(sh.prefix+key).Build()).AsInt64()
 	if valkey.IsValkeyNil(err) {
@@ -191,7 +193,7 @@ func (sh *sharedBuckets) clear(key string) bool {
 		return false
 	}
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), SharedWait)
+	ctx, cancel := context.WithTimeout(context.Background(), sh.wait)
 	defer cancel()
 	n, err := sh.c.Do(ctx, sh.c.B().Del().Key(sh.prefix+key).Build()).AsInt64()
 	return sh.done("clear", start, err) == nil && n > 0
