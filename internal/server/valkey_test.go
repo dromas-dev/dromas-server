@@ -79,8 +79,16 @@ func randomKey(t *testing.T) string {
 func sharedSet(c valkey.Client, name string, n int, every time.Duration) *buckets {
 	bs := newBuckets(name, n, every)
 	bs.shared = newSharedBuckets(c, name, nil, nil)
+	bs.shared.wait = patientWait
 	return bs
 }
+
+// patientWait bounds each call to the store in a test of what the store
+// holds: on a loaded machine a round trip can take past SharedWait, which
+// counts the call by the process alone, as it should, and fails a test of
+// the store's count. TestASlowOrDownSharedStoreIsCountedByTheProcess tests
+// SharedWait itself.
+const patientWait = 10 * time.Second
 
 // Two processes' buckets on one shared store are one bucket: a token one
 // takes, the other cannot; one given back, the other can take; and a clear
@@ -138,7 +146,7 @@ func TestASendSpendsTheSendersBudgetInTheSharedStore(t *testing.T) {
 	c := testValkey(t)
 	l := relaxed()
 	l.SendsPerDay, l.SendsBurst = 2, 2
-	e := newEnv(t, l, func(cfg *Config) { cfg.Valkey = c })
+	e := newEnv(t, l, func(cfg *Config) { cfg.Valkey, cfg.sharedWait = c, patientWait })
 	a, b := e.mailbox(), e.mailbox()
 	to := "/v1/" + b.Address().String() + "/messages"
 
