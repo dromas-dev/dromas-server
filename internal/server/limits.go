@@ -123,8 +123,8 @@ func DefaultLimits() Limits {
 	return Limits{
 		MaxSize:                      64 << 10,                        // tunable
 		MailboxCap:                   1000,                            // tunable
-		SendsPerDay:                  50,                              // decided
-		SendsBurst:                   60,                              // decided
+		SendsPerDay:                  100,                             // decided
+		SendsBurst:                   200,                             // decided
 		PollBurst:                    10,                              // decided
 		PollRefill:                   50 * time.Second,                // decided: once a minute is stated
 		AccountPollRefill:            10 * time.Second,                // decided: a poll each ten seconds, the echo mailbox's
